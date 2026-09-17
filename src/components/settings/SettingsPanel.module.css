@@ -1,0 +1,101 @@
+/* src/components/settings/SettingsPanel.module.css */
+
+/*
+ * 设置面板 · 双栏布局
+ *
+ * 左侧 sidebar（70px 固定） + 右侧 content（flex:1）。
+ * 容器填满父级 .panel 的内容区（扣除 12px padding 后约 256×256）。
+ *
+ * 标题栏（sidebarTitle / contentTitle）顶部对齐，形成水平分割线。
+ * 导航项使用左边框色条标记选中态。
+ */
+
+/* ── 容器：flex row，填满父级 ── */
+
+.container {
+  display: flex;
+  height: 100%;
+}
+
+/* ── 加载态 ── */
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.loadingText {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* ── 左侧导航 ── */
+
+.sidebar {
+  width: 52px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--depth-1);
+}
+
+.sidebarTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  padding: 6px 6px 4px;
+  margin-bottom: 2px;
+}
+
+/* ── 导航项（label 全 2 字；栏宽按实际收紧） ── */
+
+.navItem {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 5px 6px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease, border-left-color 0.15s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.navItem:hover {
+  color: var(--text-1);
+  background: var(--depth-4);
+}
+
+.navItemActive {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--depth-4);
+}
+
+/* ── 右侧内容 ── */
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.contentTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--depth-1);
+  flex-shrink: 0;
+}
+
+.contentBody {
+  flex: 1;
+  position: relative;
+  padding: 8px;
+  overflow-y: auto;
+  /* 紧凑档滚动条（设置页尺度小于主界面）：视觉 4px，机制见 styles/scrollbar.css */
+  --scrollbar-inset: 2px;
+}

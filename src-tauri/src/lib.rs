@@ -1,0 +1,331 @@
+// PRTS 终端 - Tauri 后端入口
+// 启动时装配 State 与命令，将各模块接入 Tauri 运行时
+//
+// 新架构（2026-07）：中枢调度 + 外围组件
+// 旧代码已归档至 src_old/，仅作实现参考
+
+// 模块声明
+mod approval;
+mod cache;
+mod config;
+mod db;
+mod notices;
+mod events;
+mod exec;
+mod exec_settings;
+mod knowledge;
+mod memory;
+mod observability;
+mod orchestrator;
+mod path_guard;
+mod policy;
+mod session;
+mod session_store;
+mod settings;
+mod steer_queue;
+mod skills;
+mod skills_index;
+mod tools;
+mod llm;
+mod commands;
+mod turn_registry;
+
+use std::sync::{Arc, Mutex};
+
+use tauri::Manager;
+
+use crate::approval::ApprovalRegistry;
+use crate::db::Database;
+use crate::notices::Notices;
+use crate::knowledge::index::{knowledge_dir, KnowledgeIndex};
+use crate::memory::{MemoryStore, SnapshotStore};
+use crate::llm::{ClientRegistry, ModelRegistry};
+use crate::policy::Policy;
+use crate::settings::SettingsStore;
+use crate::tools::ToolRegistry;
+use crate::steer_queue::SteerQueue;
+use crate::turn_registry::TurnRegistry;
+use crate::llm::anthropic::AnthropicMessagesClient;
+use crate::llm::openai_compatible::OpenAiCompatibleClient;
+use crate::llm::openai_responses::OpenAIResponsesClient;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // ── 数据库 ──
+    // M1 批 3：db 路径解析收口于 config::resolve_db_path（原 get_db_path 删除）
+    let db_path = config::resolve_db_path();
+    let db = Arc::new(
+        Database::open(db_path.to_str().unwrap())
+            .expect("无法打开 arknights.db，请确认 data-pipeline 已运行")
+    );
+
+    // ── 模型注册表（从 models.json 加载）──
+    let model_registry = {
+        let json = include_str!("../resources/models.json");
+        Arc::new(ModelRegistry::from_json(json).expect("models.json 格式错误"))
+    };
+
+    // ── 设置存储（2026-09 设置页扩展批 A：单一 settings.json 持久化层）──
+    // 装配语义：文件存在用文件；文件缺失用默认值（不落盘，首次 set_settings
+    // 成功保存时才建文件）；**env 完全不参与配置装配**（PRTS_LLM_* /
+    // PRTS_WORKSPACE 已废弃）。
+    let settings_store = Arc::new(Mutex::new(SettingsStore::load(&config::data_dir())));
+
+    // ── 工作目录（文件工具的工作根：read_file/list_dir 的相对路径基准）──
+    // 来源 = settings.workspace.workspace_root（空串 = 回退 data_dir）；
+    // 修改需重启生效（装配期消费一次，无热切换）。
+    let workspace_root = {
+        let st = settings_store.lock().unwrap();
+        let root = st.workspace_root();
+        std::fs::create_dir_all(&root).expect("无法创建工作目录");
+        root
+    };
+
+    // ── 知识库索引（read_knowledge 的查询底表；加载失败降级为空索引）──
+    let knowledge_index = {
+        let root = knowledge_dir();
+        match KnowledgeIndex::load(&root) {
+            Ok(idx) => Arc::new(idx),
+            Err(e) => {
+                eprintln!("[lib] 知识库索引加载失败（read_knowledge 将不可用）：{e}");
+                Arc::new(KnowledgeIndex::empty_for_boot_failure())
+            }
+        }
+    };
+
+    // ── 记忆存储（Phase 4 任务二 · 批 1）：落于 data_dir()/memory/ ──
+    // 目录创建失败时降级为空存储（记忆工具仍可注册，只读为空），不阻断启动。
+    let memory_store = {
+        let dir = config::data_dir();
+        match MemoryStore::load(&dir) {
+            Ok(s) => Arc::new(Mutex::new(s)),
+            Err(e) => {
+                eprintln!("[lib] 记忆存储加载失败（降级为空）：{e}");
+                Arc::new(Mutex::new(MemoryStore::empty(dir.join("memory"))))
+            }
+        }
+    };
+
+    // ── 提醒数据源（notices：快照＝值、环境零累积、事件有界）━━
+    // 提前创建：记忆工具（memory_growth）写成功需向数据源发记忆事件，
+    // 故须先于 register_builtin；值同步与目录 diff 在工具注册后补做。
+    let ledger = Arc::new(Mutex::new(Notices::load(&config::data_dir())));
+
+    // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
+    // M1 批 2：以 workspace 根构造沙箱策略注入注册（read_file/sim_path
+    // 经策略持有守卫与工作区基准；workspace_root 区块批 3 接 config）
+    let tool_registry = {
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(workspace_root.clone()));
+        // 内置工具在此统一注册；每个工具注册时校验 JSON Schema，
+        // 非法 schema 在此暴露（拒绝注册）
+        tools::register_builtin(
+            &mut reg,
+            policy,
+            knowledge_index,
+            Arc::clone(&memory_store),
+            Arc::clone(&ledger),
+        )
+            .expect("内置工具注册失败（schema 校验未通过）");
+        Arc::new(reg)
+    };
+
+    // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
+    // 首次组装即写；同一对话读回原文，唯一刷新点＝新对话（跨重启逐字不变）。
+    let snapshot_store = Arc::new(Mutex::new(SnapshotStore::new(
+        &crate::session_store::sessions_dir(&config::data_dir()),
+    )));
+
+    // ── 适配器注册表 ──
+    // 按 ApiType 路由到对应 LlmClient 实现。
+    // 未来添加新协议适配器只需在此改一行 register。
+    let client_registry = {
+        let mut reg = ClientRegistry::new();
+        reg.register(
+            crate::llm::ApiType::OpenAiCompletions,
+            Arc::new(OpenAiCompatibleClient::new(Arc::clone(&model_registry))),
+        );
+        reg.register(
+            crate::llm::ApiType::AnthropicMessages,
+            Arc::new(AnthropicMessagesClient::new(Arc::clone(&model_registry))),
+        );
+        reg.register(
+            crate::llm::ApiType::OpenAIResponses,
+            Arc::new(OpenAIResponsesClient::new(Arc::clone(&model_registry))),
+        );
+        // GoogleGemini 走 OpenAI 兼容端点，由 OpenAiCompletions 处理，不需要独立适配器
+        Arc::new(reg)
+    };
+
+    // ── LLM 配置（Mutex 保护写入，set_settings 命令更新） ──
+    // 装配自 settings.llm：active 供应商 resolve 成请求用 LlmConfig
+    // （provider = active 名；文件缺失 → 默认空配置）。
+    let llm_config = {
+        let st = settings_store.lock().unwrap();
+        Arc::new(Mutex::new(st.settings.llm.resolve_active()))
+    };
+
+    // ── 提醒数据源值同步 / 目录 diff（notices 已提前创建并在注册工具时注入）──
+    // 值覆写：workspace/knowledge/model 三维度与当前值比对，不同才更新
+    // （stamp＝++seq）；目录 diff（技能/工具）首启只记基线。前端 sendMessage 经
+    // get_reminder_data 拉取（快照＝值；增量＝stamp/seq 超游标）。
+    {
+        // llm_config 装配后取当前生效 model label（env 注入已废，来自 settings 文件）
+        let model_label = {
+            let c = llm_config.lock().unwrap(); // 刚构造，无竞争
+            crate::notices::model_label(&c.provider, &c.model)
+        };
+        let mut ledger = ledger.lock().unwrap();
+        ledger.sync_environment_snapshots(
+            &workspace_root.to_string_lossy(),
+            &model_label,
+            &knowledge_dir().to_string_lossy(),
+        );
+        // 技能目录：扫描失败 → 跳过 diff（保留既有基线；首启失败则下次
+        // 运行仍按首启处理——空清单不覆盖真实基线）
+        match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
+            Ok(idx) => {
+                let names: Vec<String> =
+                    idx.names().into_iter().map(|s| s.to_string()).collect();
+                ledger.diff_skill_catalog(&names);
+            }
+            Err(e) => {
+                eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
+            }
+        }
+        // 工具目录：register_builtin 之后快照（list_defs 名字集合）
+        let tool_names: Vec<String> = tool_registry
+            .list_defs()
+            .iter()
+            .map(|d| d.function.name.clone())
+            .collect();
+        ledger.diff_tool_catalog(&tool_names);
+    }
+
+    // ── 会话存储（对话持久化 · Phase 4：data_dir/sessions/{conversationId}.jsonl
+    // + index.json 原子索引）──
+    // 后端纯存储层：写盘触发 = 前端轮末归档（append_turn）；删除对话 = 删持久文件。
+    // Mutex 串行化全部命令（单 Agent 悬浮窗 + 单前端，无并发需求，消灭写竞态）。
+    let session_store = Arc::new(Mutex::new(
+        crate::session_store::SessionStore::new(&config::data_dir()),
+    ));
+
+    // ── 缓存区（工作记忆）State 已注释（2026-08：缓存工具取消注册，
+    // 缓存系统停用，待升级为记忆系统；未来复用时可恢复）──
+    // let cache_stores = Arc::new(Mutex::new(crate::cache::CacheStores::new()));
+    //
+    // ── 上轮卸载摘要（模块 B/C）已注释（2026-08：卸载机制移除）──
+    // let last_unloads = Arc::new(Mutex::new(std::collections::HashMap::<String, String>::new()));
+
+    // ── 命令执行模式（M3-A：全局声明层设置，默认操作前询问）──
+    // 装配自 settings.exec 段（2026-09：持久化兑现，落盘 settings.json）；
+    // 运行 State 由 set_settings 的 exec patch 同步更新。
+    let exec_settings = {
+        let st = settings_store.lock().unwrap();
+        Arc::new(Mutex::new(st.settings.exec))
+    };
+
+    // ── 审批注册表（M3-A：run_command 确认等待的决策通道）──
+    // 内部 Mutex 串行化 register/resolve；外部 Arc 共享（orchestrator 等待端
+    // 与 resolve_tool_approval 命令端）。
+    let approval_registry = Arc::new(ApprovalRegistry::new());
+
+    // ── 活动 turn 注册表（M3-B：中止通道 + busy 口径）──
+    // 命令层 agent_process 在 turn 起点 register / 返回后无条件 unregister；
+    // abort_turn 命令置位中止；设置闸（set_settings）消费 active_count()。
+    let turn_registry = Arc::new(TurnRegistry::new());
+
+    // ── 插话待注入队列（设计定稿：生成中插话入队 → dispatch Completed 出口注入）──
+    // 键 = session_id（与 turn_registry 同键）；命令层 steer_message 入队 /
+    // cancel_steer 移除；abort_turn 路径 clear（中止 = 停段 + 清队列）。
+    let steer_queue = Arc::new(SteerQueue::new());
+
+    // ── 装配 Tauri Builder ──
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        // 键盘治理（发布质量）：拦截浏览器默认行为（刷新/打印/源码/下载/
+        // 查找/焦点移动等；右键菜单为保险层——前端自绘体系照常工作）。
+        // debug() 语义随构建自动分档：dev 保留「刷新 + 开发者工具 + 右键」，
+        // release 全部拦截（见 tauri-plugin-prevent-default 的 Flags::debug）。
+        .plugin(tauri_plugin_prevent_default::debug())
+        .manage(db)
+        .manage(tool_registry)
+        .manage(client_registry)
+        .manage(llm_config)
+        .manage(model_registry)
+        .manage(ledger)
+        .manage(session_store)
+        .manage(memory_store)
+        .manage(snapshot_store)
+        .manage(exec_settings)
+        .manage(approval_registry)
+        .manage(turn_registry)
+        .manage(steer_queue)
+        .manage(settings_store)
+        // .manage(cache_stores)
+        // .manage(last_unloads)
+        // 置顶初值：tauri.conf.json 静态 alwaysOnTop=true 为窗口创建兜底；
+        // settings.window.always_on_top=false 时启动即关闭（文件值优先）。
+        .setup(|app| {
+            let store = app.state::<Arc<Mutex<SettingsStore>>>();
+            let atop = store.lock().unwrap().settings.window.always_on_top;
+            if !atop {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) = win.set_always_on_top(false) {
+                        eprintln!("[lib] 启动应用置顶初值失败（file=false）: {e}");
+                    }
+                }
+            }
+            // 孤儿冻结文件清扫（记忆：对话已删、残留的死 sidecar；与 ledger diff 同区）
+            if let Ok(snaps) = app.state::<Arc<Mutex<SnapshotStore>>>().lock() {
+                let n = snaps.sweep_orphans();
+                if n > 0 {
+                    eprintln!("[lib] 清扫孤儿记忆快照 {n} 个");
+                }
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::agent_process,
+            commands::get_settings,
+            commands::set_settings,
+            commands::reveal_api_key,
+            commands::get_app_meta,
+            commands::list_skills,
+            commands::open_path,
+            commands::open_url,
+            commands::set_always_on_top,
+            commands::choose_workspace_directory,
+            commands::get_reminder_data,
+            commands::list_conversations,
+            commands::get_conversation,
+            commands::append_turn,
+            commands::update_conversation_meta,
+            commands::generate_conversation_title,
+            commands::compact_conversation,
+            commands::delete_conversation,
+            commands::get_local_model_info,
+            commands::quit_app,
+            commands::verify_connection,
+            commands::list_providers,
+            commands::list_models,
+            commands::resolve_tool_approval,
+            commands::abort_turn,
+            commands::steer_message,
+            commands::cancel_steer,
+            commands::finalize_memory,
+            commands::memory_catch_up,
+            commands::memory_overview,
+            commands::memory_get,
+            commands::memory_create,
+            commands::memory_update,
+            commands::memory_delete,
+            commands::memory_experience_list,
+            commands::memory_experience_clear,
+            commands::memory_tidy,
+            // commands::clear_conversation_cache, // 已注释（2026-08：缓存系统停用）
+        ])
+        .run(tauri::generate_context!())
+        .expect("启动 Tauri 应用失败");
+}

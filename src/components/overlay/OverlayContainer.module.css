@@ -1,0 +1,71 @@
+/* src/components/overlay/OverlayContainer.module.css */
+
+/*
+ * 覆盖层视觉体系
+ *
+ * 两层堆叠：
+ *   .overlay  — flex 容器，铺满工具栏以下区域，居中子元素
+ *   .backdrop — 半透明遮罩，点击关闭
+ *   .panel    — 面板浮起容器，统一底色 + 圆角 + 滚动
+ */
+
+/* ── 覆盖层容器：工具栏起，flex 居中面板 ── */
+
+.overlay {
+  position: absolute;
+  top: calc(var(--face-size) * 0.0833);        /* 匹配 Toolbar 高度，始终对齐 */
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── 遮罩：半透明暗化背景 ── */
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: default;
+}
+
+/* ── 面板容器：浮起效果 ── */
+
+.panel {
+  position: relative;
+  z-index: 1;
+
+  background: var(--depth-3);
+  border: 1px solid var(--depth-0);
+  border-radius: var(--radius-md);
+
+  padding: 12px;
+  overflow-y: auto;
+
+  animation: panelEnter 200ms ease-out;
+}
+
+@keyframes panelEnter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ── 遮罩淡入 ── */
+
+.backdrop {
+  animation: backdropFadeIn 150ms ease-out;
+}
+
+@keyframes backdropFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

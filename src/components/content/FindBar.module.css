@@ -1,0 +1,95 @@
+/* src/components/content/FindBar.module.css */
+
+/* 会话内查找条（Ctrl+F）：锚定消息区右上，尺寸随 face 缩放。
+   边界约束：face ∈ [180, 520] 全区间内整条必须完整落在正面内
+   （正面 overflow:hidden 会裁切越界部分）——部件按此压缩到近下限。 */
+
+.findBar {
+  position: absolute;
+  top: calc(var(--face-size) * 0.1416); /* Toolbar 高（0.0833）+ 14/240 */
+  right: calc(var(--face-size) * 0.0583); /* 14 / 240 */
+  z-index: 5; /* 消息内容之上、遮罩（z10）之下——设置打开时随消息区被覆盖 */
+  display: flex;
+  align-items: center;
+  gap: calc(var(--face-size) * 0.0208); /* 5 / 240 */
+  height: calc(var(--face-size) * 0.0917); /* 22 / 240 */
+  padding: 0 calc(var(--face-size) * 0.025); /* 6 / 240 */
+  border-radius: calc(var(--face-size) * 0.0208); /* 5 / 240 */
+  background: var(--depth-3);
+  border: 1px solid var(--depth-0);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.icon {
+  width: calc(var(--face-size) * 0.05); /* 12 / 240 */
+  height: calc(var(--face-size) * 0.05);
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.input {
+  width: calc(var(--face-size) * 0.2); /* 48 / 240 */
+  min-width: 40px;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text-1);
+  font-size: calc(var(--face-size) * 0.0458); /* 11 / 240 */
+  font-family: var(--font-ui);
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+.count {
+  flex-shrink: 0;
+  min-width: calc(var(--face-size) * 0.1); /* 24 / 240 */
+  text-align: right;
+  color: var(--text-3);
+  font-size: calc(var(--face-size) * 0.0458); /* 11 / 240 */
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--face-size) * 0.0667); /* 16 / 240 */
+  height: calc(var(--face-size) * 0.0667);
+  padding: 0;
+  border: none;
+  border-radius: calc(var(--face-size) * 0.0167); /* 4 / 240 */
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--depth-4);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.btn svg {
+  width: calc(var(--face-size) * 0.0458); /* 11 / 240 */
+  height: calc(var(--face-size) * 0.0458);
+}
+
+/* ── 消息区让位（查找打开时）──
+   查找条为右上浮层：若命中位于消息前几行（文档顶端），
+   滚动无法将其移出浮层覆盖区（内容不满一屏时尤甚）——
+   通过顶部 padding 给内容留出「浮层之下」的可达空间。 */
+
+:global([data-message-list]) {
+  transition: padding-top 0.15s ease;
+}
+
+:global([data-message-list].prts-find-open) {
+  padding-top: calc(var(--face-size) * 0.15 + 8px);
+}

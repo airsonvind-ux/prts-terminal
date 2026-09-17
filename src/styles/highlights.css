@@ -1,0 +1,21 @@
+/* src/styles/highlights.css */
+
+/* 文本高亮三态：
+   1. 全命中（prts-find）：--find-match 淡蓝底，文字保持原色；
+   2. 当前命中（prts-find-active）：--find-active 蓝底 + 深墨字；
+   3. 系统选区（::selection）：与当前命中同款。
+   查找高亮名与 FindBar.tsx 的 HIGHLIGHT_NAME / HIGHLIGHT_ACTIVE_NAME 对应。 */
+
+::selection {
+  background-color: var(--selection-bg);
+  color: var(--highlight-ink);
+}
+
+::highlight(prts-find) {
+  background-color: var(--find-match);
+}
+
+::highlight(prts-find-active) {
+  background-color: var(--find-active);
+  color: var(--highlight-ink);
+}

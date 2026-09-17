@@ -1,0 +1,555 @@
+/* src/components/settings/SettingsProvider.module.css */
+
+/*
+ * "模型服务"标签页 · 表单样式
+ *
+ * 纵向标签-输入排列。控件统一 24px 高度、11px 字号、--depth-2 底色。
+ * 验证按钮四种状态：idle / loading / success（绿）/ error（红）。
+ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── 表单字段 ── */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.label {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.labelRow .label {
+  flex: 1;
+}
+
+.refreshBtn {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.refreshBtn:hover {
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.input {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.input:focus {
+  border-color: var(--accent);
+}
+
+.input::placeholder {
+  color: var(--text-3);
+}
+
+/* ── 自定义下拉（供应商选择） ── */
+
+.dropdown {
+  position: relative;
+}
+
+.dropdownTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  width: 100%;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: border-color 0.12s ease;
+}
+
+.dropdownTrigger:hover {
+  background: var(--depth-4);
+}
+
+.dropdownTriggerOpen {
+  border-color: var(--accent);
+}
+
+.dropdownArrow {
+  font-size: 8px;
+  color: var(--text-3);
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.dropdownTriggerOpen .dropdownArrow {
+  transform: rotate(180deg);
+}
+
+.dropdownMenu {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: none;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--depth-2);
+  border: 1px solid var(--depth-0);
+  border-radius: var(--radius-sm);
+  /* 紧凑档滚动条（设置页小尺度）：视觉 4px */
+  --scrollbar-inset: 2px;
+}
+
+.dropdownMenuOpen {
+  display: block;
+}
+
+.dropdownItem {
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.08s ease, color 0.08s ease;
+}
+
+.dropdownItem:hover {
+  background: var(--depth-4);
+  color: var(--text-1);
+}
+
+.dropdownItemActive {
+  color: var(--accent);
+}
+
+/* ── API Key 行：输入框 + 切换按钮 ── */
+
+.keyRow {
+  display: flex;
+  gap: 4px;
+}
+
+.keyRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.keyToggle {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.keyToggle:hover {
+  color: var(--text-1);
+  border-color: var(--text-3);
+}
+
+.keyToggleActive {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Headers 文本框 ── */
+
+.textarea {
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  outline: none;
+  resize: vertical;
+  min-height: 36px;
+  box-sizing: border-box;
+  width: 100%;
+  line-height: 1.5;
+}
+
+.textarea:focus {
+  border-color: var(--accent);
+}
+
+.textarea::placeholder {
+  color: var(--text-3);
+}
+
+/* ── 验证连接按钮 ── */
+
+.verifyRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.verifyButton {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.verifyButton:hover:not(:disabled) {
+  background: var(--depth-4);
+}
+
+.verifyButton:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.verifyLoading {
+  color: var(--text-2);
+}
+
+.verifySuccess {
+  color: #5cb878;
+  border-color: #3a6b4a;
+  background: #1e2d24;
+}
+
+.verifyError {
+  color: #e05555;
+  border-color: #6e3535;
+  background: #2d1e1e;
+}
+
+.verifyErrorText {
+  font-size: 10px;
+  color: #e05555;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+/* ── 下拉选择框（select） ── */
+
+.select {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-sizing: border-box;
+  width: 100%;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%239aa0a6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  padding-right: 20px;
+}
+
+.select:focus {
+  border-color: var(--accent);
+}
+
+.select option {
+  background: var(--depth-1);
+  color: var(--text-1);
+}
+
+/* ── 下拉分隔线 ── */
+
+.dropdownDivider {
+  height: 1px;
+  background: var(--depth-0);
+  margin: 2px 0;
+}
+
+/* ── 字段提示（错误/警告） ── */
+
+.fieldHint {
+  font-size: 10px;
+  color: #e05555;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+/* 字段下灰色说明（一行式 hint：如思考强度行） */
+.fieldNote {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+  margin-top: 1px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   模型列表区块
+   ═══════════════════════════════════════════════════════ */
+
+.modelSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ── 状态提示 ── */
+
+.modelStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.modelLoading,
+.modelRefreshing {
+  color: var(--text-3);
+}
+
+.modelRefreshing::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border: 1.5px solid var(--text-3);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.modelError {
+  color: #e05555;
+}
+
+.modelEmpty {
+  color: var(--text-3);
+}
+
+/* ── 重试按钮 ── */
+
+.retryButton {
+  align-self: flex-start;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 10px;
+  font-family: var(--font-ui);
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.retryButton:hover {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+/* ── 模型列表 ── */
+
+.modelList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--depth-1);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  max-height: 120px;
+  overflow-y: auto;
+  /* 紧凑档滚动条（设置页小尺度）：视觉 4px */
+  --scrollbar-inset: 2px;
+}
+
+.modelItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-2);
+  background: var(--depth-2);
+  cursor: pointer;
+  transition: background 0.08s ease, color 0.08s ease;
+  user-select: none;
+}
+
+.modelItem:hover {
+  background: var(--depth-4);
+  color: var(--text-1);
+}
+
+.modelItemActive {
+  color: var(--accent);
+  background: var(--depth-3);
+}
+
+.modelItemActive:hover {
+  color: var(--accent);
+  background: var(--depth-4);
+}
+
+/* ── 模型名称 + 能力标记 ── */
+
+.modelItemName {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 名字文本：可截断的独立 flex item（长名省略号收尾，不挤走徽章） */
+.modelItemNameText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.modelItemBadges {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.modelBadge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(96, 165, 250, 0.15);
+  border-radius: 3px;
+  line-height: 1;
+}
+
+.modelBadgeVision {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #5cb878;
+  background: rgba(92, 184, 120, 0.15);
+  border-radius: 3px;
+  line-height: 1;
+}
+
+/* 未收录：弱化一档（辅助色 + 浅底），与 R/V 实底强调形成层次 */
+.modelBadgeUnknown {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  line-height: 1;
+}
+
+/* ── 上下文长度标签 ── */
+
+.modelItemContext {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-left: 8px;
+}
+
+/* ── 获取模型按钮（idle 状态） ── */
+
+.fetchButton {
+  align-self: flex-start;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.fetchButton:hover {
+  background: rgba(96, 165, 250, 0.1);
+}

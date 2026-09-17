@@ -1,0 +1,73 @@
+/* src/styles/scrollbar.css */
+
+/*
+ * 全局滚动条 · 按需显示（伪元素路径）
+ *
+ * 机制（2026-09 定稿）：
+ * - 常态：thumb 透明——槽位保留（8px），颜色不可见
+ * - 滚动中：scrollActivity.ts 给滚动元素加 .prts-scroll-active → 显色
+ * - 悬停加深：指针悬停滑块（伪元素 :hover）——“加深 ⇔ 可拖动”精确一致；
+ *   指针在滑块上时始终显示加深态（拖动天然保持，独立于任何类）
+ *
+ * ── 压制与解封（2026-09 探针实测，重要）──
+ * Chromium 121+ 起，scrollbar-color / scrollbar-width 任一非 auto（含继承）
+ * 会「压制」该元素的 ::-webkit-scrollbar 定制：按钮、宽度、:hover 全部
+ * 失效（此前多轮排查的「悬停冻结」「三角复现」等现象皆源于此）。
+ * 反之，显式 auto（或全局不设置）即「解封」，伪元素路径全量生效。
+ * 因此本文件不设任何非 auto 标准属性；个别容器需隐藏滚动条时用
+ * scrollbar-width 的 none 值（如输入框 textarea，自带隐藏语义且不影响他处）。
+ *
+ * 在 main.tsx 中全局引入（不限作用域）。
+ */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* 常态隐藏；显色与加深由滚动类 / :hover 驱动。
+     注意：着色一律用 background-color——background 简写会重置
+     background-clip，导致视觉收窄失效（满宽显示）。 */
+  background-color: transparent;
+  background-clip: padding-box;
+  border-radius: 4px;
+  /* 短内容时滑块过短难以命中：钳制最小尺寸 */
+  min-height: 32px;
+  min-width: 32px;
+  transition: background-color 0.15s;
+}
+
+/* 视觉收窄（拖动热区仍为 8px）：默认内缩 1px = 视觉 6px。
+   紧凑档：容器设 --scrollbar-inset: 2px（视觉 4px）——用于设置页等
+   小尺度面板（声明见各组件 Module CSS）。 */
+::-webkit-scrollbar-thumb:vertical {
+  border-left: var(--scrollbar-inset, 1px) solid transparent;
+  border-right: var(--scrollbar-inset, 1px) solid transparent;
+}
+
+::-webkit-scrollbar-thumb:horizontal {
+  border-top: var(--scrollbar-inset, 1px) solid transparent;
+  border-bottom: var(--scrollbar-inset, 1px) solid transparent;
+}
+
+/* 滚动中显色（scrollActivity.ts 动态添加/移除） */
+.prts-scroll-active::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+}
+
+/* 指针悬停滑块：加深（伪元素路径的原生交互色；置于最后以在类存在时仍生效） */
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* 上下三角按钮（伪元素路径下生效：隐藏） */
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}

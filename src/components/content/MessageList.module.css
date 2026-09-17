@@ -1,0 +1,244 @@
+/* src/components/content/MessageList.module.css */
+
+/*
+ * 消息列表 · 内容区核心排版
+ *
+ * flex:1 弹性填充，消息从顶部开始排列，溢出时滚动。
+ * 三类气泡：user 靠右、assistant 靠左、error 居中。
+ * 滚动条样式由 styles/scrollbar.css 统一提供（本文件不单独定义）。
+ */
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /*
+   * 右侧留白与窗口缩放热区的分离（2026-09）：
+   * 列表右缘内收 8px（margin-right）——滚动条右缘与界面右缘留出间隙，
+   * 不再与 frontFace 右缘 6px 缩放热区重叠；原 padding-right 12px 拆为
+   * 8px（内容↔滚动条留白）——滚动条两侧间隙均 8px，视觉均衡。
+   * （滚动条本体由 styles/scrollbar.css 伪元素层统一提供。）
+   */
+  margin-right: 8px;
+  padding: 8px 8px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── 欢迎界面 ── */
+
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  user-select: none;
+}
+
+.welcomeLogo {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 6px;
+  font-family: var(--font-ui);
+}
+
+.welcomeTagline {
+  font-size: 13px;
+  color: var(--text-2);
+  font-family: var(--font-ui);
+}
+
+.welcomeHint {
+  font-size: var(--text-md);
+  color: var(--text-3);
+  margin-top: 6px;
+  font-family: var(--font-ui);
+}
+
+/* ── 消息气泡 ── */
+
+.bubble {
+  max-width: 78%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  font-family: var(--font-ui);
+  word-break: break-word;
+  user-select: text;
+}
+
+.user {
+  align-self: flex-end;
+  background: var(--depth-3);
+  color: var(--text-1);
+  border: 1px solid var(--depth-0);
+}
+
+.assistant {
+  align-self: flex-start;
+  background: transparent;
+  color: #b8bebf;
+  border: none;
+  padding-left: 0;
+  max-width: 95%;
+}
+
+.error {
+  align-self: center;
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--text-sm);
+  text-align: center;
+  max-width: 90%;
+}
+
+/* ── 轮中止标记条（M3-B §4.5：轮尾灰/斜体小字，不得走 error 分支） ──
+ * 独立样式（不继承 .error 视觉语义）：半截内容照常展示后追加的
+ * 轻量轮尾标记——中灰、斜体、小字号，可被用户忽略。 */
+.aborted {
+  align-self: center;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  font-style: italic;
+  text-align: center;
+  padding: 1px 8px;
+  max-width: 90%;
+  opacity: 0.75;
+}
+
+/* ── 插话 pending 气泡（设计定稿） ──
+ * 显示在当前输出段之后对话底部：右侧（即将成为下一条 user 消息）
+ * 纯样式差异——虚线边框 + 降透明，无任何文字角标；悬停警示色（--warn）
+ * 提示可点击取消；tooltip「点击取消」由 title 提供。 */
+
+.steerPending {
+  align-self: flex-end;
+  max-width: 78%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--text-3);
+  background: var(--depth-2);
+  color: var(--text-2);
+  font-size: var(--text-md);
+  font-family: var(--font-ui);
+  line-height: 1.6;
+  word-break: break-word;
+  user-select: text;
+  opacity: 0.5;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    opacity 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.steerPending:hover {
+  opacity: 1;
+  border-color: var(--danger);
+  color: var(--danger-hover);
+}
+
+.steerPending:focus-visible {
+  outline: 1px solid var(--danger);
+  outline-offset: 1px;
+}
+
+/* ── 流式中过渡文本段弱化（分段回溯） ──
+ * 段级应用：assistant 气泡内逐段渲染，被 tool/call 闭合的过渡段
+ * （transition=true）加本 class 弱化；最终未闭合段与归档后最终文本
+ * 正常显示（整个气泡不再统一弱化）。
+ * 用 opacity 而非 color：Markdown 内 strong/code/标题有固定色，
+ * 只有 opacity 能对整块（含表格/代码）一致弱化。 */
+
+.streaming {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+/* 光标保持不弱化——"正在输出"的指示需保持清晰；
+ * 当末段恰为过渡段时（无尾段文本），光标位于 .streaming 内，仍需此规则兜底 */
+.streaming .cursor {
+  opacity: 1;
+}
+
+/* ── 流式输出光标 ── */
+
+.cursor {
+  display: inline-block;
+  width: 1px;
+  height: 13px;
+  margin-left: 1px;
+  margin-bottom: -2px;
+  background: var(--text-2);
+  animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+/* ── 压缩点提示卡（模块 D · 上下文衰减） ── */
+
+.compactionCard {
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border: 0.5px solid rgba(74, 171, 234, 0.2);
+  border-radius: 6px;
+  background: var(--depth-2);
+}
+
+.compactionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.compactionHeader:hover {
+  color: var(--text-1);
+}
+
+.compactionChevron {
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+.compactionDesc {
+  margin-top: 4px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.compactionSummary {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--depth-0);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}

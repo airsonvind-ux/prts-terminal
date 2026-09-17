@@ -1,0 +1,123 @@
+// src/hooks/useConversationHydration.ts
+// 启动会话恢复 Hook（对话持久化 Phase 4）
+//
+// 职责：应用启动时从后端恢复会话列表与消息——list_conversations（秒开，
+// 来源 index.json）→ 并行 get_conversation 拉全量轮行 → 组装 Conversation
+// 装载进 useConversationStore（含恢复 activeId 的导航决策）。
+//
+// 架构约束（用户拍板）：恢复后的**导航决策**（选哪个会话为 activeId）必须
+// 收敛在本模块单点（pickActiveIdAfterRestore + 其调用处），不得散落进 store
+// action 或组件。
+//
+// ▎开屏流程改造点：未来若改为「重启显示欢迎界面 → 虚化 → 变换到上次对话」，
+// 只需改本模块——把「恢复后直接 set activeId」换成「先 restoring/欢迎态、
+// 动画完成后再 set activeId（或改存 lastActiveId 元数据）」；store action 与
+// 组件零改动（组件只消费 conversations/activeId/restoring 三个原始事实）。
+//
+// 恢复期间 UI：restoring=true（欢迎界面判定被抑制 + 输入禁发）——防恢复完成
+// 前闪欢迎界面、防恢复竞态发消息。list 空/失败 → 降级为空历史（欢迎界面照旧）。
+// 历史冻结铁律：轮行是后端落盘的归档原文，JSON.parse 逐行重建——含
+// [prts_reminder] 块的 user 消息逐字节保留，零改写。
+
+import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useConversationStore } from "../stores/useConversationStore";
+import { useUIStore } from "../stores/useUIStore";
+import type {
+  Conversation,
+  ConversationMeta,
+  ConversationRecord,
+  SessionEvent,
+} from "../types";
+
+/**
+ * 恢复后的导航决策（单点，纯函数便于测试）：取 updatedAt 最新会话为 activeId。
+ * 依据：重启后"上次活跃对话"≈ 最近有轮提交的对话；欢迎界面无对话列表入口，
+ * 一律回欢迎界面会困住用户。列表空 → null（欢迎界面照旧）。
+ * 同 updatedAt（同毫秒罕见）→ 保留先遇到者（metas 顺序稳定）。
+ * 开屏流程改造点见文件头注释。
+ */
+export function pickActiveIdAfterRestore(
+  metas: ConversationMeta[]
+): string | null {
+  if (metas.length === 0) return null;
+  let best = metas[0];
+  for (const m of metas) {
+    if (m.updatedAt > best.updatedAt) best = m;
+  }
+  return best.id;
+}
+
+/**
+ * 执行一次会话恢复（纯 async 逻辑，与 React 解耦——测试可直接 await）。
+ * 幂等：重复调用（StrictMode 双挂载）恢复同一批数据，无副作用。
+ */
+export async function restoreConversations(): Promise<void> {
+  useUIStore.getState().setRestoring(true);
+  try {
+    const metas = (await invoke<ConversationMeta[]>("list_conversations")) ?? [];
+    if (metas.length === 0) return; // 首次使用/无持久数据 → 欢迎界面照旧
+
+    // 并行拉全量（悬浮窗规模：几十条 × 每轮几 KB ≈ 几十 ms，不引入懒加载状态机）
+    const records = await Promise.all(
+      metas.map((m) =>
+        invoke<ConversationRecord>("get_conversation", { conversationId: m.id })
+      )
+    );
+
+    // 组装 Conversation（与现有形态完全一致）。防御：重复 id（罕见损坏场景）
+    // 后者丢弃 + console.warn。
+    const byId = new Map<string, Conversation>();
+    for (const r of records) {
+      if (byId.has(r.meta.id)) {
+        console.warn(`[hydration] 重复会话 id ${r.meta.id}，丢弃后者`);
+        continue;
+      }
+      byId.set(r.meta.id, {
+        id: r.meta.id,
+        title: r.meta.title,
+        createdAt: r.meta.createdAt,
+        // 轮行原文逐行 parse——后端保证每行可 parse（坏行已在读取侧跳过）
+        turns: r.turns.map((line) => JSON.parse(line) as SessionEvent[]),
+        // null → undefined 适配（后端可缺省字段以 null 表达）
+        modelName: r.meta.modelName ?? undefined,
+        contextLength: r.meta.contextLength ?? undefined,
+        contextTokens: r.meta.contextTokens ?? undefined,
+        lastNoticeSeq: r.meta.lastNoticeSeq ?? undefined,
+        compaction: r.meta.compaction ?? undefined,
+      });
+    }
+
+    // ▎导航决策单点：恢复 updatedAt 最新会话为 activeId
+    // （开屏流程改造点见文件头注释——只改本处与 pickActiveIdAfterRestore）
+    useConversationStore.setState({
+      conversations: [...byId.values()],
+      activeId: pickActiveIdAfterRestore(metas),
+      pendingTitle: null,
+    });
+
+    // 经历管线启动补偿（Phase 4 任务二）：列出水位落后的会话，逐个
+    // fire-and-forget 补提炼（前端不 await；失败静默，下轮轮末/切换会再触发）。
+    try {
+      const pending =
+        (await invoke<string[]>("memory_catch_up", { limit: 5 })) ?? [];
+      for (const cid of pending) {
+        void invoke("finalize_memory", { conversationId: cid }).catch(() => {});
+      }
+    } catch {
+      /* 补偿失败静默：不阻断恢复 */
+    }
+  } catch (err) {
+    // list/get 失败（后端不可达/损坏）→ 降级为空历史（欢迎界面），不抛给 UI
+    console.warn("[hydration] 会话恢复失败（降级为空历史）：", err);
+  } finally {
+    useUIStore.getState().setRestoring(false);
+  }
+}
+
+/** 应用启动时调用一次（仿 useAgentEvents：无 props、仅注册副作用） */
+export function useConversationHydration(): void {
+  useEffect(() => {
+    void restoreConversations();
+  }, []);
+}

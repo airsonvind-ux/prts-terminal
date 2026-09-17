@@ -1,0 +1,33 @@
+// 设置页通用组件 · Section（Hanako SettingsSection 形态，PRTS 极简版）
+//
+// 结构：可选 title 标题行 + body 主体 + Note/Warning 说明块（页内任意位置使用，
+// 非强制 slot——按内容顺序自然摆放）。说明文字约定：常态一行式 hint（SettingsRow），
+// 长文只进 Note（中性说明）与 Warning（警示）块。
+
+import type { ReactNode } from "react";
+import styles from "./settings-ui.module.css";
+
+interface SectionProps {
+  title?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}
+
+export function SettingsSection({ title, children, className }: SectionProps) {
+  return (
+    <section className={[styles.section, className].filter(Boolean).join(" ")}>
+      {title && <h2 className={styles.sectionTitle}>{title}</h2>}
+      <div className={styles.sectionBody}>{children}</div>
+    </section>
+  );
+}
+
+/** 中性说明块（长文/补充说明用；一行式 hint 请用 SettingsRow.hint） */
+export function SectionNote({ children }: { children: ReactNode }) {
+  return <div className={styles.sectionNote}>{children}</div>;
+}
+
+/** 警示块（风险说明用；文字可多行，属"长文只进警示块"的落点） */
+export function SectionWarning({ children }: { children: ReactNode }) {
+  return <div className={styles.sectionWarning}>{children}</div>;
+}

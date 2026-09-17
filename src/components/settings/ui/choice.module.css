@@ -1,0 +1,49 @@
+/* 统一勾选控件（radio / checkbox 同款圆形指示）
+ *
+ * 视觉规范（修正 3）：radio 与 checkbox 外观完全一致——同尺寸圆环、
+ * 同选中态（accent 内圆点）、同色；两者仅保留交互语义差异（单选组 / 单开关）。
+ * appearance:none 抹平原生差异，:checked::after 内点统一。
+ */
+
+.choice {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--text-3);
+  border-radius: 50%;
+  background: transparent;
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.12s ease;
+}
+
+.choice:hover {
+  border-color: var(--text-2);
+}
+
+.choice:checked {
+  border-color: var(--accent);
+}
+
+.choice:checked::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.choice:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.choice:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}

@@ -1,0 +1,34 @@
+/* src/components/content/ChatView.module.css */
+
+/*
+ * 内容层编排容器
+ *
+ * ChatView 是 DroneShellScene frontFace 的直接子元素。
+ * frontFace 提供 #26282a 底色，container 透明继承。
+ *
+ * 三区 flex column：
+ *   Toolbar   — 20px 固定高度
+ *   MessageList — flex:1 弹性填充
+ *   inputRow  — 36px 固定最小高度，承载 InputArea + 缩放 grip
+ */
+
+.container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── 输入行：承载 InputArea ── */
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  /* 高度由内容（textarea auto-grow）决定，最小 36px */
+  height: auto;
+  min-height: 36px;
+  flex-shrink: 0;
+  padding: 3px 5px 10px 5px;
+  border-top: 1px solid var(--depth-1);
+}

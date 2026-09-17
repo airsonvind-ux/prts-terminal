@@ -1,0 +1,21 @@
+/* src/App.module.css */
+
+/*
+ * 应用根容器
+ *
+ * 职责：提供一个全屏透明画布，作为 DroneShellScene 内部
+ * position:absolute 元素的定位参照系。
+ *
+ * 三层视图（外壳/内容/覆盖）的 z-index 堆叠不由本文件管理——
+ * 外壳层的面、翅膀、尾巴、缩放热区、覆盖层遮罩已在
+ * DroneShellScene.module.css 和 OverlayContainer.module.css 中各自闭环。
+ * App 层只是画布，不参与子元素的堆叠决策。
+ */
+
+.app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+}

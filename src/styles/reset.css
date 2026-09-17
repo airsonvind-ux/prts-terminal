@@ -1,0 +1,31 @@
+/* styles/reset.css */
+
+/*
+ * 应用级全局重置
+ *
+ * 透明悬浮窗的三条硬约束：
+ *   1. 所有祖先节点背景透明 —— 否则立方体外壳会"漂"在白块里
+ *   2. 无边距 —— body 的默认 8px margin 会偏移整个布局
+ *   3. 禁止文本选中 —— 拖拽窗口时划过文字不应出现蓝色选区
+ *
+ * 与 scrollbar.css 并列位于 styles/，在 main.tsx 中最先引入。
+ */
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: visible;
+  user-select: none;
+}

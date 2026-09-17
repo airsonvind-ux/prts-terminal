@@ -1,0 +1,19 @@
+/* 设置页 · 关于子页样式（极简：名称 + 版本两行） */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.version {
+  font-size: 11px;
+  color: var(--text-3);
+}

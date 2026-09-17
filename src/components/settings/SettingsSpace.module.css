@@ -1,0 +1,105 @@
+/* 设置页 · 空间子页样式 */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 工作空间：多行排布（label 行 / 路径全文行 / 按钮行 / hint） ── */
+
+.wsLabel {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+/* 路径全文独立行：长路径可换行，不与 label/按钮争宽度 */
+.wsValue {
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.5;
+  word-break: break-all;
+  padding: 1px 0 2px;
+}
+
+.wsValueEmpty {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 1px 0 2px;
+}
+
+.wsActions {
+  display: flex;
+}
+
+.pickButton {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.pickButton:hover {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.pickButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wsHint {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+/* ── 技能：容器内行式列表（成块 + 行分隔 + hover） ── */
+
+.skillList {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--depth-3);
+}
+
+.skillRow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+}
+
+.skillRow + .skillRow {
+  border-top: 1px solid var(--depth-1);
+}
+
+.skillRow:hover {
+  background: var(--depth-4);
+}
+
+.skillName {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.skillDesc {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: var(--text-3);
+}

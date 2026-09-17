@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "prts-terminal",
+  "version": "0.1.0",
+  "identifier": "com.tauri-app.prts-terminal",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "prts-terminal",
+        "width": 660,
+        "height": 660,
+        "transparent": true,
+        "decorations": false,
+        "shadow": false,
+        "dragDropEnabled": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "resources": {
+      "resources/arknights.db": "./",
+      "src/knowledge/": "resources/knowledge/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

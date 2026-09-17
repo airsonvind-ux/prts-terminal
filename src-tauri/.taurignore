@@ -1,0 +1,5 @@
+# 忽略 SQLite 数据库文件，避免写操作触发 dev 模式热重载
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

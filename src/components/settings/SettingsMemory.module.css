@@ -1,0 +1,297 @@
+/* 设置页 · 记忆子页样式（初步） */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+.busyHint {
+  font-size: 11px;
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+/* ── 通用按钮 ── */
+
+.btn {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btnDanger {
+  border-color: var(--warn);
+  color: #e6cf9a;
+}
+
+.btnPrimary {
+  border-color: var(--accent);
+}
+
+/* ── 成长列表（容器成块 + 行分隔 + hover） ── */
+
+.list {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--depth-3);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.row + .row {
+  border-top: 1px solid var(--depth-1);
+}
+
+.row:hover {
+  background: var(--depth-4);
+}
+
+.rowActive {
+  background: var(--depth-4);
+}
+
+.rowName {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.rowBrief {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowMeta {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── 编辑表单 ── */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--depth-3);
+}
+
+.fieldLabel {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.input,
+.textarea {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.input:focus,
+.textarea:focus {
+  border-color: var(--accent);
+}
+
+.textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.formMeta {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ── 当前注入 ── */
+
+.recentList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recentItem {
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.45;
+}
+
+.recentDate {
+  color: var(--text-3);
+  margin-right: 4px;
+}
+
+.caption {
+  font-size: 11px;
+  color: var(--text-3);
+  margin: 2px 0;
+}
+
+.preText {
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--depth-4);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tidyMsg {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+/* ── 浮层（查看记忆 / 清除确认） ── */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.modal {
+  width: min(560px, 86vw);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-md, 6px);
+  overflow: hidden;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--depth-1);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.modalBody {
+  padding: 8px 10px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--depth-1);
+}
+
+.viewerItem {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+}
+
+.viewerHead {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.viewerHead:hover {
+  background: var(--depth-4);
+}
+
+.viewerTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.viewerMeta {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.viewerDetail {
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 6px 8px;
+  border-top: 1px solid var(--depth-1);
+  background: var(--depth-4);
+}

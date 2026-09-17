@@ -1,0 +1,77 @@
+/* 设置页通用组件样式（Section / Row / Note / Warning） */
+
+/* ── Section（节标题统一规范：所有设置页共用） ──
+ * 小标题：600 字重、字号大于正文（正文 11px → 标题 12px）、与内容明确间距、
+ * 无装饰线（层级由字号/间距承载）；节间大间距分隔（section margin-bottom）。 */
+
+.section {
+  margin-bottom: 16px;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.sectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0 0 8px;
+}
+
+.sectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── 说明块（长文落点） ── */
+
+.sectionNote {
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-2);
+  background: var(--depth-4);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+.sectionWarning {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #e6cf9a;
+  background: var(--depth-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+}
+
+/* ── Row（stacked：label 上 / hint 中 / control 下） ── */
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rowLabel {
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.rowHint {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+.rowHintWarn {
+  font-size: 11px;
+  color: var(--warn);
+  line-height: 1.4;
+}
+
+.rowControl {
+  margin-top: 2px;
+}

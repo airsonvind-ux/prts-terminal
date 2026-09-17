@@ -1,0 +1,84 @@
+/* src/components/overlay/ToastHost.module.css */
+
+/*
+ * Toast 浮层 · 轻提示宿主
+ *
+ * createPortal 到 body 的 fixed 层（最高 z-index，覆盖 settings overlay 之上）：
+ * DroneShellScene 的 3D transform 会破坏后代 fixed 定位（fixed 相对变换祖先），
+ * 与 MessageList 右键菜单同模式 portal 到 body——overlay=null 时同样可显示。
+ *
+ * 视觉：居中顶部一排小条，圆角深色底 + 警示色描边（--warn），
+ * 点击小条手动关闭（dismiss）。pointer-events 在容器关、在条上开——
+ * 提示不挡周围交互（设置面板按钮仍可点）。
+ */
+
+.host {
+  position: fixed;
+  top: clamp(48px, 13vh, 104px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  /* 容器不拦截指针；具体小条再开 */
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  max-width: min(70vw, 320px);
+  padding: 5px 14px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-1);
+  border: 1px solid var(--depth-0);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  user-select: none;
+  animation: toastEnter 160ms ease-out;
+}
+
+/* 警示（默认 kind）：警示色描边（拦截/中止类提醒——M3-B 视觉警示防误触） */
+.warning {
+  border-color: var(--warn);
+  color: #e6cf9a;
+}
+
+/* 信息：强调色描边 */
+.info {
+  border-color: var(--accent);
+}
+
+/* 可点 toast（模块 D：带动作——压缩完成 → 点击查看分界卡） */
+.actionable {
+  border-color: var(--accent);
+  color: #bfe0ff;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.actionable:hover {
+  background: var(--depth-3);
+  transform: translateY(-1px);
+}
+
+.actionable::after {
+  content: " ›";
+  opacity: 0.7;
+}
+
+@keyframes toastEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

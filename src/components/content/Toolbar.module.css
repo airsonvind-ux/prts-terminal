@@ -1,0 +1,142 @@
+/* src/components/content/Toolbar.module.css */
+
+/*
+ * 对话标题栏 · 高度 = face-size / 12
+ *
+ * 左右分布：左侧标题文字（T1 灰），右侧操作按钮组。
+ * 所有尺寸从 --face-size 衍生（基准 240px），跟随界面整体缩放。
+ * 按钮 hover 时宽度展开至 face-size × --btn-expand-ratio，
+ * 图标靠左，中文名从右侧淡入滑入。展开通过 flex 自然推挤相邻按钮。
+ * ◷ 和 ⚙ 在对应面板开启时进入 .isActive 常驻展开态，图标和文字转为 accent 蓝。
+ */
+
+.bar {
+  height: calc(var(--face-size) * 0.0833);       /* 20 / 240 */
+  min-height: calc(var(--face-size) * 0.0833);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 calc(var(--face-size) * 0.0167);    /*  4 / 240 */
+  user-select: none;
+  cursor: grab;
+}
+
+.title {
+  position: relative;
+  z-index: 12; /* 上缘缩放热区（z-11）让位：标题顶部不被缩放带切掉 */
+  color: var(--text-2);
+  font-size: calc(var(--face-size) * 0.0458);    /* 11 / 240 */
+  font-family: var(--font-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 180ms ease;
+}
+
+.title:hover {
+  color: var(--text-1);
+}
+
+.title::before {
+  content: "▸\00A0";
+  color: var(--accent);
+  transition: opacity 180ms ease;
+}
+
+.title:empty::before {
+  content: none;
+}
+
+.titleActive {
+  color: var(--accent);
+}
+
+.titleActive::before {
+  content: "▾\00A0";
+}
+
+.actions {
+  position: relative;
+  z-index: 12; /* 上缘缩放热区（z-11）让位：按钮完整可点（含 hover 展开区） */
+  display: flex;
+  align-items: center;
+  gap: calc(var(--face-size) * 0.025);           /*  6 / 240 */
+  flex-shrink: 0;
+}
+
+/* ── 按钮容器 ── */
+
+.btn {
+  display: flex;
+  align-items: center;
+  height: calc(var(--face-size) * 0.075);        /* 18 / 240 */
+  width:  calc(var(--face-size) * 0.075);
+  overflow: hidden;
+  border: none;
+  border-radius: calc(var(--face-size) * 0.0333); /* 8 / 240 */
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: width 200ms ease, background 180ms ease;
+}
+
+.btn:hover {
+  width: calc(var(--face-size) * var(--btn-expand-ratio));
+  background: var(--depth-4);
+}
+
+/* ── 图标 ── */
+
+.icon {
+  width:  calc(var(--face-size) * 0.075);        /* 18 / 240 */
+  height: calc(var(--face-size) * 0.075);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-1);
+  font-size: calc(var(--face-size) * 0.0583);    /* 14 / 240 */
+  line-height: 1;
+  transition: color 180ms ease;
+}
+
+.btn:hover .icon {
+  color: var(--accent);
+}
+
+/* ── 文字标签 ── */
+
+.label {
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(-4px);
+  color: var(--text-2);
+  font-size: calc(var(--face-size) * 0.0458);    /* 11 / 240 */
+  font-family: var(--font-ui);
+  transition: opacity 150ms ease, transform 200ms ease, color 180ms ease;
+}
+
+.btn:hover .label {
+  opacity: 1;
+  transform: translateX(0);
+  transition-delay: 60ms;
+}
+
+/* ── 已打开态：面板开启时按钮常驻展开 ── */
+
+.btn.isActive {
+  width: calc(var(--face-size) * var(--btn-expand-ratio));
+  background: var(--depth-4);
+}
+
+.btn.isActive .icon {
+  color: var(--accent);
+}
+
+.btn.isActive .label {
+  opacity: 1;
+  transform: translateX(0);
+  color: var(--accent);
+}

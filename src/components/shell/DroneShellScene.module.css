@@ -1,0 +1,289 @@
+/* src/components/shell/DroneShellScene.module.css */
+
+/*
+ * 阶段 C · 坐标参数体系
+ *
+ * 所有几何变量定义在 .cube 上（立方体自身的参数体系，不污染外层画布）。
+ * 修改 --face-size 可整体缩放立方体（窗口放大时配合使用）。
+ * 后续步骤（左面、底面、翅膀、尾巴）只追加规则，不改动已有变量。
+ */
+
+/* ── 全局默认值：Hook 通过 document.documentElement 覆写 ── */
+
+:root {
+  --face-size: 360px;
+}
+
+/* ── 容器：透明画布，.cube 的定位参照 ── */
+
+.shell {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* ── 立方体坐标原点 ── */
+
+.cube {
+  /* 参数体系：立方体所有几何变量定义于此 */
+  --left-width: calc(var(--face-size) * 0.167);  /* 左面宽度，也是退远向量的 dx */
+  --bottom-height: calc(var(--face-size) * 0.125); /* 底面高度，也是退远向量的 dy */
+
+  /*
+   * CSS 变量 ↔ TSX viewBox 耦合关系
+   *
+   * CSS 侧的 0.167 和 0.125 来自主比例 24:4:3（正面:左面:底面），
+   * TSX 侧三组 SVG viewBox 的整数由此推导。修改主比例时，CSS 和 TSX
+   * 两处必须同步更新。
+   *
+   *   主比例        viewBox 推导
+   *   ─────────────────────────────────────────
+   *   左面  4       LEFT_FACE   0 0 4 27     4 = 左面宽
+   *   正面 24                                27 = 24 + 3（正面 + 底面）
+   *   底面  3
+   *
+   *   正面 24       BOTTOM_FACE 0 0 28 3    28 = 24 + 4（正面 + 左面）
+   *   左面  4                                 3 = 底面高
+   *   底面  3
+   *
+   *   正面 24       JUNCTION    0 0 28 27   28 = 24 + 4（正面 + 左面）
+   *   左面  4                                27 = 24 + 3（正面 + 底面）
+   *   底面  3
+   */
+
+  /*
+   * 视觉质量补偿：立方体有左面（左外延）和尾巴（下外延），
+   * 右边和上方无附属元素。正面从居中点向右上偏移，
+   * 补偿左面和尾巴的质量，使整体视觉重心回正。
+   */
+  --h-shift: calc(var(--left-width) / 2);   /* 左面质量补偿，右移 */
+  --v-shift: calc(var(--face-size) * 0.067);  /* 尾巴质量补偿，上移。16px @ 240 */
+
+  position: fixed;
+  width: var(--face-size);
+  height: var(--face-size);
+  left: calc(50% - var(--face-size) / 2 + var(--h-shift));
+  top:  calc(50% - var(--face-size) / 2 - var(--v-shift));
+  /*
+   * fixed 而非 absolute 的原因（2026-08-30 实测确认）：
+   * WebView2 流式输出期间，.app 图层树内 absolute 合成层的 transform 更新
+   * 被合成器饿死（资源优先给持续变化的 ChatView 内容图层），动画位移被压制到
+   * ~20%；fixed 的合成层挂在视口图层（树外），更新正常。
+   * .app 全屏（=视口），left/top 的 50% calc 参照不变，视觉位置与 absolute 一致。
+   * 拖拽（移动窗口）与缩放（改 --face-size）均不受影响。
+   */
+  will-change: transform;
+  /*
+   * 批 2-D：transform 归动画引擎逐帧直写（情绪动作 translateY/rotate），
+   * 不再使用 CSS 动画（--cube-tilt / cube-float keyframes 已移除）。
+   * 原点 = 正面左上角。
+   * 后续所有面、翅膀、尾巴以此为 position: absolute 参照。
+   *
+   * ⚠️ 此元素不可加 overflow: hidden。
+   * 翅膀和尾巴通过负方向 left/top 外延超出 .cube 边界，hidden 会裁切它们。
+   */
+}
+
+/* ── 接缝线：单 SVG 覆盖立方体包围盒，比例 28:27 ── */
+
+.junctionLines {
+  position: absolute;
+  left: calc(-1 * var(--left-width));
+  top: 0;
+  width: calc(var(--face-size) + var(--left-width));
+  height: calc(var(--face-size) + var(--bottom-height));
+  overflow: visible;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* ── 正面 ── */
+
+.frontFace {
+  position: relative;
+  z-index: 2;              /* 在左面和底面之上 */
+  width: 100%;
+  height: 100%;
+  background: var(--depth-2);
+  border: none;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;  /* 为 Step 6 内容区（标题栏+内容+输入）预留 */
+}
+
+/* ── 左面（SVG 平行四边形，stroke-linejoin round 圆角） ── */
+
+.leftFace {
+  position: absolute;
+  left: calc(-1 * var(--left-width));
+  top: 0;
+  width:  var(--left-width);
+  height: calc(var(--face-size) + var(--bottom-height));  /* H + dy = 240 + 30 = 270 */
+  z-index: 0;
+  overflow: visible;
+  cursor: grab;
+  /*
+   * 退远向量 = (-left-width, bottom-height)。
+   * viewBox 比例 4:27 = left-width : (face-size + bottom-height)，来自 24:4:3。
+   * 具体顶点坐标见 TSX 中 smoothPolygon 调用，此处为几何约定注释。
+   *   后上左 (0, 3)    前上左 (x≈4, y≈0)    x 溢出防接缝，y 微降贴 border
+   *   后下左 (0, 27)   前下左 (x≈4, y=24)
+   */
+}
+
+/* ── 底面（SVG 平行四边形，stroke-linejoin round 圆角） ── */
+
+.bottomFace {
+  position: absolute;
+  left: calc(-1 * var(--left-width));
+  top: var(--face-size);
+  width: calc(var(--face-size) + var(--left-width));  /* 240 + 40 = 280 */
+  height: var(--bottom-height);
+  z-index: 0;
+  overflow: visible;
+  cursor: grab;
+  /*
+   * 退远向量 = (-left-width, bottom-height)，与左面一致。
+   * viewBox 比例 28:3 = (face-size + left-width) : bottom-height，来自 24:4:3。
+   * 具体顶点坐标见 TSX 中 smoothPolygon 调用（含手动微调的溢出补偿）。
+   *   前下左 (x≈4, 0)    前下右 (x≈28, 0)
+   *   后下右 (x=24, 3)    后下左 (0, 3)   ← 与左面后下左共享
+   */
+}
+
+/* ── 翅膀（Step 4）── */
+
+.wingRight {
+  position: absolute;
+  z-index: 0;
+  overflow: visible;
+  width: calc(var(--face-size) / 3);
+  height: calc(var(--face-size) * 5 / 6);
+  top: 50%;
+  margin-top: calc(var(--face-size) * -5 / 12);
+  left: 100%;
+  /* 批 2-D：transform 归引擎逐帧直写（rotate），transform-origin 保留 */
+  transform-origin: left center;
+}
+
+.wingLeft {
+  position: absolute;
+  z-index: 0;
+  overflow: visible;
+  width: calc(var(--face-size) / 3);
+  height: calc(var(--face-size) * 5 / 6);
+  top: 50%;
+  margin-top: calc(var(--face-size) * -5 / 12);
+  right: calc(100% + var(--left-width) * 3 / 4);
+  /* 批 2-D：transform 归引擎逐帧直写（rotate），transform-origin 保留 */
+  transform-origin: right center;
+}
+
+/* ── 尾巴（Step 5 · 单 SVG 路径 + rAF 驱动）── */
+
+.tailSvg {
+  position: absolute;
+  /* 锚点：底面几何中心 */
+  left: calc((var(--face-size) - var(--left-width)) / 2);
+  top: calc(var(--face-size) + var(--bottom-height) / 2);
+  width: calc(var(--face-size) / 8);       /* 30px @ 240 */
+  height: calc(var(--face-size) * 5 / 12);  /* 100px @ 240 */
+  transform: translateX(-50%);
+  z-index: -1;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* ── 缩放热区（8 方向：四缘 + 四角。2026-07-11 从内容层提升至外壳层）──
+   规则：实心图形内侧、贴轮廓线 6px（缘）/ 12×12（角）；
+   无视觉标记，仅光标暗示；z-index:11 在遮罩之上，覆盖层打开时仍可缩放。
+   方向：拖哪边窗口向哪边生长，锚点 = 热区对角（见 resizeGeometry.ts）。 */
+
+/* 右缘（正面右边界，全高） */
+.resizeRight {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  z-index: 11;
+  cursor: ew-resize;
+}
+
+/* 上缘（正面顶部 6px；标题/按钮以更高层级让位） */
+.resizeTop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 11;
+  cursor: ns-resize;
+}
+
+/* 左缘（贴左面左缘；自后上角（0.125·face）起至后下角） */
+.resizeLeft {
+  position: absolute;
+  left: calc(-1 * var(--left-width));
+  top: calc(var(--face-size) * 0.125);
+  width: 6px;
+  height: var(--face-size);
+  z-index: 11;
+  cursor: ew-resize;
+}
+
+/* 下缘（贴底面后缘；实心段宽度 = (face+left) × 23.8/28） */
+.resizeBottom {
+  position: absolute;
+  left: calc(-1 * var(--left-width));
+  top: calc(var(--face-size) + var(--bottom-height) - 6px);
+  width: calc((var(--face-size) + var(--left-width)) * 23.8 / 28);
+  height: 6px;
+  z-index: 11;
+  cursor: ns-resize;
+}
+
+/* ── 四角（12×12，正面四角内侧；声明在缘之后以覆盖边缘交叉区）── */
+
+.resizeTopLeft {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 12px;
+  height: 12px;
+  z-index: 11;
+  cursor: nwse-resize;
+}
+
+.resizeTopRight {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 12px;
+  height: 12px;
+  z-index: 11;
+  cursor: nesw-resize;
+}
+
+.resizeBottomLeft {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  z-index: 11;
+  cursor: nesw-resize;
+}
+
+.resizeBottomRight {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  z-index: 11;
+  cursor: nwse-resize;
+}
+
+/* ── 立方体上下浮动（批 2-D 移除：动画归引擎，情绪动作直写 transform） ── */

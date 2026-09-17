@@ -1,0 +1,1059 @@
+{
+  "openai": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "models": {
+      "chatgpt-4o-latest": {
+        "name": "Chatgpt 4o Latest",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "ft:gpt-4.1-2025-04-14": {
+        "name": "Ft:Gpt 4.1.2025.04.14",
+        "context": 1047576
+      },
+      "ft:gpt-4o-mini-2024-07-18": {
+        "name": "Ft:Gpt 4o Mini 2024.07.18",
+        "context": 128000
+      },
+      "gpt-3.5-turbo-1106": {
+        "name": "Gpt 3.5 Turbo 1106",
+        "context": 16385
+      },
+      "gpt-4.1-mini-2025-04-14": {
+        "name": "Gpt 4.1 Mini 2025.04.14",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4.1-nano-2025-04-14": {
+        "name": "Gpt 4.1 Nano 2025.04.14",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4.1-2025-04-14": {
+        "name": "Gpt 4.1.2025.04.14",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4o-2024-05-13": {
+        "name": "Gpt 4o 2024.05.13",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-2024-08-06": {
+        "name": "Gpt 4o 2024.08.06",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-2024-11-20": {
+        "name": "Gpt 4o 2024.11.20",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-audio-preview": {
+        "name": "Gpt 4o Audio Preview",
+        "context": 128000
+      },
+      "gpt-4o-audio-preview-2024-12-17": {
+        "name": "Gpt 4o Audio Preview 2024.12.17",
+        "context": 128000
+      },
+      "gpt-4o-audio-preview-2025-06-03": {
+        "name": "Gpt 4o Audio Preview 2025.06.03",
+        "context": 128000
+      },
+      "gpt-4o-mini-2024-07-18": {
+        "name": "Gpt 4o Mini 2024.07.18",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-mini-audio-preview": {
+        "name": "Gpt 4o Mini Audio Preview",
+        "context": 128000
+      },
+      "gpt-4o-mini-audio-preview-2024-12-17": {
+        "name": "Gpt 4o Mini Audio Preview 2024.12.17",
+        "context": 128000
+      },
+      "gpt-4o-mini-realtime-preview": {
+        "name": "Gpt 4o Mini Realtime Preview",
+        "context": 128000
+      },
+      "gpt-4o-mini-realtime-preview-2024-12-17": {
+        "name": "Gpt 4o Mini Realtime Preview 2024.12.17",
+        "context": 128000
+      },
+      "gpt-4o-mini-search-preview": {
+        "name": "Gpt 4o Mini Search Preview",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-mini-search-preview-2025-03-11": {
+        "name": "Gpt 4o Mini Search Preview 2025.03.11",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-realtime-preview": {
+        "name": "Gpt 4o Realtime Preview",
+        "context": 128000
+      },
+      "gpt-4o-realtime-preview-2024-12-17": {
+        "name": "Gpt 4o Realtime Preview 2024.12.17",
+        "context": 128000
+      },
+      "gpt-4o-realtime-preview-2025-06-03": {
+        "name": "Gpt 4o Realtime Preview 2025.06.03",
+        "context": 128000
+      },
+      "gpt-4o-search-preview": {
+        "name": "Gpt 4o Search Preview",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-search-preview-2025-03-11": {
+        "name": "Gpt 4o Search Preview 2025.03.11",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-5": {
+        "name": "Gpt 5",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-chat": {
+        "name": "Gpt 5 Chat",
+        "context": 128000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-chat-latest": {
+        "name": "Gpt 5 Chat Latest",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-5-mini": {
+        "name": "Gpt 5 Mini",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-mini-2025-08-07": {
+        "name": "Gpt 5 Mini 2025.08.07",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-nano": {
+        "name": "Gpt 5 Nano",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-nano-2025-08-07": {
+        "name": "Gpt 5 Nano 2025.08.07",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-search-api": {
+        "name": "Gpt 5 Search Api",
+        "context": 272000,
+        "supports_vision": true
+      },
+      "gpt-5-search-api-2025-10-14": {
+        "name": "Gpt 5 Search Api 2025.10.14",
+        "context": 272000,
+        "supports_vision": true
+      },
+      "gpt-5.1-chat-latest": {
+        "name": "Gpt 5.1 Chat Latest",
+        "context": 128000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.1-2025-11-13": {
+        "name": "Gpt 5.1.2025.11.13",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.2-chat-latest": {
+        "name": "Gpt 5.2 Chat Latest",
+        "context": 128000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.2-2025-12-11": {
+        "name": "Gpt 5.2.2025.12.11",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5-2025-08-07": {
+        "name": "Gpt 5.2025.08.07",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.3-chat-latest": {
+        "name": "Gpt 5.3 Chat Latest",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-5.4-mini": {
+        "name": "Gpt 5.4 Mini",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.4-nano": {
+        "name": "Gpt 5.4 Nano",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.4-2026-03-05": {
+        "name": "Gpt 5.4.2026.03.05",
+        "context": 1050000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-audio": {
+        "name": "Gpt Audio",
+        "context": 128000
+      },
+      "gpt-audio-1.5": {
+        "name": "Gpt Audio 1.5",
+        "context": 128000
+      },
+      "gpt-audio-2025-08-28": {
+        "name": "Gpt Audio 2025.08.28",
+        "context": 128000
+      },
+      "gpt-audio-mini": {
+        "name": "Gpt Audio Mini",
+        "context": 128000
+      },
+      "gpt-audio-mini-2025-10-06": {
+        "name": "Gpt Audio Mini 2025.10.06",
+        "context": 128000
+      },
+      "gpt-audio-mini-2025-12-15": {
+        "name": "Gpt Audio Mini 2025.12.15",
+        "context": 128000
+      },
+      "gpt-realtime": {
+        "name": "Gpt Realtime",
+        "context": 32000
+      },
+      "gpt-realtime-1.5": {
+        "name": "Gpt Realtime 1.5",
+        "context": 32000
+      },
+      "gpt-realtime-2025-08-28": {
+        "name": "Gpt Realtime 2025.08.28",
+        "context": 32000
+      },
+      "gpt-realtime-mini": {
+        "name": "Gpt Realtime Mini",
+        "context": 128000
+      },
+      "gpt-realtime-mini-2025-10-06": {
+        "name": "Gpt Realtime Mini 2025.10.06",
+        "context": 128000
+      },
+      "gpt-realtime-mini-2025-12-15": {
+        "name": "Gpt Realtime Mini 2025.12.15",
+        "context": 128000
+      },
+      "gpt-4.1": {
+        "name": "GPT-4.1",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4.1-mini": {
+        "name": "GPT-4.1 Mini",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4.1-nano": {
+        "name": "GPT-4.1 Nano",
+        "context": 1047576,
+        "supports_vision": true
+      },
+      "gpt-4o": {
+        "name": "GPT-4o",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-4o-mini": {
+        "name": "GPT-4o Mini",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gpt-5.1": {
+        "name": "GPT-5.1",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.1-codex-mini": {
+        "name": "GPT-5.1 Codex Mini",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.2": {
+        "name": "GPT-5.2",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.2-codex": {
+        "name": "GPT-5.2 Codex",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.3-codex": {
+        "name": "GPT-5.3 Codex",
+        "context": 400000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.3-codex-spark": {
+        "name": "GPT-5.3 Codex Spark",
+        "context": 128000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.4": {
+        "name": "GPT-5.4",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.5": {
+        "name": "GPT-5.5",
+        "context": 272000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gpt-5.6": {
+        "name": "GPT-5.6",
+        "context": 1050000,
+        "reasoning": true,
+        "supports_vision": true,
+        "thinking_levels": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "medium"
+      },
+      "gpt-5.6-luna": {
+        "name": "GPT-5.6 Luna",
+        "context": 1050000,
+        "reasoning": true,
+        "supports_vision": true,
+        "thinking_levels": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "medium"
+      },
+      "gpt-5.6-sol": {
+        "name": "GPT-5.6 Sol",
+        "context": 1050000,
+        "reasoning": true,
+        "supports_vision": true,
+        "thinking_levels": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "medium"
+      },
+      "gpt-5.6-terra": {
+        "name": "GPT-5.6 Terra",
+        "context": 1050000,
+        "reasoning": true,
+        "supports_vision": true,
+        "thinking_levels": [
+          "off",
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "medium"
+      },
+      "text-embedding-3-large": {
+        "name": "Text Embedding 3 Large",
+        "context": 8191
+      },
+      "text-embedding-3-small": {
+        "name": "Text Embedding 3 Small",
+        "context": 8191
+      },
+      "o1": {
+        "name": "O1",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "o1-2024-12-17": {
+        "name": "O1.2024.12.17",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "o3": {
+        "name": "o3",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "o3-2025-04-16": {
+        "name": "O3.2025.04.16",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "o3-mini": {
+        "name": "o3 Mini",
+        "context": 200000,
+        "reasoning": true
+      },
+      "o3-mini-2025-01-31": {
+        "name": "O3 Mini 2025.01.31",
+        "context": 200000,
+        "reasoning": true
+      },
+      "o4-mini": {
+        "name": "o4 Mini",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "o4-mini-2025-04-16": {
+        "name": "O4 Mini 2025.04.16",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      }
+    }
+  },
+  "anthropic": {
+    "defaults": {
+      "api_type": "anthropic-messages",
+      "base_url": "https://api.anthropic.com"
+    },
+    "models": {
+      "claude-fable-5": {
+        "name": "Claude Fable 5",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-haiku-4-5": {
+        "name": "Claude Haiku 4.5",
+        "context": 200000,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "claude-mythos-5": {
+        "name": "Claude Mythos 5",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-1": {
+        "name": "Claude Opus 4.1",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-5": {
+        "name": "Claude Opus 4.5",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-6": {
+        "name": "Claude Opus 4.6",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-7": {
+        "name": "Claude Opus 4.7",
+        "context": 1000000,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "claude-sonnet-4-5": {
+        "name": "Claude Sonnet 4.5",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-sonnet-4-5-20250929": {
+        "name": "Claude Sonnet 4.5 20250929",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-sonnet-4-6": {
+        "name": "Claude Sonnet 4.6",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true,
+        "compat": {
+          "thinking_format": "anthropic"
+        }
+      },
+      "claude-sonnet-5": {
+        "name": "Claude Sonnet 5",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true,
+        "compat": {
+          "thinking_format": "anthropic"
+        }
+      },
+      "claude-4-opus-20250514": {
+        "name": "Claude 4 Opus 20250514",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-4-sonnet-20250514": {
+        "name": "Claude 4 Sonnet 20250514",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-sonnet-4-20250514": {
+        "name": "Claude Sonnet 4",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-haiku-4-5-20251001": {
+        "name": "Claude Haiku 4.5 20251001",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-20250514": {
+        "name": "Claude Opus 4",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-1-20250805": {
+        "name": "Claude Opus 4.1 20250805",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-5-20251101": {
+        "name": "Claude Opus 4.5 20251101",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "claude-opus-4-6-20260205": {
+        "name": "Claude Opus 4.6 20260205",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true
+      }
+    }
+  },
+  "gemini": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+    },
+    "models": {
+      "gemini-2.0-flash": {
+        "name": "Gemini 2.0 Flash",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-2.0-flash-001": {
+        "name": "Gemini 2.0 Flash 001",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-2.0-flash-lite": {
+        "name": "Gemini 2.0 Flash Lite",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-2.0-flash-lite-001": {
+        "name": "Gemini 2.0 Flash Lite 001",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-2.5-computer-use-preview-10-2025": {
+        "name": "Gemini 2.5 Computer Use Preview 10.2025",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "gemini-2.5-flash": {
+        "name": "Gemini 2.5 Flash",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-flash-lite": {
+        "name": "Gemini 2.5 Flash Lite",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-flash-lite-preview-06-17": {
+        "name": "Gemini 2.5 Flash Lite Preview 06.17",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-flash-lite-preview-09-2025": {
+        "name": "Gemini 2.5 Flash Lite Preview 09.2025",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-flash-native-audio-latest": {
+        "name": "Gemini 2.5 Flash Native Audio Latest",
+        "context": 1048576
+      },
+      "gemini-2.5-flash-native-audio-preview-09-2025": {
+        "name": "Gemini 2.5 Flash Native Audio Preview 09.2025",
+        "context": 1048576
+      },
+      "gemini-2.5-flash-native-audio-preview-12-2025": {
+        "name": "Gemini 2.5 Flash Native Audio Preview 12.2025",
+        "context": 1048576
+      },
+      "gemini-2.5-flash-preview-09-2025": {
+        "name": "Gemini 2.5 Flash Preview 09.2025",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-pro": {
+        "name": "Gemini 2.5 Pro",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-2.5-pro-preview-tts": {
+        "name": "Gemini 2.5 Pro Preview Tts",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-3-flash-preview": {
+        "name": "Gemini 3 Flash Preview",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-3-pro-preview": {
+        "name": "Gemini 3 Pro Preview",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-3.1-flash-lite-preview": {
+        "name": "Gemini 3.1 Flash Lite Preview",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-3.1-pro-preview": {
+        "name": "Gemini 3.1 Pro Preview",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-3.1-pro-preview-customtools": {
+        "name": "Gemini 3.1 Pro Preview Customtools",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-exp-1114": {
+        "name": "Gemini Exp 1114",
+        "context": 1048576,
+        "supports_vision": true
+      },
+      "gemini-exp-1206": {
+        "name": "Gemini Exp 1206",
+        "context": 2097152,
+        "supports_vision": true
+      },
+      "gemini-flash-latest": {
+        "name": "Gemini Flash Latest",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-flash-lite-latest": {
+        "name": "Gemini Flash Lite Latest",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-gemma-2-27b-it": {
+        "name": "Gemini Gemma 2.27b It",
+        "context": 8192,
+        "supports_vision": true
+      },
+      "gemini-gemma-2-9b-it": {
+        "name": "Gemini Gemma 2.9b It",
+        "context": 8192,
+        "supports_vision": true
+      },
+      "gemini-pro-latest": {
+        "name": "Gemini Pro Latest",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemini-robotics-er-1.5-preview": {
+        "name": "Gemini Robotics Er 1.5 Preview",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "gemma-3-27b-it": {
+        "name": "Gemma 3.27b It",
+        "context": 131072,
+        "supports_vision": true
+      },
+      "learnlm-1.5-pro-experimental": {
+        "name": "Learnlm 1.5 Pro Experimental",
+        "context": 32767,
+        "supports_vision": true
+      }
+    }
+  },
+  "deepseek": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://api.deepseek.com/v1"
+    },
+    "models": {
+      "deepseek-flash": {
+        "name": "DeepSeek V4.1 Flash",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true,
+        "compat": {
+          "thinking_format": "deepseek"
+        },
+        "thinking_levels": [
+          "off",
+          "low",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "high"
+      },
+      "deepseek-v4-flash": {
+        "name": "DeepSeek V4 Flash",
+        "context": 1000000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "deepseek"
+        },
+        "thinking_levels": [
+          "off",
+          "low",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "high"
+      },
+      "deepseek-v4-pro": {
+        "name": "DeepSeek V4 Pro",
+        "context": 1000000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "deepseek"
+        },
+        "thinking_levels": [
+          "off",
+          "low",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "high"
+      }
+    }
+  },
+  "zhipu": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4"
+    },
+    "models": {
+      "glm-4-air": {
+        "name": "GLM-4 Air",
+        "context": 128000
+      },
+      "glm-4-flash": {
+        "name": "GLM-4 Flash",
+        "context": 131072,
+        "supports_vision": true
+      },
+      "glm-4-plus": {
+        "name": "GLM-4 Plus",
+        "context": 131072,
+        "supports_vision": true
+      },
+      "glm-4.7-flash": {
+        "name": "GLM-4.7 Flash",
+        "context": 200000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "zhipu"
+        }
+      },
+      "glm-5": {
+        "name": "GLM-5",
+        "context": 200000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "zhipu"
+        }
+      },
+      "glm-5-turbo": {
+        "name": "GLM-5 Turbo",
+        "context": 205000,
+        "reasoning": true
+      },
+      "glm-5.1": {
+        "name": "GLM-5.1",
+        "context": 200000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "zhipu"
+        }
+      },
+      "glm-5.2": {
+        "name": "GLM-5.2",
+        "context": 1000000,
+        "reasoning": true,
+        "compat": {
+          "thinking_format": "zhipu"
+        }
+      },
+      "glm-5v-turbo": {
+        "name": "GLM-5V Turbo",
+        "context": 200000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "glm-4.7": {
+        "name": "GLM-4.7",
+        "context": 200000,
+        "reasoning": true
+      }
+    }
+  },
+  "kimi": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://api.moonshot.cn/v1"
+    },
+    "models": {
+      "kimi-k2.6": {
+        "name": "Kimi K2.6",
+        "context": 262144,
+        "supports_vision": true
+      },
+      "kimi-k2.7-code": {
+        "name": "Kimi K2.7 Code",
+        "context": 262144
+      },
+      "kimi-k3": {
+        "name": "Kimi K3",
+        "context": 1048576,
+        "reasoning": true,
+        "supports_vision": true
+      }
+    }
+  },
+  "qwen": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    },
+    "models": {
+      "qwen-max": {
+        "name": "Qwen Max",
+        "context": 32768
+      },
+      "qwen-plus": {
+        "name": "Qwen Plus",
+        "context": 131072
+      },
+      "qwen-turbo": {
+        "name": "Qwen Turbo",
+        "context": 131072
+      },
+      "qwen3-235b-a22b": {
+        "name": "Qwen3 235B",
+        "context": 131072,
+        "reasoning": true
+      }
+    }
+  },
+  "volcengine": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3"
+    },
+    "models": {
+      "doubao-seed-2-0-code-preview-260215": {
+        "name": "Doubao Seed 2.0 Code Preview",
+        "context": 256000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "doubao-seed-2-0-lite-260215": {
+        "name": "Doubao Seed 2.0 Lite",
+        "context": 256000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "doubao-seed-2-0-lite-260428": {
+        "name": "Doubao Seed 2.0 Lite (Full-Modal)",
+        "context": 256000,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "doubao-seed-2-0-mini-260215": {
+        "name": "Doubao Seed 2.0 Mini",
+        "context": 131072,
+        "supports_vision": true
+      },
+      "doubao-seed-2-0-pro-260215": {
+        "name": "Doubao Seed 2.0 Pro",
+        "context": 262144,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "deepseek-v4-flash-260425": {
+        "name": "DeepSeek V4 Flash",
+        "context": 1048576
+      },
+      "deepseek-v4-pro-260425": {
+        "name": "DeepSeek V4 Pro",
+        "context": 1048576,
+        "reasoning": true
+      },
+      "doubao-seed-2-1-pro-260628": {
+        "name": "Doubao Seed 2.1 Pro",
+        "context": 262144,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "doubao-seed-2-1-turbo-260628": {
+        "name": "Doubao Seed 2.1 Turbo",
+        "context": 262144,
+        "reasoning": true,
+        "supports_vision": true
+      },
+      "glm-4-7-251222": {
+        "name": "Glm 4.7",
+        "context": 204800,
+        "reasoning": true
+      },
+      "kimi-k2-thinking-251104": {
+        "name": "Kimi K2 Thinking",
+        "context": 229376,
+        "reasoning": true
+      },
+      "doubao-lite-128k": {
+        "name": "Doubao Lite 128K",
+        "context": 131072
+      },
+      "doubao-pro-128k": {
+        "name": "Doubao Pro 128K",
+        "context": 131072
+      },
+      "doubao-pro-256k": {
+        "name": "Doubao Pro 256K",
+        "context": 262144
+      }
+    }
+  },
+  "ollama": {
+    "defaults": {
+      "api_type": "openai-completions",
+      "base_url": "http://localhost:11434/v1",
+      "compat": {
+        "auth": "none"
+      }
+    },
+    "models": {
+      "deepseek-v3.1:671b-cloud": {
+        "name": "Deepseek V3.1:671b Cloud",
+        "context": 163840
+      },
+      "gemma3": {
+        "name": "Gemma 3",
+        "context": 131072,
+        "supports_vision": true
+      },
+      "gpt-oss:120b-cloud": {
+        "name": "Gpt Oss:120b Cloud",
+        "context": 131072
+      },
+      "gpt-oss:20b-cloud": {
+        "name": "Gpt Oss:20b Cloud",
+        "context": 131072
+      },
+      "llama3.1": {
+        "name": "Llama 3.1",
+        "context": 131072
+      },
+      "llama3.2": {
+        "name": "Llama 3.2",
+        "context": 131072
+      },
+      "mistral": {
+        "name": "Mistral",
+        "context": 32768
+      },
+      "qwen2.5": {
+        "name": "Qwen 2.5",
+        "context": 131072
+      },
+      "qwen3": {
+        "name": "Qwen 3",
+        "context": 131072
+      },
+      "qwen3-coder:480b-cloud": {
+        "name": "Qwen3 Coder:480b Cloud",
+        "context": 262144
+      }
+    }
+  }
+}

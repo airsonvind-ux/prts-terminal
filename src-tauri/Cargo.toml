@@ -1,0 +1,68 @@
+[package]
+name = "prts-terminal"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "prts_terminal_lib"
+# cdylib 已移除：桌面构建（--bins）不需要它（移动端产物），
+# 且带 tauri/custom-protocol feature 时其链接在 rustc 1.95 MSVC 下
+# 会因 sqlite3.o 的 __imp_strchr/strrchr/memchr 无法解析而失败（2026-08-15 打包排查）。
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+futures-util = "0.3"
+log = "0.4"
+# 文件工具 grep 的匹配引擎（Rust 生态基础库：无回溯、线性时间；
+# 不引入 ignore/walkdir——依赖树保持极简，gitignore 语义自研见 tools/fs_grep.rs）
+regex = "1"
+# 时间参照工具（Phase4 1.3）：本地时间、星期、UTC 偏移与格式化。
+# 特性裁剪：仅需 clock（now / Local），不带 oldtime / wasmbind。
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# IANA 时区名（如 Asia/Shanghai；Windows 走 WinRT Calendar）。
+# chrono 的 clock 特性本就依赖它，版本同源、无额外分裂。
+iana-time-zone = "0.1"
+# 通用重试的退避 sleep（缺陷 3）：复用 Tauri 的 tokio runtime
+# macros：M3-B 取消点 select!（dispatch_turn / preflight）
+tokio = { version = "1", features = ["time", "sync", "macros"] }
+# env_logger = "0.11"
+# M4 降权执行：Windows 受限令牌 / Job / ACL / 进程创建。
+# 复用 tauri 依赖链已锁定的 windows 0.61（Cargo.lock 同版本，不引入第二份）；
+# feature 只开实现所需模块，随 tauri 既有 feature 并集编译。
+# 非 Windows 目标不编译（exec/spawn_win32.rs 由 #[cfg(windows)] 门控）。
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+# M5 网络层：web_fetch 的 HTML 正文提取（readabilityrs = Mozilla Readability 的 Rust 移植，
+# Firefox Reader View 同源算法；输入纯 HTML 字符串，输出 text/markdown 双形态，不自带 fetch）。
+# 精确 pin：0.1.x 阶段 API 可能变动，升级由主对话主动决策（2026-09-05 选型核实，锁 ≥0.1.4
+# 的安全加固：script 泄漏修复 / 递归深度上限 / markdown 注入封堵）。
+# 传递依赖为 scraper/html5ever 系（约 11-14 crate，冷编译 +40~120s 一次性）。
+readabilityrs = "=0.1.4"
+tauri-plugin-prevent-default = "5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+

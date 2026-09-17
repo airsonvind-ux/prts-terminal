@@ -1,0 +1,197 @@
+/* src/components/content/InputArea.module.css */
+
+/*
+ * 输入区 · 36px 最小高度
+ *
+ * 占据 inputRow 的 flex:1 空间。
+ * 发送按钮双态：宽药丸（未聚焦）→ 正圆（聚焦）。
+ * ::before 充能条从左侧以 --send-charge 宽度填充。
+ *
+ * 配色：背景继承 frontFace D2 #26282a。
+ */
+
+.wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0px;
+  /* 高度跟随 textarea 内容（auto-grow），最小 36px */
+  height: auto;
+  min-height: 36px;
+}
+
+.textarea {
+  flex: 1;
+  height: 28px;
+  /* auto-grow 上限：两行半 = 2.5×20px line-height + padding(7+1) */
+  max-height: 58px;
+  overflow-y: auto;
+  padding: 7px 16px 1px 8px;
+  border: none;
+  border-radius: 14px 0 0 14px;
+  background: var(--depth-3);
+  color: var(--text-1);
+  font-size: var(--text-md);
+  font-family: var(--font-ui);
+  line-height: 20px;
+  resize: none;
+  outline: none;
+  /* 形态过渡：圆角/背景色与按钮同节奏（0.3s cubic-bezier）。
+   * 高度不用 CSS transition——auto-grow 判定与过渡互相耦合（隐式起始值
+   * 被强制 reflow 推进，引发「先变小再变大」/同行数误触发），
+   * 高度动画由 resizeToContent 用 WAAPI 显式控制。
+   * mask 凹弧不可插值（CSS 渐变参数不可动画），保持离散切换——
+   * 切换瞬间由圆角生长动画接管视觉 */
+  transition:
+    border-radius 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 右侧 "（" 形凹弧：单行拼合造型（凹弧容纳圆形发送按钮）。
+   * 多行态由 .multiline 移除（造型切换为对称圆角，见下）。
+   * 注意：-webkit-mask-image 与 mask-image 须同时写且同值，
+   * 标准属性声明在后会覆盖前者（此前 ellipse 方案被旧 circle 覆盖）。 */
+  -webkit-mask-image: radial-gradient(
+    circle 24px at calc(100% + 12px) 50%,
+    transparent 23px,
+    black 24px
+  );
+  mask-image: radial-gradient(
+    circle 24px at calc(100% + 12px) 50%,
+    transparent 23px,
+    black 24px
+  );
+}
+
+/* 多行态：凹弧退场，右端恢复与左侧一致的圆角（对称容器 + 独立按钮） */
+.multiline {
+  -webkit-mask-image: none;
+  mask-image: none;
+  border-radius: 14px;
+}
+
+/* textarea 内部滚动不需要滚动条 UI（滚轮/方向键可用；
+ * 且滚动条位于右端，会被凹弧/圆角遮挡，观感差） */
+.textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.textarea {
+  scrollbar-width: none;
+}
+
+.textarea::placeholder {
+  color: var(--text-3);
+}
+
+.textarea:focus {
+  background: var(--depth-4);
+}
+
+/* ── 发送按钮 ── */
+
+.btnWrapper {
+  position: relative;
+  flex-shrink: 0;
+  /* 多行态向右让位（0→4px）：textarea 收缩产生空隙，按钮绝对位置不变，不溢出窗口 */
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 多行态：圆角与按钮之间留 4px 空隙；单行态回位嵌凹弧（拼合造型） */
+.textarea.multiline + .btnWrapper {
+  margin-left: 4px;
+}
+
+.sendBtn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 14px;
+  background: var(--depth-4);
+  color: var(--text-3);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition:
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-radius 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 充能条：从左填充 accent 蓝 */
+.sendBtn::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--send-charge, 0%);
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.15s ease-out;
+}
+
+/* 聚焦态：缩为正圆 */
+.sendBtnFocused {
+  width: 28px;
+  border-radius: 50%;
+  color: #fff;
+}
+
+/* 中止态（生成中无字）：方块危险色（--danger：破坏性操作） */
+.sendBtnStop {
+  color: var(--danger);
+}
+
+.sendBtnStop.sendBtnFocused {
+  color: var(--danger);
+}
+
+.sendBtnStop:hover {
+  color: var(--danger-hover);
+}
+
+/* ── SVG 箭头 ── */
+
+.arrowSvg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  width: 20px;
+  height: 20px;
+}
+
+.sendBtn:disabled {
+  cursor: default;
+}
+
+/* ── 发送涟漪：::after 伪元素，不创建独立合成层 ── */
+
+.sendBtnRipple::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 3;
+  animation: sendRipple 500ms ease-out forwards;
+}
+
+@keyframes sendRipple {
+  0%   { transform: translate(-50%, -50%) scale(0.3); opacity: 1; border-width: 2px; }
+  40%  { opacity: 0.8; }
+  100% { transform: translate(-50%, -50%) scale(4); opacity: 0; border-width: 0.5px; }
+}
+
+
+
+

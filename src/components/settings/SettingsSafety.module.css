@@ -1,0 +1,41 @@
+/* 设置页 · 安全子页样式（草案 v2：选项块 = radio 行 + 缩进说明小字） */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* 整个选项块（标题行 + 说明）可点选 */
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 2px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.option:hover {
+  background: var(--depth-4);
+}
+
+.optionHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.optionTitle {
+  cursor: pointer;
+}
+
+/* 说明：缩进对齐选项标题（radio 圆点宽 + 间距），灰调小字 */
+.optionNote {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  padding-left: 22px;
+}

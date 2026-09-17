@@ -1,0 +1,57 @@
+/* 设置页 · 应用子页样式 */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 置顶开关行 ── */
+
+.topRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.topTitle {
+  cursor: pointer;
+}
+
+.topHint {
+  margin: 1px 0 0 16px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+/* ── 退出（危险按钮，原通用页 quitButton 迁入） ── */
+
+.quitWrap {
+  display: flex;
+  justify-content: center;
+}
+
+.quitButton {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.quitButton:hover {
+  border-color: var(--danger);
+  background: var(--depth-4);
+}
+
+.quitButton:active {
+  color: var(--text-2);
+  background: var(--depth-1);
+}

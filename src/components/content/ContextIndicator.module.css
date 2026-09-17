@@ -1,0 +1,190 @@
+/* src/components/content/ContextIndicator.module.css */
+
+/*
+ * 圆环指示器 + 悬停浮层
+ *
+ * 圆环直径 20px，stroke 2px。
+ * 可见性：默认隐藏（width:0），活跃对话时展开（.visible）。
+ * 浮层绝对定位在圆环上方，三角箭头指向圆环中心。
+ * 模型名可点击，跳转设置页"模型服务"标签。
+ */
+
+/* ── 圆环容器 ── */
+
+.ringWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 0;
+  height: 28px;
+  flex-shrink: 0;
+  cursor: pointer;
+  opacity: 0;
+  overflow: hidden;
+  transition: width 0.25s ease, opacity 0.25s ease;
+}
+
+.visible {
+  width: 28px;
+  opacity: 1;
+}
+
+/* ── SVG 圆环 ── */
+
+.ring {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  transform: scale(0);
+  transition: transform 0.2s ease 0.08s;
+}
+
+.visible .ring {
+  transform: scale(1);
+}
+
+.track {
+  stroke: var(--text-3);
+}
+
+.fill {
+  transition: stroke-dashoffset 0.3s ease, stroke 0.4s ease;
+}
+
+/* ── 悬停浮层（Portal → body，fixed 定位） ── */
+
+.tooltip {
+  position: fixed;
+  background: var(--depth-0);
+  border: 0.5px solid rgba(74, 171, 234, 0.15);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: nowrap;
+  z-index: 1000;
+  pointer-events: auto;
+}
+
+/* 下方三角箭头（浮层在圆环上方，箭头向下指） */
+.tooltipArrow {
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 4px solid var(--depth-0);
+}
+
+/* ── 模型名（可点击，跳转设置） ── */
+
+.modelName {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.modelName:hover {
+  background: var(--depth-4);
+  color: var(--text-1);
+}
+
+/* ── 用量行 ── */
+
+.usage {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ── 高水位预警行（模块 D：≥70% 窗口追加提示） ── */
+
+.warning {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--warning, #e0a03a);
+}
+
+/* ── 压缩中：弧点绕圆环圆周旋转加载动画（模块 D） ── */
+
+/* 弧点（短弧）自身旋转——transform-origin 对齐 viewBox 圆心（20/2=10）；
+ * keyframes 显式 from rotate(0)→to rotate(360deg)：同函数列表走角度插值，
+ * 中间帧真实经过圆周各角度（此前整 svg 旋转遇 scale/rotate 混合退化为
+ * matrix 恒等插值、无可见动画——已修）。 */
+.arcDot {
+  stroke: var(--accent, hsl(205, 65%, 50%));
+  transform-box: view-box;
+  transform-origin: center;
+  animation: ctxArcSpin 1s linear infinite;
+}
+
+@keyframes ctxArcSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 压缩菜单（点击浮层：单一动作项，随状态切换，点击即执行） ── */
+
+.menu {
+  position: fixed;
+  background: var(--depth-0);
+  border: 0.5px solid rgba(74, 171, 234, 0.25);
+  border-radius: 6px;
+  padding: 4px;
+  /* 宽度贴合内容（max-content）：随「压缩 / 取消压缩」两档文本自然伸缩；
+   * flex + center 保证按钮在容器内居中（无 left-aligned 空隙） */
+  display: flex;
+  justify-content: center;
+  width: max-content;
+  min-width: 48px;
+  z-index: 1001;
+  pointer-events: auto;
+}
+
+.menuArrow {
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 4px solid var(--depth-0);
+}
+
+.menuAction {
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-1);
+  background: transparent;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.menuAction:hover {
+  background: var(--depth-3);
+  color: #fff;
+}

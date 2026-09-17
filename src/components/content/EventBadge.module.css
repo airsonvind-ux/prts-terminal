@@ -1,0 +1,229 @@
+/* src/components/content/EventBadge.module.css */
+
+/*
+ * Agent 处理过程展示
+ *
+ * 两层信息结构：
+ *   折叠行 — 阶段名 + 状态标签（始终可见）
+ *   展开区 — 具体内容（推理文本 / 工具名+摘要，点击展开）
+ *
+ * 状态标签两种视觉：
+ *   · 正在思考... / · 正在调用工具...  → 脉冲蓝色，表示活跃
+ *   · ✓ 思考完成    / · ✓ 工具调用完成  → 静态灰绿色，表示终态
+ */
+
+.badge {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  user-select: none;
+}
+
+/* ── 折叠行 ── */
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.toggle:hover {
+  color: var(--text-1);
+}
+
+/* ── 折叠三角 ── */
+
+.arrow {
+  display: inline-block;
+  font-size: 8px;
+  transition: transform 0.15s ease;
+  line-height: 1;
+}
+
+.arrowOpen {
+  transform: rotate(90deg);
+}
+
+/* ── 状态标签 ── */
+
+/*
+ * 活跃态：脉冲蓝，表示正在进行中。
+ * opacity 脉冲而非 color 变化——浏览器对 opacity 的合成
+ * 比 color 过渡更省 GPU 资源，在流式场景下不抢渲染预算。
+ */
+.statusActive {
+  color: var(--accent);
+  font-size: 10px;
+  animation: statusPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+/* 完成态：静态灰绿，表示已结束 */
+.statusDone {
+  color: #5a8a6a;
+  font-size: 10px;
+}
+
+/* ── 展开区（推理文本 / 工具列表共用） ── */
+
+.detail {
+  margin: 4px 0 4px 12px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--depth-0);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-ui);
+}
+
+/* ── 工具条目（仅展开时可见） ── */
+
+.toolItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.toolItem + .toolItem {
+  margin-top: 3px;
+}
+
+/* 已完成 */
+.toolDone {
+  background: var(--depth-1);
+  border: 1px solid var(--depth-0);
+  color: var(--text-2);
+}
+
+/* 运行中：脉冲边框 */
+.toolRunning {
+  background: var(--depth-1);
+  border: 1px solid var(--depth-0);
+  color: var(--text-1);
+  animation: toolPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes toolPulse {
+  0%, 100% { border-color: var(--depth-0); }
+  50%      { border-color: var(--accent); }
+}
+
+/* ── 失败态：静态红系（与 toolDone 灰绿对应，不引新 CSS 变量） ── */
+
+.toolFailed {
+  background: var(--depth-1);
+  border: 1px solid rgba(200, 80, 80, 0.45);
+  color: #c98080;
+}
+
+/* ── 展示切片链接（文件 / URL）：短语后可点击的目标 ── */
+
+.displayLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+/* ── 审批确认态（M3-A：run_command 等待用户确认的第四态） ── */
+
+/* 审批中的工具条目：醒目边框（等待用户输入，非自动流程）
+   纵向排布：确认文案 / 类别行 / 完整命令 / 按钮各行自上而下 */
+.toolApproval {
+  background: var(--depth-1);
+  border: 1px solid rgba(212, 160, 60, 0.55);
+  color: var(--text-1);
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* 完整命令（等宽、可换行） */
+.approvalCommand {
+  margin: 4px 0;
+  padding: 5px 8px;
+  background: var(--depth-0);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-1);
+}
+
+/* 类别短语行（ruleId→短语）：确认卡回答"为什么问"。高危档位徽章已废除，
+   以出卡族类别短语取代"高危操作"字样标签 */
+.approvalCategory {
+  margin: 4px 0 0;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-1);
+  background: rgba(90, 138, 106, 0.12);
+  border: 1px solid rgba(90, 138, 106, 0.35);
+}
+
+/* 确认/拒绝按钮行 */
+.approvalActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.approveBtn {
+  padding: 3px 14px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: rgba(90, 138, 106, 0.18);
+  border: 1px solid rgba(90, 138, 106, 0.6);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.approveBtn:hover {
+  background: rgba(90, 138, 106, 0.32);
+}
+
+.rejectBtn {
+  padding: 3px 14px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: #c98080;
+  background: rgba(200, 80, 80, 0.12);
+  border: 1px solid rgba(200, 80, 80, 0.45);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.rejectBtn:hover {
+  background: rgba(200, 80, 80, 0.24);
+}
+
+.approveBtn:disabled,
+.rejectBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

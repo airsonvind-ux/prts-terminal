@@ -1,0 +1,16 @@
+/* 通用「文件 / 链接点击打开」样式（盒布局/外观由调用方 className 提供；
+ * 本文件只保证链接语义的指针/焦点/处理中态） */
+
+.linkClickable {
+  cursor: pointer;
+}
+
+.linkClickable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* 打开请求处理中：弱化但保留点击区（防连点；失败/成功即恢复） */
+.linkOpening {
+  opacity: 0.6;
+}

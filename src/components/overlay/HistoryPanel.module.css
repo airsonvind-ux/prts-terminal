@@ -1,0 +1,250 @@
+/* src/components/overlay/HistoryPanel.module.css */
+
+/*
+ * 历史对话列表样式
+ *
+ * 视觉语言与设置面板导航栏统一：左侧 accent 边框标记态。
+ * 三种状态：
+ *   默认    — 左边框透明，行背景透明
+ *   hover   — 左边框淡灰 + 行背景微亮 + 删除按钮浮现
+ *   激活    — 左边框 accent 蓝 + 暗蓝底色 (#1f2a30)
+ *
+ * 面板宽度 216px（calc(var(--face-size) * 0.67)），
+ * 扣除 .panel 的 12px padding，内容区可用宽度 192px。
+ */
+
+/* ── 面板标题行 ── */
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 6px 8px;
+  border-bottom: 1px solid var(--depth-1);
+  margin-bottom: 4px;
+}
+
+.headerTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.headerCount {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ── 列表容器 ── */
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 列表项 ── */
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px 8px 6px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--depth-1);
+  transition: border-left-color 0.15s ease, background 0.12s ease;
+}
+
+.item:hover {
+  background: var(--depth-4);
+  border-left-color: var(--text-3);
+}
+
+.item:last-child {
+  border-bottom: none;
+}
+
+/* ── 激活态：当前对话 ── */
+
+.active {
+  background: #1f2a30;
+  border-left-color: var(--accent);
+}
+
+.active:hover {
+  background: #1f2a30;
+  border-left-color: var(--accent);
+}
+
+/* ── 左侧信息区：标题 + 时间 ── */
+
+.itemInfo {
+  flex: 1;
+  min-width: 0;  /* flex 子元素允许收缩到内容之下，配合 title 的 ellipsis */
+}
+
+.itemTitle {
+  display: block;
+  font-size: var(--text-md);
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+  user-select: none;
+}
+
+/* ── 标题编辑输入框 ── */
+
+.editInput {
+  display: block;
+  width: 100%;
+  padding: 1px 2px;
+  font-size: var(--text-md);
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  outline: none;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.itemTime {
+  display: block;
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+/* ── 操作按钮组：hover 浮现 ── */
+
+.actions {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.item:hover .actions {
+  opacity: 1;
+}
+
+.editBtn,
+.deleteBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+
+.editBtn {
+  color: var(--text-3);
+}
+
+.editBtn:hover {
+  color: var(--accent);
+  background: rgba(74, 171, 234, 0.12);
+}
+
+.deleteBtn {
+  color: var(--text-3);
+}
+
+.deleteBtn:hover {
+  color: #e05555;
+  background: #2d2226;
+}
+
+/* ── 删除确认态 ── */
+
+.deleting {
+  background: #2d1e1e;
+  border-left-color: #e05555;
+}
+
+.deleting:hover {
+  background: #2d1e1e;
+  border-left-color: #e05555;
+}
+
+.confirmText {
+  font-size: var(--text-md);
+  color: #e05555;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.confirmActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.confirmYes,
+.confirmNo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  transition: color 0.1s ease, background 0.1s ease;
+}
+
+.confirmYes:hover {
+  color: #5cb878;
+  background: rgba(92, 184, 120, 0.12);
+}
+
+.confirmNo:hover {
+  color: var(--text-1);
+  background: var(--depth-4);
+}
+
+/* ── 空状态 ── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 0;
+}
+
+.emptyText {
+  font-size: var(--text-md);
+  color: var(--text-2);
+  margin: 0 0 6px 0;
+}
+
+.emptyHint {
+  font-size: var(--text-sm);
+  color: var(--text-3);
+  margin: 0;
+}
