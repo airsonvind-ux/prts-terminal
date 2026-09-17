@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::memory::prompt::{ymd_hms_local, ymd_local};
-use crate::memory::schema::PROFILE_NAME;
+use crate::memory::schema::{PROFILE_NAME, SOURCE_TOOL};
 use crate::memory::store::MemoryStore;
 use crate::notices::Notices;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
@@ -309,7 +309,7 @@ impl Tool for MemoryGrowthTool {
                 let brief = v.get("brief").and_then(|x| x.as_str()).unwrap_or("");
                 let tags = parse_tags(&v)?;
                 store
-                    .growth_create(name, brief, body, tags, "手动")
+                    .growth_create(name, brief, body, tags, SOURCE_TOOL)
                     .map_err(ToolError::Execution)?;
                 let b = brief.trim();
                 reminder = Some(if b.is_empty() {
@@ -330,7 +330,7 @@ impl Tool for MemoryGrowthTool {
                     return Err(ToolError::Parse("update 至少需要 body / brief / tags 之一".into()));
                 }
                 store
-                    .growth_update(name, body, brief, tags)
+                    .growth_update(name, body, brief, tags, SOURCE_TOOL)
                     .map_err(ToolError::Execution)?;
                 if name == PROFILE_NAME {
                     // 「关于博士」：提醒带新版全文（快照冻结不再更新，靠提醒同步）
@@ -452,6 +452,11 @@ mod tests {
         tool.execute(&ctx, r#"{"action":"update","name":"伤害计算","body":"新正文内容"}"#)
             .unwrap();
         assert_eq!(store.lock().unwrap().growth_get("伤害计算").unwrap().body, "新正文内容");
+        // 写入方盖章：工具写入 → 「工具」（create 与 update 均章）
+        assert_eq!(
+            store.lock().unwrap().growth_get("伤害计算").unwrap().source,
+            crate::memory::schema::SOURCE_TOOL
+        );
 
         let err = tool
             .execute(&ctx, r#"{"action":"update","name":"不存在","body":"x"}"#)
@@ -544,7 +549,7 @@ mod tests {
         // 头行（含 brief）+ 元数据行 + 正文
         assert!(out.summary.starts_with("伤害计算（暴击与减伤）\n创建 "), "got: {}", out.summary);
         assert!(out.summary.contains(" · 更新 "), "got: {}", out.summary);
-        assert!(out.summary.contains(" · 来源 手动\n"), "got: {}", out.summary);
+        assert!(out.summary.contains(" · 来源 工具\n"), "got: {}", out.summary);
         assert!(out.summary.ends_with("\n正文内容"), "got: {}", out.summary);
         // 空 brief：头行不带括号
         tool.execute(&ctx, r#"{"action":"create","name":"无简述","body":"x"}"#)

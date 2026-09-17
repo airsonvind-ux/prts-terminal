@@ -15,7 +15,7 @@ use crate::db::Database;
 use crate::notices::Notices;
 use crate::events::{AgentEvent, FrontendMessage, IpcEvent};
 use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo, ModelRegistry, ProviderInfo, TokenUsage};
-use crate::memory::schema::PROFILE_NAME;
+use crate::memory::schema::{PROFILE_NAME, SOURCE_USER};
 use crate::memory::{MemoryStore, SnapshotStore};
 use crate::orchestrator;
 use crate::settings::{SettingsPatch, SettingsStore};
@@ -1217,7 +1217,7 @@ pub fn memory_create(
         let mut m = memory_store
             .lock()
             .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-        m.growth_create(&name, &brief, &body, tags.unwrap_or_default(), "手动")?;
+        m.growth_create(&name, &brief, &body, tags.unwrap_or_default(), SOURCE_USER)?;
     }
     let b = brief.trim();
     let detail = if b.is_empty() {
@@ -1248,7 +1248,7 @@ pub fn memory_update(
         let mut m = memory_store
             .lock()
             .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-        m.growth_update(&name, body.as_deref(), brief.as_deref(), tags)?;
+        m.growth_update(&name, body.as_deref(), brief.as_deref(), tags, SOURCE_USER)?;
         let p = m
             .growth_get(&name)
             .ok_or_else(|| format!("成长页「{name}」不存在"))?;

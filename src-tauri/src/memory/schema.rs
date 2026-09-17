@@ -27,6 +27,14 @@ pub const PROFILE_NAME: &str = "关于博士";
 /// 封存线：`revisionCount` 达到此值即封存（不可再重写，只能另起新条目）。
 pub const REVISION_SEALED: u32 = 2;
 
+/// 成长页写入来源（集中定义，防拼写漂移）：
+/// - [`SOURCE_TOOL`]：`memory_growth` 工具写入；
+/// - [`SOURCE_USER`]：设置页命令（博士）写入；
+/// - [`SOURCE_SYSTEM`]：初始化（如 [`GrowthPage::empty_profile`]）。
+pub const SOURCE_TOOL: &str = "工具";
+pub const SOURCE_USER: &str = "博士";
+pub const SOURCE_SYSTEM: &str = "系统";
+
 // ═══════════════════════════════════════════════════════
 // 成长页
 // ═══════════════════════════════════════════════════════
@@ -67,9 +75,9 @@ impl GrowthPage {
         }
     }
 
-    /// 空的「关于博士」页（首次启动 / 删除后复位用）。
+    /// 空的「关于博士」页（首次启动 / 删除后复位用）——来源＝「系统」（初始化）。
     pub fn empty_profile(now: u64) -> Self {
-        Self::new(PROFILE_NAME, "", "", Vec::new(), "手动", now)
+        Self::new(PROFILE_NAME, "", "", Vec::new(), SOURCE_SYSTEM, now)
     }
 
     /// 渲染为 Markdown 文本（frontmatter + 正文）。

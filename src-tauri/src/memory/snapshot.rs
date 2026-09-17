@@ -135,7 +135,7 @@ fn is_safe_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::schema::PROFILE_NAME;
+    use crate::memory::schema::{PROFILE_NAME, SOURCE_SYSTEM};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -156,7 +156,7 @@ mod tests {
         let sessions = data.join("sessions");
         let mut store = MemoryStore::load(&data).unwrap();
         store
-            .growth_update(PROFILE_NAME, Some("第一版画像"), None, None)
+            .growth_update(PROFILE_NAME, Some("第一版画像"), None, None, SOURCE_SYSTEM)
             .unwrap();
 
         let mut snaps = SnapshotStore::new(&sessions);
@@ -168,7 +168,7 @@ mod tests {
 
         // 记忆变化后，同一对话仍返回旧快照（冻结）
         store
-            .growth_update(PROFILE_NAME, Some("第二版画像"), None, None)
+            .growth_update(PROFILE_NAME, Some("第二版画像"), None, None, SOURCE_SYSTEM)
             .unwrap();
         let again = snaps.get_or_assemble(Some("c1"), &store);
         assert_eq!(again, first, "对话内冻结：不随记忆变化");
@@ -186,7 +186,7 @@ mod tests {
         let data = temp_dir("restart");
         let sessions = data.join("sessions");
         let mut store = MemoryStore::load(&data).unwrap();
-        store.growth_create("伤害计算", "暴击与减伤", "正文", vec![], "手动").unwrap();
+        store.growth_create("伤害计算", "暴击与减伤", "正文", vec![], SOURCE_SYSTEM).unwrap();
 
         let before = {
             let mut snaps = SnapshotStore::new(&sessions);
@@ -194,7 +194,7 @@ mod tests {
         };
 
         // 模拟重启：进程内缓存清空、记忆已变化，但同对话读回 sidecar
-        store.growth_update("伤害计算", Some("改动后的正文"), None, None).unwrap();
+        store.growth_update("伤害计算", Some("改动后的正文"), None, None, SOURCE_SYSTEM).unwrap();
         let mut fresh = SnapshotStore::new(&sessions);
         let after = fresh.get_or_assemble(Some("c9"), &store);
         assert_eq!(after, before, "重启后同对话记忆区逐字一致");
@@ -218,7 +218,7 @@ mod tests {
         let data = temp_dir("none");
         let sessions = data.join("sessions");
         let mut store = MemoryStore::load(&data).unwrap();
-        store.growth_update(PROFILE_NAME, Some("画像"), None, None).unwrap();
+        store.growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_SYSTEM).unwrap();
         let mut snaps = SnapshotStore::new(&sessions);
         let block = snaps.get_or_assemble(None, &store);
         assert!(block.contains("画像"), "仍返回组装结果");

@@ -102,7 +102,7 @@ fn fmt_local(ts_ms: u64, fmt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::schema::ExperienceEntry;
+    use crate::memory::schema::{ExperienceEntry, SOURCE_SYSTEM};
     use std::path::PathBuf;
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -130,10 +130,10 @@ mod tests {
     fn four_sections_present_and_deterministic() {
         let dir = temp_dir("four");
         let mut s = MemoryStore::load(&dir).unwrap();
-        s.growth_update(PROFILE_NAME, Some("博士偏好简洁回答"), None, None)
+        s.growth_update(PROFILE_NAME, Some("博士偏好简洁回答"), None, None, SOURCE_SYSTEM)
             .unwrap();
-        s.growth_create("伤害计算", "暴击与减伤", "正文", vec![], "手动").unwrap();
-        s.growth_create("索敌", "仇恨规则", "正文", vec![], "手动").unwrap();
+        s.growth_create("伤害计算", "暴击与减伤", "正文", vec![], SOURCE_SYSTEM).unwrap();
+        s.growth_create("索敌", "仇恨规则", "正文", vec![], SOURCE_SYSTEM).unwrap();
         // 近期条目：直接注入经历（批 1 只读路径，测试经内部构造）
         s.inject_experience_for_test(ExperienceEntry {
             id: "e1".into(),

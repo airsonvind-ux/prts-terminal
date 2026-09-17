@@ -654,12 +654,16 @@ impl MemoryStore {
     }
 
     /// 改页（字段缺席 = 不动）；不存在 → Err。
+    ///
+    /// `source` 为本次写入方（调用点集中常量：工具＝「工具」/ 设置页＝「博士」），
+    /// 与 `updated_at` 同期刷新。
     pub fn growth_update(
         &mut self,
         name: &str,
         body: Option<&str>,
         brief: Option<&str>,
         tags: Option<Vec<String>>,
+        source: &str,
     ) -> Result<(), String> {
         let name = name.trim();
         let target = self
@@ -674,6 +678,8 @@ impl MemoryStore {
         if let Some(t) = tags {
             target.tags = t;
         }
+        // 写入方盖章：与 updated_at 同期刷新（create 由调用方传 source）
+        target.source = source.to_string();
         target.updated_at = now_ms();
         let page = target.clone();
         self.write_page(&page)?;
@@ -853,6 +859,7 @@ fn fnv1a(s: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::schema::{SOURCE_SYSTEM, SOURCE_TOOL, SOURCE_USER};
 
     fn temp_dir(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -884,11 +891,11 @@ mod tests {
         let dir = temp_dir("growth");
         {
             let mut s = MemoryStore::load(&dir).unwrap();
-            s.growth_create("伤害计算", "暴击与减伤", "## 正文", vec!["数值".into()], "手动")
+            s.growth_create("伤害计算", "暴击与减伤", "## 正文", vec!["数值".into()], SOURCE_SYSTEM)
                 .unwrap();
-            s.growth_update("伤害计算", Some("## 新正文"), Some("新简述"), None)
+            s.growth_update("伤害计算", Some("## 新正文"), Some("新简述"), None, SOURCE_SYSTEM)
                 .unwrap();
-            s.growth_create("索敌", "仇恨规则", "body", vec![], "手动").unwrap();
+            s.growth_create("索敌", "仇恨规则", "body", vec![], SOURCE_SYSTEM).unwrap();
         }
         let s2 = MemoryStore::load(&dir).unwrap();
         let p = s2.growth_get("伤害计算").unwrap();
@@ -911,13 +918,13 @@ mod tests {
     fn growth_cleaned_name_collision_paths_are_stable() {
         let dir = temp_dir("collide");
         let mut s = MemoryStore::load(&dir).unwrap();
-        s.growth_create("A/B", "斜杠名", "b1", vec![], "手动").unwrap(); // → A_B.md
-        s.growth_create("A_B", "下划线名", "b2", vec![], "手动").unwrap(); // 撞名 → A_B-<hash>.md
+        s.growth_create("A/B", "斜杠名", "b1", vec![], SOURCE_SYSTEM).unwrap(); // → A_B.md
+        s.growth_create("A_B", "下划线名", "b2", vec![], SOURCE_SYSTEM).unwrap(); // 撞名 → A_B-<hash>.md
         assert_eq!(s.topics().len(), 2);
 
         // 删前者，改后者 → 后者仍在、内容正确、重启不复活前者
         s.growth_delete("A/B").unwrap();
-        s.growth_update("A_B", Some("b2-new"), None, None).unwrap();
+        s.growth_update("A_B", Some("b2-new"), None, None, SOURCE_SYSTEM).unwrap();
         drop(s);
         let s2 = MemoryStore::load(&dir).unwrap();
         assert!(s2.growth_get("A/B").is_none(), "前者不应复活");
@@ -930,10 +937,10 @@ mod tests {
     fn growth_create_duplicate_errors_including_profile() {
         let dir = temp_dir("dup");
         let mut s = MemoryStore::load(&dir).unwrap();
-        s.growth_create("甲", "b", "x", vec![], "手动").unwrap();
-        let err = s.growth_create("甲", "b", "x", vec![], "手动").unwrap_err();
+        s.growth_create("甲", "b", "x", vec![], SOURCE_SYSTEM).unwrap();
+        let err = s.growth_create("甲", "b", "x", vec![], SOURCE_SYSTEM).unwrap_err();
         assert!(err.contains("已存在"), "got: {err}");
-        let err = s.growth_create(PROFILE_NAME, "b", "x", vec![], "手动").unwrap_err();
+        let err = s.growth_create(PROFILE_NAME, "b", "x", vec![], SOURCE_SYSTEM).unwrap_err();
         assert!(err.contains("已存在"), "got: {err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -942,7 +949,7 @@ mod tests {
     fn growth_update_or_delete_missing_errors() {
         let dir = temp_dir("missing");
         let mut s = MemoryStore::load(&dir).unwrap();
-        assert!(s.growth_update("不存在", Some("x"), None, None).is_err());
+        assert!(s.growth_update("不存在", Some("x"), None, None, SOURCE_SYSTEM).is_err());
         assert!(s.growth_delete("不存在").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -951,12 +958,35 @@ mod tests {
     fn growth_update_profile_and_delete_resets() {
         let dir = temp_dir("profile");
         let mut s = MemoryStore::load(&dir).unwrap();
-        s.growth_update(PROFILE_NAME, Some("博士偏好简洁"), None, None).unwrap();
+        s.growth_update(PROFILE_NAME, Some("博士偏好简洁"), None, None, SOURCE_USER).unwrap();
         assert_eq!(s.profile().body, "博士偏好简洁");
+        assert_eq!(s.profile().source, SOURCE_USER, "更新盖章写入方");
         s.growth_delete(PROFILE_NAME).unwrap();
         assert!(s.profile().body.is_empty(), "profile 删除＝复位为空页");
+        assert_eq!(s.profile().source, SOURCE_SYSTEM, "复位＝初始化（系统）");
         let s2 = MemoryStore::load(&dir).unwrap();
         assert!(s2.profile().body.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn growth_source_stamps_writer_and_refreshes_on_update() {
+        let dir = temp_dir("source");
+        let mut s = MemoryStore::load(&dir).unwrap();
+        // 工具写入 → 「工具」
+        s.growth_create("甲", "b", "x", vec![], SOURCE_TOOL).unwrap();
+        assert_eq!(s.growth_get("甲").unwrap().source, SOURCE_TOOL);
+        // 设置页写入 → 「博士」
+        s.growth_create("乙", "b", "x", vec![], SOURCE_USER).unwrap();
+        assert_eq!(s.growth_get("乙").unwrap().source, SOURCE_USER);
+        // 更新刷新写入方（工具 → 博士）
+        s.growth_update("甲", Some("x2"), None, None, SOURCE_USER).unwrap();
+        assert_eq!(s.growth_get("甲").unwrap().source, SOURCE_USER);
+        // 初始化 → 「系统」
+        assert_eq!(GrowthPage::empty_profile(0).source, SOURCE_SYSTEM);
+        // 重启后保持
+        let s2 = MemoryStore::load(&dir).unwrap();
+        assert_eq!(s2.growth_get("甲").unwrap().source, SOURCE_USER);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
