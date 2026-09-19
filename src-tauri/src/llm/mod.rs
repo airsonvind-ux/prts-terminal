@@ -176,7 +176,10 @@ pub enum ThinkingFormat {
 #[serde(rename_all = "camelCase")]
 pub struct Compat {
     /// 模型所属的 thinking 家族。None = 不需要特殊推理处理
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// models.json 手写键为 snake_case（thinking_format），此处 alias 接收；
+    /// 序列化仍按容器 rename_all 输出 camelCase（前端契约，见测试）。
+    #[serde(default, alias = "thinking_format", skip_serializing_if = "Option::is_none")]
     pub thinking_format: Option<ThinkingFormat>,
     /// 认证方式。None = 默认 "bearer"。"none" = 不发送 Authorization header
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1097,5 +1100,31 @@ mod tests {
         let json = serde_json::to_string(&info).unwrap();
         // ProviderInfo 的 compat 字段是嵌套的 Compat，必须验证 camelCase
         assert!(json.contains("\"thinkingFormat\""), "Nested compat must be camelCase, got: {json}");
+    }
+
+    /// 真实 models.json 解析回归（2026-09-19 修）：文件里 `compat` 用 snake_case
+    /// 键（thinking_format），Compat 结构声明 camelCase——键名错位曾静默落默认档，
+    /// 使 carrier=None，出网前误剥离全部推理链。此测试直接从真身文件断言效果层
+    /// 配置，堵住「测试只覆盖手搭结构、不读文件」的盲区。
+    #[test]
+    fn real_models_json_deepseek_compat_resolves() {
+        let reg =
+            ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        let r = reg.get_resolved_compat("deepseek", "deepseek-flash", ApiType::OpenAiCompletions);
+        assert_eq!(
+            r.carrier.as_deref(),
+            Some("reasoning_content"),
+            "carrier 必须从真身文件解析成功（thinking_format 别名）"
+        );
+        assert_eq!(
+            r.request_param.as_deref(),
+            Some("thinking"),
+            "request_param 必须从真身文件解析成功"
+        );
+        assert_eq!(
+            r.policy,
+            ReasoningPolicy::RequireToolCall,
+            "policy 必须为 RequireToolCall"
+        );
     }
 }
