@@ -13,6 +13,7 @@
 // IME 处理：拼写期间冻结充能进度。
 
 import { useState, useRef, useEffect, type KeyboardEvent, type CompositionEvent, type ChangeEvent } from "react";
+import { measureWithoutScrollJump } from "./messageScroll";
 import styles from "./InputArea.module.css";
 
 interface Props {
@@ -78,7 +79,9 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
     if (textareaRef.current) {
       const ta = textareaRef.current;
       ta.getAnimations().forEach((a) => a.cancel());
-      ta.style.height = "";
+      measureWithoutScrollJump(() => {
+        ta.style.height = "";
+      });
     }
     lastTargetRef.current = 28;
     setMultiline(false);
@@ -135,22 +138,26 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
     if (!ta) return;
     const current = ta.getBoundingClientRect().height;
     ta.getAnimations().forEach((a) => a.cancel());
-    ta.style.transition = "none";
-    ta.style.height = "";
-    const ml = ta.scrollHeight > ta.clientHeight;
-    const target = ml ? ta.scrollHeight : 28;
-    ta.style.transition = "";
-    setMultiline(ml);
-    if (target === lastTargetRef.current) {
-      ta.style.height = ml ? `${target}px` : "";
-    } else {
-      ta.style.height = ml ? `${target}px` : "";
-      ta.animate(
-        [{ height: `${current}px` }, { height: `${target}px` }],
-        { duration: 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
-      );
-      lastTargetRef.current = target;
-    }
+    /* 整个“复位→测量→落位”包在稳定测量窗口内：复位高度会让对话区变高、
+     * 浏览器趁机把滚动位置钳下去（实测距底恰好差增高量），写回在高度恢复之后。 */
+    measureWithoutScrollJump(() => {
+      ta.style.transition = "none";
+      ta.style.height = "";
+      const ml = ta.scrollHeight > ta.clientHeight;
+      const target = ml ? ta.scrollHeight : 28;
+      ta.style.transition = "";
+      setMultiline(ml);
+      if (target === lastTargetRef.current) {
+        ta.style.height = ml ? `${target}px` : "";
+      } else {
+        ta.style.height = ml ? `${target}px` : "";
+        ta.animate(
+          [{ height: `${current}px` }, { height: `${target}px` }],
+          { duration: 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
+        );
+        lastTargetRef.current = target;
+      }
+    });
   };
 
   /** 输入变化：文本状态 + 高度/多行同步 */
@@ -184,13 +191,17 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
     // 动画目标 = 复位后的实际渲染高度（不能硬编码 28——CSS height 28px 在
     // content-box 下渲染 36px，硬编码会误判单行需要回落 → 播放 36→28→36 的
     // 虚假动画，「高度没变却发生动画/先升高再回落」的根因）
-    ta.style.transition = "none";
-    ta.style.height = "";
-    const target = ta.getBoundingClientRect().height;
-    ta.style.transition = "";
-    if (Math.abs(current - target) > 0.5) {
+    // 同样包在稳定测量窗口内：复位高度会改变对话区高度
+    const at = measureWithoutScrollJump(() => {
+      ta.style.transition = "none";
+      ta.style.height = "";
+      const natural = ta.getBoundingClientRect().height;
+      ta.style.transition = "";
+      return natural;
+    });
+    if (Math.abs(current - at) > 0.5) {
       ta.animate(
-        [{ height: `${current}px` }, { height: `${target}px` }],
+        [{ height: `${current}px` }, { height: `${at}px` }],
         { duration: 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
       );
     }

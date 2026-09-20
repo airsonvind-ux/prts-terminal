@@ -1,5 +1,17 @@
 /* src/components/content/ChatView.module.css */
 
+/* ── 恢复中占位（启动/长对话读取期间）── */
+.restoring {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: var(--text-md);
+  font-family: var(--font-ui);
+  user-select: none;
+}
+
 /*
  * 内容层编排容器
  *

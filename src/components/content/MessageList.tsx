@@ -10,13 +10,14 @@
 // 消息气泡/事件卡片全部由投影函数派生（src/projection.ts），
 // 不再维护独立的 messages 数组。
 
-import { useMemo, useRef, useEffect, useCallback, useState } from "react";
+import { memo, useMemo, useRef, useEffect, useCallback, useState } from "react";
 import type { SessionEvent } from "../../types";
 import type { CompactionMeta } from "../../types";
 import { deriveTextSegments, isMetaEvent, splitTurnByUserBoundary, stripReminderBlock } from "../../projection";
 import type { TextSegment } from "../../projection";
 import { EventBadge } from "./EventBadge";
 import { Markdown } from "./Markdown";
+import { registerMessageScrollHost } from "./messageScroll";
 import styles from "./MessageList.module.css";
 
 // ── 展示项类型 ──
@@ -76,6 +77,13 @@ function CompactionNotice({
     </div>
   );
 }
+
+/** 钉底收敛窗口（ms）：items 变化后在这段时间内逐帧压到底，
+ * 覆盖输入区/上下文环/大段文本布局随后落定的情况。 */
+const PIN_SETTLE_MS = 400;
+
+/** 贴底判定阈值（px）：离底距离不超过它就当成“贴底”。 */
+const STICK_PX = 5;
 
 // ── 时间线算法（投影派生） ──
 
@@ -158,12 +166,29 @@ function appendTurnItems(
   }
 }
 
-function buildDisplayItems(
+/**
+ * 单轮归档展示项缓存（键 = 该轮事件数组的身份）。
+ *
+ * 归档轮次的 events 数组在 store 中身份稳定（归档只 push/替换外层数组），
+ * 因此一次投影可长期复用：流式刷新期间不再重算整段历史的文本聚合。
+ */
+const turnItemsCache = new WeakMap<SessionEvent[], DisplayItem[]>();
+
+/** 单轮 → 归档展示项（带缓存）。 */
+function archivedItemsForTurn(events: SessionEvent[]): DisplayItem[] {
+  const cached = turnItemsCache.get(events);
+  if (cached) return cached;
+  const items: DisplayItem[] = [];
+  appendTurnItems(items, events, false);
+  turnItemsCache.set(events, items);
+  return items;
+}
+
+/** 归档部分（turns + 压缩点卡）。只在 turns / compaction / isFirstUse 变化时重算。 */
+function buildArchivedItems(
   turns: SessionEvent[][],
-  currentEvents: SessionEvent[],
   isFirstUse: boolean,
-  compaction: CompactionMeta | undefined,
-  pending: readonly { id: string; text: string }[] | undefined
+  compaction: CompactionMeta | undefined
 ): DisplayItem[] {
   if (isFirstUse) return [{ type: "welcome" }];
 
@@ -178,8 +203,17 @@ function buildDisplayItems(
         foldedCount: compaction.retainedFrom,
       });
     }
-    appendTurnItems(items, turns[i], false);
+    items.push(...archivedItemsForTurn(turns[i]));
   }
+  return items;
+}
+
+/** 进行中部分（当前轮 + 插话 pending）。随每次流式刷新重算，规模限于当前轮。 */
+function buildLiveItems(
+  currentEvents: SessionEvent[],
+  pending: readonly { id: string; text: string }[] | undefined
+): DisplayItem[] {
+  const items: DisplayItem[] = [];
   if (currentEvents.length > 0) {
     appendTurnItems(items, currentEvents, true);
   }
@@ -191,6 +225,99 @@ function buildDisplayItems(
   }
   return items;
 }
+
+// ── 单行渲染 ──
+
+/**
+ * 一行展示项（消息气泡 / 事件卡 / pending / 压缩卡）。
+ *
+ * memo 的前提是归档 item 引用跨刷新稳定（buildArchivedItems 按 turns 缓存 +
+ * 单轮投影缓存）：流式刷新时归档行整段跳过重渲染，只有当前轮的行会更新。
+ */
+const MessageRow = memo(function MessageRow({
+  item,
+  onCancelPending,
+}: {
+  item: DisplayItem;
+  onCancelPending?: (entryId: string) => void;
+}) {
+  switch (item.type) {
+    case "welcome":
+      return (
+        <div className={styles.welcome}>
+          <div className={styles.welcomeLogo}>PRTS</div>
+          <div className={styles.welcomeTagline}>明日方舟AI辅助终端</div>
+        </div>
+      );
+    case "events":
+      return (
+        <EventBadge
+          events={item.events}
+          interactive={item.interactive}
+          className={styles.row}
+        />
+      );
+    case "message":
+      if (item.role === "assistant") {
+        return (
+          <div
+            data-message-area
+            className={`${styles.bubble} ${styles.assistant} ${styles.row}`}
+          >
+            {item.segments.map((seg, segIdx) => (
+              <div
+                key={segIdx}
+                className={seg.transition ? styles.streaming : undefined}
+              >
+                <Markdown content={seg.content} />
+                {item.isStreaming && segIdx === item.segments.length - 1 && (
+                  <span className={styles.cursor} />
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      }
+      // M3-B：轮中止标记条（灰/斜体小字，独立样式——不走 error 分支）
+      if (item.role === "aborted") {
+        return (
+          <div
+            data-message-area
+            className={`${styles.bubble} ${styles.aborted} ${styles.row}`}
+          >
+            {item.content}
+          </div>
+        );
+      }
+      return (
+        <div
+          data-message-area
+          className={`${styles.bubble} ${styles[item.role]} ${styles.row}`}
+        >
+          <Markdown content={item.content} />
+        </div>
+      );
+    case "pending":
+      return (
+        <button
+          type="button"
+          className={`${styles.steerPending} ${styles.row}`}
+          title="点击取消"
+          data-steer-pending
+          onClick={() => onCancelPending?.(item.id)}
+        >
+          {item.text}
+        </button>
+      );
+    case "compaction":
+      return (
+        <CompactionNotice
+          foldedCount={item.foldedCount}
+          summary={item.summary}
+        />
+      );
+  }
+});
 
 // ── 组件 ──
 
@@ -204,11 +331,12 @@ interface Props {
   pending?: readonly { id: string; text: string }[];
   /** pending 气泡点击取消（cancel_steer 成功移除后消失） */
   onCancelPending?: (entryId: string) => void;
+  /** 当前对话 id：变化即视为切换对话（重置滑底标志，保证新对话能自动沉底） */
+  conversationId?: string | null;
 }
 
-export function MessageList({ turns, currentEvents, isFirstUse, compaction, pending, onCancelPending }: Props) {
+export function MessageList({ turns, currentEvents, isFirstUse, compaction, pending, onCancelPending, conversationId }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
   /*
    * 用户手动上滑标志位。
@@ -222,9 +350,55 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    */
   const userScrolledUpRef = useRef(false);
 
+  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。 */
+  const pinNow = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  /* 提供给输入框的“稳定测量窗口”：测量期间接管滚动行为（见 messageScroll.ts）。
+   * 贴底则测量后仍贴底；否则原位不动——避免输入框复位测量把滚动位置钳下去。 */
+  useEffect(() => {
+    registerMessageScrollHost({
+      measure: (fn) => {
+        const el = listRef.current;
+        if (!el) return fn();
+        const atBottom =
+          el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX;
+        const saved = el.scrollTop;
+        try {
+          return fn();
+        } finally {
+          el.scrollTop = atBottom ? el.scrollHeight : saved;
+        }
+      },
+    });
+    return () => registerMessageScrollHost(null);
+  }, []);
+
+  // ── 展示项派生 ──
+  //
+  // 归档部分只在 turns / compaction / isFirstUse 变化时重算（内部再按轮缓存
+  // 投影），流式刷新的每次 currentEvents 变更不再重算整段历史；进行中部分
+  // 每次刷新重算，但规模限于当前轮。
+  const archivedItems = useMemo(
+    () => buildArchivedItems(turns, isFirstUse, compaction),
+    [turns, isFirstUse, compaction]
+  );
+  const liveItems = useMemo(
+    () => buildLiveItems(currentEvents, pending),
+    [currentEvents, pending]
+  );
+  // 无进行中内容时直接复用归档数组（引用稳定 → 不触发多余的滚底副作用）
   const items = useMemo(
-    () => buildDisplayItems(turns, currentEvents, isFirstUse, compaction, pending),
-    [turns, currentEvents, isFirstUse, compaction, pending]
+    () =>
+      isFirstUse
+        ? archivedItems
+        : liveItems.length > 0
+          ? [...archivedItems, ...liveItems]
+          : archivedItems,
+    [archivedItems, liveItems, isFirstUse]
   );
 
   /*
@@ -248,123 +422,78 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   /*
    * 滚动事件处理。
    *
-   * 用户向上滚动（距离底部 > 5px）→ 立即停止自动跟底。
-   * 用户滑回最底部（距离 ≤ 5px）→ 恢复自动跟底。
-   *
-   * 5px 的阈值仅用于过滤浏览器子像素滚动抖动，不做"滚多远才停"的
-   * 距离判断。任何有意图的向上滚动都会在第一个像素就触发暂停。
+   * 用户向上滚动（离底 > 5px）→ 停止自动跟底；滑回距底 ≤ 5px → 恢复跟底。
+   * 判据用“离底距离”而非“位置是否变小”：浏览器因布局变化钳位滚动位置时，
+   * 落点就是当时的最大滚动量，即仍然贴底——不该被当成用户上滑。
    */
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
-    const distanceFromBottom =
-      el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolledUpRef.current = distanceFromBottom > 5;
+    userScrolledUpRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight > STICK_PX;
   }, []);
 
   /*
-   * 自动滚底。
+   * 切换对话：重置滑底标志。
    *
-   * items 每次变化都检查标志位：用户未上滑 → 滚底；用户上滑了 → 不滚。
-   * behavior: "instant" 而非 "smooth"——之前已验证 smooth 在 WebView2
-   * 透明窗口下会导致持续闪烁。
+   * 上一段对话“上滑过”的状态会随 ref 带到下一段，导致新对话完全不自动沉底。
+   * 本副作用必须声明在钉底副作用之前：React 按声明顺序执行，否则钉底会先读到
+   * 尚未重置的标志位而直接跳过。
    */
   useEffect(() => {
-    if (!userScrolledUpRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "instant" });
-    }
-  }, [items]);
+    userScrolledUpRef.current = false;
+  }, [conversationId]);
+
+  /*
+   * 自动滚底（钉底）。
+   *
+   * 刻意不做“一次性”：切换对话/恢复时，输入区、上下文环、大段文本的布局会在
+   * 随后几帧才落定，只钉一次会差一截——表现为“比较接近于底部但不在底部”。
+   * 这里在 items 变化后跟一段收敛窗口，期间逐帧把滚动位置压到底（用户一上滑
+   * 即停）。
+   */
+  useEffect(() => {
+    if (userScrolledUpRef.current) return;
+    let raf = 0;
+    const deadline = performance.now() + PIN_SETTLE_MS;
+    const tick = () => {
+      if (userScrolledUpRef.current) return;
+      pinNow();
+      if (performance.now() < deadline) raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [items, conversationId, pinNow]);
+
+  /*
+   * 对话区自身尺寸变化时保持沉底。
+   *
+   * 输入框随内容变长展开（高度是动画）会逐帧压缩对话区高度：此时 items 没变，
+   * 上面的钉底副作用不会触发，最后一屏内容就被输入框挤出视口。这里盯列表自身
+   * 尺寸，变化即重钉；用户已上滑（翻历史）时不动。
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver !== "function") return;
+    const ro = new ResizeObserver(() => {
+      if (userScrolledUpRef.current) return;
+      pinNow();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pinNow]);
 
   return (
     <div className={styles.list} ref={listRef} onScroll={handleScroll} data-message-list>
-      {items.map((item, i) => {
-        switch (item.type) {
-          case "welcome":
-            return (
-              <div key="welcome" className={styles.welcome}>
-                <div className={styles.welcomeLogo}>PRTS</div>
-                <div className={styles.welcomeTagline}>明日方舟AI辅助终端</div>
-              </div>
-            );
-          case "events":
-            return (
-              <EventBadge
-                key={`events-${i}`}
-                events={item.events}
-                interactive={item.interactive}
-              />
-            );
-          case "message":
-            if (item.role === "assistant") {
-              return (
-                <div
-                  key={`msg-${i}`}
-                  data-message-area
-                  className={`${styles.bubble} ${styles.assistant}`}
-                >
-                  {item.segments.map((seg, segIdx) => (
-                    <div
-                      key={segIdx}
-                      className={
-                        seg.transition ? styles.streaming : undefined
-                      }
-                    >
-                      <Markdown content={seg.content} />
-                      {item.isStreaming &&
-                        segIdx === item.segments.length - 1 && (
-                          <span className={styles.cursor} />
-                        )}
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-            // M3-B：轮中止标记条（灰/斜体小字，独立样式——不走 error 分支）
-            if (item.role === "aborted") {
-              return (
-                <div
-                  key={`msg-${i}`}
-                  data-message-area
-                  className={`${styles.bubble} ${styles.aborted}`}
-                >
-                  {item.content}
-                </div>
-              );
-            }
-            return (
-              <div
-                key={`msg-${i}`}
-                data-message-area
-                className={`${styles.bubble} ${styles[item.role]}`}
-              >
-                <Markdown content={item.content} />
-              </div>
-            );
-          case "pending":
-            return (
-              <button
-                key={`pending-${item.id}`}
-                type="button"
-                className={styles.steerPending}
-                title="点击取消"
-                data-steer-pending
-                onClick={() => onCancelPending?.(item.id)}
-              >
-                {item.text}
-              </button>
-            );
-            // 模块 D：压缩点提示卡（本地条目，非 LLM 消息）
-            case "compaction":
-              return (
-                <CompactionNotice
-                  key={`compaction-${i}`}
-                  foldedCount={item.foldedCount}
-                  summary={item.summary}
-                />
-              );
-        }
-      })}
-      <div ref={bottomRef} />
+      {items.map((item, i) => (
+        // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
+        // 不会因为 ChatView 里 handleCancelSteer 换引用而整段重渲染
+        <MessageRow
+          key={i}
+          item={item}
+          onCancelPending={item.type === "pending" ? onCancelPending : undefined}
+        />
+      ))}
     </div>
   );
 }

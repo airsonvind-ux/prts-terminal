@@ -185,9 +185,11 @@ interface Props {
    * pending 不出现；此开关是双保险（异常数据不渲染交互按钮）。
    */
   interactive?: boolean;
+  /** 外层附加类（消息列表传入的行级样式：屏幕外跳过布局等） */
+  className?: string;
 }
 
-export function EventBadge({ events, interactive = false }: Props) {
+export function EventBadge({ events, interactive = false, className }: Props) {
   // ── 推理内容提取：assistant/chunk(Reasoning) 累积 ──
   const reasoningText = useMemo(() => {
     let text = "";
@@ -367,7 +369,7 @@ export function EventBadge({ events, interactive = false }: Props) {
   if (!reasoningText && !hasTools && moodEvents.length === 0) return null;
 
   return (
-    <div className={styles.badge}>
+    <div className={className ? `${styles.badge} ${className}` : styles.badge}>
       {/* ── 思考阶段 ── */}
       {reasoningText && (
         <div className={styles.section}>
@@ -418,18 +420,32 @@ export function EventBadge({ events, interactive = false }: Props) {
                 const approval = approvalState(slot);
                 // ── 终态优先：tool/result 到达后走既有三态 ──
                 if (slot.ok !== null) {
+                  // 失败行单行省略（悬停 title 看全文）：展示面不铺长错误串；
+                  // 与模型上下文共用的 summary 本身不变。
+                  if (!slot.ok) {
+                    return (
+                      <div
+                        key={slot.callId || i}
+                        className={`${styles.toolItem} ${styles.toolFailed}`}
+                      >
+                        <span
+                          className={styles.toolFailLine}
+                          title={slot.summary}
+                        >
+                          {`PRTS${slot.phrase}失败：${slot.summary}`}
+                        </span>
+                        {renderDisplaySuffix(slot.display, true)}
+                      </div>
+                    );
+                  }
                   return (
                     <div
                       key={slot.callId || i}
-                      className={`${styles.toolItem} ${
-                        slot.ok ? styles.toolDone : styles.toolFailed
-                      }`}
+                      className={`${styles.toolItem} ${styles.toolDone}`}
                     >
                       <span>
-                        {slot.ok
-                          ? `PRTS${slot.phrase}完成`
-                          : `PRTS${slot.phrase}失败：${slot.summary}`}
-                        {renderDisplaySuffix(slot.display, !slot.ok)}
+                        {`PRTS${slot.phrase}完成`}
+                        {renderDisplaySuffix(slot.display, false)}
                       </span>
                     </div>
                   );

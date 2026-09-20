@@ -54,8 +54,13 @@ pub const COMPRESS_AFTER: usize = 10;
 pub const COMPRESS_TAKE: usize = 5;
 /// 压缩输入上限 / 输出 token 上限 / 超时。
 const MAX_COMPRESS_INPUT_CHARS: usize = 24_000;
-const COMPRESS_MAX_TOKENS: u32 = 1_500;
+/// 压缩输出 token 预算：与字数上限对齐（目标 400 字 ≈ 400~550 tokens）。
+const COMPRESS_MAX_TOKENS: u32 = 600;
 const COMPRESS_TIMEOUT: Duration = Duration::from_secs(90);
+/// 长期记忆字数：提示词目标 [LONGTERM_TARGET_CHARS]，代码硬闸 [MAX_LONGTERM_CHARS]。
+/// 硬闸超限 → 先让模型缩短重写一次，仍超限则拒收（保留旧版，条目不吸收）。
+const LONGTERM_TARGET_CHARS: usize = 400;
+pub const MAX_LONGTERM_CHARS: usize = 600;
 /// 整轮报废后的冷却时长（下次不再立刻重试）。
 const FAILURE_COOLDOWN_MS: u64 = 5 * 60 * 1000;
 
@@ -264,17 +269,29 @@ pub async fn run_experience_pipeline_with(
     if let Some((ids, entries_text, through_ts, current_long)) = compress_plan {
         match compress_longterm(llm, config, abort, &current_long, &entries_text).await {
             Ok(text) if !text.trim().is_empty() => {
-                let version = {
-                    let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-                    let v = s.set_longterm(text.clone(), through_ts, now)?;
-                    s.mark_absorbed(&ids, v)?;
-                    v
-                };
-                outcome.compressed = true;
-                // 提醒带内容：附新版长期梗概全文（快照冻结不再更新，靠提醒同步）
-                let detail = format!("长期经历已整理（版本 {version}）\n{}", text.trim());
-                note(ledger, &detail);
-                outcome.note = Some(detail);
+                match fit_longterm(llm, config, abort, text.trim()).await {
+                    Some(text) => {
+                        let version = {
+                            let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+                            let v = s.set_longterm(text.clone(), through_ts, now)?;
+                            s.mark_absorbed(&ids, v)?;
+                            v
+                        };
+                        outcome.compressed = true;
+                        // 提醒带内容：附新版长期梗概全文（快照冻结不再更新，靠提醒同步）
+                        let detail = format!("长期经历已整理（版本 {version}）\n{}", text.trim());
+                        note(ledger, &detail);
+                        outcome.note = Some(detail);
+                    }
+                    None => {
+                        // 超限且缩短重写后仍超限：拒收——保留旧版，条目不吸收（下轮再试）。
+                        // 人工编辑入口（设置页长期记忆）是此时的出口。
+                        debug!(
+                            "action" => "memory_compress_over_limit_kept_old",
+                            "limit" => MAX_LONGTERM_CHARS
+                        );
+                    }
+                }
             }
             Ok(_) => debug!("action" => "memory_compress_empty"),
             Err(e) => {
@@ -546,6 +563,35 @@ fn resolve_op(op: RawOp, recent: &[(String, Fingerprint, String)]) -> Option<Mem
 // 压缩 run
 // ═══════════════════════════════════════════════════════
 
+/// 压缩系统提示词。
+///
+/// 写法参照 Hanako 的 longterm 编译提示词（硬上限放首句、保留/剔除双层清单、
+/// 超长时优先概括旧内容）；内容判据换成 PRTS 的工作经历口径。
+fn compress_system_prompt() -> String {
+    format!(
+        r#"请综合「上一份长期情况」和「新沉淀内容」，重写成一份新的长期情况。必须控制在 {target} 字以内。
+
+长期情况不是工作日志。这一层只保留「以后再回看仍然有助于理解这段长期工作」的内容：
+- 在推进的长期方向与它们当前的状态
+- 已经稳定下来的结论、约定与偏好
+- 反复出现的问题、已知的坑
+
+去掉这些单次性内容：
+- 某次任务的具体步骤、参数、数值、命令与工具调用
+- 某次的失败与重试、来回修改、被打断又恢复
+- 逐条任务的流水账
+
+处理方式：
+- 不要追加，不要把旧内容和新内容分开复述
+- 必须做取舍、抽象、合并：同一方向的多次往返归并为一件事，过细信息压成更高层概括
+- 如果上一份长期情况已经很长，优先概括旧内容，再吸收真正重要的新内容
+- 细节不必留在这一层——经历库可检索
+
+只输出正文本身，不要 Markdown 标题，不要以 #、##、### 开头，不要解释或代码围栏。"#,
+        target = LONGTERM_TARGET_CHARS
+    )
+}
+
 async fn compress_longterm(
     llm: &dyn LlmClient,
     config: &LlmConfig,
@@ -553,16 +599,8 @@ async fn compress_longterm(
     current_long: &str,
     entries_text: &str,
 ) -> Result<String, String> {
-    let system = r#"你是长期记忆压缩器。你会收到两部分输入：
-① 现有长期记忆；
-② 若干需要并入的旧条目（先前记录的工作单元）。
+    let system = compress_system_prompt();
 
-请合并为一份更新后的完整长期记忆（Markdown 正文）。
-
-要求：
-- 只做合并与浓缩：不得加入材料里没有的信息，不得丢失材料中的独有结论；
-- 按主题归类（可带时间线索）；保持简洁，整体以 800 字符以内为软目标——信息完整优先于字数目标；
-- 只输出正文本身，不要解释、代码围栏或其他文字。"#;
     let input = {
         let cur = if current_long.trim().is_empty() {
             "（暂无长期记忆）"
@@ -575,6 +613,39 @@ async fn compress_longterm(
     let messages = vec![ChatMessage::system(system), ChatMessage::user(input)];
     let raw = call(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await?;
     Ok(strip_fences(&raw))
+}
+
+/// 长度硬闸：超限时让模型缩短重写一次；返回 None = 仍超限（调用方拒收、保留旧版）。
+async fn fit_longterm(
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    abort: &AbortSignal,
+    text: &str,
+) -> Option<String> {
+    let len = text.chars().count();
+    if len <= MAX_LONGTERM_CHARS {
+        return Some(text.to_string());
+    }
+    let system = "你是长期记忆压缩器。上一步输出的长期记忆超长，请在不丢失要点（方向、结论、约定、\
+坑）的前提下重写得更短。只输出正文本身，不要解释、代码围栏或其他文字。";
+    let user = format!(
+        "上一步输出（{len} 字，超出上限 {max} 字）：\n{text}\n\n请在 {max} 字以内重写（目标 {target} 字）：",
+        len = len,
+        max = MAX_LONGTERM_CHARS,
+        target = LONGTERM_TARGET_CHARS,
+        text = text
+    );
+    let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
+    let raw = call(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort)
+        .await
+        .ok()?;
+    let out = strip_fences(&raw);
+    let out = out.trim();
+    if out.is_empty() || out.chars().count() > MAX_LONGTERM_CHARS {
+        None
+    } else {
+        Some(out.to_string())
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1145,6 +1216,106 @@ mod tests {
         // 被吸收条目（level=long、absorbedIn 已置）
         assert!(s.experience_get("old0").unwrap().is_absorbed());
         assert_eq!(s.experience_get("old0").unwrap().level, "long");
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 预置 n 条未吸收短期条目（压缩触发条件）。
+    fn inject_unabsorbed(store: &Arc<Mutex<MemoryStore>>, n: usize) {
+        let mut s = store.lock().unwrap();
+        for i in 0..n {
+            s.inject_experience_for_test(crate::memory::schema::ExperienceEntry {
+                id: format!("old{i}"),
+                ts: 100 + i as u64,
+                conversation_id: "c1".into(),
+                line_from: String::new(),
+                turn_from: 0,
+                turn_to: 0,
+                level: "short".into(),
+                title: format!("题{i}"),
+                summary: "s".into(),
+                tags: vec![],
+                revision_count: 0,
+                absorbed_in: None,
+            });
+        }
+    }
+
+    #[test]
+    fn compress_prompt_states_target_and_scope() {
+        let p = compress_system_prompt();
+        assert!(
+            p.contains("必须控制在 400 字以内"),
+            "硬上限应写在首句且不留豁免口: {p}"
+        );
+        assert!(p.contains("长期情况不是工作日志"));
+        assert!(p.contains("去掉这些单次性内容"));
+        assert!(p.contains("如果上一份长期情况已经很长，优先概括旧内容"));
+        assert!(p.contains("经历库可检索"), "应给模型一个“可以忘”的许可");
+    }
+
+    #[tokio::test]
+    async fn overlong_longterm_shortened_once_then_accepted() {
+        let (store, ledger, dir) = temp_store("lt-fit");
+        inject_unabsorbed(&store, COMPRESS_AFTER);
+        let long: &'static str = Box::leak("长".repeat(MAX_LONGTERM_CHARS + 50).into_boxed_str());
+        let short: &'static str = Box::leak("短".repeat(120).into_boxed_str());
+        // 第一次＝提炼（空清单）；第二次＝超长 longterm；第三次＝缩短重写
+        let client = mock_client(vec!["[]", long, short]);
+        let out = run_experience_pipeline(
+            &client,
+            &LlmConfig::default(),
+            &store,
+            &ledger,
+            &AbortSignal::new(),
+            PipelineInput {
+                conversation_id: "c1".into(),
+                delta_turns: delta(INCREMENTAL_TURNS),
+                turn_from: 0,
+                new_watermark: 6,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(out.compressed, "缩短重写后应接受并落盘");
+        let s = store.lock().unwrap();
+        assert_eq!(s.longterm().chars().count(), 120);
+        assert_eq!(s.longterm_version(), 1);
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn overlong_longterm_kept_old_when_still_too_long() {
+        let (store, ledger, dir) = temp_store("lt-reject");
+        {
+            let mut s = store.lock().unwrap();
+            s.set_longterm("## 旧版\n一句话".into(), 0, 0).unwrap();
+        }
+        inject_unabsorbed(&store, COMPRESS_AFTER);
+        let long: &'static str = Box::leak("长".repeat(MAX_LONGTERM_CHARS + 50).into_boxed_str());
+        let still: &'static str = Box::leak("长".repeat(MAX_LONGTERM_CHARS + 10).into_boxed_str());
+        let client = mock_client(vec!["[]", long, still]);
+        let out = run_experience_pipeline(
+            &client,
+            &LlmConfig::default(),
+            &store,
+            &ledger,
+            &AbortSignal::new(),
+            PipelineInput {
+                conversation_id: "c1".into(),
+                delta_turns: delta(INCREMENTAL_TURNS),
+                turn_from: 0,
+                new_watermark: 6,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!out.compressed, "仍超限应拒收");
+        let s = store.lock().unwrap();
+        assert_eq!(s.longterm(), "## 旧版\n一句话", "拒收应保留旧版");
+        assert_eq!(s.longterm_version(), 1, "拒收不推进版本");
+        assert_eq!(s.recent_line_count(), COMPRESS_AFTER as u64, "拒收不吸收条目");
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

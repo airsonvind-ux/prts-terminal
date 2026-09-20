@@ -2,8 +2,8 @@
 // 设置页「记忆」子页（初步）渲染/交互冒烟
 //
 // 覆盖：overview 渲染（成长列表 + 当前注入）／单条读取与保存（memory_update）／
-// 新建（memory_create）／整理（memory_tidy）／清除二次确认（memory_experience_clear）／
-// 对话处理中写按钮禁用。
+// 新建（memory_create）／整理（memory_tidy）／编辑长期记忆（memory_set_longterm）／
+// 清除二次确认（memory_experience_clear）／对话处理中写按钮禁用。
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
@@ -79,6 +79,12 @@ function route(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
       },
     ]);
   }
+  if (cmd === "memory_set_longterm") {
+    return Promise.resolve({
+      version: 2,
+      chars: String(args?.text ?? "").length,
+    });
+  }
   if (cmd === "memory_tidy") {
     return Promise.resolve({
       status: "created",
@@ -120,6 +126,18 @@ function clickText(text: string): void {
 function setInput(el: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(
     window.HTMLInputElement.prototype,
+    "value"
+  )!.set!;
+  act(() => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+/** 受控 textarea 设值（React 需原生 setter + input 事件） */
+function setTextarea(el: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype,
     "value"
   )!.set!;
   act(() => {
@@ -193,6 +211,23 @@ describe("SettingsMemory", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({ conversationId: "c1" });
     expect(container.textContent).toContain("已整理：新建 1 条、重写 0 条");
+  });
+
+  it("编辑长期记忆：预填现正文 → 保存走 memory_set_longterm", async () => {
+    render();
+    await flush();
+    clickText("编辑长期记忆");
+    const ta = container.querySelector<HTMLTextAreaElement>("[data-pre-edit]");
+    expect(ta).toBeTruthy();
+    expect(ta!.value).toBe("老事概要");
+    setTextarea(ta!, "## 先前\n新的长期记忆");
+    clickText("保存");
+    await flush();
+    const calls = invokeCalls("memory_set_longterm");
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({ text: "## 先前\n新的长期记忆" });
+    // 保存后回到只读态
+    expect(container.querySelector("[data-pre-edit]")).toBeNull();
   });
 
   it("清除记忆 → 二次确认 → memory_experience_clear", async () => {

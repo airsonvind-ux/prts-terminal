@@ -18,9 +18,18 @@ import type {
   MemoryDetail,
   MemoryExperienceItem,
   MemoryOverview,
+  MemorySetLongtermResult,
   MemoryTidyResult,
 } from "../../types";
 import styles from "./SettingsMemory.module.css";
+
+/** 「先前」（长期记忆）字数上限：与后端硬闸同源（orchestrator::memory::MAX_LONGTERM_CHARS） */
+const LONGTERM_MAX_CHARS = 600;
+
+/** Unicode 码点数（对齐后端 chars().count()；不用 String.length） */
+function charCount(s: string): number {
+  return [...s].length;
+}
 
 export interface SettingsMemoryProps {
   /** 对话处理中（任一对话）：写类操作禁用 */
@@ -56,6 +65,9 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [tidying, setTidying] = useState(false);
   const [tidyMsg, setTidyMsg] = useState<string | null>(null);
+  /** 「先前」（长期记忆）编辑中：非 null = 编辑态（值为草稿） */
+  const [preEdit, setPreEdit] = useState<string | null>(null);
+  const [savingPre, setSavingPre] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -104,6 +116,33 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
   const startCreate = () => {
     if (!guard()) return;
     setEdit({ mode: "create", name: "", brief: "", body: "", tagsText: "" });
+  };
+
+  /** 打开「先前」（长期记忆）编辑：预填现正文 */
+  const openPreEdit = () => {
+    if (!guard()) return;
+    setPreEdit(overview?.previous ?? "");
+  };
+
+  /** 保存长期记忆（人工纠偏入口：不经模型，直接覆盖） */
+  const savePre = async () => {
+    if (preEdit === null || !guard()) return;
+    setSavingPre(true);
+    try {
+      const r = await invoke<MemorySetLongtermResult>("memory_set_longterm", {
+        text: preEdit,
+      });
+      showToast(`长期记忆已重写（版本 ${r.version}，${r.chars} 字）`, {
+        kind: "info",
+        dedupeKey: "memory-pre-save",
+      });
+      setPreEdit(null);
+      await load();
+    } catch (e) {
+      showToast(`保存失败：${String(e)}`, { kind: "warning" });
+    } finally {
+      setSavingPre(false);
+    }
   };
 
   const save = async () => {
@@ -291,10 +330,48 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
         )}
 
         <div className={styles.caption}>当前注入 · 先前</div>
-        {overview.previous.trim().length === 0 ? (
-          <span className={styles.emptyHint}>（暂无）</span>
+        {preEdit === null ? (
+          overview.previous.trim().length === 0 ? (
+            <span className={styles.emptyHint}>（暂无）</span>
+          ) : (
+            <div className={styles.preText}>{overview.previous}</div>
+          )
         ) : (
-          <div className={styles.preText}>{overview.previous}</div>
+          <>
+            <textarea
+              className={styles.textarea}
+              value={preEdit}
+              onChange={(e) => setPreEdit(e.target.value)}
+              data-pre-edit
+            />
+            <div className={styles.formMeta}>
+              {charCount(preEdit)} 字 / 上限 {LONGTERM_MAX_CHARS} 字（超出会被拒绝）。
+              这是注入给模型的「先前」正文：保存后对新对话生效，正在进行的对话靠提醒看到新版。
+            </div>
+            <div className={styles.actions}>
+              <button
+                className={`${styles.btn} ${styles.btnPrimary}`}
+                onClick={() => void savePre()}
+                disabled={busy || savingPre}
+              >
+                {savingPre ? "保存中…" : "保存"}
+              </button>
+              <button className={styles.btn} onClick={() => setPreEdit(null)}>
+                取消
+              </button>
+            </div>
+          </>
+        )}
+        {preEdit === null && (
+          <div className={styles.actions}>
+            <button
+              className={styles.btn}
+              onClick={openPreEdit}
+              disabled={busy || savingPre}
+            >
+              编辑长期记忆
+            </button>
+          </div>
         )}
 
         <div className={styles.actions}>

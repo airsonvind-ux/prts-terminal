@@ -90,7 +90,11 @@ interface UIStore {
 }
 
 export const useUIStore = create<UIStore>((set) => ({
-  restoring: false,
+  /* 初值 true：启动即视为“恢复中”，直到恢复流程落定。
+     原因：首帧若为 false，会先闪一下欢迎界面/空对话区（无任何提示），
+     而恢复要读全量会话（长对话可能耗时秒级）。组件只需消费这一个事实：
+     restoring 期间对话区显示占位、输入禁发。 */
+  restoring: true,
   hiddenMode: null,
   errorMsg: null,
   overlay: null,

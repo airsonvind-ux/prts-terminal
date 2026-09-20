@@ -171,7 +171,7 @@ impl fmt::Display for ToolError {
             Self::NotFound(name) => write!(f, "工具 '{}' 未注册", name),
             Self::Execution(msg) => write!(f, "工具执行失败：{}", msg),
             Self::Parse(msg) => write!(f, "参数解析失败：{}", msg),
-            Self::CommandFailed(msg) => write!(f, "命令执行失败：{}", msg),
+            Self::CommandFailed(msg) => f.write_str(msg),
         }
     }
 }
@@ -655,6 +655,13 @@ impl Tool for EchoTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_failed_display_is_verbatim() {
+        // 失败文案由工具自包含（含退出码/分节）；Display 不再叠加前缀
+        let e = ToolError::CommandFailed("命令执行失败（退出码 7）：boom".into());
+        assert_eq!(e.to_string(), "命令执行失败（退出码 7）：boom");
+    }
 
     #[test]
     fn echo_tool_basic() {

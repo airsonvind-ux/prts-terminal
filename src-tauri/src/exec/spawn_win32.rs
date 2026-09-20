@@ -17,6 +17,9 @@
 //!   的清理步骤收敛）；同 workspace 并发受限命令互不干扰。
 //! - **环境**：TEMP/TMP → workspace/.prts-exec-temp；npm/pip/cargo 缓存
 //!   变量 → workspace/.prts-exec-cache/*（对应 exe 不在 PATH 时跳过）。
+//! - **路径形式**：内部一律用 canonical（`\\?\`）形式做 SID 派生 / ACL /
+//!   判定；只有「交给子进程」的路径（工作目录、TEMP/缓存环境变量）剥去
+//!   `\\?\` 前缀——PowerShell 5.1 在 verbatim 工作目录下相对路径解析会失效。
 //! - **PS 探针**：PowerShell 系首个受限进程先跑探测
 //!   （`[Console]::Out.Write('ok')`；验证 %TEMP% 可写 + 无 CLM 回落）；
 //!   失败 fail-fast（不静默回落），按 exe 路径缓存。
@@ -155,6 +158,21 @@ fn path_key(path: &Path) -> String {
     upper
 }
 
+/// 子进程可见路径：剥 `\\?\` verbatim 前缀（`\\?\UNC\server\share` → `\\server\share`）。
+///
+/// 内部判定（SID 派生 / 引用计数 / ACL / 守卫比较）一律沿用 canonical 形式；
+/// 仅在「把路径交给子进程」的边界（工作目录、TEMP/缓存环境变量）转成普通形式。
+fn child_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    match s.strip_prefix("\\\\?\\UNC\\") {
+        Some(rest) => PathBuf::from(format!("\\\\{rest}")),
+        None => match s.strip_prefix("\\\\?\\") {
+            Some(rest) => PathBuf::from(rest),
+            None => path.to_path_buf(),
+        },
+    }
+}
+
 /// PATH 解析 exe（绝对/带分隔符原样；否则 PATH × PATHEXT 常见扩展）。
 fn resolve_exe_in_path(name: &str) -> Option<PathBuf> {
     let p = Path::new(name);
@@ -256,13 +274,33 @@ struct AclRestore {
     /// GetNamedSecurityInfoW 的 descriptor（还原完成后释放）。
     orig_descriptor: PSECURITY_DESCRIPTOR,
     restore_clean: bool,
-    /// 幂等标记：restore 执行过后 Drop 不再重复还原（防二次释放/悬垂指针）。
-    restored: bool,
+    /// 结算标记：已还原（restore）或已弃置（discard）后不再动作（防二次释放/悬垂指针）。
+    settled: bool,
 }
 
+// SAFETY: 内部裸指针指向 LocalAlloc 分配的进程堆内存（DACL / 安全描述符），
+// 无线程归属；对其的全部访问都发生在 acl_entries() 的互斥区内（首个会话登记 /
+// 末位会话执行），跨线程移动与释放由该互斥串行化，故可 Send。
+unsafe impl Send for AclRestore {}
+
 impl AclRestore {
+    /// 释放持有的 descriptor / clean DACL（不触碰目标对象 ACL）。
+    fn free_owned(&mut self) {
+        unsafe {
+            if !self.orig_descriptor.0.is_null() {
+                let _ = LocalFree(Some(HLOCAL(self.orig_descriptor.0.cast())));
+                self.orig_descriptor = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
+            }
+            if let Some(dacl) = self.clean_dacl.take() {
+                let _ = LocalFree(Some(HLOCAL(dacl.cast())));
+            }
+            self.orig_dacl = std::ptr::null_mut();
+        }
+    }
+
+    /// 还原目标对象 ACL 到记录状态（仅末位会话执行），随后释放本地内存。
     fn restore(&mut self) {
-        if self.restored {
+        if self.settled {
             return;
         }
         unsafe {
@@ -286,35 +324,46 @@ impl AclRestore {
             if rc.0 != 0 {
                 eprintln!("[spawn_win32] ACL 还原失败 rc={}", rc.0);
             }
-            if !self.orig_descriptor.0.is_null() {
-                let _ = LocalFree(Some(HLOCAL(self.orig_descriptor.0.cast())));
-                self.orig_descriptor = PSECURITY_DESCRIPTOR(std::ptr::null_mut());
-            }
-            if let Some(dacl) = self.clean_dacl.take() {
-                let _ = LocalFree(Some(HLOCAL(dacl.cast())));
-            }
-            self.orig_dacl = std::ptr::null_mut();
-            self.restored = true;
         }
+        self.free_owned();
+        self.settled = true;
+    }
+
+    /// 弃置：不触碰 ACL（放行仍被其它活跃会话使用），只释放本地内存。
+    fn discard(&mut self) {
+        if self.settled {
+            return;
+        }
+        self.free_owned();
+        self.settled = true;
     }
 }
 
 impl Drop for AclRestore {
     fn drop(&mut self) {
-        self.restore();
+        // 兜底只释放内存：ACL 还原一律显式执行（末位会话），
+        // 任意析构路径都不得改动授权状态。
+        self.discard();
     }
 }
 
-/// 活跃写根会话引用计数（同 workspace 并发受限命令共享放行；归零才还原）。
-fn acl_refs() -> &'static Mutex<HashMap<String, usize>> {
-    static REFS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
-    REFS.get_or_init(|| Mutex::new(HashMap::new()))
+/// 活跃写根登记项：引用计数 + 本代还原记录（末位会话归还时执行）。
+struct GrantEntry {
+    refs: usize,
+    restores: Vec<AclRestore>,
 }
 
-/// 一次 spawn 期间持有：ACL 临时放行（引用计数；最后释放者还原）。
+/// 活跃写根登记表（同 workspace 并发受限命令共享放行；末位归零才还原）。
+fn acl_entries() -> &'static Mutex<HashMap<String, GrantEntry>> {
+    static ENTRIES: OnceLock<Mutex<HashMap<String, GrantEntry>>> = OnceLock::new();
+    ENTRIES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 一次 spawn 期间持有的放行租约：只记 key；放行记录挂在登记表上。
+/// 协议：首个进入者施加放行，末位退出者执行还原；非末位释放只递减计数。
 struct GrantSession {
     key: String,
-    restores: Vec<AclRestore>,
+    released: bool,
 }
 
 impl GrantSession {
@@ -324,31 +373,48 @@ impl GrantSession {
         std::fs::create_dir_all(ws.join(EXEC_CACHE_DIR)).map_err(io::Error::other)?;
 
         let key = path_key(ws);
-        *acl_refs().lock().unwrap().entry(key.clone()).or_insert(0) += 1;
+        // 施加 / 计数 / 还原共用本锁串行：防「新代施加」与「旧代末位还原」交错。
+        let mut entries = acl_entries().lock().unwrap();
+        if let Some(entry) = entries.get_mut(&key) {
+            // 已有活跃会话：共享其放行，只加引用
+            entry.refs += 1;
+            return Ok(GrantSession { key, released: false });
+        }
+        // 本代首个会话：施加放行；失败原路收回已施加部分（此刻无并发者）
         let sid = writable_root_sid(ws);
         let mut restores = Vec::new();
         for p in [ws.to_path_buf(), ws.join(EXEC_TEMP_DIR), ws.join(EXEC_CACHE_DIR)] {
             if let Err(e) = grant_write_root(&p, &sid, &mut restores) {
-                // 失败：归还引用；已产生的 restores 显式还原（不依赖 Drop）
-                let mut g = GrantSession { key: key.clone(), restores };
-                g.release();
+                for r in restores.iter_mut().rev() {
+                    r.restore();
+                }
                 return Err(e);
             }
         }
-        Ok(GrantSession { key, restores })
+        entries.insert(key.clone(), GrantEntry { refs: 1, restores });
+        Ok(GrantSession { key, released: false })
     }
 
-    /// 归还一个引用；归零时执行还原。
+    /// 归还引用；末位（归零）执行本代还原，其余只递减计数。重复调用无效。
     fn release(&mut self) {
-        let zero = {
-            let mut refs = acl_refs().lock().unwrap();
-            let entry = refs.entry(self.key.clone()).or_insert(0);
-            *entry = entry.saturating_sub(1);
-            *entry == 0
+        if self.released {
+            return;
+        }
+        self.released = true;
+
+        let mut entries = acl_entries().lock().unwrap();
+        let zero = match entries.get_mut(&self.key) {
+            Some(entry) => {
+                entry.refs = entry.refs.saturating_sub(1);
+                entry.refs == 0
+            }
+            None => return, // 防御：无对应登记（不应发生）
         };
         if zero {
-            for r in self.restores.iter_mut().rev() {
-                r.restore();
+            if let Some(mut entry) = entries.remove(&self.key) {
+                for r in entry.restores.iter_mut().rev() {
+                    r.restore();
+                }
             }
         }
     }
@@ -516,7 +582,7 @@ fn grant_write_root(path: &Path, sid: &[u8], restores: &mut Vec<AclRestore>) -> 
         orig_dacl,
         orig_descriptor: desc,
         restore_clean: had_ours,
-        restored: false,
+        settled: false,
     });
     Ok(())
 }
@@ -548,10 +614,13 @@ fn build_env_block(workspace_root: &Path, overrides: &[(String, String)]) -> Vec
     let cache = workspace_root.join(EXEC_CACHE_DIR);
     let _ = std::fs::create_dir_all(&temp);
     let _ = std::fs::create_dir_all(&cache);
+    // 环境值用普通形式（剥 verbatim 前缀）：目录已按 canonical 形式建好，
+    // 两种写法指向同一处；子进程解析 `\\?\` 路径不可靠。
+    let temp_env = child_path(&temp).to_string_lossy().into_owned();
 
     let mut eff: Vec<(String, String)> = vec![
-        ("TEMP".into(), temp.to_string_lossy().into_owned()),
-        ("TMP".into(), temp.to_string_lossy().into_owned()),
+        ("TEMP".into(), temp_env.clone()),
+        ("TMP".into(), temp_env),
     ];
     eff.extend(overrides.iter().filter(|(k, _)| k != "TEMP" && k != "TMP").cloned());
 
@@ -575,17 +644,17 @@ fn cache_overrides(workspace_root: &Path) -> Vec<(String, String)> {
     let cache = workspace_root.join(EXEC_CACHE_DIR);
     let mut out = Vec::new();
     if tool_on_path("npm") {
-        let p = cache.join("npm");
+        let p = child_path(&cache.join("npm"));
         let _ = std::fs::create_dir_all(&p);
         out.push(("npm_config_cache".into(), p.to_string_lossy().into_owned()));
     }
     if tool_on_path("pip") {
-        let p = cache.join("pip");
+        let p = child_path(&cache.join("pip"));
         let _ = std::fs::create_dir_all(&p);
         out.push(("PIP_CACHE_DIR".into(), p.to_string_lossy().into_owned()));
     }
     if tool_on_path("cargo") {
-        let p = cache.join("cargo");
+        let p = child_path(&cache.join("cargo"));
         let _ = std::fs::create_dir_all(&p);
         out.push(("CARGO_HOME".into(), p.to_string_lossy().into_owned()));
     }
@@ -801,7 +870,7 @@ fn launch_restricted(
         let mut cmdline_w: Vec<u16> = cmdline.encode_utf16().collect();
         cmdline_w.push(0);
 
-        let cwd_w = wide(&cwd.to_string_lossy());
+        let cwd_w = wide(&child_path(cwd).to_string_lossy());
         let sa = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: std::ptr::null_mut(),
@@ -914,7 +983,7 @@ pub(crate) struct RestrictedChild {
     job: Option<HANDLE>,
     stdout_file: Option<File>,
     stderr_file: Option<File>,
-    /// ACL 放行会话（仅受限路径持有；full 恒 None）：Drop 时引用归零才还原
+    /// ACL 放行租约（仅受限路径持有；full 恒 None）：Drop 归还引用，末位归零时还原
     _grant: Option<GrantSession>,
 }
 
@@ -996,7 +1065,7 @@ impl Drop for RestrictedChild {
                 let _ = CloseHandle(job);
             }
         }
-        // _grant Drop：引用归零时 ACL 还原（进程句柄已关，无并发写者）
+        // _grant Drop：归还引用；末位（归零）时执行 ACL 还原
     }
 }
 
@@ -1064,7 +1133,7 @@ fn spawn_exec(
         )));
     }
 
-    // 4) 令牌 + 启动（失败路径：grant Drop 自动还原 ACL）
+    // 4) 令牌 + 启动（失败路径：grant Drop 归还引用，末位时还原 ACL）
     let token = if full {
         open_own_token()
             .map_err(|e| io::Error::other(format!("自身令牌获取失败：{e}")))?
@@ -1358,6 +1427,40 @@ mod tests {
     }
 
     #[test]
+    fn child_path_strips_verbatim_prefix() {
+        assert_eq!(
+            child_path(Path::new("\\\\?\\F:\\ws\\x")),
+            PathBuf::from("F:\\ws\\x"),
+            "盘符 verbatim 应剥为普通形式"
+        );
+        assert_eq!(
+            child_path(Path::new("\\\\?\\UNC\\srv\\share\\x")),
+            PathBuf::from("\\\\srv\\share\\x"),
+            "UNC verbatim 应还原为普通 UNC"
+        );
+        assert_eq!(child_path(Path::new("F:\\ws")), PathBuf::from("F:\\ws"));
+        assert_eq!(child_path(Path::new("rel\\x")), PathBuf::from("rel\\x"));
+    }
+
+    /// 回归：cwd 为 canonical（verbatim `\\?\`）形式时相对路径 cmdlet 仍应工作。
+    /// 此前 cwd 原样带前缀交给子进程，PowerShell 5.1 相对解析失效。
+    #[test]
+    fn verbatim_cwd_relative_paths_work() {
+        let ws = unique_ws("verbatim");
+        let ws_canon = ws.canonicalize().expect("canonicalize");
+        assert!(
+            ws_canon.to_string_lossy().starts_with("\\\\?\\"),
+            "canonical 形式应带 verbatim 前缀（否则本用例失去意义）: {ws_canon:?}"
+        );
+        let script = "Set-Content -Path rel.txt -Value hi -ErrorAction Stop; \
+                      Write-Output ('REL:' + (Get-Content -Raw -Path rel.txt).Trim())";
+        let (code, out, err) = run_ps(&ws_canon, script, Duration::from_secs(30));
+        assert_eq!(code, Some(0), "verbatim cwd 下相对路径应可用 err={err}");
+        assert!(out.contains("REL:hi"), "out: {out}");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
     fn job_kill_converges_grandchild_tree() {
         let ws = unique_ws("job");
         // 受限子进程再派生子进程（孙进程 sleep 60s），pid 打到 stdout；
@@ -1447,6 +1550,32 @@ mod tests {
         }
         let after = dacl_raw(&ws);
         assert_eq!(before, after, "运行前后 workspace DACL 应一致（还原）");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// 放行租约语义（回归：曾因 AclRestore::Drop 无条件还原，先结束的会话会把
+    /// 仍在运行会话的写放行收走——非末位释放必须只递减计数，不得触碰 ACL）。
+    #[test]
+    fn grant_lease_survives_until_last_release() {
+        let ws = unique_ws("grant-lease");
+        let before = dacl_raw(&ws);
+
+        let g1 = GrantSession::acquire(&ws).expect("首个会话放行");
+        let after_first = dacl_raw(&ws);
+        assert_ne!(before, after_first, "首个会话应施加放行（DACL 应变化）");
+
+        let g2 = GrantSession::acquire(&ws).expect("第二个会话共享放行");
+        drop(g1);
+        let after_early_release = dacl_raw(&ws);
+        assert_ne!(
+            before, after_early_release,
+            "非末位释放不得还原 ACL（仍在运行的会话需要放行）"
+        );
+
+        drop(g2);
+        let after_last_release = dacl_raw(&ws);
+        assert_eq!(before, after_last_release, "末位释放后 DACL 应还原到初始状态");
+
         let _ = std::fs::remove_dir_all(&ws);
     }
 

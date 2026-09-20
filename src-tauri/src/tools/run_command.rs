@@ -7,6 +7,14 @@
 //!   直调 / 测试）= 无审批直接执行（语义见方案 §1.3）。
 //! - 超时消费点：`Tool::timeout()` 提供工具级默认（120s），调用级参数
 //!   timeout 覆盖之（params.timeout > 工具默认；registry 不做全域包装）。
+//!
+//! ## 渲染口径（对齐 Hanako exec_command）
+//!
+//! - 双通道共用一份尾部额度：2000 行 / 50KB，stderr 优先占额；
+//! - 单通道有内容不加标记，双通道带 `[stderr]` / `[stdout]` 标记，顺序统一
+//!   **stderr 在前**（异常优先；与真实写入次序无关——两条管道各读，交织早已不可得）；
+//! - 截断时把完整输出落盘并把路径写进文案（模型按需 read_file）；
+//!   给消费方的路径一律普通形式（剥 `\\?\` 前缀）。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -15,8 +23,11 @@ use crate::exec::runner::{self, Outcome, RunOptions, RunOutput, ShellKind};
 
 use super::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
-/// 返回给 LLM/前端的 summary 尾部上限（方案 §3 数值定稿）。
-const MAX_SUMMARY_CHARS: usize = 4000;
+/// 双通道共用的尾部额度（行 / 字节，与 Hanako exec_command 同口径）。
+const MAX_TAIL_LINES: usize = 2000;
+const MAX_TAIL_BYTES: usize = 50 * 1024;
+/// canonical 中通道尾部字段上限（结构化数据，不进模型上下文）。
+const MAX_CANONICAL_CHARS: usize = 4000;
 /// canonical 中命令回显截断。
 const MAX_COMMAND_CHARS: usize = 512;
 
@@ -199,7 +210,7 @@ impl Tool for RunCommandTool {
             },
         );
 
-        render_output(&spec, &out, timeout_secs)
+        render_output(&spec, &out, timeout_secs, &self.output_dir())
     }
 }
 
@@ -216,18 +227,216 @@ fn truncate_chars(s: &str, max: usize) -> String {
     }
 }
 
-/// 截断提示附注（truncated 时）。
-fn spill_notice(path: &Path) -> String {
-    format!(
-        "\n\n[输出已截断，完整输出：{}（可用 read_file 读取）]",
-        path.display()
-    )
+/// 取文本尾部字节（UTF-8 char 边界安全）。
+fn tail_bytes(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut start = s.len() - max;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
+}
+
+/// 单通道尾部切片。
+struct ChannelSlice {
+    text: String,
+    /// 已占用的额度（行 / 字节）
+    lines: usize,
+    bytes: usize,
+    /// 原内容多于 `text`（被行数或字节上限裁掉）
+    clipped: bool,
+}
+
+/// 取尾部：自末尾向上累加，最多 `max_lines` 行且不超过 `max_bytes` 字节；
+/// 单行本身超字节上限时按字符边界取其尾部（对齐 Hanako lastLinePartial）。
+fn tail_slice(text: &str, max_lines: usize, max_bytes: usize) -> ChannelSlice {
+    let trimmed = text.trim_end();
+    if trimmed.is_empty() {
+        return ChannelSlice {
+            text: String::new(),
+            lines: 0,
+            bytes: 0,
+            clipped: false,
+        };
+    }
+    let all: Vec<&str> = trimmed.lines().collect();
+    let mut taken: Vec<&str> = Vec::new();
+    let mut bytes = 0usize;
+    for line in all.iter().rev() {
+        if taken.len() >= max_lines {
+            break;
+        }
+        let sep = if taken.is_empty() { 0 } else { 1 };
+        if bytes + line.len() + sep > max_bytes {
+            break;
+        }
+        taken.push(line);
+        bytes += line.len() + sep;
+    }
+    if taken.is_empty() {
+        // 行额度已尽，或单行本身超字节上限
+        if max_lines == 0 {
+            return ChannelSlice {
+                text: String::new(),
+                lines: 0,
+                bytes: 0,
+                clipped: true,
+            };
+        }
+        let s = tail_bytes(all[all.len() - 1], max_bytes);
+        return ChannelSlice {
+            bytes: s.len(),
+            lines: 1,
+            text: s,
+            clipped: true,
+        };
+    }
+    let clipped = taken.len() < all.len();
+    taken.reverse();
+    ChannelSlice {
+        text: taken.join("\n"),
+        lines: taken.len(),
+        bytes,
+        clipped,
+    }
+}
+
+/// 双通道渲染结果（共用一份额度）。
+struct StreamRender {
+    stderr: ChannelSlice,
+    stdout: ChannelSlice,
+}
+
+impl StreamRender {
+    fn stderr_has(&self) -> bool {
+        !self.stderr.text.is_empty()
+    }
+    fn stdout_has(&self) -> bool {
+        !self.stdout.text.is_empty()
+    }
+}
+
+/// 两通道渲染：共用一份额度（2000 行 / 50KB），stderr 优先占额。
+fn render_streams(stdout: &str, stderr: &str) -> StreamRender {
+    let stderr = tail_slice(stderr, MAX_TAIL_LINES, MAX_TAIL_BYTES);
+    let stdout = tail_slice(
+        stdout,
+        MAX_TAIL_LINES.saturating_sub(stderr.lines),
+        MAX_TAIL_BYTES.saturating_sub(stderr.bytes),
+    );
+    StreamRender { stderr, stdout }
+}
+
+/// 正文拼装：单通道不加标记（保持紧凑形态），双通道带 `[stderr]` / `[stdout]`
+/// 标记。顺序统一为 **stderr 在前**（异常优先：失败先看错误现场，成功先看警告），
+/// 与真实写入次序无关——两条管道由两个读线程各读，交织信息在采集层就不再可得。
+fn compose_body(header: &str, r: &StreamRender) -> String {
+    let head = |text: &str| {
+        if header.is_empty() {
+            text.to_string()
+        } else {
+            format!("{header}：{text}")
+        }
+    };
+    match (r.stderr_has(), r.stdout_has()) {
+        (false, false) => header.to_string(),
+        (true, false) => head(&r.stderr.text),
+        (false, true) => head(&r.stdout.text),
+        (true, true) => {
+            let body = format!("[stderr]\n{}\n[stdout]\n{}", r.stderr.text, r.stdout.text);
+            if header.is_empty() {
+                body
+            } else {
+                format!("{header}\n{body}")
+            }
+        }
+    }
+}
+
+/// 报告面路径：剥 Windows verbatim（`\\?\`）前缀，消费方（模型 / 卡片）用普通形式。
+/// 与沙箱侧 `spawn_win32::child_path` 是同一条规则的两个面（那边是交给子进程）。
+fn plain_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    match s.strip_prefix("\\\\?\\UNC\\") {
+        Some(rest) => PathBuf::from(format!("\\\\{rest}")),
+        None => match s.strip_prefix("\\\\?\\") {
+            Some(rest) => PathBuf::from(rest),
+            None => path.to_path_buf(),
+        },
+    }
+}
+
+/// 完整输出提示：`[输出已截断，完整输出：<path>（stderr）（可用 read_file 读取）]`。
+fn spill_notice(entries: &[(&str, PathBuf)]) -> String {
+    let list = entries
+        .iter()
+        .map(|(chan, p)| format!("{}（{chan}）", plain_path(p).display()))
+        .collect::<Vec<_>>()
+        .join("、");
+    format!("\n\n[输出已截断，完整输出：{list}（可用 read_file 读取）]")
+}
+
+/// 确保被截断通道的完整输出可读：runner 已落盘则直接用其路径；
+/// 否则（未达 runner 阈值、全文仍在内存）写入输出目录。
+fn ensure_full_file(
+    out_dir: &Path,
+    chan: &str,
+    content: &str,
+    spilled: Option<&PathBuf>,
+) -> Option<PathBuf> {
+    if let Some(p) = spilled {
+        return Some(p.clone());
+    }
+    if content.is_empty() {
+        return None;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = out_dir.join(format!("run-{}-{nanos}.{chan}.log", std::process::id()));
+    std::fs::create_dir_all(out_dir).ok()?;
+    std::fs::write(&path, content).ok()?;
+    Some(path)
+}
+
+/// 截断提示（无截断返回空串；顺带落实「截断必落盘」）。
+fn truncation_notice(out_dir: &Path, out: &RunOutput, r: &StreamRender) -> String {
+    let mut entries: Vec<(&str, PathBuf)> = Vec::new();
+    if r.stderr.clipped {
+        if let Some(p) = ensure_full_file(
+            out_dir,
+            "stderr",
+            &out.stderr_tail,
+            out.full_stderr_path.as_ref(),
+        ) {
+            entries.push(("stderr", p));
+        }
+    }
+    if r.stdout.clipped {
+        if let Some(p) = ensure_full_file(
+            out_dir,
+            "stdout",
+            &out.stdout_tail,
+            out.full_stdout_path.as_ref(),
+        ) {
+            entries.push(("stdout", p));
+        }
+    }
+    if entries.is_empty() {
+        String::new()
+    } else {
+        spill_notice(&entries)
+    }
 }
 
 fn render_output(
     spec: &runner::CommandSpec,
     out: &RunOutput,
     timeout_secs: u64,
+    out_dir: &Path,
 ) -> Result<ToolOutput, ToolError> {
     let canonical = serde_json::json!({
         "ok": out.ok(),
@@ -239,56 +448,40 @@ fn render_output(
         },
         "exit_code": out.exit_code,
         "command": truncate_chars(&spec.command, MAX_COMMAND_CHARS),
-        "stdout_tail": truncate_chars(&out.stdout_tail, MAX_SUMMARY_CHARS),
-        "stderr_tail": truncate_chars(&out.stderr_tail, MAX_SUMMARY_CHARS),
+        "stdout_tail": truncate_chars(&out.stdout_tail, MAX_CANONICAL_CHARS),
+        "stderr_tail": truncate_chars(&out.stderr_tail, MAX_CANONICAL_CHARS),
         "truncated": out.truncated,
         "output_bytes": out.total_bytes,
-        "full_stdout_path": out.full_stdout_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-        "full_stderr_path": out.full_stderr_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "full_stdout_path": out.full_stdout_path.as_ref().map(|p| plain_path(p).to_string_lossy().into_owned()),
+        "full_stderr_path": out.full_stderr_path.as_ref().map(|p| plain_path(p).to_string_lossy().into_owned()),
         "elapsed_ms": out.elapsed_ms,
     });
 
+    // 双通道共用一份尾部额度（stderr 优先占额）；截断时把完整输出落盘并给路径。
+    let r = render_streams(&out.stdout_tail, &out.stderr_tail);
+    let notice = truncation_notice(out_dir, out, &r);
+
     match out.outcome {
         Outcome::Completed if out.exit_code == Some(0) => {
-            // 成功：summary = stdout 尾部（截断附 read_file 指引）
-            let stdout = out.stdout_tail.trim_end().to_string();
-            let mut summary = truncate_chars(&stdout, MAX_SUMMARY_CHARS);
-            if let Some(full) = out.full_stdout_path.as_ref() {
-                if stdout.chars().count() > MAX_SUMMARY_CHARS || out.truncated {
-                    summary.push_str(&spill_notice(full));
-                }
-            }
-            if summary.trim().is_empty() {
+            // 成功：产物（stdout）+ 警告（stderr，非空时才附）
+            let mut summary = compose_body("", &r);
+            if summary.is_empty() {
                 summary = "(无输出)".into();
             }
+            summary.push_str(&notice);
             Ok(ToolOutput::json(canonical, summary))
         }
         Outcome::Completed => {
-            // 非零退出码：错误文案 = 退出码 + stderr/stdout 摘要
-            let detail = if !out.stderr_tail.trim().is_empty() {
-                &out.stderr_tail
-            } else {
-                &out.stdout_tail
-            };
-            let code = out.exit_code.unwrap_or(-1);
-            let detail = truncate_chars(detail.trim_end(), MAX_SUMMARY_CHARS);
-            let mut msg = format!("命令执行失败（退出码 {code}）");
-            if !detail.is_empty() {
-                msg.push_str(&format!("：{detail}"));
-            }
+            // 非零退出码：异常优先（stderr 段在前）
+            let header = format!("命令执行失败（退出码 {}）", out.exit_code.unwrap_or(-1));
+            let mut msg = compose_body(&header, &r);
+            msg.push_str(&notice);
             Err(ToolError::CommandFailed(msg))
         }
         Outcome::TimedOut => {
-            let mut msg = format!("命令超过 {timeout_secs}s 未完成，已终止进程树");
-            let detail = if !out.stderr_tail.trim().is_empty() {
-                &out.stderr_tail
-            } else {
-                &out.stdout_tail
-            };
-            let detail = truncate_chars(detail.trim_end(), 2000);
-            if !detail.is_empty() {
-                msg.push_str(&format!("。已产生输出：{detail}"));
-            }
+            let header = format!("命令超过 {timeout_secs}s 未完成，已终止进程树");
+            let mut msg = compose_body(&header, &r);
+            msg.push_str(&notice);
             Err(ToolError::CommandFailed(msg))
         }
         Outcome::Killed => Err(ToolError::CommandFailed(
@@ -414,6 +607,123 @@ mod tests {
         match err {
             ToolError::CommandFailed(msg) => {
                 assert!(msg.contains("退出码 7"), "got: {msg}");
+            }
+            other => panic!("应 CommandFailed，got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn failure_message_carries_both_streams_stderr_first() {
+        let ws = unique_temp_dir("both-streams");
+        let t = tool(&ws);
+        let err = t
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"Write-Output 'out-line'; [Console]::Error.WriteLine('err-line'); exit 3"}"#,
+            )
+            .expect_err("非零退出应失败");
+        match err {
+            ToolError::CommandFailed(msg) => {
+                assert!(msg.contains("退出码 3"), "got: {msg}");
+                assert!(
+                    msg.contains("[stderr]") && msg.contains("[stdout]"),
+                    "双通道应有分段标记: {msg}"
+                );
+                let err_at = msg.find("[stderr]").unwrap();
+                let out_at = msg.find("[stdout]").unwrap();
+                assert!(err_at < out_at, "失败时 stderr 段应在前: {msg}");
+                assert!(msg.contains("err-line") && msg.contains("out-line"), "got: {msg}");
+            }
+            other => panic!("应 CommandFailed，got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn success_message_appends_stderr_section() {
+        let ws = unique_temp_dir("succ-stderr");
+        let t = tool(&ws);
+        let out = t
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"Write-Output 'ok-line'; [Console]::Error.WriteLine('warn-line')"}"#,
+            )
+            .expect("退出码 0 应成功");
+        assert!(
+            out.summary.contains("[stdout]") && out.summary.contains("[stderr]"),
+            "成功态也应带上 stderr 段: {}",
+            out.summary
+        );
+        // 顺序统一：stderr 段恒在前（与失败态一致）
+        assert!(
+            out.summary.find("[stderr]") < out.summary.find("[stdout]"),
+            "两段顺序应统一为 stderr 在前: {}",
+            out.summary
+        );
+        assert!(
+            out.summary.contains("ok-line") && out.summary.contains("warn-line"),
+            "summary: {}",
+            out.summary
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn tail_capped_by_lines_and_full_output_written() {
+        let ws = unique_temp_dir("tail-lines");
+        let t = tool(&ws);
+        let err = t
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"1..3000 | ForEach-Object { [Console]::Error.WriteLine('e' + $_) }; exit 1"}"#,
+            )
+            .expect_err("应失败");
+        match err {
+            ToolError::CommandFailed(msg) => {
+                assert!(msg.contains("e3000"), "尾部应保留最后一行");
+                assert!(!msg.contains("e1000"), "被裁的行不应出现");
+                assert!(msg.contains("read_file"), "截断应给落盘指引: {msg}");
+                assert!(!msg.contains("\\\\?\\"), "提示里的路径应为普通形式（剥 verbatim 前缀）");
+                let path = msg
+                    .split("完整输出：")
+                    .nth(1)
+                    .and_then(|s| s.split("（stderr）").next())
+                    .expect("应含完整输出路径");
+                let content = std::fs::read_to_string(path).expect("完整输出应落盘");
+                assert_eq!(content.lines().count(), 3000, "落盘应为全文");
+            }
+            other => panic!("应 CommandFailed，got {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn shared_budget_clips_second_stream_and_spills_only_it() {
+        let ws = unique_temp_dir("shared-budget");
+        let t = tool(&ws);
+        // stderr 先占 1500 行额度，stdout 只剩 500 行 → 仅 stdout 被裁
+        let err = t
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"1..1500 | ForEach-Object { [Console]::Error.WriteLine('e' + $_) }; 1..1500 | ForEach-Object { [Console]::Out.WriteLine('o' + $_) }; exit 1"}"#,
+            )
+            .expect_err("应失败");
+        match err {
+            ToolError::CommandFailed(msg) => {
+                assert!(msg.contains("e1500"), "stderr 应完整（优先占额）");
+                assert!(msg.contains("o1500"), "stdout 应保留尾部");
+                assert!(!msg.contains("o1000"), "stdout 被裁部分不应出现");
+                assert!(msg.contains("（stdout）"), "仅被裁通道需落盘: {msg}");
+                assert!(!msg.contains("（stderr）"), "未截断通道不落盘（内容已在正文）");
+                assert!(!msg.contains("\\\\?\\"), "提示里的路径应为普通形式（剥 verbatim 前缀）");
+                let path = msg
+                    .split("完整输出：")
+                    .nth(1)
+                    .and_then(|s| s.split("（stdout）").next())
+                    .expect("应含 stdout 落盘路径");
+                let content = std::fs::read_to_string(path).expect("完整输出应落盘");
+                assert_eq!(content.lines().count(), 1500, "落盘应为 stdout 全文");
             }
             other => panic!("应 CommandFailed，got {other:?}"),
         }

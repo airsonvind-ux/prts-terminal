@@ -25,10 +25,36 @@ import {
   useState,
 } from "react";
 import { marked } from "marked";
+import type { Tokenizer } from "marked";
 import { sanitizeMarkdownHtml } from "./markdownSanitize";
 import styles from "./Markdown.module.css";
 
 marked.setOptions({ breaks: true, gfm: true });
+
+/**
+ * GFM 删除线只认双波浪 `~~`。
+ *
+ * marked 的实现把左定界符放宽到单个 `~`（源码规则 `~~?`），于是
+ * 「12~30，3~24」这类数值区间会被配成一对，中间那段被渲染成删除线。
+ * 覆盖 `del` 分词器：非双波浪一律返回 undefined（= 不消费，交回普通文字）。
+ * 注：marked 的 use() 约定——返回 false 会回落到内置实现，返回 undefined 不会。
+ */
+const STRICT_DEL = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?=[^~]|$)/;
+
+marked.use({
+  tokenizer: {
+    del(this: Tokenizer, src: string) {
+      const m = STRICT_DEL.exec(src);
+      if (!m) return undefined;
+      return {
+        type: "del",
+        raw: m[0],
+        text: m[1],
+        tokens: this.lexer.inlineTokens(m[1]),
+      };
+    },
+  },
+});
 
 interface Props {
   content: string;

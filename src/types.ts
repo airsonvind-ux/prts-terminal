@@ -718,6 +718,12 @@ export interface MemoryDetail {
   entry?: MemoryExperienceItem | null;
 }
 
+/** memory_set_longterm 返回 */
+export interface MemorySetLongtermResult {
+  version: number;
+  chars: number;
+}
+
 /** memory_tidy 返回 */
 export interface MemoryTidyResult {
   status: "created" | "rewritten" | "compressed" | "no_delta" | "cooldown" | "failed";

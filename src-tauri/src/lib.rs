@@ -323,6 +323,7 @@ pub fn run() {
             commands::memory_delete,
             commands::memory_experience_list,
             commands::memory_experience_clear,
+            commands::memory_set_longterm,
             commands::memory_tidy,
             // commands::clear_conversation_cache, // 已注释（2026-08：缓存系统停用）
         ])

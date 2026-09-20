@@ -13,12 +13,43 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
+import { marked } from "marked";
 import {
   Markdown,
   allocateCols,
   getTableLayouts,
   reconcileTopLevelChildren,
 } from "./Markdown";
+
+// ═════════════════════════════════════════════════════
+// GFM 删除线：只认双波浪（数值区间不得被吃掉）
+// ═════════════════════════════════════════════════════
+
+describe("删除线分词（只认 ~~）", () => {
+  it("单波浪不构成删除线：数值区间原样保留", () => {
+    const html = marked.parseInline("攻击间隔 12~30，防御 3~24") as string;
+    expect(html).not.toContain("<del>");
+    expect(html).toContain("12~30");
+    expect(html).toContain("3~24");
+  });
+
+  it("双波浪仍是删除线", () => {
+    const html = marked.parseInline("~~作废~~") as string;
+    expect(html).toContain("<del>作废</del>");
+  });
+
+  it("文本中段的双波浪仍生效", () => {
+    const html = marked.parseInline("前面 ~~作废~~ 后面") as string;
+    expect(html).toContain("<del>作废</del>");
+  });
+
+  it("单波浪与成对波浪混用互不干扰", () => {
+    const html = marked.parseInline("1~5 与 ~~废~~ 7~9") as string;
+    expect(html).toContain("<del>废</del>");
+    expect(html).toContain("1~5");
+    expect(html).toContain("7~9");
+  });
+});
 
 // ═════════════════════════════════════════════════════
 // allocateCols（原有测试，保持不动）

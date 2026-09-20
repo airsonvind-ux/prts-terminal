@@ -148,14 +148,24 @@ export function ChatView({ onDragHandle }: Props) {
   return (
     <div className={styles.container}>
       <Toolbar onDragHandle={onDragHandle} />
-      <MessageList
-        turns={turns}
-        currentEvents={currentEvents}
-        isFirstUse={isFirstUse}
-        compaction={activeCompaction}
-        pending={pending}
-        onCancelPending={handleCancelSteer}
-      />
+      {restoring && turns.length === 0 ? (
+        /* 恢复中且尚无内容：给一个明确的等待态。
+           启动要读全量会话（长对话单文件可达十余 MB），这段工作占满主线程，
+           期间没有任何内容可画——用占位把“空”变成“在等”。 */
+        <div className={styles.restoring} data-restoring>
+          正在恢复上次对话…
+        </div>
+      ) : (
+        <MessageList
+          turns={turns}
+          currentEvents={currentEvents}
+          isFirstUse={isFirstUse}
+          compaction={activeCompaction}
+          pending={pending}
+          onCancelPending={handleCancelSteer}
+          conversationId={activeId}
+        />
+      )}
       {!isFirstUse && <FindBar />}
       <div className={styles.inputRow}>
         <ContextIndicator />

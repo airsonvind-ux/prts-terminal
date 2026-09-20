@@ -619,14 +619,25 @@ pub fn list_conversations(
     s.list()
 }
 
-/// 读取单个会话：meta + 轮行原文（坏行已跳过；恢复时前端 JSON.parse 逐行重建）。
+/// 读取单个会话：meta + 轮行（坏行已跳过；恢复时前端 JSON.parse 逐行重建）。
+///
+/// **读出侧合并流式 chunk**（2026-09）：归档按事件落盘，每个流式 chunk 一条，
+/// 长对话单行可达数 MB；返回前把「连续且同 kind 的 assistant/chunk」合并为一条
+/// （[`crate::session_store::coalesce_chunks_line`]），payload 与前端解析量下降
+/// 数量级。**落盘原文不动**——历史冻结语义不变。
 #[tauri::command]
 pub fn get_conversation(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     conversation_id: String,
 ) -> Result<ConversationRecord, String> {
     let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
-    s.get(&conversation_id)
+    let mut rec = s.get(&conversation_id)?;
+    for line in rec.turns.iter_mut() {
+        if let Some(merged) = crate::session_store::coalesce_chunks_line(line) {
+            *line = merged;
+        }
+    }
+    Ok(rec)
 }
 
 /// 追加一轮（前端轮末归档触发）。首轮建会话文件（header + 轮行 + index 插入），
@@ -1072,6 +1083,16 @@ pub struct MemoryDetailDto {
     pub entry: Option<ExperienceItemDto>,
 }
 
+/// memory_set_longterm 返回。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySetLongtermDto {
+    /// 写入后的长期记忆版本号
+    pub version: u64,
+    /// 写入字数
+    pub chars: usize,
+}
+
 /// memory_tidy 返回（界面反馈）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1337,6 +1358,45 @@ pub fn memory_experience_clear(
         }
     }
     note_memory(&ledger, "博士清除了经历记忆");
+    Ok(())
+}
+
+/// 重写长期记忆：把「先前」正文覆盖为给定文本（版本 +1，走台账提醒）。
+///
+/// 定位：**人工纠偏入口**（与成长页编辑同构）——自动沉淀跑偏时由用户改写。
+/// 上限与压缩硬闸同源（[`MAX_LONGTERM_CHARS`]）；空串允许（＝清空）。
+/// 写入对**新对话**生效；正在进行的对话靠提醒看到新版全文（快照对话内冻结）。
+#[tauri::command]
+pub fn memory_set_longterm(
+    turn_registry: State<'_, Arc<TurnRegistry>>,
+    memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
+    ledger: State<'_, Arc<Mutex<Notices>>>,
+    text: String,
+) -> Result<MemorySetLongtermDto, String> {
+    ensure_not_busy(&turn_registry)?;
+    validate_longterm(&text)?;
+    let now = crate::memory::schema::now_ms();
+    let mut m = memory_store
+        .lock()
+        .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+    let version = m.set_longterm(text.clone(), now, now)?;
+    drop(m);
+    let detail = format!("长期记忆已重写（版本 {version}）\n{}", text.trim());
+    note_memory(&ledger, &detail);
+    Ok(MemorySetLongtermDto {
+        version,
+        chars: text.chars().count(),
+    })
+}
+
+/// 长期记忆写入校验（人工编辑入口专用；与压缩硬闸同源）。
+/// 空串放行（＝清空）；超限报错，不静默截断。
+fn validate_longterm(text: &str) -> Result<(), String> {
+    let n = text.chars().count();
+    let max = crate::orchestrator::memory::MAX_LONGTERM_CHARS;
+    if n > max {
+        return Err(format!("长期记忆过长：{n} 字，上限 {max} 字"));
+    }
     Ok(())
 }
 
@@ -1821,6 +1881,15 @@ pub fn resolve_tool_approval(
 mod tests {
     use super::*;
     use crate::llm::ApiType;
+
+    #[test]
+    fn validate_longterm_bounds() {
+        let max = crate::orchestrator::memory::MAX_LONGTERM_CHARS;
+        assert!(validate_longterm("").is_ok(), "空串允许（＝清空）");
+        assert!(validate_longterm(&"字".repeat(max)).is_ok(), "上限内应放行");
+        let err = validate_longterm(&"字".repeat(max + 1)).unwrap_err();
+        assert!(err.contains("上限"), "超限应报错而不静默截断: {err}");
+    }
 
     // ── list_skills：dev 目录真实条目（数值计算/行动推演已落盘）──
 

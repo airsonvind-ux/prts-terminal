@@ -728,6 +728,50 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// 合并一行轮行里**连续且同 kind** 的 `assistant/chunk`（多 → 一）。
+///
+/// 用途：`get_conversation` 返回前瘦身。会话文件按事件落盘，每个流式 chunk 都是
+/// 一条事件——长对话单行可达数 MB；而展示口径上同段同类 chunk 的语义就是其拼接
+/// 文本（前端 deriveTextSegments 与 EventBadge 都这么消费），逐条保留只让 payload
+/// 与前端解析量膨胀。
+///
+/// 不变量：只动**返回给前端的副本**（本函数取 `&str` 返回新 `String`，碰不到文件），
+/// 落盘原文不动（历史冻结不变）；其它事件与先后顺序原样保留。无需合并时返回
+/// `None`（调用方保留原行）。
+pub(crate) fn coalesce_chunks_line(line: &str) -> Option<String> {
+    let events: Vec<serde_json::Value> = serde_json::from_str(line).ok()?;
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(events.len());
+    let mut merged = false;
+    for ev in events {
+        let is_chunk = ev.get("type").and_then(|v| v.as_str()) == Some("assistant/chunk");
+        if is_chunk {
+            if let Some(last) = out.last_mut() {
+                let same_kind = last.get("type").and_then(|v| v.as_str())
+                    == Some("assistant/chunk")
+                    && last.get("kind") == ev.get("kind");
+                if same_kind {
+                    let add = ev.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if !add.is_empty() {
+                        let cur = last
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        last["content"] = serde_json::Value::String(format!("{cur}{add}"));
+                    }
+                    merged = true;
+                    continue;
+                }
+            }
+        }
+        out.push(ev);
+    }
+    if !merged {
+        return None;
+    }
+    serde_json::to_string(&out).ok()
+}
+
 // ═══════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════
@@ -735,6 +779,42 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coalesce_chunks_merges_consecutive_same_kind() {
+        let line = r#"[{"type":"user/message","content":"问"},
+            {"type":"assistant/chunk","kind":"reasoning","content":"想"},
+            {"type":"assistant/chunk","kind":"reasoning","content":"一下"},
+            {"type":"assistant/chunk","kind":"text","content":"答"},
+            {"type":"tool/call","callId":"c1"},
+            {"type":"assistant/chunk","kind":"text","content":"完"}]"#;
+        let out = coalesce_chunks_line(line).expect("应发生合并");
+        let evs: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(evs.len(), 5, "reasoning 两条合 1；被 tool/call 隔开的 text 不合并");
+        assert_eq!(evs[1]["kind"], "reasoning");
+        assert_eq!(evs[1]["content"], "想一下");
+        assert_eq!(evs[4]["content"], "完");
+        assert_eq!(evs[3]["type"], "tool/call", "其它事件类型与顺序原样保留");
+    }
+
+    #[test]
+    fn coalesce_chunks_no_change_returns_none() {
+        let no_chunk = r#"[{"type":"user/message","content":"问"},{"type":"assistant/message","content":"答"}]"#;
+        assert!(coalesce_chunks_line(no_chunk).is_none(), "无 chunk 不改写");
+        let single = r#"[{"type":"assistant/chunk","kind":"text","content":"唯一条"}]"#;
+        assert!(coalesce_chunks_line(single).is_none(), "单条无需合并");
+        assert!(coalesce_chunks_line("不是 JSON").is_none(), "坏行原样放过");
+    }
+
+    #[test]
+    fn coalesce_chunks_preserves_multibyte_content() {
+        let line = r#"[{"type":"assistant/chunk","kind":"text","content":"中文"},{"type":"assistant/chunk","kind":"text","content":"：数值 12~30"}]"#;
+        let out = coalesce_chunks_line(line).expect("应合并");
+        assert!(
+            out.contains("中文：数值 12~30"),
+            "多字节内容应逐字拼接保留: {out}"
+        );
+    }
 
     /// 创建唯一临时目录（不引入 tempfile crate，沿用 notices/config 夹具模式）。
     fn unique_temp_dir(tag: &str) -> PathBuf {

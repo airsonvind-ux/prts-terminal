@@ -136,6 +136,15 @@
   color: #c98080;
 }
 
+/* 失败行：单行省略（悬停 title 看全文）——展示面不铺长错误串 */
+.toolFailLine {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── 展示切片链接（文件 / URL）：短语后可点击的目标 ── */
 
 .displayLink {

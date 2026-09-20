@@ -9,8 +9,14 @@
 //
 // 注意：左/上系方向拖动期间窗口位置会变，因此位置换算一律以
 // "锚角屏幕坐标 + 光标"为基准，不依赖 outerPosition 的实时值。
+//
+// 装配时机（2026-09 加固）：监听在 mousedown 内**同步**装上，不再等 IPC
+// 再经状态/effect 装配——与 useDrag 同源的竞态（主线程繁忙时整段手势落在
+// 装配空窗里、漏掉的 mouseup 让状态一直挂着）。另加"鼠标已松开即收摊"兜底。
+// 锚角仍来自一次 IPC：到位前只等不动作（computeResize 是绝对反算，晚到
+// 只会迟一帧，不会跳变）。
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import {
@@ -25,69 +31,55 @@ import {
 export function useResize(): {
   onResizeHandle: (e: React.MouseEvent, dir: ResizeDirection) => void;
 } {
-  const [resizing, setResizing] = useState(false);
-
-  // mousedown 快照：锚角屏幕坐标（逻辑域）+ 方向。拖动期间不变。
-  const session = useRef<{ anchor: ResizeAnchor; dir: ResizeDirection } | null>(
-    null
-  );
-
-  // ── mousedown：快照锚角，启动缩放 ──
   const handleMouseDown = useCallback(
-    async (e: React.MouseEvent, dir: ResizeDirection) => {
+    (e: React.MouseEvent, dir: ResizeDirection) => {
       e.stopPropagation(); // 阻断拖拽：热区与拖动面各自独立
+      if (e.button !== 0) return; // 只认左键
 
       const win = getCurrentWindow();
       const scale = window.devicePixelRatio || 1;
-      const [pos, size] = await Promise.all([
-        win.outerPosition(),
-        win.outerSize(),
-      ]);
+      /** 锚角（逻辑域）。IPC 到位前为 null：此间的移动只等不动作 */
+      let anchor: ResizeAnchor | null = null;
 
-      const winX = pos.x / scale;
-      const winY = pos.y / scale;
-      const winSize = size.width / scale; // 正方窗口
+      function finish(): void {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", finish);
+      }
 
-      session.current = {
-        anchor: anchorPoint(RESIZE_SPECS[dir].corner, winX, winY, winSize),
-        dir,
-      };
-      setResizing(true);
+      function onMouseMove(ev: MouseEvent): void {
+        // 兜底：mouseup 被吞（主线程繁忙）→ 松开即收摊，不留在拖动态
+        if (ev.buttons === 0) {
+          finish();
+          return;
+        }
+        if (!anchor) return;
+        const { face, x, y } = computeResize(dir, ev.screenX, ev.screenY, anchor);
+        const size = face * RATIO;
+
+        // 先更新 CSS 自定义属性（同步），再并行提交位置与尺寸（异步）。
+        document.documentElement.style.setProperty("--face-size", `${face}px`);
+        void Promise.all([
+          win.setPosition(new LogicalPosition(x, y)),
+          win.setSize(new LogicalSize(size, size)),
+        ]);
+      }
+
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", finish);
+
+      void Promise.all([win.outerPosition(), win.outerSize()]).then(
+        ([pos, size]) => {
+          anchor = anchorPoint(
+            RESIZE_SPECS[dir].corner,
+            pos.x / scale,
+            pos.y / scale,
+            size.width / scale // 正方窗口
+          );
+        }
+      );
     },
     []
   );
-
-  // ── resizing 变为 true 时注册 document 级监听 ──
-  useEffect(() => {
-    if (!resizing) return;
-
-    const win = getCurrentWindow();
-
-    const onMouseMove = (e: MouseEvent) => {
-      const s = session.current;
-      if (!s) return;
-
-      const { face, x, y } = computeResize(s.dir, e.screenX, e.screenY, s.anchor);
-      const size = face * RATIO;
-
-      // 先更新 CSS 自定义属性（同步），再并行提交位置与尺寸（异步）。
-      document.documentElement.style.setProperty("--face-size", `${face}px`);
-      void Promise.all([
-        win.setPosition(new LogicalPosition(x, y)),
-        win.setSize(new LogicalSize(size, size)),
-      ]);
-    };
-
-    const onMouseUp = () => setResizing(false);
-
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    };
-  }, [resizing]);
 
   return { onResizeHandle: handleMouseDown };
 }
