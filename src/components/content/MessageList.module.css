@@ -8,6 +8,16 @@
  * 滚动条样式由 styles/scrollbar.css 统一提供（本文件不单独定义）。
  */
 
+/* ── 消息区容器（承载滚动列表与悬浮按钮）── */
+
+.listArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .list {
   flex: 1;
   min-height: 0;
@@ -24,6 +34,54 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* ── 回到底部悬浮按钮（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方）──
+ * 尺寸随界面缩放：--face-size × 0.1（240 基准 → 24px；360 时 = Hanako 的 36px）；
+ * 图标 × 0.05（360 时 = Hanako 的 18px）。默认半透明，悬停不透明并锁 accent 边。 */
+
+.scrollFab {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: calc(var(--face-size) * 0.1);
+  height: calc(var(--face-size) * 0.1);
+  border-radius: 50%;
+  border: 1px solid var(--depth-1);
+  background: var(--depth-2);
+  color: var(--text-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  cursor: pointer;
+  transition:
+    opacity 0.12s ease,
+    box-shadow 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.scrollFab:hover {
+  opacity: 1;
+  border-color: var(--accent);
+  /* 图标随边框一起转蓝（stroke=currentColor）；悬停态整体 accent 化 */
+  color: var(--accent);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+}
+
+.scrollFab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.scrollFab svg {
+  display: block;
+  width: calc(var(--face-size) * 0.05);
+  height: calc(var(--face-size) * 0.05);
 }
 
 /* ── 行级容器（消息气泡 / 事件卡共用）──

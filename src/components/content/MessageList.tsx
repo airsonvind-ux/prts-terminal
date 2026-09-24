@@ -85,6 +85,23 @@ const PIN_SETTLE_MS = 400;
 /** 贴底判定阈值（px）：离底距离不超过它就当成“贴底”。 */
 const STICK_PX = 5;
 
+/** 窗口缩放保护窗（ms）：resize 打头后这段时间内不钉底。 */
+const WINDOW_RESIZE_GUARD_MS = 160;
+
+/** 缩放锚校正量：把锚行送回原来的偏移处所需的 scrollTop 增量。
+ *  纯函数，供单测直接验证（真实布局行为在浏览器探针里验证）。 */
+export function anchorDelta(rowTop: number, listTop: number, offset: number): number {
+  return rowTop - listTop - offset;
+}
+
+/** 读当前界面缩放基准（--face-size）。
+ *  useResize 逐帧写 documentElement 的内联变量，是整个界面缩放的唯一源；
+ *  窗口尺寸本身在这里靠不住——CSS 变量先变、窗口后变，中间隔着一两帧。 */
+function readFaceSize(): string {
+  if (typeof document === "undefined") return "";
+  return document.documentElement.style.getPropertyValue("--face-size");
+}
+
 // ── 时间线算法（投影派生） ──
 
 /**
@@ -348,14 +365,125 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    * 滚动事件回调里不需要触发重渲染——这个值只在 useEffect 的
    * 自动滚底逻辑中被读取，ref 的变更不会导致额外渲染。
    */
+  const [atBottom, setAtBottom] = useState(true);
   const userScrolledUpRef = useRef(false);
 
-  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。 */
+  /** 贴底状态唯一写入口：ref（热路径读）+ state（按钮显示用），仅在变化时更新 state */
+  const setStick = useCallback((stick: boolean) => {
+    const next = !stick;
+    if (userScrolledUpRef.current === next) return;
+    userScrolledUpRef.current = next;
+    setAtBottom(stick);
+  }, []);
+
+  /* 滚动写入白名单 / 观测记录（照 Hanako 的两条通用判据）
+   *   programmaticTopRef  —— 我们自己写过的位置：滚动事件与之相符 ⇒ 不是用户
+   *   observedScrollHeightRef —— 最近观测的 scrollHeight：事件到达时它已变 ⇒
+   *   这次滚动是内容尺寸变化引起的钳位/锚定（浏览器行为），也不是用户。 */
+  const programmaticTopRef = useRef<number | null>(null);
+  const observedScrollHeightRef = useRef<number | null>(null);
+
+  /*
+   * ── 滚动所有权（谁可以写列表的滚动位置）──
+   *
+   * 全部写入点就下面四处；新增任何“自动滚动”前，先回答它属于哪一条：
+   *   1. items 变化（新消息/归档/切对话）→ 钉底（带 PIN_SETTLE_MS 收敛窗；
+   *      用户已上滑则不钉）；
+   *   2. 输入框尺寸回落/展开等“内容区被挤压” → ResizeObserver 重钉底；
+   *   3. 窗口缩放 → 不写（保护窗由 resize 事件与视口尺寸变化共同开启；
+   *      滚动事件同样忽略，意图改由滚轮手势判定；见下）；
+   *   4. 输入框布局测量（messageScroll.ts）→ 测量期间接管，贴底续贴底、
+   *      否则原位。
+   * 用户上滑（离底 > STICK_PX）立即停自动钉底；滑回底部恢复。
+   */
+
+  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。
+   * 写后记录实际落点——白名单只认落点，不认请求值（浏览器会钳位）。 */
   const pinNow = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    programmaticTopRef.current = el.scrollTop;
   }, []);
+
+  /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底 */
+  const scrollToBottomNow = useCallback(() => {
+    setStick(true);
+    pinNow();
+  }, [pinNow, setStick]);
+
+  /*
+   * 窗口缩放保护窗。
+   *
+   * 缩放是用户在调整视图，不是内容变化——若在缩放中钉底，对话内容会随缩放
+   * 手势上下滚动（2026-09 实测反馈）。
+   *
+   * 触发来源有两个，任取其一：
+   *   1. window resize 事件（通常可用）；
+   *   2. **视口尺寸变化观察**（ResizeObserver 回调里比 innerWidth/innerHeight）
+   *      ——Tauri/WebView2 下 resize 事件的到达时机不可靠，只靠事件会出现
+   *      “保护窗从未打开、缩放中照旧钉底”；尺寸比较不依赖事件也不依赖顺序。
+   */
+  const windowResizingRef = useRef(false);
+  const resizeGuardTimerRef = useRef(0);
+  /** 最近一次已知视口尺寸（由 ResizeObserver 回调维护） */
+  const lastViewportRef = useRef({ w: 0, h: 0 });
+  /** 最近一次已知界面缩放基准（--face-size） */
+  const lastFaceSizeRef = useRef("");
+  /** 缩放期间的视野锚：视野顶端那一行 + 它距列表顶的偏移 */
+  const anchorRef = useRef<{ row: Element; offset: number } | null>(null);
+
+  /** 记锚（缩放开始时只记一次） */
+  const captureAnchor = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const listTop = el.getBoundingClientRect().top;
+    for (const row of Array.from(el.children)) {
+      const r = row.getBoundingClientRect();
+      if (r.bottom > listTop) {
+        anchorRef.current = { row, offset: r.top - listTop };
+        return;
+      }
+    }
+    anchorRef.current = null;
+  }, []);
+
+  /** 把锚行送回原来的偏移处（缩放中每次尺寸变化后调）。
+   *  界面整体随 --face-size 缩放：窗口一变，每行都要重排、整篇高度随之变，
+   *  而滚动位置是像素值——不校正的话，视野里的内容会整体挪位。 */
+  const restoreAnchor = useCallback(() => {
+    const el = listRef.current;
+    const a = anchorRef.current;
+    if (!el || !a || !a.row.isConnected) {
+      anchorRef.current = null;
+      return;
+    }
+    const listTop = el.getBoundingClientRect().top;
+    const rowTop = a.row.getBoundingClientRect().top;
+    const delta = anchorDelta(rowTop, listTop, a.offset);
+    if (Math.abs(delta) > 0.5) {
+      el.scrollTop = el.scrollTop + delta;
+      programmaticTopRef.current = el.scrollTop;
+    }
+  }, []);
+
+  /** 打开（并顺延）保护窗；窗结束即释放锚 */
+  const armResizeGuard = useCallback(() => {
+    windowResizingRef.current = true;
+    window.clearTimeout(resizeGuardTimerRef.current);
+    resizeGuardTimerRef.current = window.setTimeout(() => {
+      windowResizingRef.current = false;
+      anchorRef.current = null;
+    }, WINDOW_RESIZE_GUARD_MS);
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("resize", armResizeGuard);
+    return () => {
+      window.removeEventListener("resize", armResizeGuard);
+      window.clearTimeout(resizeGuardTimerRef.current);
+    };
+  }, [armResizeGuard]);
 
   /* 提供给输入框的“稳定测量窗口”：测量期间接管滚动行为（见 messageScroll.ts）。
    * 贴底则测量后仍贴底；否则原位不动——避免输入框复位测量把滚动位置钳下去。 */
@@ -371,6 +499,7 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
           return fn();
         } finally {
           el.scrollTop = atBottom ? el.scrollHeight : saved;
+          programmaticTopRef.current = el.scrollTop;
         }
       },
     });
@@ -414,10 +543,10 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     const turnsGrew = turns.length > prevTurnCountRef.current;
     const last = currentEvents[currentEvents.length - 1];
     if (turnsGrew || last?.type === "user/message") {
-      userScrolledUpRef.current = false;
+      setStick(true);
     }
     prevTurnCountRef.current = turns.length;
-  }, [turns, currentEvents]);
+  }, [turns, currentEvents, setStick]);
 
   /*
    * 滚动事件处理。
@@ -425,13 +554,59 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    * 用户向上滚动（离底 > 5px）→ 停止自动跟底；滑回距底 ≤ 5px → 恢复跟底。
    * 判据用“离底距离”而非“位置是否变小”：浏览器因布局变化钳位滚动位置时，
    * 落点就是当时的最大滚动量，即仍然贴底——不该被当成用户上滑。
+   *
+   * 缩放期间直接忽略：重排会让离底距离变大，那不是用户意图（意图由滚轮手势
+   * 单独判定，见下）。这里除了保护窗，还额外比一次缩放基准（--face-size）与
+   * 视口尺寸——scroll 事件先于 ResizeObserver 回调到达，保护窗可能还没打开。
    */
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
-    userScrolledUpRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight > STICK_PX;
-  }, []);
+    if (windowResizingRef.current) return;
+    // ① 白名单：这次滚动就是我们自己刚写的（钉底 / 锚校正 / 测量写回）
+    const prog = programmaticTopRef.current;
+    if (prog !== null && Math.abs(el.scrollTop - prog) <= 1) return;
+    // ② 内容尺寸刚变过 ⇒ 钳位/锚定引起的滚动（浏览器行为）
+    const observed = observedScrollHeightRef.current;
+    observedScrollHeightRef.current = el.scrollHeight;
+    if (observed !== null && Math.abs(el.scrollHeight - observed) > 0.5) return;
+    // ③ 缩放中（界面随 --face-size 缩放 ⇒ 重排）
+    const face = readFaceSize();
+    const faceChanged =
+      lastFaceSizeRef.current !== "" && lastFaceSizeRef.current !== face;
+    if (faceChanged) {
+      // 缩放基准变了：界面整体在缩放，与视口尺寸变化同一口径
+      armResizeGuard();
+      return;
+    }
+    const vp = lastViewportRef.current;
+    if (
+      vp.w !== 0 &&
+      (vp.w !== window.innerWidth || vp.h !== window.innerHeight)
+    ) {
+      // 视口/缩放基准变了：这次滚动是缩放引起的（重排/钳位）。
+      // 记录不在这里更新——归 ResizeObserver 回调，否则 RO 看不到变化。
+      armResizeGuard();
+      return;
+    }
+    setStick(el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX);
+  }, [armResizeGuard, setStick]);
+
+  /*
+   * 用户意图（手势）：向上滚轮 → 立即停止跟随。
+   *
+   * 缩放保护窗期间滚动事件不可信（重排会改距离），但手势本身可信——这两条
+   * 合起来才能既“缩放不动内容”，又不错过用户在缩放中真的上滑了。
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) setStick(false);
+    };
+    el.addEventListener("wheel", onWheel, { passive: true });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [setStick]);
 
   /*
    * 切换对话：重置滑底标志。
@@ -441,8 +616,8 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    * 尚未重置的标志位而直接跳过。
    */
   useEffect(() => {
-    userScrolledUpRef.current = false;
-  }, [conversationId]);
+    setStick(true);
+  }, [conversationId, setStick]);
 
   /*
    * 自动滚底（钉底）。
@@ -458,6 +633,11 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     const deadline = performance.now() + PIN_SETTLE_MS;
     const tick = () => {
       if (userScrolledUpRef.current) return;
+      if (windowResizingRef.current) return;
+      const vp = lastViewportRef.current;
+      if (vp.w !== 0 && (vp.w !== window.innerWidth || vp.h !== window.innerHeight)) {
+        return;
+      }
       pinNow();
       if (performance.now() < deadline) raf = requestAnimationFrame(tick);
     };
@@ -471,29 +651,77 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    * 输入框随内容变长展开（高度是动画）会逐帧压缩对话区高度：此时 items 没变，
    * 上面的钉底副作用不会触发，最后一屏内容就被输入框挤出视口。这里盯列表自身
    * 尺寸，变化即重钉；用户已上滑（翻历史）时不动。
+   *
+   * 但“尺寸变化”有两种来源：输入框（该钉）与窗口缩放（不该钉）。判据是本次
+   * 回调里视口尺寸是否变了——变了就是窗口在缩放，开保护窗并跳过。
    */
   useEffect(() => {
     const el = listRef.current;
     if (!el || typeof ResizeObserver !== "function") return;
     const ro = new ResizeObserver(() => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const face = readFaceSize();
+      const prev = lastViewportRef.current;
+      const viewportChanged = prev.w !== 0 && (prev.w !== w || prev.h !== h);
+      const faceChanged =
+        lastFaceSizeRef.current !== "" && lastFaceSizeRef.current !== face;
+      lastViewportRef.current = { w, h };
+      lastFaceSizeRef.current = face;
+      observedScrollHeightRef.current = el.scrollHeight;
+
+      if (viewportChanged || faceChanged) {
+        // UI 在缩放：记锚（一次缩放会话只记一次，窗结束释放）。
+        // 不能用“保护窗是否已开”来判定——滚动事件（通常来自我们自己刚写过的
+        // 位置）可能先一步开窗，那样就永远记不上锚。
+        if (!anchorRef.current) captureAnchor();
+        armResizeGuard();
+      }
+      if (windowResizingRef.current) {
+        restoreAnchor();
+        return;
+      }
       if (userScrolledUpRef.current) return;
       pinNow();
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [pinNow]);
+  }, [pinNow, armResizeGuard, captureAnchor, restoreAnchor]);
 
   return (
-    <div className={styles.list} ref={listRef} onScroll={handleScroll} data-message-list>
-      {items.map((item, i) => (
-        // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
-        // 不会因为 ChatView 里 handleCancelSteer 换引用而整段重渲染
-        <MessageRow
-          key={i}
-          item={item}
-          onCancelPending={item.type === "pending" ? onCancelPending : undefined}
-        />
-      ))}
+    <div className={styles.listArea}>
+      <div className={styles.list} ref={listRef} onScroll={handleScroll} data-message-list>
+        {items.map((item, i) => (
+          // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
+          // 不会因为 ChatView 里 handleCancelSteer 换引用而整段重渲染
+          <MessageRow
+            key={i}
+            item={item}
+            onCancelPending={item.type === "pending" ? onCancelPending : undefined}
+          />
+        ))}
+      </div>
+      {/* 回到底部（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方） */}
+      {!atBottom && (
+        <button
+          type="button"
+          className={styles.scrollFab}
+          aria-label="回到最新"
+          title="回到最新"
+          onClick={scrollToBottomNow}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
