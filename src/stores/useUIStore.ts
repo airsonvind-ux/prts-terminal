@@ -44,8 +44,16 @@ export function deriveUIState(
   return "processing";
 }
 
-/** 设置页记忆（上次所在页）：ContextIndicator 跳模型页时覆盖一次 */
-export type SettingsTabKey = "memory" | "model" | "safety" | "space" | "app" | "about";
+/** 设置页记忆（上次所在页）：ContextIndicator 跳模型页时覆盖一次。
+ *  与 SettingsPanel 的 TABS 保持一致（新增子页时两处同改）。 */
+export type SettingsTabKey =
+  | "memory"
+  | "model"
+  | "safety"
+  | "space"
+  | "skills"
+  | "app"
+  | "about";
 
 // ── Store ──
 

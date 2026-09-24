@@ -410,7 +410,7 @@ export interface AppMeta {
   skills_dir: string;
 }
 
-/** list_skills / open_path 载荷（空间页技能清单；来源 skills md frontmatter）
+/** list_skills / open_path 载荷（技能页技能清单；来源 skills md frontmatter）
  *  字段与 Rust SkillEntry `#[serde(rename_all = "camelCase")]` 对齐：
  *  后端序列化为 filePath/name/description。filePath 由后端供给（源 md 绝对
  *  路径，前端不拼接硬编码）；open_path 仅放行资源目录（技能/知识库）内路径。 */
@@ -419,6 +419,30 @@ export interface SkillEntry {
   description: string;
   /** 源 md 绝对路径（camelCase 对齐后端；null/缺省 = 无文件可打开） */
   filePath?: string | null;
+}
+
+/** 空间页 · 工作区树节点（list_workspace_dir 载荷；字段对齐 Rust camelCase） */
+export interface WorkspaceEntry {
+  name: string;
+  isDir: boolean;
+  /** 绝对路径（普通形式，非 canonical） */
+  path: string;
+}
+
+/** 空间页 · 搜索命中（search_workspace_files 载荷）
+ *  path / ancestorDirs 由后端供给：前端不拼路径（与 FileLink 同口径），
+ *  点中后直接拿展开链做状态合并。 */
+export interface WorkspaceSearchHit {
+  name: string;
+  /** 绝对路径（点击打开 / 树选中定位） */
+  path: string;
+  /** 相对工作区根，'/' 分隔（展示） */
+  relativePath: string;
+  /** 相对根的父目录（根级命中 = 空串） */
+  parentSubdir: string;
+  /** 从根下一级到命中项所在目录的绝对路径链（展开用） */
+  ancestorDirs: string[];
+  isDir: boolean;
 }
 
 /** 工具审批请求（M3-A §5.1 / M4）：run_command 询问用户确认时后端推送 */

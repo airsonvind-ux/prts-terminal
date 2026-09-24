@@ -2,7 +2,7 @@
 // SettingsPanel · 五子页路由 + 即时保存单漏斗测试
 //
 // 覆盖（设置页扩展批 B / C1）：
-//   - 五 tab 渲染（model/safety/space/app/about）与默认页（记忆 settingsInitialTab）
+//   - 七个导航项（app/model/safety/space/skills/memory/about）与默认页（记忆 settingsInitialTab）
 //   - Safety 页即时保存：radio 变更 → 一次 set_settings patch invoke（无卸载批保存）
 //   - busy 守卫：对话处理中变更被拒（toast + 受控回弹，无 invoke）
 //   - 保存失败：回滚 + toast（保存失败前端可见）
@@ -27,7 +27,7 @@ import type { Settings } from "../../types";
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-const NAV_KEYS = ["model", "safety", "space", "app", "about"] as const;
+const NAV_KEYS = ["app", "model", "safety", "space", "skills", "memory", "about"] as const;
 
 function defaultSettings(): Settings {
   return {
@@ -131,8 +131,8 @@ beforeEach(() => {
   );
 });
 
-describe("SettingsPanel · 五子页路由", () => {
-  it("挂载后渲染五个导航项，默认停 model 页", async () => {
+describe("SettingsPanel · 子页路由", () => {
+  it("挂载后渲染七个导航项，默认停 model 页", async () => {
     renderPanel();
     await flush();
     for (const key of NAV_KEYS) {
@@ -324,21 +324,15 @@ describe("SettingsPanel · 关于页（极简：名称 + 版本）", () => {
   });
 });
 
-describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清单）", () => {
-  const SKILL_FIXTURE = [
-    // 字段按后端真实契约（SkillEntry camelCase：filePath）
-    { name: "数值计算", description: "数值类任务推演流程标准。", filePath: "F:/skills/数值计算.md" },
-    { name: "行动推演", description: "寻路与行动模拟。", filePath: "F:/skills/行动推演.md" },
-  ];
-
-  it("渲染：路径只读值 + hint + 技能容器列表", async () => {
+describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结构树）", () => {
+  it("渲染：路径只读值 + hint + 目录结构节（树 + 搜索框 + 根一层拉起）", async () => {
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "get_settings") {
         const s = defaultSettings();
         s.workspace.workspace_root = "F:/ws";
         return Promise.resolve(s);
       }
-      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      if (cmd === "list_workspace_dir") return Promise.resolve([]);
       return Promise.resolve(undefined);
     });
     renderPanel();
@@ -348,10 +342,17 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清�
     expect(container!.textContent).toContain("F:/ws");
     expect(container!.textContent).not.toContain("未设置");
     expect(container!.textContent).toContain("修改后重启生效");
-    expect(container!.textContent).toContain("数值计算");
-    expect(container!.textContent).toContain("行动推演");
-    // 无输入框（只读显示）
-    expect(container!.querySelector('input[type="text"]')).toBeNull();
+    // 目录结构节：树容器 + 搜索框在位
+    expect(container!.querySelector("[data-workspace-tree]")).toBeTruthy();
+    expect(
+      container!.querySelector('input[placeholder="搜索工作空间"]')
+    ).toBeTruthy();
+    // 根一层用当前工作区根拉起（前端不拼路径）
+    const listCalls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "list_workspace_dir"
+    );
+    expect(listCalls).toHaveLength(1);
+    expect((listCalls[0][1] as { path: string }).path).toBe("F:/ws");
   });
 
   it("未设置时路径显示「未设置」（任务 B）", async () => {
@@ -364,7 +365,6 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清�
   it("选择目录：按钮 → choose_workspace_directory → 选定即存 patch", async () => {
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "get_settings") return Promise.resolve(defaultSettings());
-      if (cmd === "list_skills") return Promise.resolve([]);
       if (cmd === "choose_workspace_directory")
         return Promise.resolve("F:/picked-ws");
       return Promise.resolve(undefined);
@@ -398,6 +398,63 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清�
     expect(container!.textContent).toContain("F:/picked-ws");
   });
 
+  it("在资源管理器中打开 → open_workspace_in_explorer + 可见反馈", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") {
+        const s = defaultSettings();
+        s.workspace.workspace_root = "F:/ws";
+        return Promise.resolve(s);
+      }
+      if (cmd === "list_workspace_dir") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("space");
+
+    const btn = Array.from(container!.querySelectorAll("button")).find(
+      (b) => b.textContent === "在资源管理器中打开"
+    )!;
+    expect(btn).toBeTruthy();
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    expect(
+      __invokeMock.mock.calls.filter(
+        (c) => c[0] === "open_workspace_in_explorer"
+      )
+    ).toHaveLength(1);
+    const toasts = useToastStore.getState().toasts;
+    expect(
+      toasts.some((t) => t.message.includes("已在文件管理器打开工作目录"))
+    ).toBe(true);
+  });
+});
+
+describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
+  const SKILL_FIXTURE = [
+    // 字段按后端真实契约（SkillEntry camelCase：filePath）
+    { name: "数值计算", description: "数值类任务推演流程标准。", filePath: "F:/skills/数值计算.md" },
+    { name: "行动推演", description: "寻路与行动模拟。", filePath: "F:/skills/行动推演.md" },
+  ];
+
+  it("渲染：技能容器列表（名称 + 描述）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+    expect(container!.textContent).toContain("数值计算");
+    expect(container!.textContent).toContain("行动推演");
+    // 技能页不再承载工作空间内容（拆分后职责单一）
+    expect(container!.textContent).not.toContain("修改后重启生效");
+  });
+
   it("技能行点击 → open_path 打开源 md + 成功可见反馈（info toast）", async () => {
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "get_settings") return Promise.resolve(defaultSettings());
@@ -406,7 +463,7 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清�
     });
     renderPanel();
     await flush();
-    clickTab("space");
+    clickTab("skills");
 
     const calcRow = Array.from(container!.querySelectorAll("span")).find(
       (s) => (s.textContent ?? "").includes("数值计算")
@@ -435,7 +492,7 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 技能清�
     });
     renderPanel();
     await flush();
-    clickTab("space");
+    clickTab("skills");
 
     const calcRow = Array.from(container!.querySelectorAll("span")).find(
       (s) => (s.textContent ?? "").includes("数值计算")

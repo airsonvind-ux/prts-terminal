@@ -1,4 +1,5 @@
-// 设置页主容器 · 五子页路由（model/safety/space/app/about）+ 即时保存单漏斗
+// 设置页主容器 · 子页路由（app/model/safety/space/skills/memory/about）
+//              + 即时保存单漏斗
 //
 // 职责：
 //   1. 挂载时 invoke("get_settings") 一次 → settings state（全部子页的受控数据源）
@@ -19,6 +20,7 @@ import { SettingsAbout } from "./SettingsAbout";
 import { SettingsApp } from "./SettingsApp";
 import { SettingsModel } from "./SettingsModel";
 import { SettingsSafety } from "./SettingsSafety";
+import { SettingsSkills } from "./SettingsSkills";
 import { SettingsSpace } from "./SettingsSpace";
 import { SettingsMemory } from "./SettingsMemory";
 import { useUIStore } from "../../stores/useUIStore";
@@ -42,6 +44,7 @@ const TABS = [
   { key: "model", label: "模型" },
   { key: "safety", label: "安全" },
   { key: "space", label: "空间" },
+  { key: "skills", label: "技能" },
   { key: "memory", label: "记忆" },
   { key: "about", label: "关于" },
 ] as const;
@@ -121,7 +124,7 @@ export function SettingsPanel() {
   const settingsRef = useRef<Settings | null>(null);
   // 应用只读元信息（关于页展示；空间页批 C2 复用同一份 props）
   const [appMeta, setAppMeta] = useState<AppMeta | null>(null);
-  // 技能清单（空间页技能节只读；null = 加载中/失败）
+  // 技能清单（技能页；null = 加载中/失败）
   const [skills, setSkills] = useState<SkillEntry[] | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(
     () => useUIStore.getState().settingsInitialTab
@@ -333,10 +336,10 @@ export function SettingsPanel() {
           {activeTab === "space" && (
             <SettingsSpace
               workspaceRoot={settings.workspace.workspace_root}
-              skills={skills}
               onChooseWorkspace={handleChooseWorkspace}
             />
           )}
+          {activeTab === "skills" && <SettingsSkills skills={skills} />}
           {activeTab === "memory" && <SettingsMemory busy={settingsBusy} />}
           {activeTab === "app" && (
             <SettingsApp

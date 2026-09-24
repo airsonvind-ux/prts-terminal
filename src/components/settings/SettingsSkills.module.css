@@ -1,0 +1,50 @@
+/* 设置页 · 技能子页样式（由空间页技能节迁出） */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 容器内行式列表（成块 + 行分隔 + hover） */
+
+.skillList {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--depth-3);
+}
+
+.skillRow {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+}
+
+.skillRow + .skillRow {
+  border-top: 1px solid var(--depth-1);
+}
+
+.skillRow:hover {
+  background: var(--depth-4);
+}
+
+.skillName {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.skillDesc {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.emptyHint {
+  font-size: 11px;
+  color: var(--text-3);
+}

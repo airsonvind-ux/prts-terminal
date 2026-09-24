@@ -1,19 +1,33 @@
-/* 设置页 · 空间子页样式 */
+/* 设置页 · 空间子页样式（工作空间 + 目录结构）
+ *
+ * 空间页：普通纵向排列——页面内容超过可视高度时由设置页内容区滚动。
+ * （不做"整页占满 + 树填充"：默认窗口下高度不足时，填充型布局会把树压到
+ *   0 高且页面无溢出，列表消失在底部、无法滚到——2026-09 实测反馈。） */
 
 .container {
   display: flex;
   flex-direction: column;
 }
 
-/* ── 工作空间：多行排布（label 行 / 路径全文行 / 按钮行 / hint） ── */
+/* ── 工作空间：多行排布（label / 路径行 / 打开行 / hint） ──
+ * 排布取舍（2026-09）：两个动作同行会超宽折行，所以「选择目录」跟在路径右侧
+ * （与路径同行，名字短、靠路径语境自明），「在资源管理器中打开」独行用全名。 */
 
 .wsLabel {
   font-size: 11px;
   color: var(--text-2);
 }
 
-/* 路径全文独立行：长路径可换行，不与 label/按钮争宽度 */
+/* 路径行：路径（可换行，占满余宽）+ 选择目录（紧凑按钮，不换行、不缩） */
+.wsPathRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .wsValue {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-1);
   line-height: 1.5;
@@ -22,35 +36,46 @@
 }
 
 .wsValueEmpty {
+  flex: 1;
+  min-width: 0;
   font-size: 11px;
   color: var(--text-3);
   padding: 1px 0 2px;
 }
 
-.wsActions {
-  display: flex;
-}
-
-.pickButton {
+/* 动作按钮：紧凑、不内折行。横向内边距收到 8px——默认窗口下内容区约 122px，
+ * 「在资源管理器中打开」（9 字 ≈ 117px 含内边距）靠它才放得下。 */
+.actionButton {
+  flex: 0 0 auto;
   font-size: 11px;
   font-family: var(--font-ui);
   color: var(--text-1);
   background: var(--depth-2);
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
-  padding: 4px 10px;
+  padding: 4px 8px;
+  white-space: nowrap;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.pickButton:hover {
+.actionButton:hover {
   border-color: var(--accent);
   background: var(--depth-4);
 }
 
-.pickButton:disabled {
+.actionButton:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.actionButton:disabled:hover {
+  border-color: var(--depth-1);
+  background: var(--depth-2);
+}
+
+.wsActions {
+  display: flex;
 }
 
 .wsHint {
@@ -58,48 +83,4 @@
   font-size: 11px;
   color: var(--text-3);
   line-height: 1.4;
-}
-
-/* ── 技能：容器内行式列表（成块 + 行分隔 + hover） ── */
-
-.skillList {
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--depth-3);
-}
-
-.skillRow {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 8px;
-}
-
-.skillRow + .skillRow {
-  border-top: 1px solid var(--depth-1);
-}
-
-.skillRow:hover {
-  background: var(--depth-4);
-}
-
-.skillName {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-1);
-}
-
-.skillDesc {
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.emptyHint {
-  font-size: 11px;
-  color: var(--text-3);
 }

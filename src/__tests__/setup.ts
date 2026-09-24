@@ -111,6 +111,10 @@ const __defaultInvokeImpl = (cmd: string) => {
   // open_path（资源文件打开）与目录选择器默认静默/取消
   if (cmd === "open_path") return Promise.resolve(undefined);
   if (cmd === "choose_workspace_directory") return Promise.resolve(null);
+  // 空间页（工作区查看）：默认空目录树 / 空搜索 / 资源管理器静默
+  if (cmd === "list_workspace_dir") return Promise.resolve([]);
+  if (cmd === "search_workspace_files") return Promise.resolve([]);
+  if (cmd === "open_workspace_in_explorer") return Promise.resolve(undefined);
   return Promise.resolve(undefined);
 };
 

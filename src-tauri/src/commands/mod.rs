@@ -1877,6 +1877,230 @@ pub fn resolve_tool_approval(
     Ok(approval_registry.resolve(&request.session_id, &request.call_id, decision))
 }
 
+// ═══════════════════════════════════════════════════════
+// 空间页 · 工作区查看（目录树 / 按名搜索 / 资源管理器）
+// ═══════════════════════════════════════════════════════
+//
+// 定位：让用户能“舒服地查看当前的工作目录”。树按需逐层读取（点开哪级读哪级）；
+// 搜索递归按名匹配并跳过隐藏项与依赖/构建目录。两侧口径有意不同：树照实列
+// （＝真实目录，也与 list_dir 一致），搜索降噪（结果才有用）。
+
+/// 树节点 DTO（list_workspace_dir 返回）。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceEntry {
+    pub name: String,
+    pub is_dir: bool,
+    /// 绝对路径（普通形式，非 canonical）
+    pub path: String,
+}
+
+/// 搜索命中 DTO（search_workspace_files 返回）。
+///
+/// 为什么要带 `path` 与 `ancestorDirs`：前端不拼路径（与 FileLink 同口径）——
+/// 命中后要在树里展开祖先并选中，展开链由后端给出，前端只做状态合并。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchHit {
+    pub name: String,
+    /// 绝对路径（点击打开 / 树选中定位）
+    pub path: String,
+    /// 相对工作区根，'/' 分隔（展示）
+    pub relative_path: String,
+    /// 相对根的父目录（根级命中 = 空串；展示 + 兜底）
+    pub parent_subdir: String,
+    /// 从根下一级到命中项所在目录的绝对路径链（展开用，根级命中为空）
+    pub ancestor_dirs: Vec<String>,
+    pub is_dir: bool,
+}
+
+/// 搜索跳过的目录名（隐藏项另按 '.' 前缀跳过）。
+const WORKSPACE_SEARCH_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "vendor",
+    "__pycache__",
+];
+
+/// 搜索结果上限（照 Hanako 工作台的 WORKSPACE_SEARCH_LIMIT = 80）。
+const WORKSPACE_SEARCH_LIMIT: usize = 80;
+/// 搜索递归深度上限（根 = 0）。
+const WORKSPACE_SEARCH_MAX_DEPTH: usize = 12;
+/// 搜索扫描条目预算（防超大目录树把界面拖住）。
+const WORKSPACE_SEARCH_SCAN_BUDGET: usize = 20_000;
+
+/// 解析工作区内的目标路径。
+///
+/// `requested` 为空 → 根自身；非空必须是绝对路径，且（canonical 化后）落在
+/// 工作区根内——越界一律拒绝。返回值保持传入口径（非 canonical），供前端回用。
+fn resolve_workspace_target(
+    root: &std::path::Path,
+    requested: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    let target = match requested.map(str::trim).filter(|p| !p.is_empty()) {
+        None => root.to_path_buf(),
+        Some(p) => {
+            let pb = std::path::PathBuf::from(p);
+            if !pb.is_absolute() {
+                return Err(format!("需要绝对路径：{p}"));
+            }
+            pb
+        }
+    };
+    let canon_root = root
+        .canonicalize()
+        .map_err(|e| format!("工作区根不可访问：{e}"))?;
+    let canon_target = target
+        .canonicalize()
+        .map_err(|e| format!("路径不可访问：{e}"))?;
+    if !canon_target.starts_with(&canon_root) {
+        return Err("路径不在工作区内".to_string());
+    }
+    Ok(target)
+}
+
+/// 列一层目录：目录在前，各自按名排序（大小写不敏感，末位比原串保确定）。
+fn list_dir_entries(dir: &std::path::Path) -> Result<Vec<WorkspaceEntry>, String> {
+    let rd = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败：{e}"))?;
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        out.push(WorkspaceEntry {
+            name,
+            is_dir,
+            path: entry.path().to_string_lossy().into_owned(),
+        });
+    }
+    out.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(out)
+}
+
+/// 递归按名搜索（大小写不敏感子串）。
+///
+/// 跳过点开头项与依赖/构建目录；深度 ≤ MAX_DEPTH；扫描条目 ≤ BUDGET；
+/// 命中数达上限即停。结果按相对路径排序（确定序）。
+fn search_workspace_entries(root: &std::path::Path, query: &str) -> Vec<WorkspaceSearchHit> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut hits: Vec<WorkspaceSearchHit> = Vec::new();
+    let mut budget = WORKSPACE_SEARCH_SCAN_BUDGET;
+    let mut stack: Vec<(std::path::PathBuf, String, Vec<String>, usize)> =
+        vec![(root.to_path_buf(), String::new(), Vec::new(), 0)];
+    'outer: while let Some((dir, rel, chain, depth)) = stack.pop() {
+        if depth > WORKSPACE_SEARCH_MAX_DEPTH {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut subdirs: Vec<(std::path::PathBuf, String, Vec<String>, usize)> = Vec::new();
+        for entry in rd.flatten() {
+            if budget == 0 {
+                break 'outer;
+            }
+            budget -= 1;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            let child_abs = entry.path().to_string_lossy().into_owned();
+            if name.to_lowercase().contains(&needle) {
+                hits.push(WorkspaceSearchHit {
+                    name: name.clone(),
+                    path: child_abs.clone(),
+                    relative_path: child_rel.clone(),
+                    parent_subdir: rel.clone(),
+                    ancestor_dirs: chain.clone(),
+                    is_dir,
+                });
+                if hits.len() >= WORKSPACE_SEARCH_LIMIT {
+                    break 'outer;
+                }
+            }
+            if is_dir && !WORKSPACE_SEARCH_SKIP_DIRS.contains(&name.to_lowercase().as_str()) {
+                let mut child_chain = chain.clone();
+                child_chain.push(child_abs);
+                subdirs.push((entry.path(), child_rel, child_chain, depth + 1));
+            }
+        }
+        for item in subdirs.into_iter().rev() {
+            stack.push(item);
+        }
+    }
+    hits.sort_by(|a, b| {
+        a.relative_path
+            .to_lowercase()
+            .cmp(&b.relative_path.to_lowercase())
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    hits
+}
+
+/// 列出工作区内一层目录（path 省略 = 根）。
+#[tauri::command]
+pub fn list_workspace_dir(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+    path: Option<String>,
+) -> Result<Vec<WorkspaceEntry>, String> {
+    let root = {
+        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
+        st.workspace_root()
+    };
+    let dir = resolve_workspace_target(&root, path.as_deref())?;
+    list_dir_entries(&dir)
+}
+
+/// 在工作区内按名字递归搜索（跳过隐藏项与依赖/构建目录）。
+#[tauri::command]
+pub fn search_workspace_files(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+    query: String,
+) -> Result<Vec<WorkspaceSearchHit>, String> {
+    let root = {
+        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
+        st.workspace_root()
+    };
+    Ok(search_workspace_entries(&root, &query))
+}
+
+/// 用系统文件管理器打开工作区根。
+///
+/// 目录不能走 open_path（那里只放行文件），故单开一条命令；目标固定为工作区根、
+/// 不经前端传参，边界最清楚。
+#[tauri::command]
+pub fn open_workspace_in_explorer(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+) -> Result<(), String> {
+    let root = {
+        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
+        st.workspace_root()
+    };
+    let dir = resolve_workspace_target(&root, None)?;
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("explorer").arg(&dir).spawn();
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(&dir).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let spawned = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    spawned.map_err(|e| format!("打开文件管理器失败：{e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2095,5 +2319,122 @@ mod tests {
         assert!(guard_config_write(&reg).is_err());
         reg.unregister("s1");
         assert!(guard_config_write(&reg).is_ok());
+    }
+
+    // ── 空间页 · 工作区查看（树 / 搜索） ──
+
+    fn space_root(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("prts-space-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn list_dir_entries_dirs_first_then_name() {
+        let root = space_root("list");
+        std::fs::create_dir_all(root.join("zeta")).unwrap();
+        std::fs::create_dir_all(root.join("Alpha")).unwrap();
+        std::fs::write(root.join("b.txt"), "x").unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+
+        let entries = list_dir_entries(&root).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["Alpha", "zeta", "a.txt", "b.txt"], "目录在前，各自按名");
+        assert!(entries[0].is_dir, "目录标记");
+        assert!(!entries[2].is_dir, "文件标记");
+        // 路径为拼接形式（非 canonical，不带 \\?\ 前缀）——直接回传给前端用
+        assert!(entries[0].path.ends_with("Alpha"));
+        assert!(!entries[0].path.contains("\\\\?\\"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_workspace_target_guards_escape() {
+        let root = space_root("guard");
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+
+        assert!(
+            resolve_workspace_target(&root, Some(&sub.to_string_lossy())).is_ok(),
+            "根内子目录放行"
+        );
+        assert_eq!(resolve_workspace_target(&root, None).unwrap(), root, "省略 = 根自身");
+        assert_eq!(
+            resolve_workspace_target(&root, Some("  ")).unwrap(),
+            root,
+            "空白项等同省略"
+        );
+        assert!(
+            resolve_workspace_target(&root, Some("sub")).is_err(),
+            "相对路径拒绝"
+        );
+        let outside = std::env::temp_dir();
+        assert!(
+            resolve_workspace_target(&root, Some(&outside.to_string_lossy())).is_err(),
+            "根外目录拒绝"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_skips_hidden_and_dependency_dirs() {
+        let root = space_root("search");
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("notes/崖.md"), "x").unwrap();
+        std::fs::create_dir_all(root.join("node_modules/hit")).unwrap();
+        std::fs::write(root.join("node_modules/hit/崖.js"), "x").unwrap();
+        std::fs::create_dir_all(root.join(".git/hit")).unwrap();
+        std::fs::write(root.join(".git/hit/崖"), "x").unwrap();
+        std::fs::write(root.join(".hidden崖.md"), "x").unwrap();
+
+        let hits = search_workspace_entries(&root, "崖");
+        let paths: Vec<&str> = hits.iter().map(|h| h.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["notes/崖.md"], "命中只来自可见目录");
+
+        // 嵌套命中的展开链：根下一级 → 命中所在目录（绝对路径，前端不拼路径）
+        std::fs::create_dir_all(root.join("a/b/c")).unwrap();
+        std::fs::write(root.join("a/b/c/崖深处.md"), "x").unwrap();
+        let deep = search_workspace_entries(&root, "崖深处");
+        assert_eq!(deep.len(), 1);
+        assert_eq!(deep[0].relative_path, "a/b/c/崖深处.md");
+        assert_eq!(deep[0].parent_subdir, "a/b/c");
+        assert_eq!(deep[0].ancestor_dirs.len(), 3, "a → b → c 三层展开链");
+        assert!(deep[0].ancestor_dirs[0].ends_with("a"));
+        assert!(deep[0].ancestor_dirs[2].ends_with("c"));
+
+        assert!(search_workspace_entries(&root, "  ").is_empty(), "空查询不搜");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn search_caps_results_and_matches_case_insensitively() {
+        let root = space_root("cap");
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        for i in 0..100 {
+            std::fs::write(root.join(format!("d/Note{i}.md")), "x").unwrap();
+        }
+
+        let hits = search_workspace_entries(&root, "note");
+        assert_eq!(hits.len(), WORKSPACE_SEARCH_LIMIT, "结果上限 80");
+        assert_eq!(hits[0].parent_subdir, "d", "父目录相对根");
+        assert!(!hits[0].is_dir);
+        assert!(
+            hits[0].path.ends_with("d") || hits[0].path.contains("d"),
+            "命中带绝对路径（供树定位）"
+        );
+        assert_eq!(hits[0].ancestor_dirs.len(), 1, "展开链：命中所在目录");
+
+        let dir_hits = search_workspace_entries(&root, "d");
+        let root_dir_hit = dir_hits
+            .iter()
+            .find(|h| h.is_dir && h.relative_path == "d")
+            .expect("根级目录命中");
+        assert!(root_dir_hit.parent_subdir.is_empty(), "根级 parentSubdir 为空串");
+        assert!(root_dir_hit.ancestor_dirs.is_empty(), "根级命中无祖先目录");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

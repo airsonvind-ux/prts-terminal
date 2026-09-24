@@ -1,0 +1,166 @@
+/* 设置页 · 空间子页 · 工作区树与搜索样式
+ *
+ * 尺度随设置页（11px 正文 / 10px 次要）；滚动条走紧凑档（--scrollbar-inset）。
+ * 搜索无浮层：结果列表与树共用同一块区域（.treeBox），窄面板里不互相遮挡。 */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* ── 搜索框 ── */
+
+.searchInput {
+  box-sizing: border-box;
+  width: 100%;
+  height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--text-3);
+  opacity: 0.7;
+}
+
+.searchInput:focus {
+  border-color: var(--accent);
+}
+
+.searchInput:disabled {
+  opacity: 0.5;
+}
+
+/* ── 内容区（树 / 搜索结果共用；固定上限 + 自带滚动）──
+ * 树永远有一个可见高度（不依赖父级剩余空间，避免塌成 0）；内容超过上限时
+ * 由这里滚，整页不够高时由设置页内容区滚。 */
+
+.treeBox {
+  max-height: 240px;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+  overflow-y: auto;
+  padding: 3px 0;
+  --scrollbar-inset: 2px;
+}
+
+/* ── 树行 ── */
+
+.rowWrap {
+  display: block;
+}
+
+/* 行：目录用 button、文件用 FileLink（span，盒布局由本类供给） */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: default;
+}
+
+.row:hover {
+  background: var(--depth-4);
+}
+
+.rowSelected {
+  background: var(--depth-4);
+  color: var(--accent);
+}
+
+/* 名称单行省略；全名走 title 悬停（窄列里的必要取舍） */
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caret {
+  flex: 0 0 auto;
+  width: 8px;
+  font-size: 9px;
+  color: var(--text-3);
+}
+
+/* 文件行占位：与目录行三角同宽，名称对齐 */
+.caretSpacer {
+  flex: 0 0 auto;
+  width: 8px;
+}
+
+.emptyRow {
+  padding: 2px 6px;
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ── 搜索结果（就地替掉树，同一块区域）── */
+
+.results {
+  display: flex;
+  flex-direction: column;
+}
+
+.resultRow {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 3px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.resultRow:hover {
+  background: var(--depth-4);
+}
+
+.resultName,
+.resultPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resultName {
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.resultPath {
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.emptyHint {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}

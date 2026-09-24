@@ -11,7 +11,7 @@
 // 命令契约：kind=file → invoke open_path（后端校验存在，无白名单）；
 //           kind=url  → invoke open_url（仅 http/https，系统浏览器打开）。
 
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
 import styles from "./FileLink.module.css";
@@ -24,6 +24,8 @@ export interface FileLinkProps {
   /** 打开成功的提示文案（默认 file「已打开文件」/ url「已在浏览器打开」） */
   successHint?: string;
   className?: string;
+  /** 盒布局由调用方供给时用（如工作区树行缩进） */
+  style?: CSSProperties;
   title?: string;
   children: ReactNode;
 }
@@ -33,6 +35,7 @@ export function FileLink({
   linkKind = "file",
   successHint,
   className,
+  style,
   title,
   children,
 }: FileLinkProps) {
@@ -82,6 +85,7 @@ export function FileLink({
         .filter(Boolean)
         .join(" ")}
       title={title}
+      style={style}
       onClick={open}
       onKeyDown={onKeyDown}
     >
