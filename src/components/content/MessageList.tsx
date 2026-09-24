@@ -377,10 +377,10 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   }, []);
 
   /* 滚动写入白名单 / 观测记录（照 Hanako 的两条通用判据）
-   *   programmaticTopRef  —— 我们自己写过的位置：滚动事件与之相符 ⇒ 不是用户
    *   observedScrollHeightRef —— 最近观测的 scrollHeight：事件到达时它已变 ⇒
-   *   这次滚动是内容尺寸变化引起的钳位/锚定（浏览器行为），也不是用户。 */
-  const programmaticTopRef = useRef<number | null>(null);
+   *   这次滚动是内容尺寸变化引起的钳位/锚定（浏览器行为），也不是用户。
+   *   （曾另有一条“写入白名单”：记下自己写过的落点、滚动事件与之相符就忽略。
+   *    它会在“用户之后滚到同一位置”时永远吞掉判定，已删——见 handleScroll。）*/
   const observedScrollHeightRef = useRef<number | null>(null);
 
   /*
@@ -397,13 +397,11 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    * 用户上滑（离底 > STICK_PX）立即停自动钉底；滑回底部恢复。
    */
 
-  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。
-   * 写后记录实际落点——白名单只认落点，不认请求值（浏览器会钳位）。 */
+  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。 */
   const pinNow = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-    programmaticTopRef.current = el.scrollTop;
   }, []);
 
   /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底 */
@@ -463,7 +461,6 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     const delta = anchorDelta(rowTop, listTop, a.offset);
     if (Math.abs(delta) > 0.5) {
       el.scrollTop = el.scrollTop + delta;
-      programmaticTopRef.current = el.scrollTop;
     }
   }, []);
 
@@ -499,7 +496,6 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
           return fn();
         } finally {
           el.scrollTop = atBottom ? el.scrollHeight : saved;
-          programmaticTopRef.current = el.scrollTop;
         }
       },
     });
@@ -562,34 +558,39 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    /*
+     * 判定顺序（结构不变量）：先给“回到贴底”让路，再谈屏蔽。
+     *
+     * “已经在底部”是唯一不需要前提的判据（重排/钳位/自己写的回声都
+     * 不可能把距离变成 0）——所以它放在最前面，不受下面任何提前返回影响。
+     * 后面的屏蔽逻辑只能拦住“离开贴底”的判定，拦不住恢复。
+     *
+     * 之前的顺序相反（先屏蔽、后判定），于是保护窗开着、或基准记录过期时，
+     * 连“滚到底”也会被吞掉：表现为滚到底按钮不消失、只有点击才恢复，
+     * 而且成不成要看滚动事件落在保护窗内还是窗外（不稳定）——2026-09 实测。
+     */
+    if (distance <= STICK_PX) {
+      setStick(true);
+      return;
+    }
     if (windowResizingRef.current) return;
-    // ① 白名单：这次滚动就是我们自己刚写的（钉底 / 锚校正 / 测量写回）
-    const prog = programmaticTopRef.current;
-    if (prog !== null && Math.abs(el.scrollTop - prog) <= 1) return;
-    // ② 内容尺寸刚变过 ⇒ 钳位/锚定引起的滚动（浏览器行为）
+    // 内容尺寸刚变过 ⇒ 钳位/锚定引起的滚动（浏览器行为），不算用户意图
     const observed = observedScrollHeightRef.current;
     observedScrollHeightRef.current = el.scrollHeight;
     if (observed !== null && Math.abs(el.scrollHeight - observed) > 0.5) return;
-    // ③ 缩放中（界面随 --face-size 缩放 ⇒ 重排）
+    // 缩放基准/视口尺寸变了 ⇒ 缩放引起的重排
     const face = readFaceSize();
     const faceChanged =
       lastFaceSizeRef.current !== "" && lastFaceSizeRef.current !== face;
-    if (faceChanged) {
-      // 缩放基准变了：界面整体在缩放，与视口尺寸变化同一口径
-      armResizeGuard();
-      return;
-    }
     const vp = lastViewportRef.current;
-    if (
-      vp.w !== 0 &&
-      (vp.w !== window.innerWidth || vp.h !== window.innerHeight)
-    ) {
-      // 视口/缩放基准变了：这次滚动是缩放引起的（重排/钳位）。
-      // 记录不在这里更新——归 ResizeObserver 回调，否则 RO 看不到变化。
+    const viewportChanged =
+      vp.w !== 0 && (vp.w !== window.innerWidth || vp.h !== window.innerHeight);
+    if (faceChanged || viewportChanged) {
       armResizeGuard();
       return;
     }
-    setStick(el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX);
+    setStick(false);
   }, [armResizeGuard, setStick]);
 
   /*

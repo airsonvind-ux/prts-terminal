@@ -142,6 +142,20 @@ function forceScrollTop(el: HTMLElement, v: number): void {
   el.scrollTop = v;
 }
 
+/** 带铐位的 scrollTop 替身（模拟浏览器：越界时铐到最大） */
+function spyOnScrollTopClamped(el: HTMLElement, max: number) {
+  let value = 0;
+  const spy = vi.fn((v: number) => {
+    value = Math.max(0, Math.min(v, max));
+  });
+  Object.defineProperty(el, "scrollTop", {
+    configurable: true,
+    get: () => value,
+    set: spy,
+  });
+  return spy;
+}
+
 function triggerSizeChange(): void {
   act(() => {
     lastROCallback?.();
@@ -149,6 +163,85 @@ function triggerSizeChange(): void {
 }
 
 describe("MessageList · 回到底部按钮", () => {
+  it("保护窗开着时滚到底也必须恢复贴底（按钮消失）", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    const spy = spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 1000, 100);
+    await wait(450);
+    spy.mockClear();
+
+    // 用户上滑 → 按钮出现
+    act(() => {
+      forceScrollTop(listEl, 100);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeTruthy();
+
+    // 缩放开着保护窗（resize 事件），紧接着滚到底：
+    // 逃生门在屏蔽之前，所以必须恢复——这正是之前不稳定的根源
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    act(() => {
+      forceScrollTop(listEl, 900);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
+  it("缩放基准不一致时，滚到底仍能恢复贴底（按钮消失）", async () => {
+    document.documentElement.style.setProperty("--face-size", "360px");
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    const spy = spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 1000, 100);
+    await wait(450);
+    spy.mockClear();
+
+    // 用户上滑 → 按钮出现
+    act(() => {
+      forceScrollTop(listEl, 100);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeTruthy();
+
+    // 缩放一次（缩放基准变了；故意不给 ResizeObserver 回调，模拟实际情形）
+    document.documentElement.style.setProperty("--face-size", "320px");
+    await wait(200); // 让保护窗过期
+
+    // 手动滚到底：即便命中“基准不一致”分支，也必须恢复贴底
+    act(() => {
+      forceScrollTop(listEl, 900);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
+  it("自己写入的回声被认领；稍后用户滚到底仍恢复贴底（按钮消失）", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    const spy = spyOnScrollTopClamped(listEl, 900); // 上限 = 1000 − 100
+    fakeMetrics(listEl, 1000, 100);
+    await wait(450); // 挂载收敛窗钉底：写入并记录（浏览器铐位后落点 = 900）
+    spy.mockClear();
+
+    // 用户上滑 → 贴底标志翻掉 → 按钮出现
+    act(() => {
+      forceScrollTop(listEl, 0);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeTruthy();
+
+    // 稍后（已超出程序化认领窗）手动滚回底部：必须被认作“回到贴底”
+    await wait(300);
+    act(() => {
+      forceScrollTop(listEl, 900);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
   it("上滑后出现；点击回到最新且按钮消失", async () => {
     await renderList();
     const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;

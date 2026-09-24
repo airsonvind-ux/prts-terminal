@@ -43,7 +43,10 @@
 .scrollFab {
   position: absolute;
   left: 50%;
-  bottom: 6px;
+  /* 下缘压在输入区上沿（照 Hanako：按钮与输入卡片有交叠，不是完全浮在上方）。
+   * −face×0.025 = 自高的 25%（Hanako 观感：约四分之一压在输入框上）；
+   * z-index 5 使其高于静态的输入行，不会被截。 */
+  bottom: calc(var(--face-size) * -0.025);
   transform: translateX(-50%);
   z-index: 5;
   width: calc(var(--face-size) * 0.1);
