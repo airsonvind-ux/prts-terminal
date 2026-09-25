@@ -5,11 +5,13 @@
 //   - 总时长 = max(真实, 剧本最小)：真实慢 → 停在当前句等它；真实快 → 剧本照走完
 //   - 文案只报真实在做的事：全篇消费 useUIStore.restoreInfo
 //     （index → read[n/N] → ready），不产生任何虚构进度
-//   - 首次使用（readTotal === 0）：跳过「调取」一拍，收尾换就绪句
 //   - [n/N] 计数仅在 N ≥ 2 时显示（单份时「1/1」无意义）
 //
-// 结构：铭牌 + 接入清单（CSS 入场）→「校验索引」「调取作战记录」「收尾」逐句打字
-// → 淡出。淡出完成后回调 onDone（ChatView 撤下覆盖层，露出底下已就绪的对话）。
+// 三幕：
+//   幕一 自检日志：铭牌 + 接入清单（CSS 入场）→ 三句日志逐句打字
+//   幕二 欢迎页（仅回归用户）：收尾句整句停留后交叉渐变到 PRTS 字标，停留一拍
+//   幕三 淡出露出对话。首次使用无幕二——欢迎页就是目的地，与覆盖层之下
+//        的欢迎页无缝衔接；收尾句也换成就绪句。
 
 import { useEffect, useState } from "react";
 import { useUIStore } from "../../stores/useUIStore";
@@ -24,10 +26,14 @@ const MIN_LINE_MS = 460;
 const LINE_GAP_MS = 90;
 /** 静态块（铭牌 + 清单）入场后开始第一句（ms） */
 const BLOCK_SETTLE_MS = 480;
-/** 收尾句播完后的停顿（ms） */
-const POST_HOLD_MS = 200;
-/** 淡出时长（ms；与 CSS transition 同步） */
-const FADE_MS = 260;
+/** 收尾句打完后的整句停留（ms；先把最后一句话读完再过渡） */
+const CLOSE_HOLD_MS = 900;
+/** 日志 → 欢迎页交叉渐变（ms；与 CSS scene transition 同步） */
+const SCENE_FADE_MS = 280;
+/** 欢迎页停留（ms） */
+const WELCOME_HOLD_MS = 650;
+/** 覆盖层淡出（ms；与 CSS root transition 同步） */
+const FADE_MS = 280;
 
 const INDEX_LINE = "正在校验作战记录索引…";
 const READ_LINE = "正在调取作战记录…";
@@ -41,6 +47,8 @@ interface Line {
   text: string;
 }
 
+type Scene = "log" | "welcome";
+
 interface Props {
   /** 演出完成（含淡出）后回调；由 ChatView 撤下本覆盖层 */
   onDone: () => void;
@@ -53,6 +61,8 @@ export function BootSequence({ onDone }: Props) {
   const [active, setActive] = useState<{ line: Line; typed: number } | null>(
     null
   );
+  /** 当前幕：log（自检日志）→ welcome（欢迎页） */
+  const [scene, setScene] = useState<Scene>("log");
   /** 收尾淡出中 */
   const [closing, setClosing] = useState(false);
 
@@ -78,7 +88,7 @@ export function BootSequence({ onDone }: Props) {
     /**
      * 逐字打出并满足最短展示；
      * holdUntil：真实未完时停在本句（光标续闪、计数继续刷新）；
-     * keepActive：不并入已完成列表（收尾句用，光标留到淡出）。
+     * keepActive：不并入已完成列表（收尾句用，光标留到过渡）。
      */
     const playLine = async (
       line: Line,
@@ -112,9 +122,7 @@ export function BootSequence({ onDone }: Props) {
 
       // 等索引结果定音（有记录 → 进入「调取」；无记录/失败 → 直奔收尾）
       await until(
-        () =>
-          realDone() ||
-          useUIStore.getState().restoreInfo.readTotal > 0
+        () => realDone() || useUIStore.getState().restoreInfo.readTotal > 0
       );
       if (cancelled) return;
 
@@ -129,15 +137,24 @@ export function BootSequence({ onDone }: Props) {
       if (cancelled) return;
 
       // 句 3：收尾（首次使用换就绪句）
+      const readTotalNow = useUIStore.getState().restoreInfo.readTotal;
       const closeText =
-        useUIStore.getState().restoreInfo.readTotal === 0
-          ? CLOSE_LINE_FIRST_USE
-          : CLOSE_LINE_RETURNING;
+        readTotalNow === 0 ? CLOSE_LINE_FIRST_USE : CLOSE_LINE_RETURNING;
       await playLine({ id: "close", text: closeText }, { keepActive: true });
       if (cancelled) return;
 
-      await sleep(POST_HOLD_MS);
+      // 整句停留：先把最后一句话读完，再开始过渡
+      await sleep(CLOSE_HOLD_MS);
       if (cancelled) return;
+
+      // 幕二（仅回归用户）：日志 → 欢迎页交叉渐变 + 停留
+      if (readTotalNow > 0) {
+        setScene("welcome");
+        await sleep(SCENE_FADE_MS + WELCOME_HOLD_MS);
+        if (cancelled) return;
+      }
+
+      // 幕三：淡出露出对话（首次使用时欢迎页就在覆盖层之下，无缝衔接）
       setClosing(true);
       await sleep(FADE_MS);
       if (cancelled) return;
@@ -153,41 +170,58 @@ export function BootSequence({ onDone }: Props) {
     <div
       className={`${styles.root} ${closing ? styles.closing : ""}`}
       data-boot
+      data-scene={scene}
     >
-      <div className={styles.banner}>
-        PRTS · Preliminary RodesIsland Terminal System
+      <div
+        className={`${styles.scene} ${
+          scene === "welcome" ? styles.sceneHidden : ""
+        }`}
+      >
+        <div className={styles.banner}>
+          PRTS · Preliminary RodesIsland Terminal System
+        </div>
+        <div className={styles.modules}>
+          <div className={styles.module}>作战数据库 … 已接入</div>
+          <div className={styles.module}>知识库 … 已接入</div>
+          <div className={styles.module}>记忆模块 … 已接入</div>
+        </div>
+        <div className={styles.log}>
+          {doneLines.map((line) => (
+            <div key={line.id} className={`${styles.line} ${styles.lineDone}`}>
+              <span className={styles.prompt}>{">"}</span>
+              <span>{line.text}</span>
+              {line.id === "read" && readTotal >= 2 && (
+                <span className={styles.count}>
+                  {" "}
+                  [{readDone}/{readTotal}]
+                </span>
+              )}
+            </div>
+          ))}
+          {active && (
+            <div className={`${styles.line} ${styles.lineActive}`}>
+              <span className={styles.prompt}>{">"}</span>
+              <span>{active.line.text.slice(0, active.typed)}</span>
+              {active.line.id === "read" &&
+                readTotal >= 2 &&
+                active.typed >= READ_LINE.length && (
+                  <span className={styles.count}>
+                    {" "}
+                    [{readDone}/{readTotal}]
+                  </span>
+                )}
+              <span className={styles.cursor} />
+            </div>
+          )}
+        </div>
       </div>
-      <div className={styles.modules}>
-        <div className={styles.module}>作战数据库 … 已接入</div>
-        <div className={styles.module}>知识库 … 已接入</div>
-        <div className={styles.module}>记忆模块 … 已接入</div>
-      </div>
-      <div className={styles.log}>
-        {doneLines.map((line) => (
-          <div key={line.id} className={`${styles.line} ${styles.lineDone}`}>
-            <span className={styles.prompt}>{">"}</span>
-            <span>{line.text}</span>
-            {line.id === "read" && readTotal >= 2 && (
-              <span className={styles.count}>
-                {" "}
-                [{readDone}/{readTotal}]
-              </span>
-            )}
-          </div>
-        ))}
-        {active && (
-          <div className={`${styles.line} ${styles.lineActive}`}>
-            <span className={styles.prompt}>{">"}</span>
-            <span>{active.line.text.slice(0, active.typed)}</span>
-            {active.line.id === "read" && readTotal >= 2 && active.typed >= READ_LINE.length && (
-              <span className={styles.count}>
-                {" "}
-                [{readDone}/{readTotal}]
-              </span>
-            )}
-            <span className={styles.cursor} />
-          </div>
-        )}
+      <div
+        className={`${styles.scene} ${styles.welcomeScene} ${
+          scene === "welcome" ? "" : styles.sceneHidden
+        }`}
+      >
+        <div className={styles.welcomeLogo}>PRTS</div>
+        <div className={styles.welcomeTagline}>明日方舟AI辅助终端</div>
       </div>
     </div>
   );

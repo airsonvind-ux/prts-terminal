@@ -3,6 +3,9 @@
 /*
  * 启动演出覆盖层：定位在 ChatView 的 .messageArea 内，铺满消息区。
  * 底色取 frontFace 同款（--depth-2）——淡出时直接露出底下已就绪的对话内容。
+ *
+ * 两幕（场景）叠放交叉渐变：.scene 内切换，幕间过渡时长与组件内
+ * SCENE_FADE_MS / FADE_MS 同步（改一处要改两处）。
  */
 
 .root {
@@ -10,25 +13,36 @@
   inset: 0;
   z-index: 3;
   background: var(--depth-2);
-  display: flex;
-  flex-direction: column;
-  padding: 18px 20px;
-  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.9;
-  color: var(--text-2);
   overflow: hidden;
+  color: var(--text-2);
   user-select: none;
   opacity: 1;
-  /* 时长与组件内 FADE_MS 同步（改一处要改两处） */
-  transition: opacity 260ms ease;
+  transition: opacity 280ms ease;
 }
 
 .closing {
   opacity: 0;
 }
 
-/* ── 铭牌与接入清单（CSS 入场，错峰落定）── */
+/* ── 场景（幕）通用 ── */
+
+.scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.9;
+  transition: opacity 280ms ease;
+}
+
+.sceneHidden {
+  opacity: 0;
+}
+
+/* ── 幕一：自检日志 ── */
 
 .banner {
   color: var(--text-2);
@@ -56,8 +70,6 @@
 .module:nth-child(3) {
   animation-delay: 380ms;
 }
-
-/* ── 日志句 ── */
 
 .log {
   margin-top: 16px;
@@ -116,4 +128,25 @@
     opacity: 1;
     transform: none;
   }
+}
+
+/* ── 幕二：欢迎页（PRTS 字标 · 与 MessageList 欢迎页同款样式）── */
+
+.welcomeScene {
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-family: var(--font-ui);
+}
+
+.welcomeLogo {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 6px;
+}
+
+.welcomeTagline {
+  font-size: 13px;
+  color: var(--text-2);
 }
