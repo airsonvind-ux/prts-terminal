@@ -12,7 +12,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::memory::prompt::{ymd_hms_local, ymd_local};
-use crate::memory::schema::{PROFILE_NAME, SOURCE_TOOL};
+use crate::memory::schema::{MAX_PROFILE_CHARS, MAX_TOPIC_CHARS, PROFILE_NAME, SOURCE_TOOL};
 use crate::memory::store::MemoryStore;
 use crate::notices::Notices;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
@@ -215,7 +215,7 @@ impl Tool for MemoryGrowthTool {
     }
 
     fn description(&self) -> &str {
-        "成长记忆（读写）：维护成长页——你对博士与共同工作的理解（「关于博士」常驻）。宁少勿滥——被纠正、\"记住\"、关键结论当刻写；零散认识收尾合并写；判据：会改变你未来的判断或选择吗？不会就是复述，不写。读—并—写：新的／被纠正的覆盖旧的、留博士用词、只动相关内容不整篇重写；重要改判留轨迹（\"原以为 X，现为 Y，因为 Z\"）；补充进现有页、独立才新建；碎页并、杂页拆、上限约 12；存疑标\"待验证\"。格式：标题＋一句话简述＋正文；时间与来源由系统记录，不用你写；正文不必带日期（时间本身是判断的一部分时除外）。删除仅限：被取代／终结无参照／复核不成立；想不起用途不算——博士的要求除外。"
+        "成长记忆（读写）：维护成长页。成长页＝「从工作里提炼出的、跨案例、面向未来的行为与判断准则」：写以后遇到什么、怎么想、怎么做；工作内容与知识不写进来——它们归经历记忆、工作区与知识库。「关于博士」是常驻页：写你对博士的认识——称呼、习惯、偏好、协作方式；认识变了就更新它。宁少勿滥——被纠正、\"记住\"、关键结论当刻写；零散认识收尾合并写；判据：会改变你未来的判断或做法吗？不会就是复述，不写；案例只是材料，细节压成一句、余下留指向。读—并—写：写前先在已有主题里找相关页，找得到就读取它、在它上面迭代（补充、深化、修正）；新的／被纠正的覆盖旧的、留博士用词、只动相关内容不整篇重写；重要改判留轨迹（\"原以为 X，现为 Y，因为 Z\"）；找不到能迭代的才新建；碎页并、杂页拆；存疑标\"待验证\"。篇幅从紧（约 150～250 字，超线会被拒绝）。格式：标题＋一句话简述＋正文；时间与来源由系统记录，不用你写；正文不必带日期（时间本身是判断的一部分时除外）。删除仅限：被取代／终结无参照／复核不成立；想不起用途不算——博士的要求除外。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -227,7 +227,7 @@ impl Tool for MemoryGrowthTool {
                     "enum": ["read", "create", "update", "delete"],
                     "description": "read=读页；create=建页；update=改页；delete=删页"
                 },
-                "name": { "type": "string", "description": "页名。「关于博士」为画像与协作约定页；其余为专题页名" },
+                "name": { "type": "string", "description": "页名。「关于博士」是常驻页（对博士的认识）；其余为专题页名" },
                 "brief": { "type": "string", "description": "一句话简述（进主题目录）" },
                 "body": { "type": "string", "description": "正文" },
                 "tags": {
@@ -308,6 +308,13 @@ impl Tool for MemoryGrowthTool {
                     .ok_or_else(|| ToolError::Parse("create 需要参数 body".into()))?;
                 let brief = v.get("brief").and_then(|x| x.as_str()).unwrap_or("");
                 let tags = parse_tags(&v)?;
+                // 篇幅闸（兜底）：超限拒绝并给出路——先压缩提炼再写
+                let n = body.chars().count();
+                if n > MAX_TOPIC_CHARS {
+                    return Err(ToolError::Execution(format!(
+                        "正文 {n} 字，超过专题页上限 {MAX_TOPIC_CHARS} 字：先压缩提炼（知识细节移到工作区或知识库、页里留指向），再写入。"
+                    )));
+                }
                 store
                     .growth_create(name, brief, body, tags, SOURCE_TOOL)
                     .map_err(ToolError::Execution)?;
@@ -328,6 +335,25 @@ impl Tool for MemoryGrowthTool {
                 };
                 if body.is_none() && brief.is_none() && tags.is_none() {
                     return Err(ToolError::Parse("update 至少需要 body / brief / tags 之一".into()));
+                }
+                // 篇幅闸（兜底）：按写入后的正文长度校验（body 缺席 = 保持原正文）
+                let cap = if name == PROFILE_NAME {
+                    MAX_PROFILE_CHARS
+                } else {
+                    MAX_TOPIC_CHARS
+                };
+                {
+                    let page = store.growth_get(name).ok_or_else(|| {
+                        ToolError::Execution(format!("成长页「{name}」不存在"))
+                    })?;
+                    let len = body
+                        .map(|b| b.chars().count())
+                        .unwrap_or_else(|| page.body.chars().count());
+                    if len > cap {
+                        return Err(ToolError::Execution(format!(
+                            "「{name}」写入后正文 {len} 字，超过上限 {cap} 字：先压缩提炼（保留准则、细节外移），再写入。"
+                        )));
+                    }
                 }
                 let changed = store
                     .growth_update(name, body, brief, tags, SOURCE_TOOL)
@@ -562,6 +588,68 @@ mod tests {
             .execute(&ctx, r#"{"action":"read","name":"无简述"}"#)
             .unwrap();
         assert!(out.summary.starts_with("无简述\n创建 "), "got: {}", out.summary);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn growth_length_gate_rejects_overlong_writes() {
+        let (store, ledger, dir) = temp_store("len");
+        let tool = MemoryGrowthTool::new(store.clone(), ledger);
+        let ctx = ToolContext::new();
+
+        // 专题页：超限拒绝、不落盘
+        let long = "字".repeat(MAX_TOPIC_CHARS + 1);
+        let err = tool
+            .execute(&ctx, &format!(r#"{{"action":"create","name":"超长页","body":"{long}"}}"#))
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("超过专题页上限")),
+            "got: {err}"
+        );
+        assert!(store.lock().unwrap().growth_get("超长页").is_none());
+
+        // 上限内可建；更新超限同样拒绝
+        let ok = "字".repeat(MAX_TOPIC_CHARS);
+        tool.execute(
+            &ctx,
+            &format!(r#"{{"action":"create","name":"合规页","body":"{ok}"}}"#),
+        )
+        .unwrap();
+        let over = "字".repeat(MAX_TOPIC_CHARS + 1);
+        let err = tool
+            .execute(
+                &ctx,
+                &format!(r#"{{"action":"update","name":"合规页","body":"{over}"}}"#),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("超过上限")),
+            "got: {err}"
+        );
+        assert_eq!(
+            store.lock().unwrap().growth_get("合规页").unwrap().body.chars().count(),
+            MAX_TOPIC_CHARS,
+            "拒绝后页面保持原样"
+        );
+
+        // 「关于博士」取更紧的一档：250 可写、251 拒绝
+        let ok_p = "字".repeat(MAX_PROFILE_CHARS);
+        tool.execute(
+            &ctx,
+            &format!(r#"{{"action":"update","name":"关于博士","body":"{ok_p}"}}"#),
+        )
+        .unwrap();
+        let over_p = "字".repeat(MAX_PROFILE_CHARS + 1);
+        let err = tool
+            .execute(
+                &ctx,
+                &format!(r#"{{"action":"update","name":"关于博士","body":"{over_p}"}}"#),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("超过上限")),
+            "got: {err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

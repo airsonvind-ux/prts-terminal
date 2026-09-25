@@ -27,6 +27,11 @@ pub const PROFILE_NAME: &str = "关于博士";
 /// 封存线：`revisionCount` 达到此值即封存（不可再重写，只能另起新条目）。
 pub const REVISION_SEALED: u32 = 2;
 
+/// 成长页正文上限（工具侧兜底闸；设置页人工写入不受限）：
+/// 「关于博士」常驻、逐轮携带，取更紧的一档；专题页宽松些。
+pub const MAX_PROFILE_CHARS: usize = 250;
+pub const MAX_TOPIC_CHARS: usize = 400;
+
 /// 成长页写入来源（集中定义，防拼写漂移）：
 /// - [`SOURCE_TOOL`]：`memory_growth` 工具写入；
 /// - [`SOURCE_USER`]：设置页命令（博士）写入；
