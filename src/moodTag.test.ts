@@ -8,7 +8,7 @@
 //   4. 非法值回退平静（标签全量放行、mood 不更新）
 //   5. pending 超上界未闭合 → 全量放行
 //   6. 段中标签不剥离（原样渲染）；tool/call 段边界 re-arm 后可再匹配
-//   7. 每轮最多消费一个标签
+//   7. 每段最多消费一个标签（段边界重置；段内仍一个）
 //   8. stripTagFromText 一次性剥离（全角冒号容错）
 //   9. releasePending 生命周期（finish/fail 路径放行）
 
@@ -19,7 +19,7 @@ import {
   rearmScanner,
   releasePending,
   resetScanners,
-  consumedIn,
+  segmentConsumed,
 } from "./moodTag";
 
 beforeEach(() => resetScanners());
@@ -180,16 +180,23 @@ describe("段中标签与段边界", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 7：每轮最多消费一个标签
+// 场景 7：每段最多消费一个标签
 // ═══════════════════════════════════════════════
 
-describe("每轮最多消费一个标签", () => {
-  it("首次成功匹配后关闭本轮匹配机会（re-arm 也不恢复）", () => {
+describe("每段最多消费一个标签", () => {
+  it("段边界（re-arm）后可再消费：跨段多情绪（轨迹语义）", () => {
     scanTextChunk("s1", "【mood:高兴】第一段");
     rearmScanner("s1");
     const r = scanTextChunk("s1", "【mood:沮丧】第二段");
+    expect(r.mood).toBe("沮丧");
+    expect(r.text).toBe("第二段");
+  });
+
+  it("段内二次标签仍忽略（段中标签不剥离）", () => {
+    scanTextChunk("s1", "【mood:高兴】第一段");
+    const r = scanTextChunk("s1", "【mood:沮丧】还在同一段");
     expect(r.mood).toBeNull();
-    expect(r.text).toBe("【mood:沮丧】第二段");
+    expect(r.text).toBe("【mood:沮丧】还在同一段");
   });
 });
 
@@ -287,10 +294,12 @@ describe("强度档位解析", () => {
     expect(r.text).toBe("提示");
   });
 
-  it("consumedIn：匹配成功返回 true，未匹配返回 false", () => {
-    expect(consumedIn("s1")).toBe(false);
+  it("segmentConsumed：本段匹配成功返回 true；段边界重置为 false", () => {
+    expect(segmentConsumed("s1")).toBe(false);
     scanTextChunk("s1", "【mood:高兴】内容");
-    expect(consumedIn("s1")).toBe(true);
-    expect(consumedIn("s2")).toBe(false);
+    expect(segmentConsumed("s1")).toBe(true);
+    rearmScanner("s1");
+    expect(segmentConsumed("s1")).toBe(false); // 新段可再消费
+    expect(segmentConsumed("s2")).toBe(false);
   });
 });

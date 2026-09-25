@@ -7,7 +7,7 @@
 //   2. 无标签轮次逐字节一致（剥离器零副作用，mood 保持平静）
 //   3. reasoning chunk 不进扫描器（标签形态文本原样缓冲，不启动 pending）
 //   4. 工具型轮次：tool/call 段边界 re-arm 后段首标签被消费
-//   5. 同轮二次标签忽略（原样渲染，mood 保持首次值）
+//   5. 段内二次标签忽略；跨段可再消费（轨迹语义，一轮多情绪）
 //   6. turn/end 归档：chunk 与 assistant/message 均已剥离 + mood 置位
 //   7. finishProcessing 未闭合 pending 放行（半标签最终可见）
 //   8. failProcessing 清理：pending 随缓冲丢弃，错误轮只归档 [user, error]
@@ -165,10 +165,10 @@ describe("场景 2：无标签轮次逐字节一致", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 3：工具型轮次段边界
+// 场景 3：轮内段边界（工具调用与注入）
 // ═══════════════════════════════════════════════
 
-describe("场景 3：工具型轮次段边界", () => {
+describe("场景 3：轮内段边界（工具调用与注入）", () => {
   it("tool/call re-arm 后段首标签被消费", async () => {
     const sid = await startTurn("查询");
 
@@ -199,7 +199,7 @@ describe("场景 3：工具型轮次段边界", () => {
     useProcessingStore.getState().finishProcessing(sid);
   });
 
-  it("同轮二次标签忽略（原样渲染，mood 保持首次值）", async () => {
+  it("跨段二次标签可再消费（轨迹）：两段两情绪各产一条事件", async () => {
     const sid = await startTurn("查询");
 
     const store = useProcessingStore.getState();
@@ -214,12 +214,77 @@ describe("场景 3：工具型轮次段边界", () => {
       "mood/event",
       "assistant/chunk",
       "tool/call",
+      "mood/event",
       "assistant/chunk",
     ]);
-    // 首次标签已消费 → 二次标签原样放行（不剥离、不产事件）
-    expect(events.filter((e) => e.type === "mood/event")).toHaveLength(1);
-    expect(events[4]).toEqual(textChunk(sid, "【mood:沮丧】第二个。"));
-    expect(moodOf(sid)).toBe("高兴"); // 首次值，未被二次标签覆盖
+    // 段边界可再消费：两条事件成轨迹（顺序＝时间）
+    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
+      mood: string;
+    }>;
+    expect(moodEvents.map((e) => e.mood)).toEqual(["高兴", "沮丧"]);
+    expect(events[5]).toEqual(textChunk(sid, "第二个。")); // 已剥离
+    expect(moodOf(sid)).toBe("沮丧"); // 落点＝最后一段
+
+    useProcessingStore.getState().finishProcessing(sid);
+  });
+
+  it("轨迹全链路：两段两情绪 + 聚合防重（本段已消费不重复插）", async () => {
+    const sid = await startTurn("查询");
+
+    const store = useProcessingStore.getState();
+    store.appendCurrentEvent(textChunk(sid, "【mood:高兴:1】我先查一下。"));
+    flushPending(sid);
+    store.appendCurrentEvent(toolCall(sid, "c1"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:困惑:2】查到了，结论如下。"));
+    flushPending(sid);
+    // 段完成聚合（后端原始聚合，携带标签）→ 本段已消费，应只剥离不补插
+    store.appendCurrentEvent({
+      type: "assistant/message",
+      sessionId: sid,
+      content: "【mood:困惑:2】查到了，结论如下。",
+      reasoningContent: null,
+      usage: null,
+    });
+
+    const events = currentEventsOf(sid);
+    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
+      mood: string;
+      intensity: number;
+    }>;
+    expect(moodEvents).toHaveLength(2); // 防重：不重复插
+    expect(moodEvents.map((e) => [e.mood, e.intensity])).toEqual([
+      ["高兴", 1],
+      ["困惑", 2],
+    ]);
+    expect(moodOf(sid)).toBe("困惑"); // 落点＝最后一段
+    expect(intensityOf(sid)).toBe(2);
+
+    store.finishProcessing(sid);
+    const turn = useConversationStore.getState().conversations[0].turns[0];
+    expect(turn.filter((e) => e.type === "mood/event")).toHaveLength(2);
+  });
+
+  it("轮内注入也是段边界：注入后新回答的标签可再消费", async () => {
+    const sid = await startTurn("查询");
+
+    const store = useProcessingStore.getState();
+    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】先答一段。"));
+    flushPending(sid);
+    // 轮内注入（插话）：user/message 到达 → 段边界（重置段首与消费位）
+    store.appendCurrentEvent({
+      type: "user/message",
+      sessionId: sid,
+      content: "追问一句",
+    });
+    store.appendCurrentEvent(textChunk(sid, "【mood:困惑】补答一段。"));
+    flushPending(sid);
+
+    const events = currentEventsOf(sid);
+    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
+      mood: string;
+    }>;
+    expect(moodEvents.map((e) => e.mood)).toEqual(["高兴", "困惑"]);
+    expect(moodOf(sid)).toBe("困惑");
 
     useProcessingStore.getState().finishProcessing(sid);
   });

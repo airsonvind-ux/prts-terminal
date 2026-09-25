@@ -28,7 +28,7 @@ import {
   stripTagFromText,
   rearmScanner,
   releasePending,
-  consumedIn,
+  segmentConsumed,
 } from "../moodTag";
 import { generateId } from "../utils";
 import {
@@ -740,9 +740,9 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       // 流式期间标签已在 chunk 层剥离，此处用同一套剥离保证归档 turns 干净。
       const { text, mood, intensity } = stripTagFromText(event.content);
       if (mood) {
-        // 防重：流式扫描器已消费（已产 mood/event）→ 只同步 mood；
+        // 防重：本段（聚合所属的末段）已消费（流式已产 mood/event）→ 只同步 mood；
         // 未消费（异常路径：流式未匹配但聚合带标签）→ 补插事件，保证归档完整。
-        if (!consumedIn(event.sessionId)) {
+        if (!segmentConsumed(event.sessionId)) {
           appendImmediate({
             type: "mood/event",
             sessionId: event.sessionId,
@@ -757,10 +757,11 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       return;
     }
 
-    if (event.type === "tool/call") {
-      // 段边界 re-arm（批 2-D）：该段未匹配标签则后续段可再尝试匹配。
-      // 未闭合 pending 的扣留文本在此放行，作为 tool/call 之前的 chunk 落位
-      // （事件顺序不变：pending 文本 → tool/call）。
+    if (event.type === "tool/call" || event.type === "user/message") {
+      // 段边界 re-arm（轨迹语义）：tool/call 与轮内注入都是“一段新回复”的边界——
+      // 重置段首与消费位，后续段可再尝试匹配（每段最多一个）。
+      // 未闭合 pending 的扣留文本在此放行，作为边界事件之前的 chunk 落位
+      // （事件顺序不变：pending 文本 → 边界事件）。
       const held = rearmScanner(event.sessionId);
       if (held) pushTextChunk(event.sessionId, held);
     }

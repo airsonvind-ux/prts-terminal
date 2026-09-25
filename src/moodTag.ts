@@ -11,8 +11,8 @@
 //   直到 】 闭合 → matched（剥离 + 更新 mood）或非法值 → 全量放行
 // - 非标签开头 → 立即放行；段中标签（非段首）不剥离，原样渲染（既定行为）
 // - pending 上界 24 字符，超界未闭合 → 放行
-// - tool/call 段边界 re-arm：该段未匹配标签则后续段可再尝试匹配
-// - 每轮最多消费一个标签（首次成功匹配后关闭本轮的匹配机会）
+// - 段边界 re-arm（tool/call、轮内注入）：重置段首与消费位，后续段可再尝试匹配
+// - 每段最多消费一个标签（段边界重置；段内首次成功匹配后关闭本段的匹配机会）
 //
 // ⚠️ 剥离差异声明（既定行为）：归档 turns 与 currentEvents 中的 assistant 文本是
 // 剥离后的版本（情绪标签被移除），而后端 session log 保真保留原始文本。前端是后端
@@ -53,12 +53,12 @@ interface ParsedTag {
   intensity: MoodIntensity;
 }
 
-/** 单个 session 的扫描器瞬态（每轮一个 sessionId，天然一轮一状态） */
+/** 单个 session 的扫描器瞬态（每轮一个 sessionId；状态生命＝本轮，段边界重置段内状态） */
 interface TagScannerState {
   /** 已累积的未闭合标签前缀（扣留中，未进缓冲） */
   pending: string | null;
-  /** 本轮是否已消费一个标签（消费后整轮关闭匹配机会） */
-  consumed: boolean;
+  /** 本段是否已消费一个标签（段边界重置；消费后本段关闭匹配机会） */
+  segmentConsumed: boolean;
   /** 当前段是否已放行过文本（段中标签不剥离） */
   segmentStarted: boolean;
 }
@@ -136,7 +136,7 @@ function evaluatePending(state: TagScannerState): ScanResult {
     const tag = pending.slice(0, tagEnd + 1);
     const parsed = parseMoodTag(tag);
     if (parsed.mood !== null) {
-      state.consumed = true;
+      state.segmentConsumed = true;
       return {
         text: pending.slice(tagEnd + 1),
         mood: parsed.mood,
@@ -160,12 +160,12 @@ function evaluatePending(state: TagScannerState): ScanResult {
 export function scanTextChunk(sessionId: string, content: string): ScanResult {
   let state = scannerStates.get(sessionId);
   if (!state) {
-    state = { pending: null, consumed: false, segmentStarted: false };
+    state = { pending: null, segmentConsumed: false, segmentStarted: false };
     scannerStates.set(sessionId, state);
   }
 
-  // 本轮已消费标签 → 原样放行（每轮最多一个）
-  if (state.consumed) return { text: content, mood: null, intensity: 0 };
+  // 本段已消费标签 → 原样放行（每段最多一个）
+  if (state.segmentConsumed) return { text: content, mood: null, intensity: 0 };
 
   // pending 未闭合：累积后求值
   if (state.pending !== null) {
@@ -185,7 +185,7 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
       const tag = content.slice(0, tagEnd + 1);
       const parsed = parseMoodTag(tag);
       if (parsed.mood !== null) {
-        state.consumed = true;
+        state.segmentConsumed = true;
         return {
           text: content.slice(tagEnd + 1),
           mood: parsed.mood,
@@ -205,17 +205,17 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
   return { text: content, mood: null, intensity: 0 };
 }
 
-/** 查询本轮是否已消费情绪标签（assistant/message 分支防重：已消费则只剥离不产事件） */
-export function consumedIn(sessionId: string): boolean {
-  return scannerStates.get(sessionId)?.consumed ?? false;
+/** 查询当前段是否已消费情绪标签（assistant/message 分支防重：本段已消费则只剥离不产事件） */
+export function segmentConsumed(sessionId: string): boolean {
+  return scannerStates.get(sessionId)?.segmentConsumed ?? false;
 }
 
 // ── 生命周期 ──
 
 /**
- * tool/call 段边界 re-arm：释放未闭合 pending（该段尾部文本放行），重置段状态。
- * 每轮已消费的标签不在此重置（每轮最多消费一个）。
- * 返回待放行的扣留文本（无 → null），调用方以 chunk 形式落位在 tool/call 之前。
+ * 段边界 re-arm（tool/call、轮内注入）：释放未闭合 pending（该段尾部文本放行），
+ * 重置段首与消费位——每段独立，后续段可再匹配（每段最多一个）。
+ * 返回待放行的扣留文本（无 → null），调用方以 chunk 形式落位在边界事件之前。
  */
 export function rearmScanner(sessionId: string): string | null {
   const state = scannerStates.get(sessionId);
@@ -223,6 +223,7 @@ export function rearmScanner(sessionId: string): string | null {
   const held = state.pending;
   state.pending = null;
   state.segmentStarted = false;
+  state.segmentConsumed = false;
   return held;
 }
 
