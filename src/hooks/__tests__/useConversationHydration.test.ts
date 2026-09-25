@@ -8,6 +8,7 @@
 //   F7 恢复失败降级（list reject → restoring=false 空列表不抛）
 //      + 首次使用（空列表）→ 欢迎界面照旧
 //   F9 restoring 状态切换（恢复期间 true、完成/失败后 false）
+//   F10 启动演出进度（restoreInfo：read 逐份推进 → ready）
 //   导航决策：pickActiveIdAfterRestore 单测（updatedAt 最新 = activeId）
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -72,6 +73,9 @@ const blockedUserContent =
 const blockedTurnLine = JSON.stringify([
   { type: "user/message", sessionId: "s1", content: blockedUserContent },
 ]);
+
+/** 等一轮宏任务（让 list/get 的 await 链推进到下一稳定态） */
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 // ═══════════════════════════════════════════════════════
 // 导航决策单点
@@ -167,6 +171,12 @@ describe("F6 恢复 hydrate", () => {
 
     // 恢复完成 restoring 复位
     expect(useUIStore.getState().restoring).toBe(false);
+    // 启动演出数据源：工序进度收敛 ready（两份记录读完）
+    expect(useUIStore.getState().restoreInfo).toEqual({
+      phase: "ready",
+      readDone: 2,
+      readTotal: 2,
+    });
   });
 
   it("list 空（首次使用）→ 空历史 + restoring 复位（欢迎界面照旧）", async () => {
@@ -181,6 +191,12 @@ describe("F6 恢复 hydrate", () => {
     expect(conversations).toHaveLength(0);
     expect(activeId).toBeNull();
     expect(useUIStore.getState().restoring).toBe(false);
+    // 首次使用：无记录可读（readTotal 保持 0）
+    expect(useUIStore.getState().restoreInfo).toEqual({
+      phase: "ready",
+      readDone: 0,
+      readTotal: 0,
+    });
   });
 });
 
@@ -247,5 +263,53 @@ describe("F9 restoring 状态切换", () => {
     release();
     await p;
     expect(useUIStore.getState().restoring).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// F10：启动演出进度（restoreInfo 的工序推进）
+// ═══════════════════════════════════════════════════════
+
+describe("F10 启动演出进度", () => {
+  it("read 阶段逐份推进 readDone；结束后收敛 ready", async () => {
+    const metaA = meta({ id: "a", updatedAt: 2 });
+    const metaB = meta({ id: "b", updatedAt: 1 });
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const gateA = new Promise<void>((r) => (releaseA = r));
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    __invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaA, metaB]);
+      if (cmd === "get_conversation") {
+        const id = (args as { conversationId: string }).conversationId;
+        const gate = id === "a" ? gateA : gateB;
+        return gate.then(() => ({
+          meta: id === "a" ? metaA : metaB,
+          turns: [],
+        }));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const p = restoreConversations();
+    await tick();
+    // 进入 read 阶段：0/2
+    expect(useUIStore.getState().restoreInfo).toEqual({
+      phase: "read",
+      readDone: 0,
+      readTotal: 2,
+    });
+
+    releaseA();
+    await tick();
+    expect(useUIStore.getState().restoreInfo.readDone).toBe(1);
+
+    releaseB();
+    await p;
+    expect(useUIStore.getState().restoreInfo).toEqual({
+      phase: "ready",
+      readDone: 2,
+      readTotal: 2,
+    });
   });
 });

@@ -7,7 +7,7 @@
 // 架构升级 · 模块 1：对话数据为投影缓存（turns: SessionEvent[][]），
 // 消息气泡/事件卡片由 MessageList 内部投影派生。
 
-import { useCallback, useMemo, type MouseEvent } from "react";
+import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useProcessingStore } from "../../stores/useProcessingStore";
@@ -18,6 +18,7 @@ import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
 import { Toolbar } from "./Toolbar";
 import { MessageList } from "./MessageList";
+import { BootSequence } from "./BootSequence";
 import { FindBar } from "./FindBar";
 import { InputArea } from "./InputArea";
 import { ContextIndicator } from "./ContextIndicator";
@@ -64,6 +65,9 @@ export function ChatView({ onDragHandle }: Props) {
   const uiState = useUIState();
   // 启动会话恢复中（Phase 4）：期间抑制欢迎界面判定 + 禁发（防竞态）
   const restoring = useUIStore((s) => s.restoring);
+  // 启动演出覆盖层（2026-09 定稿）：播完（含淡出）才撤下、露出对话
+  const [bootVisible, setBootVisible] = useState(true);
+  const handleBootDone = useCallback(() => setBootVisible(false), []);
 
   // ── 当前对话处理中轮次的 sessionId（processing 字典 key = 后端
   // abort_turn / steer_message 的活动 turn 目标）──
@@ -77,8 +81,9 @@ export function ChatView({ onDragHandle }: Props) {
   });
   const generating = processingSessionId !== null;
 
-  // 硬禁（非生成态）：错误 / 会话恢复中 / 压缩中——不发送也不插话不中止
-  const hardDisabled = restoring || compacting || uiState === "error";
+  // 硬禁（非生成态）：错误 / 会话恢复中 / 启动演出未撤 / 压缩中——不发送也不插话不中止
+  const hardDisabled =
+    restoring || bootVisible || compacting || uiState === "error";
 
   // ── 插话：pending 待注入气泡（仅当前进行中轮；空列表复用常量引用）──
   const pending = useSteerStore((s) =>
@@ -148,24 +153,22 @@ export function ChatView({ onDragHandle }: Props) {
   return (
     <div className={styles.container}>
       <Toolbar onDragHandle={onDragHandle} />
-      {restoring && turns.length === 0 ? (
-        /* 恢复中且尚无内容：给一个明确的等待态。
-           启动要读全量会话（长对话单文件可达十余 MB），这段工作占满主线程，
-           期间没有任何内容可画——用占位把“空”变成“在等”。 */
-        <div className={styles.restoring} data-restoring>
-          正在恢复上次对话…
-        </div>
-      ) : (
-        <MessageList
-          turns={turns}
-          currentEvents={currentEvents}
-          isFirstUse={isFirstUse}
-          compaction={activeCompaction}
-          pending={pending}
-          onCancelPending={handleCancelSteer}
-          conversationId={activeId}
-        />
-      )}
+      <div className={styles.messageArea}>
+        {/* 恢复中且尚无内容：对话区留白（启动演出覆盖其上）；恢复后内容先挂载、
+            在遮盖期间完成首帧与沉底，演出淡出时直接露出 */}
+        {restoring && turns.length === 0 ? null : (
+          <MessageList
+            turns={turns}
+            currentEvents={currentEvents}
+            isFirstUse={isFirstUse}
+            compaction={activeCompaction}
+            pending={pending}
+            onCancelPending={handleCancelSteer}
+            conversationId={activeId}
+          />
+        )}
+        {bootVisible && <BootSequence onDone={handleBootDone} />}
+      </div>
       {!isFirstUse && <FindBar />}
       <div className={styles.inputRow}>
         <ContextIndicator />

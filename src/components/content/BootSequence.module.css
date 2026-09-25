@@ -1,0 +1,119 @@
+/* src/components/content/BootSequence.module.css */
+
+/*
+ * 启动演出覆盖层：定位在 ChatView 的 .messageArea 内，铺满消息区。
+ * 底色取 frontFace 同款（--depth-2）——淡出时直接露出底下已就绪的对话内容。
+ */
+
+.root {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: var(--depth-2);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--text-2);
+  overflow: hidden;
+  user-select: none;
+  opacity: 1;
+  /* 时长与组件内 FADE_MS 同步（改一处要改两处） */
+  transition: opacity 260ms ease;
+}
+
+.closing {
+  opacity: 0;
+}
+
+/* ── 铭牌与接入清单（CSS 入场，错峰落定）── */
+
+.banner {
+  color: var(--text-2);
+  letter-spacing: 0.05em;
+  animation: bootFadeUp 240ms ease both;
+}
+
+.modules {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.module {
+  padding-left: 22px;
+  color: var(--text-3);
+  animation: bootFadeUp 240ms ease both;
+}
+.module:nth-child(1) {
+  animation-delay: 140ms;
+}
+.module:nth-child(2) {
+  animation-delay: 260ms;
+}
+.module:nth-child(3) {
+  animation-delay: 380ms;
+}
+
+/* ── 日志句 ── */
+
+.log {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.line {
+  color: var(--text-2);
+}
+
+.lineDone {
+  opacity: 0.55;
+}
+
+.lineActive {
+  color: var(--text-1);
+}
+
+.prompt {
+  color: var(--text-3);
+  margin-right: 6px;
+}
+
+.count {
+  color: var(--text-3);
+}
+
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  margin-left: 4px;
+  vertical-align: -2px;
+  background: var(--accent);
+  animation: bootBlink 1.06s step-end infinite;
+}
+
+@keyframes bootBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes bootFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

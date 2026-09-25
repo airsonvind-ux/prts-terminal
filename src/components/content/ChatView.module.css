@@ -1,15 +1,13 @@
 /* src/components/content/ChatView.module.css */
 
-/* ── 恢复中占位（启动/长对话读取期间）── */
-.restoring {
+/* ── 中部内容区：消息列表 + 启动演出覆盖层（BootSequence 绝对定位其上）── */
+.messageArea {
+  position: relative;
   flex: 1;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-size: var(--text-md);
-  font-family: var(--font-ui);
-  user-select: none;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /*

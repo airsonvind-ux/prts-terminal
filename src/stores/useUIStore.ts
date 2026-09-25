@@ -55,6 +55,20 @@ export type SettingsTabKey =
   | "app"
   | "about";
 
+/**
+ * 启动恢复的真实工序进度（只喂启动演出 BootSequence；不参与业务判定）。
+ * - index：读会话索引（list_conversations）阶段；
+ * - read：逐份读取作战记录（readDone 随每份完成 +1）；
+ * - ready：全部就绪（finally 置位，随后 restoring 复位）。
+ */
+export interface RestoreInfo {
+  phase: "index" | "read" | "ready";
+  /** 已读完的作战记录份数 */
+  readDone: number;
+  /** 作战记录总份数（0 = 无历史/首次使用） */
+  readTotal: number;
+}
+
 // ── Store ──
 
 interface UIStore {
@@ -65,6 +79,10 @@ interface UIStore {
    * 且输入禁发（InputArea disabled）——防恢复完成前闪欢迎/发消息竞态。
    */
   restoring: boolean;
+  /**
+   * 启动恢复的真实工序进度（只喂启动演出；不参与任何业务判定）。
+   */
+  restoreInfo: RestoreInfo;
   /**
    * hidden 的触发方式。
    * null = 窗口正常可见。
@@ -85,6 +103,8 @@ interface UIStore {
   // ── Actions ──
   /** 设置会话恢复中状态（恢复 hook 调用） */
   setRestoring: (value: boolean) => void;
+  /** 推进启动恢复工序进度（部分字段合并；恢复 hook 调用） */
+  setRestoreInfo: (patch: Partial<RestoreInfo>) => void;
   /** 设置隐藏方式 */
   setHiddenMode: (mode: HiddenMode) => void;
   /** 记录错误信息 */
@@ -103,12 +123,16 @@ export const useUIStore = create<UIStore>((set) => ({
      而恢复要读全量会话（长对话可能耗时秒级）。组件只需消费这一个事实：
      restoring 期间对话区显示占位、输入禁发。 */
   restoring: true,
+  restoreInfo: { phase: "index", readDone: 0, readTotal: 0 },
   hiddenMode: null,
   errorMsg: null,
   overlay: null,
   settingsInitialTab: "app",
 
   setRestoring: (value) => set({ restoring: value }),
+
+  setRestoreInfo: (patch) =>
+    set((s) => ({ restoreInfo: { ...s.restoreInfo, ...patch } })),
 
   setHiddenMode: (mode) => set({ hiddenMode: mode }),
 

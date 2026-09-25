@@ -16,6 +16,9 @@
 //
 // 恢复期间 UI：restoring=true（欢迎界面判定被抑制 + 输入禁发）——防恢复完成
 // 前闪欢迎界面、防恢复竞态发消息。list 空/失败 → 降级为空历史（欢迎界面照旧）。
+//
+// 启动演出数据源：真实工序进度写入 useUIStore.restoreInfo（index → read[n/N]
+// → ready），由 BootSequence 消费；演出只读进度，不反向影响流程。
 // 历史冻结铁律：轮行是后端落盘的归档原文，JSON.parse 逐行重建——含
 // [prts_reminder] 块的 user 消息逐字节保留，零改写。
 
@@ -54,15 +57,28 @@ export function pickActiveIdAfterRestore(
  */
 export async function restoreConversations(): Promise<void> {
   useUIStore.getState().setRestoring(true);
+  useUIStore
+    .getState()
+    .setRestoreInfo({ phase: "index", readDone: 0, readTotal: 0 });
   try {
     const metas = (await invoke<ConversationMeta[]>("list_conversations")) ?? [];
     if (metas.length === 0) return; // 首次使用/无持久数据 → 欢迎界面照旧
 
     // 并行拉全量（悬浮窗规模：几十条 × 每轮几 KB ≈ 几十 ms，不引入懒加载状态机）
+    // ——逐份完成推进 readDone（启动演出的真实计数）
+    useUIStore
+      .getState()
+      .setRestoreInfo({ phase: "read", readDone: 0, readTotal: metas.length });
+    let readDone = 0;
     const records = await Promise.all(
-      metas.map((m) =>
-        invoke<ConversationRecord>("get_conversation", { conversationId: m.id })
-      )
+      metas.map(async (m) => {
+        const rec = await invoke<ConversationRecord>("get_conversation", {
+          conversationId: m.id,
+        });
+        readDone += 1;
+        useUIStore.getState().setRestoreInfo({ readDone });
+        return rec;
+      })
     );
 
     // 组装 Conversation（与现有形态完全一致）。防御：重复 id（罕见损坏场景）
@@ -111,6 +127,8 @@ export async function restoreConversations(): Promise<void> {
     // list/get 失败（后端不可达/损坏）→ 降级为空历史（欢迎界面），不抛给 UI
     console.warn("[hydration] 会话恢复失败（降级为空历史）：", err);
   } finally {
+    // 先置 ready（演出据此收尾），再复位 restoring（业务闸）
+    useUIStore.getState().setRestoreInfo({ phase: "ready" });
     useUIStore.getState().setRestoring(false);
   }
 }
