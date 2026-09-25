@@ -1,4 +1,4 @@
-/* 设置页 · 记忆子页样式（初步） */
+/* 设置页 · 记忆子页样式（2026-09 结构定稿：主列表 + 内容区替换的二级视图） */
 
 .container {
   display: flex;
@@ -74,10 +74,6 @@
   background: var(--depth-4);
 }
 
-.rowActive {
-  background: var(--depth-4);
-}
-
 .rowName {
   font-size: 11px;
   font-weight: 600;
@@ -91,11 +87,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.rowMeta {
-  font-size: 10px;
-  color: var(--text-3);
 }
 
 .actions {
@@ -151,32 +142,77 @@
   color: var(--text-3);
 }
 
-/* ── 当前注入 ── */
+/* ── 二级视图（设置内容区内的替换视图） ── */
 
-.recentList {
+.view {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
 }
 
-.recentItem {
+.viewHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--depth-1);
+}
+
+.backBtn {
   font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.backBtn:hover {
+  color: var(--accent);
+}
+
+.viewTitle {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-1);
-  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.recentDate {
-  color: var(--text-3);
-  margin-right: 4px;
+.viewBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.caption {
+.viewCaption {
   font-size: 11px;
   color: var(--text-3);
   margin: 2px 0;
 }
 
-.preText {
+.subTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+.viewMeta {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.viewBrief {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.viewText {
   font-size: 11px;
   color: var(--text-1);
   line-height: 1.5;
@@ -186,8 +222,106 @@
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
-  max-height: 180px;
-  overflow: auto;
+}
+
+.tagRow {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  background: var(--depth-3);
+}
+
+/* ── 近期列表（视图①内） ── */
+
+.recentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recentItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.45;
+}
+
+.recentDate {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+/* ── 记忆库（视图②：日期分组） ── */
+
+.dateGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dateLabel {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-top: 4px;
+}
+
+.entry {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+}
+
+.entryHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-ui);
+}
+
+.entryHead:hover {
+  background: var(--depth-4);
+}
+
+.entryTitle {
+  font-size: 11px;
+  color: var(--text-1);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entryMark {
+  font-size: 10px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.entryBody {
+  font-size: 11px;
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 6px 8px;
+  border-top: 1px solid var(--depth-1);
 }
 
 .emptyHint {
@@ -201,7 +335,7 @@
   line-height: 1.4;
 }
 
-/* ── 浮层（查看记忆 / 清除确认） ── */
+/* ── 清除确认浮层 ── */
 
 .backdrop {
   position: fixed;
@@ -249,49 +383,4 @@
   gap: 6px;
   padding: 8px 10px;
   border-top: 1px solid var(--depth-1);
-}
-
-.viewerItem {
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  background: var(--depth-3);
-}
-
-.viewerHead {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  width: 100%;
-  text-align: left;
-  padding: 5px 8px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-family: var(--font-ui);
-}
-
-.viewerHead:hover {
-  background: var(--depth-4);
-}
-
-.viewerTitle {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-1);
-}
-
-.viewerMeta {
-  font-size: 10px;
-  color: var(--text-3);
-}
-
-.viewerDetail {
-  font-size: 11px;
-  color: var(--text-1);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  padding: 6px 8px;
-  border-top: 1px solid var(--depth-1);
-  background: var(--depth-4);
 }
