@@ -609,6 +609,8 @@ impl ReminderData {
 // 命令层只做参数透传与锁获取，语义全部收敛在 session_store（纯存储层，
 // 不解析业务）。写盘触发 = 前端轮末归档（turn/end 与错误轮都提交）；
 // 空对话不落盘（createConversation 不触发 IPC）；删除 = 删持久文件。
+// 线程口径：读重命令异步执行（窗口线程不因读档阻塞）；写命令保持同步——
+// 主线程顺序执行承载着标题 CAS / metaSnapshot 等顺序假设，不轻动。
 
 /// 列出全部会话元数据（来源 index.json——列表不扫内容文件；附带孤儿清理）。
 #[tauri::command]
@@ -625,7 +627,9 @@ pub fn list_conversations(
 /// 长对话单行可达数 MB；返回前把「连续且同 kind 的 assistant/chunk」合并为一条
 /// （[`crate::session_store::coalesce_chunks_line`]），payload 与前端解析量下降
 /// 数量级。**落盘原文不动**——历史冻结语义不变。
-#[tauri::command]
+///
+/// 异步执行（线程池）：读档与合并不占窗口线程，启动恢复期间窗口保持可拖。
+#[tauri::command(async)]
 pub fn get_conversation(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     conversation_id: String,
@@ -978,7 +982,9 @@ pub async fn finalize_memory(
 /// 最近更新优先、最多 limit 条（缺省 [`MEMORY_CATCH_UP_LIMIT`]）；前端逐个
 /// invoke finalize_memory。仅扫描 updatedAt 前 [`MEMORY_CATCH_UP_SCAN`] 条，
 /// 控制启动开销。
-#[tauri::command]
+///
+/// 异步执行（线程池）：扫描档案不占窗口线程。
+#[tauri::command(async)]
 pub fn memory_catch_up(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
@@ -1341,7 +1347,9 @@ pub fn memory_experience_list(
 
 /// 清除经历记忆：清经历本体＋长期梗概；水位抬平到各对话当前总轮数
 /// （防旧轮次被补提炼挖回）；不动冻结文件。
-#[tauri::command]
+///
+/// 异步执行（线程池）：抬水位的整读不占窗口线程。
+#[tauri::command(async)]
 pub fn memory_experience_clear(
     turn_registry: State<'_, Arc<TurnRegistry>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
