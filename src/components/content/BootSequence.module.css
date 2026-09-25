@@ -147,4 +147,8 @@
 .welcomeScene {
   align-items: center;
   justify-content: center;
+  /* 水平中心对准消息列表内容盒（.list 内缩：左 12 / 右 16 → 中心较消息区左移 2px；
+     左右 padding 20/24 与之同中心）——幕二字标与欢迎页交接时逐像素重合。
+     改列表内缩时同步改这里（对齐探针实测修正，2026-09）。 */
+  padding-right: 24px;
 }

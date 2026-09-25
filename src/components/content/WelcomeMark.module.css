@@ -12,6 +12,9 @@
   gap: 10px;
   font-family: var(--font-ui);
   user-select: none;
+  /* 行高自持：宿主上下文（如启动幕 .scene 的 1.9 行高）不得渗入——
+     欢迎页与幕二两处呈现必须逐像素一致（对齐探针实测修正，2026-09） */
+  line-height: normal;
 }
 
 .logo {
