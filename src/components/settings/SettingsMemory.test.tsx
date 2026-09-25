@@ -241,13 +241,19 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(findButton("编辑")).toBeTruthy();
   });
 
-  it("「关于博士」阅读视图显示「复位」而非「删除」", async () => {
+  it("「关于博士」阅读视图显示「复位」；确认框可取消", async () => {
     render();
     await flush();
     clickText("关于博士");
     await flush();
     expect(findButton("复位")).toBeTruthy();
     expect(findButton("删除")).toBeUndefined();
+    clickText("复位");
+    await flush();
+    expect(container.textContent).toContain("确认复位");
+    clickText("取消");
+    await flush();
+    expect(invokeCalls("memory_delete")).toHaveLength(0);
   });
 
   it("新建专题 → 空白表单 → 保存走 memory_create 并返回列表", async () => {
@@ -269,12 +275,16 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(findButton("查看当下记忆")).toBeTruthy();
   });
 
-  it("阅读视图删除 → memory_delete 并返回列表", async () => {
+  it("阅读视图删除 → 二次确认 → memory_delete 并返回列表", async () => {
     render();
     await flush();
     clickText("伤害计算");
     await flush();
     clickText("删除");
+    await flush();
+    expect(invokeCalls("memory_delete")).toHaveLength(0);
+    expect(container.textContent).toContain("确认删除");
+    clickText("确认删除");
     await flush();
     expect(invokeCalls("memory_delete")).toHaveLength(1);
     expect(findButton("查看当下记忆")).toBeTruthy();
@@ -331,12 +341,14 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(container.textContent).not.toContain("s1");
   });
 
-  it("清除记忆 → 二次确认 → memory_experience_clear", async () => {
+  it("清除记忆 → 二次确认（面向用户的文案）→ memory_experience_clear", async () => {
     render();
     await flush();
     clickText("清除记忆");
     await flush();
     expect(container.textContent).toContain("确认清除");
+    expect(container.textContent).toContain("成长页（关于博士与专题）不受影响");
+    expect(container.textContent).not.toContain("水位");
     clickText("确认清除");
     await flush();
     expect(invokeCalls("memory_experience_clear")).toHaveLength(1);

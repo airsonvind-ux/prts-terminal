@@ -200,7 +200,7 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
             </div>
 
             <SectionNote>
-              经历记忆由后台自动维护；「整理当下记忆」对当前对话立即提炼一次（忽略轮数阈值）。
+              经历记忆由后台自动维护；「整理当下记忆」对当前对话立即整理一次。
             </SectionNote>
           </SettingsSection>
         </>
@@ -215,8 +215,7 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
             </div>
             <div className={styles.modalBody}>
               <SectionNote>
-                将清除全部经历条目与长期梗概，并把各对话水位抬平到当前轮数（旧轮次不会被补提炼挖回）。
-                冻结的历史不受影响。此操作不可撤销。
+                将清除全部经历记忆：经历条目与长期梗概都会清空；成长页（关于博士与专题）不受影响。此操作不可撤销。
               </SectionNote>
             </div>
             <div className={styles.modalFooter}>

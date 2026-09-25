@@ -111,6 +111,7 @@ export function GrowthView({
     tagsText: "",
   });
   const [saving, setSaving] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // 正文编辑框随内容自增（与阅读态展示框同尺寸；CSS 已去原生缩放柄）
@@ -193,6 +194,7 @@ export function GrowthView({
 
   const del = async () => {
     if (!name) return;
+    setConfirmDel(false);
     try {
       await invoke("memory_delete", { name });
       showToast(
@@ -258,12 +260,41 @@ export function GrowthView({
             </button>
             <button
               className={`${styles.btn} ${styles.btnDanger}`}
-              onClick={() => void del()}
+              onClick={() => setConfirmDel(true)}
               disabled={busy}
             >
               {name === PROFILE_NAME ? "复位" : "删除"}
             </button>
           </div>
+
+          {confirmDel && (
+            <div className={styles.backdrop} onClick={() => setConfirmDel(false)}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.modalHeader}>
+                  <span>{name === PROFILE_NAME ? "复位「关于博士」" : "删除专题"}</span>
+                </div>
+                <div className={styles.modalBody}>
+                  <SectionNote>
+                    {name === PROFILE_NAME
+                      ? "复位将清空该页的全部内容（页面保留）；此操作不可撤销。"
+                      : `将删除「${name}」及其全部内容；此操作不可撤销。`}
+                  </SectionNote>
+                </div>
+                <div className={styles.modalFooter}>
+                  <button className={styles.btn} onClick={() => setConfirmDel(false)}>
+                    取消
+                  </button>
+                  <button
+                    className={`${styles.btn} ${styles.btnDanger}`}
+                    onClick={() => void del()}
+                    disabled={busy}
+                  >
+                    {name === PROFILE_NAME ? "确认复位" : "确认删除"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <div className={styles.form}>
@@ -414,8 +445,7 @@ export function CompiledView({
             data-pre-edit
           />
           <div className={styles.formMeta}>
-            {charCount(preEdit)} 字 / 上限 {LONGTERM_MAX_CHARS} 字（超出会被拒绝）。
-            保存后对新对话生效，正在进行的对话靠提醒看到新版。
+            {charCount(preEdit)} 字 / 上限 {LONGTERM_MAX_CHARS} 字（超出会被拒绝）。保存后对新对话生效。
           </div>
           <div className={styles.actions}>
             <button
@@ -433,7 +463,7 @@ export function CompiledView({
       )}
 
       <SectionNote>
-        这里是与提示词同源的两节注入内容；「近期」只读，长期记忆可编辑。
+        这里展示的是 PRTS 当前记住的内容：「近期」只读；「先前」（长期梗概）可编辑。
       </SectionNote>
     </MemoryViewFrame>
   );
