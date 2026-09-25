@@ -17,6 +17,7 @@ import { deriveTextSegments, isMetaEvent, splitTurnByUserBoundary, stripReminder
 import type { TextSegment } from "../../projection";
 import { EventBadge } from "./EventBadge";
 import { Markdown } from "./Markdown";
+import { WelcomeMark } from "./WelcomeMark";
 import { registerMessageScrollHost } from "./messageScroll";
 import styles from "./MessageList.module.css";
 
@@ -262,8 +263,7 @@ const MessageRow = memo(function MessageRow({
     case "welcome":
       return (
         <div className={styles.welcome}>
-          <div className={styles.welcomeLogo}>PRTS</div>
-          <div className={styles.welcomeTagline}>明日方舟AI辅助终端</div>
+          <WelcomeMark />
         </div>
       );
     case "events":

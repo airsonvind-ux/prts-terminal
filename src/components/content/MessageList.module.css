@@ -96,7 +96,7 @@
   overflow-anchor: none;
 }
 
-/* ── 欢迎界面 ── */
+/* ── 欢迎界面（字标样式收口在 WelcomeMark——单一来源）── */
 
 .welcome {
   flex: 1;
@@ -106,20 +106,6 @@
   justify-content: center;
   gap: 10px;
   user-select: none;
-}
-
-.welcomeLogo {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 6px;
-  font-family: var(--font-ui);
-}
-
-.welcomeTagline {
-  font-size: 13px;
-  color: var(--text-2);
-  font-family: var(--font-ui);
 }
 
 .welcomeHint {

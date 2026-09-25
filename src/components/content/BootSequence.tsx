@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUIStore } from "../../stores/useUIStore";
+import { WelcomeMark } from "./WelcomeMark";
 import styles from "./BootSequence.module.css";
 
 // ── 剧本节奏（调演出长相改这里；与 CSS 的 transition 时长同步）──
@@ -292,25 +293,7 @@ export function BootSequence({ onDone }: Props) {
         </div>
       </div>
       <div className={`${styles.scene} ${styles.welcomeScene}`}>
-        <div
-          className={`${styles.welcomeLogo} ${
-            scene === "welcome" ? "" : styles.pre
-          }`}
-        >
-          PRTS
-        </div>
-        <div
-          className={`${styles.welcomeUnderline} ${
-            scene === "welcome" ? "" : styles.pre
-          }`}
-        />
-        <div
-          className={`${styles.welcomeTagline} ${
-            scene === "welcome" ? "" : styles.pre
-          }`}
-        >
-          明日方舟AI辅助终端
-        </div>
+        <WelcomeMark entering={scene !== "welcome"} />
       </div>
     </div>
   );

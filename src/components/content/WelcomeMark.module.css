@@ -1,0 +1,62 @@
+/* src/components/content/WelcomeMark.module.css */
+
+/*
+ * PRTS 欢迎字标（单一来源）——MessageList 欢迎页与 BootSequence 幕二共用。
+ * 入场过渡：entering 态（pre 值）→ 落定态；时长与 BootSequence 常量同步。
+ */
+
+.mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-ui);
+  user-select: none;
+}
+
+.logo {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 6px;
+  padding-left: 3px; /* 补偿尾字距，保持视觉居中 */
+  transition: opacity 520ms cubic-bezier(0, 0, 0.2, 1),
+    letter-spacing 520ms cubic-bezier(0, 0, 0.2, 1),
+    transform 520ms cubic-bezier(0, 0, 0.2, 1),
+    padding-left 520ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.underline {
+  width: 56px;
+  height: 1px;
+  background: rgba(74, 171, 234, 0.5);
+  transform-origin: center;
+  transition: transform 320ms cubic-bezier(0, 0, 0.2, 1), opacity 240ms ease;
+  transition-delay: 720ms;
+}
+
+.tagline {
+  font-size: 13px;
+  color: var(--text-2);
+  transition: opacity 320ms cubic-bezier(0, 0, 0.2, 1),
+    transform 320ms cubic-bezier(0, 0, 0.2, 1);
+  transition-delay: 600ms;
+}
+
+/* entering ＝ 入场前状态（过渡幕未切换时保持；切换后摘除触发过渡） */
+.entering .logo {
+  opacity: 0;
+  letter-spacing: 18px;
+  padding-left: 9px;
+  transform: translateY(8px);
+}
+
+.entering .underline {
+  transform: scaleX(0);
+  opacity: 0;
+}
+
+.entering .tagline {
+  opacity: 0;
+  transform: translateY(4px);
+}

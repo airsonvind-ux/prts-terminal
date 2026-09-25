@@ -7,6 +7,7 @@
  * 过渡编排（与组件内常量同步，改一处要改两处）：
  *   出场 ease-in  cubic-bezier(.4,0,1,1)  —— 日志退场波、整层淡出
  *   入场 ease-out cubic-bezier(0,0,.2,1)  —— 字标收拢 / 标语 / 细线
+ *     （字标样式与入场时长收口在 WelcomeMark.module.css——两处共用）
  */
 
 .root {
@@ -141,58 +142,9 @@
   }
 }
 
-/* ── 幕二：欢迎页（字标收拢入场）── */
+/* ── 幕二：欢迎页（字标样式收口在 WelcomeMark——单一来源）── */
 
 .welcomeScene {
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  font-family: var(--font-ui);
-}
-
-.welcomeLogo {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 6px;
-  padding-left: 3px; /* 补偿尾字距，保持视觉居中 */
-  transition: opacity 520ms cubic-bezier(0, 0, 0.2, 1),
-    letter-spacing 520ms cubic-bezier(0, 0, 0.2, 1),
-    transform 520ms cubic-bezier(0, 0, 0.2, 1),
-    padding-left 520ms cubic-bezier(0, 0, 0.2, 1);
-}
-
-.welcomeUnderline {
-  width: 56px;
-  height: 1px;
-  background: rgba(74, 171, 234, 0.5);
-  transform-origin: center;
-  transition: transform 320ms cubic-bezier(0, 0, 0.2, 1), opacity 240ms ease;
-  transition-delay: 720ms;
-}
-
-.welcomeTagline {
-  font-size: 13px;
-  color: var(--text-2);
-  transition: opacity 320ms cubic-bezier(0, 0, 0.2, 1),
-    transform 320ms cubic-bezier(0, 0, 0.2, 1);
-  transition-delay: 600ms;
-}
-
-/* pre ＝ 入场前状态（欢迎幕未切换时保持；切换后摘除触发过渡） */
-.welcomeLogo.pre {
-  opacity: 0;
-  letter-spacing: 18px;
-  padding-left: 9px;
-  transform: translateY(8px);
-}
-
-.welcomeUnderline.pre {
-  transform: scaleX(0);
-  opacity: 0;
-}
-
-.welcomeTagline.pre {
-  opacity: 0;
-  transform: translateY(4px);
 }
