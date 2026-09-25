@@ -244,7 +244,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
         onKeyDown={handleKeyDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
-        placeholder="输入关卡或敌人名..."
+        placeholder="说点什么…"
         rows={1}
       />
       <div className={styles.btnWrapper}>
