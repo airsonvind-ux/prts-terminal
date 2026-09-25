@@ -4,8 +4,9 @@
  * 启动演出覆盖层：定位在 ChatView 的 .messageArea 内，铺满消息区。
  * 底色取 frontFace 同款（--depth-2）——淡出时直接露出底下已就绪的对话内容。
  *
- * 两幕（场景）叠放交叉渐变：.scene 内切换，幕间过渡时长与组件内
- * SCENE_FADE_MS / FADE_MS 同步（改一处要改两处）。
+ * 过渡编排（与组件内常量同步，改一处要改两处）：
+ *   出场 ease-in  cubic-bezier(.4,0,1,1)  —— 日志退场波、整层淡出
+ *   入场 ease-out cubic-bezier(0,0,.2,1)  —— 字标收拢 / 标语 / 细线
  */
 
 .root {
@@ -17,7 +18,8 @@
   color: var(--text-2);
   user-select: none;
   opacity: 1;
-  transition: opacity 280ms ease;
+  /* 时长与组件内 EXIT_MS 同步 */
+  transition: opacity 400ms cubic-bezier(0.4, 0, 1, 1);
 }
 
 .closing {
@@ -35,19 +37,16 @@
   font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
   font-size: 12px;
   line-height: 1.9;
-  transition: opacity 280ms ease;
-}
-
-.sceneHidden {
-  opacity: 0;
 }
 
 /* ── 幕一：自检日志 ── */
 
+/* 入场动画用 backwards（不保留终态）——结束后交还给常规样式，
+   否则 fill 会压住后续退场波的 transition */
 .banner {
   color: var(--text-2);
   letter-spacing: 0.05em;
-  animation: bootFadeUp 240ms ease both;
+  animation: bootFadeUp 240ms ease backwards;
 }
 
 .modules {
@@ -59,7 +58,7 @@
 .module {
   padding-left: 22px;
   color: var(--text-3);
-  animation: bootFadeUp 240ms ease both;
+  animation: bootFadeUp 240ms ease backwards;
 }
 .module:nth-child(1) {
   animation-delay: 140ms;
@@ -109,6 +108,18 @@
   animation: bootBlink 1.06s step-end infinite;
 }
 
+/* 退场波：时长与组件内 WAVE_DUR_MS 同步；
+   延迟由组件按序号写入 inline style（transitionDelay） */
+.wave {
+  transition: opacity 330ms cubic-bezier(0.4, 0, 1, 1),
+    transform 330ms cubic-bezier(0.4, 0, 1, 1);
+}
+
+.wave.gone {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
 @keyframes bootBlink {
   0%,
   100% {
@@ -130,7 +141,7 @@
   }
 }
 
-/* ── 幕二：欢迎页（PRTS 字标 · 与 MessageList 欢迎页同款样式）── */
+/* ── 幕二：欢迎页（字标收拢入场）── */
 
 .welcomeScene {
   align-items: center;
@@ -144,9 +155,44 @@
   font-weight: 700;
   color: var(--accent);
   letter-spacing: 6px;
+  padding-left: 3px; /* 补偿尾字距，保持视觉居中 */
+  transition: opacity 520ms cubic-bezier(0, 0, 0.2, 1),
+    letter-spacing 520ms cubic-bezier(0, 0, 0.2, 1),
+    transform 520ms cubic-bezier(0, 0, 0.2, 1),
+    padding-left 520ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.welcomeUnderline {
+  width: 56px;
+  height: 1px;
+  background: rgba(74, 171, 234, 0.5);
+  transform-origin: center;
+  transition: transform 320ms cubic-bezier(0, 0, 0.2, 1), opacity 240ms ease;
+  transition-delay: 720ms;
 }
 
 .welcomeTagline {
   font-size: 13px;
   color: var(--text-2);
+  transition: opacity 320ms cubic-bezier(0, 0, 0.2, 1),
+    transform 320ms cubic-bezier(0, 0, 0.2, 1);
+  transition-delay: 600ms;
+}
+
+/* pre ＝ 入场前状态（欢迎幕未切换时保持；切换后摘除触发过渡） */
+.welcomeLogo.pre {
+  opacity: 0;
+  letter-spacing: 18px;
+  padding-left: 9px;
+  transform: translateY(8px);
+}
+
+.welcomeUnderline.pre {
+  transform: scaleX(0);
+  opacity: 0;
+}
+
+.welcomeTagline.pre {
+  opacity: 0;
+  transform: translateY(4px);
 }

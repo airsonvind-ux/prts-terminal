@@ -3,7 +3,7 @@
 //
 // 覆盖：
 //   - 回归用户：铭牌/清单/三句依次落定，[n/N] 展示真实计数；
-//     收尾句停留 → 交叉渐变到欢迎页 → 淡出后 onDone
+//     收尾句停留 → 日志退场波 → 字标收拢入场（欢迎页）→ 淡出后 onDone
 //   - 首次使用（readTotal = 0）：跳过「调取」与欢迎页幕，收尾换就绪句
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -46,15 +46,15 @@ function sceneNow(): string | null {
   );
 }
 
-/** 推进到全部落定（剧本总时长 < 5s，6s 富余） */
+/** 推进到全部落定（剧本总时长 < 6s，8s 富余） */
 async function playThrough() {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(6000);
+    await vi.advanceTimersByTimeAsync(8000);
   });
 }
 
 describe("BootSequence 启动演出", () => {
-  it("回归用户：三句打字、[2/2] 计数、收尾停留、欢迎页、淡出后 onDone", async () => {
+  it("回归用户：三句打字、[2/2] 计数、收尾停留、退场波 → 欢迎页、淡出后 onDone", async () => {
     useUIStore.setState({
       restoreInfo: { phase: "ready", readDone: 2, readTotal: 2 },
     });
