@@ -186,6 +186,13 @@ pub async fn agent_process(
         snaps.get_or_assemble(memory_key, &mem)
     };
 
+    // ── 插话保留领取（2026-09-25）：同对话上一轮中止/错误留下的未交付
+    // 插话并入本轮队列，dispatch 首个 step 请求前领取注入（轮次边界领取，
+    // 对齐 DSH「turn 边界领取 next-step」）。无 conversation 归属跳过。
+    if !conversation_id.is_empty() {
+        steer_queue.adopt(&conversation_id, &session_id);
+    }
+
     // ── 调用调度中枢（abort 透传：取消点消费；memory_block 注入 system 尾部）──
     let result = orchestrator::process_with_memory(
         &session_id,
@@ -205,10 +212,16 @@ pub async fn agent_process(
     )
     .await;
 
-    // ── 兜底清理插话队列（设计定稿）：正常轮队列在 turn/end 前已消费空；
-    // error 终止轮（dispatch Err → process 补 error 事件）队列可能残留
-    // 待注入条目——session_id 每轮唯一不复用，残留永不被消费，此处幂等清空。
-    steer_queue.clear(&session_id);
+    // ── 插话队列收尾（保留语义，2026-09-25 修订）：不再无条件清空——
+    // 未交付条目在有 conversation 归属时进入保留态：同对话下一轮
+    // agent_process 开头 adopt 领取，于首步请求前注入交付（中止/错误也
+    // 不丢字，对齐 DSH keepInbox）。无 conversation 归属（旧前端）保持
+    // 原兜底清空；正常轮队列在 turn/end 前已消费至空，此处零行为。
+    if steer_queue.len(&session_id) > 0 && !conversation_id.is_empty() {
+        steer_queue.preserve(&session_id, &conversation_id);
+    } else {
+        steer_queue.clear(&session_id);
+    }
     // busy 位由 `_turn_guard` Drop 统一注销（含上方所有错误出口）
 
     // ── 错误处理：调度中枢报错 → 推送错误事件到前端（新词汇）──
@@ -1816,14 +1829,12 @@ pub async fn list_models(
 /// 置位后 busy 仍保持（快照未删），直到 process 返回、命令层 unregister。
 #[tauri::command]
 pub fn abort_turn(
-    steer_queue: State<'_, Arc<SteerQueue>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
     session_id: String,
 ) -> Result<bool, String> {
-    // 中止语义（插话补充，设计定稿）：中止 = 停当前段 + 清空该 session
-    // 插话队列——待注入条目随中止作废（前端 pending 由 abort 反馈侧清除，
-    // 不残留僵尸注入）。
-    steer_queue.clear(&session_id);
+    // 中止语义（2026-09-25 修订）：中止 = 立断当前段；插话队列不再清空——
+    // 未交付条目由 agent_process 收尾置保留态，同对话下一轮领取交付
+    // （中止不丢字；前端 pending 气泡留存、可点击取消）。
     Ok(turn_registry.abort(&session_id))
 }
 
@@ -1833,11 +1844,15 @@ pub fn abort_turn(
 
 /// 生成中提交插话：入队待注入（不打断当前段）。
 ///
-/// - 仅该 session 有活动 turn 时可入队；空闲返回明确拒绝（前端走普通发送）；
+/// - 仅该 session 有活动 turn 时可入队；空闲返回明确拒绝（前端据拒绝文案
+///   走「关窗降级」= 退化为普通发送，见 ChatView.handleSteer 同步口径）；
 /// - 返回条目定位 id（cancel_steer / 前端 pending 气泡取消用）；
-/// - 队列消费：dispatch_turn 的 Completed 出口（assistant 段完成、无工具调用）
-///   每次 take 队首注入为轮内下一条 user 消息，自动继续生成（同轮 streaming
-///   不断，turn/end 只在队列空时发一次）。
+/// - 队列消费（2026-09-25 修订）：dispatch 循环每个 step 的请求发出前领取
+///   队首注入为轮内下一条 user 消息（步边界领取——工具步之间不再等回答段
+///   收尾）；assistant 段收尾出口复查队列，有留存则续跑、空才发 turn/end。
+///   同轮 streaming 不断，turn/end 只在队列空时发一次；
+/// - 拒绝文案「当前没有处理中的对话，请等待处理结束后直接发送」是前端
+///   关窗降级的判定标记，改动需同步（ChatView.handleSteer）。
 #[tauri::command]
 pub fn steer_message(
     steer_queue: State<'_, Arc<SteerQueue>>,

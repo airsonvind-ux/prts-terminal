@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // src/__tests__/agentEvents.steer.test.tsx
-// 插话注入事件流（useAgentEvents → store 链路）：
-// - user/message 事件（dispatch Completed 出口注入的轮内下一条 user）进入
+// 插话注入事件流（useAgentEvents → store 链路，2026-09-25 语义修订）：
+// - user/message 事件（dispatch 步边界领取注入的轮内下一条 user）进入
 //   processing 快照投影（currentEvents 多段数据源）+ pending 队首转正移除
-// - turn/end 轮收尾防御清理 pending（后端队列空才发；此处验证兜底）
-// - 中止（turn/end aborted）时 pending 已由中止侧清空（清空幂等）
+//   （按 sessionId → conversationId 反查对话键）
+// - turn/end 轮收尾不再清 pending（保留语义：中止/错误未交付条目跨轮
+//   留存，由后续匹配事件或用户取消收敛）
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
@@ -47,7 +48,7 @@ function resetAll(): void {
     restoring: false,
   });
   useToastStore.setState({ toasts: [] });
-  useSteerStore.setState({ pendingBySession: {} });
+  useSteerStore.setState({ pendingByConversation: {} });
   __invokeMock.mockClear();
 }
 
@@ -81,15 +82,20 @@ describe("useAgentEvents · 插话注入事件流", () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("原始问题");
     const sid = Object.keys(useProcessingStore.getState().processing)[0];
+    const convId = useProcessingStore.getState().processing[sid].conversationId;
 
     // 模拟前端插话提交成功登记的两条 pending
-    useSteerStore.getState().addPending(sid, { id: "0", text: "插话一" });
-    useSteerStore.getState().addPending(sid, { id: "1", text: "插话二" });
+    useSteerStore
+      .getState()
+      .addPending(convId, { id: "0", text: "插话一", sessionId: sid });
+    useSteerStore
+      .getState()
+      .addPending(convId, { id: "1", text: "插话二", sessionId: sid });
 
     // 后端注入第一条（轮内 user/message 事件）
     pushEvent({ type: "user/message", sessionId: sid, content: "插话一" });
     await flush();
-    let snap = useProcessingStore.getState().processing[sid];
+    const snap = useProcessingStore.getState().processing[sid];
     // 注入事件已进投影（第 2 条 user 段数据源）
     expect(snap.currentEvents.filter((e) => e.type === "user/message").length).toBe(2);
     expect(snap.currentEvents[snap.currentEvents.length - 1]).toMatchObject({
@@ -97,52 +103,63 @@ describe("useAgentEvents · 插话注入事件流", () => {
       content: "插话一",
     });
     // 队首 pending 转正移除（第二条仍在）
-    expect(useSteerStore.getState().pendingBySession[sid]).toEqual([
-      { id: "1", text: "插话二" },
+    expect(useSteerStore.getState().pendingByConversation[convId]).toEqual([
+      { id: "1", text: "插话二", sessionId: sid },
     ]);
 
     // 注入第二条
     pushEvent({ type: "user/message", sessionId: sid, content: "插话二" });
     await flush();
-    expect(useSteerStore.getState().pendingBySession[sid]).toBeUndefined();
+    expect(
+      useSteerStore.getState().pendingByConversation[convId]
+    ).toBeUndefined();
     // 轮收尾前注入未触发 turn/end → 快照仍在（同轮 streaming 连续）
     expect(useProcessingStore.getState().processing[sid]).toBeDefined();
 
-    // turn/end：轮结束（快照清空 + pending 防御清理幂等）
+    // turn/end：轮结束（快照清空；pending 已全部转正 → 保持空，无兜底清理）
     pushEvent({ type: "turn/end", sessionId: sid, reason: "completed" });
     await flush();
     expect(useProcessingStore.getState().processing).toEqual({});
-    expect(useSteerStore.getState().pendingBySession).toEqual({});
-    snap = undefined as unknown as typeof snap;
+    expect(useSteerStore.getState().pendingByConversation).toEqual({});
   });
 
-  it("中止轮：pending 已被中止侧清空；turn/end(aborted) 兜底清理幂等", async () => {
+  it("中止轮：pending 保留（后端保留、下一轮领取——保留语义）", async () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("生成中中止");
     const sid = Object.keys(useProcessingStore.getState().processing)[0];
-    // 中止侧（ChatView handleStop）已乐观清 pending —— 此处残留防御场景：
-    // 若仍有残留，turn/end 到达时兜底清除
-    useSteerStore.getState().addPending(sid, { id: "0", text: "残留插话" });
+    const convId = useProcessingStore.getState().processing[sid].conversationId;
+    useSteerStore
+      .getState()
+      .addPending(convId, { id: "0", text: "未交付插话", sessionId: sid });
     pushEvent({ type: "turn/end", sessionId: sid, reason: "aborted" });
     await flush();
     expect(useProcessingStore.getState().processing).toEqual({});
-    expect(useSteerStore.getState().pendingBySession).toEqual({});
+    // 轮收尾不再清 pending：未交付条目留存（气泡跨轮可见，可点击取消）
+    expect(useSteerStore.getState().pendingByConversation[convId]).toEqual([
+      { id: "0", text: "未交付插话", sessionId: sid },
+    ]);
   });
 
-  it("注入内容与队首不匹配（协议错位）→ pending 保留至轮收尾清除（防御）", async () => {
+  it("注入内容与队首不匹配（协议错位）→ pending 保留（轮收尾不再兜底清空）", async () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("原始问题");
     const sid = Object.keys(useProcessingStore.getState().processing)[0];
-    useSteerStore.getState().addPending(sid, { id: "0", text: "插话一" });
+    const convId = useProcessingStore.getState().processing[sid].conversationId;
+    useSteerStore
+      .getState()
+      .addPending(convId, { id: "0", text: "插话一", sessionId: sid });
     pushEvent({ type: "user/message", sessionId: sid, content: "异常内容" });
     await flush();
-    // 不匹配：pending 未动（不破坏 FIFO 视觉），事件仍进投影（异常内容按普通
-    // user 段展示——不会重复气泡，因 pending 仍在且与事件内容不同）
-    expect(useSteerStore.getState().pendingBySession[sid]).toEqual([
-      { id: "0", text: "插话一" },
+    // 不匹配：pending 未动（不破坏 FIFO 视觉），事件仍进投影（异常内容按
+    // 普通 user 段展示——不会重复气泡，因 pending 仍在且与事件内容不同）
+    expect(useSteerStore.getState().pendingByConversation[convId]).toEqual([
+      { id: "0", text: "插话一", sessionId: sid },
     ]);
     pushEvent({ type: "turn/end", sessionId: sid, reason: "completed" });
     await flush();
-    expect(useSteerStore.getState().pendingBySession).toEqual({});
+    // 保留语义：轮收尾不兜底清空——由后续匹配事件/用户取消收敛
+    expect(useSteerStore.getState().pendingByConversation[convId]).toEqual([
+      { id: "0", text: "插话一", sessionId: sid },
+    ]);
   });
 });

@@ -1,14 +1,16 @@
 //! SteerQueue —— 插话（steer）待注入队列
 //!
-//! 按 sessionId 分区的 FIFO 队列，承载「生成中提交插话 → assistant 段
-//! 完成后注入为轮内下一条 user 消息」的待办（设计定稿 2026-09）：
+//! 按 sessionId 分区的 FIFO 队列，承载「生成中提交插话 → 步边界注入为
+//! 轮内下一条 user 消息」的待办（2026-09 定稿；2026-09-25 步边界领取修订）：
 //!
 //! - 键 = session_id（与 TurnRegistry / 前端 processing 快照同键）；
-//! - FIFO 逐条消费：dispatch_turn 的 Completed 出口每次 `take_next` 只取
-//!   一条（一条完整走完回答段再注入下一条）；
+//! - FIFO 逐条消费：dispatch_turn 每个 step 的请求前 `take_next` 一条
+//!   （步边界领取——工具步之间也不再等回答段收尾；一条走完其回答段
+//!   再注入下一条）；
 //! - 条目携带会话内单调递增序号 id（cancel_steer 定位用）；
-//! - 中止语义：abort_turn 路径 `clear(session_id)` 清空待注入条目
-//!   （中止 = 停当前段 + 清插话队列）。
+//! - 中止/错误语义（2026-09-25 修订）：不再随中止清队列——命令层收尾把
+//!   未交付条目置保留态（`preserve`，归属 conversationId），同对话下一轮
+//!   `adopt` 领取合并（中止不丢字，对齐 DSH keepInbox）。
 //!
 //! 队列空时零行为变化：dispatch 只在 `take_next` 命中时注入，否则走
 //! 既有 turn/end 收尾，不感知队列存在。
@@ -31,6 +33,9 @@ struct SteerPartition {
     entries: VecDeque<SteerEntry>,
     /// 会话内序号计数器（注入即离队不回收，无跨会话复用）
     next_seq: u64,
+    /// 保留标记（2026-09-25）：非空 = 该分区在中止/错误轮收尾后留存，
+    /// 值 = 归属 conversationId；同对话下一轮 adopt 时领取合并。
+    preserved_for: Option<String>,
 }
 
 /// 按 sessionId 分区的插话 FIFO 队列。
@@ -85,6 +90,57 @@ impl SteerQueue {
         Some(entry)
     }
 
+    /// 置保留态（命令层收尾调用，2026-09-25）：该分区在中止/错误轮结束后
+    /// 留存，值 = 归属 conversationId。保留期条目仍以原 session_id 寻址
+    /// （cancel_steer 可继续取消）；同对话下一轮 `adopt` 领取合并。
+    ///
+    /// 返回是否实际标记（无此分区/已空 → false，幂等）。
+    pub fn preserve(&self, session_id: &str, conversation_id: &str) -> bool {
+        let mut parts = self.partitions.lock().unwrap();
+        match parts.get_mut(session_id) {
+            Some(part) if !part.entries.is_empty() => {
+                part.preserved_for = Some(conversation_id.to_string());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 领取某 conversation 的全部保留分区，合并进新轮 session 分区。
+    ///
+    /// FIFO：保留条目（先入队）排在新轮既有条目之前；源分区随后清出。
+    /// 同一会话同时存在多个保留分区在实战中不可达（任一后续轮次先
+    /// adopt 再可能 preserve），此处置于防御——此时合并顺序未定义。
+    ///
+    /// 返回合并的条目数（无保留分区 → 0，幂等）。
+    pub fn adopt(&self, conversation_id: &str, into_session_id: &str) -> usize {
+        let mut parts = self.partitions.lock().unwrap();
+        let sources: Vec<String> = parts
+            .iter()
+            .filter(|(_, p)| p.preserved_for.as_deref() == Some(conversation_id))
+            .map(|(sid, _)| sid.clone())
+            .collect();
+        if sources.is_empty() {
+            return 0;
+        }
+        let mut retained: VecDeque<SteerEntry> = VecDeque::new();
+        for sid in &sources {
+            if let Some(part) = parts.remove(sid) {
+                retained.extend(part.entries);
+            }
+        }
+        let count = retained.len();
+        if count == 0 {
+            return 0;
+        }
+        let target = parts.entry(into_session_id.to_string()).or_default();
+        // 保留条目（旧）在前：倒序 push_front；目标既有条目自然落其后
+        while let Some(entry) = retained.pop_back() {
+            target.entries.push_front(entry);
+        }
+        count
+    }
+
     /// 按条目 id 移除待注入条目（cancel_steer）。
     ///
     /// 返回是否实际移除（不存在/已注入 → false，幂等）。
@@ -102,7 +158,8 @@ impl SteerQueue {
         removed
     }
 
-    /// 清空某 session 全部待注入条目（abort_turn 路径：中止 = 停段 + 清队列）。
+    /// 清空某 session 全部待注入条目（命令层兜底：无 conversation 归属的
+    /// 残留清理；2026-09-25 修订后不再用于中止路径——中止走 preserve）。
     ///
     /// 返回是否存在该 session 的分区（false = 原本无待注入，幂等）。
     pub fn clear(&self, session_id: &str) -> bool {
@@ -230,5 +287,53 @@ mod tests {
         assert_eq!(q.take_next("s1").unwrap().id, b);
         assert_eq!(q.take_next("s1").unwrap().id, c);
         assert_eq!(q.take_next("s1"), None);
+    }
+
+    #[test]
+    fn preserve_marks_partition_and_keeps_entries_addressable() {
+        let q = SteerQueue::new();
+        let a = q.enqueue("s1", "甲").unwrap();
+        assert!(q.preserve("s1", "conv-1"), "有分区有条目 → 标记成功");
+        assert_eq!(q.len("s1"), 1, "保留不移动条目");
+        assert!(q.contains("s1", &a), "保留期仍可按原 session 寻址");
+        assert!(q.cancel("s1", &a), "保留期 cancel 仍可用");
+        assert_eq!(q.len("s1"), 0);
+    }
+
+    #[test]
+    fn preserve_without_partition_or_after_drain_is_false() {
+        let q = SteerQueue::new();
+        assert!(!q.preserve("nope", "conv-1"), "无分区 → false");
+        q.enqueue("s1", "甲");
+        q.take_next("s1");
+        assert!(!q.preserve("s1", "conv-1"), "空分区（已清出）→ false");
+    }
+
+    #[test]
+    fn adopt_merges_retained_entries_before_existing_fifo() {
+        let q = SteerQueue::new();
+        q.enqueue("s1", "旧甲");
+        q.enqueue("s1", "旧乙");
+        assert!(q.preserve("s1", "conv-1"));
+        // 目标分区已有新条目（极限窗口：adopt 前新轮已入队）
+        q.enqueue("s2", "新丙");
+        assert_eq!(q.adopt("conv-1", "s2"), 2, "合并两条保留条目");
+        assert_eq!(q.len("s1"), 0, "保留分区随合并清出");
+        assert_eq!(q.take_next("s2").unwrap().text, "旧甲", "保留条目（旧）在前");
+        assert_eq!(q.take_next("s2").unwrap().text, "旧乙");
+        assert_eq!(q.take_next("s2").unwrap().text, "新丙", "既有条目保序在后");
+    }
+
+    #[test]
+    fn adopt_is_scoped_and_idempotent() {
+        let q = SteerQueue::new();
+        q.enqueue("s1", "甲");
+        assert!(q.preserve("s1", "conv-1"));
+        q.enqueue("s9", "别家");
+        assert_eq!(q.adopt("conv-2", "s2"), 0, "不串对话");
+        assert_eq!(q.adopt("conv-1", "s2"), 1);
+        assert_eq!(q.adopt("conv-1", "s3"), 0, "重复 adopt 幂等");
+        assert_eq!(q.len("s9"), 1, "他会话不受影响");
+        assert_eq!(q.take_next("s2").unwrap().text, "甲");
     }
 }

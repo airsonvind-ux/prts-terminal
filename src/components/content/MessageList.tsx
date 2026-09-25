@@ -226,7 +226,7 @@ function buildArchivedItems(
   return items;
 }
 
-/** 进行中部分（当前轮 + 插话 pending）。随每次流式刷新重算，规模限于当前轮。 */
+/** 进行中部分（当前轮 + 插话 pending；pending 含跨轮未交付项）。随每次流式刷新重算，规模限于当前轮/当前对话。 */
 function buildLiveItems(
   currentEvents: SessionEvent[],
   pending: readonly { id: string; text: string }[] | undefined
@@ -344,7 +344,7 @@ interface Props {
   isFirstUse: boolean;
   /** 压缩记录（模块 D；undefined = 未压缩过）。决定压缩点提示卡位置与摘要 */
   compaction?: CompactionMeta;
-  /** 当前进行中轮的插话 pending（待注入气泡；undefined/空 = 无） */
+  /** 当前对话的插话 pending（待注入气泡；跨轮留存，undefined/空 = 无） */
   pending?: readonly { id: string; text: string }[];
   /** pending 气泡点击取消（cancel_steer 成功移除后消失） */
   onCancelPending?: (entryId: string) => void;

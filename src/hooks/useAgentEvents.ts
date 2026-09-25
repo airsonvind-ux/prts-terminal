@@ -47,20 +47,27 @@ export function useAgentEvents(): void {
 
         // ── 插话注入（轮内下一条 user 消息）──
         // 进入投影缓存渲染为正常 user 段（多段展示改造后各成气泡）；
-        // FIFO 队首 pending 内容双校验转正移除（防重复气泡）。
-        case "user/message":
+        // FIFO 队首 pending 内容校验转正移除（防重复气泡；2026-09-25
+        // 按 sessionId → conversationId 反查对话键）。
+        case "user/message": {
           appendCurrentEvent(e);
-          useSteerStore.getState().resolveInjected(e.sessionId, e.content);
+          const processing = useProcessingStore.getState().processing;
+          const convId =
+            Object.entries(processing).find(
+              ([sid]) => sid === e.sessionId
+            )?.[1].conversationId ?? null;
+          useSteerStore.getState().resolveInjected(convId, e.sessionId, e.content);
           break;
+        }
 
         // ── 轮次结束：归档整轮（快照已被 failProcessing 清理时幂等） ──
         // M3-B：reason 透传——turn/end(aborted) → finishProcessing 归档前
         // 合成轮中止标记（前端私有 turn/aborted 事件）。
-        // 插话：轮收尾时该 session pending 必已全部注入转正（后端 turn/end
-        // 只在队列空时发）；此处 clearForSession 为防御清理（防异常残留）。
+        // 插话（2026-09-25 保留语义）：轮收尾不再清 pending——正常轮条目
+        // 已全部注入转正（后端 turn/end 只在队列空时发）；中止/错误的
+        // 未交付条目由后端保留、下一轮领取，气泡跨轮留存（可点击取消）。
         case "turn/end":
           finishProcessing(e.sessionId, e.reason);
-          useSteerStore.getState().clearForSession(e.sessionId);
           break;
 
         // ── 瞬时信号：更新 agentPhase ──
@@ -114,9 +121,8 @@ export function useAgentEvents(): void {
             appendCurrentEvent(e);
           } else {
             failProcessing(e.sessionId, e.message);
-            // 不可恢复错误终止轮：待注入插话作废（后端 error 轮队列由
-            // 命令层兜底清理），前端同步清 pending。
-            useSteerStore.getState().clearForSession(e.sessionId);
+            // 不可恢复错误终止轮（2026-09-25 保留语义）：未交付插话由
+            // 后端保留、下一轮领取——前端不清 pending（气泡留存）。
           }
           break;
 

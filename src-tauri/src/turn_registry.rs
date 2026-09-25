@@ -221,8 +221,8 @@ impl TurnRegistry {
 
     /// 指定 session 是否有活动 turn。
     ///
-    /// 消费端：steer_message 命令（仅活动 turn 可插话入队——空闲明确拒绝）；
-    /// 另在 cfg(test)（命令层守卫测试）。
+    /// 消费端：steer_message 命令（仅活动 turn 可插话入队——空闲明确拒绝，
+    /// 前端据此走关窗降级）；另在 cfg(test)（命令层守卫测试）。
     pub fn is_active(&self, session_id: &str) -> bool {
         // 后台管线不算「活动」（不可插话 / 不表示对话处理中）
         self.turns

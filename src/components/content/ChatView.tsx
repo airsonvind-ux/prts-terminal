@@ -85,10 +85,13 @@ export function ChatView({ onDragHandle }: Props) {
   const hardDisabled =
     restoring || bootVisible || compacting || uiState === "error";
 
-  // ── 插话：pending 待注入气泡（仅当前进行中轮；空列表复用常量引用）──
+  // ── 插话：pending 待注入气泡（对话级，2026-09-25 修订）──
+  // 不再要求「进行中轮」：中止/错误后未交付条目跨轮存活（后端保留、
+  // 下一轮领取），气泡任何时候都显示当前对话的待交付项（可点击取消；
+  // 空列表复用常量引用）。
   const pending = useSteerStore((s) =>
-    processingSessionId
-      ? s.pendingBySession[processingSessionId] ?? EMPTY_STEER_PENDING
+    activeId
+      ? s.pendingByConversation[activeId] ?? EMPTY_STEER_PENDING
       : EMPTY_STEER_PENDING
   );
 
@@ -100,49 +103,74 @@ export function ChatView({ onDragHandle }: Props) {
   );
 
   // ── 插话提交（生成中）：入队成功（返回条目 id）→ 登记 pending → 清输入；
-  // 失败 toast → 保留输入供修改 ──
+  // 关窗降级（2026-09-25）：轮恰在提交时收束 → 后端拒绝 → 转普通发送
+  // （对齐 DSH 尽力而为语义，不打扰用户）；其余失败 toast → 保留输入 ──
   const handleSteer = useCallback(
     async (text: string): Promise<boolean> => {
-      if (!processingSessionId) return false;
+      // 无活动轮（竞态窗口）：直接降级为普通发送
+      if (!processingSessionId || !activeId) {
+        await sendMessage(text);
+        return true;
+      }
       try {
         const id = await invoke<string>("steer_message", {
           sessionId: processingSessionId,
           text,
         });
-        useSteerStore.getState().addPending(processingSessionId, { id, text });
+        useSteerStore.getState().addPending(activeId, {
+          id,
+          text,
+          sessionId: processingSessionId,
+        });
         return true;
       } catch (err) {
-        showToast(String(err), { kind: "warning", dedupeKey: "steer-failed" });
+        const msg = String(err);
+        // 判定标记与后端 steer_message 的拒绝文案保持同步
+        if (msg.includes("没有处理中的对话")) {
+          // 轮收尾事件在途（processing 残留）→ 不清输入、不发送——
+          // 防 sendMessage 并发保护吞消息；待模式切回「发送」后由用户提交
+          const stillProcessing = Object.values(
+            useProcessingStore.getState().processing
+          ).some((p) => p.conversationId === activeId);
+          if (stillProcessing) return false;
+          await sendMessage(text);
+          return true;
+        }
+        showToast(msg, { kind: "warning", dedupeKey: "steer-failed" });
         return false;
       }
     },
-    [processingSessionId]
+    [processingSessionId, activeId, sendMessage]
   );
 
-  // ── 中止（生成中无字方块）：后端 abort_turn 已清插话队列；前端乐观清
-  // pending（气泡立即消失），轮尾 turn/end(aborted) 走现有归档链路 ──
+  // ── 中止（生成中无字方块）：中止不再清插话队列（2026-09-25 保留语义）
+  // ——未交付 pending 气泡留存（可点击取消），后端保留、下一轮领取交付；
+  // 轮尾 turn/end(aborted) 走现有归档链路 ──
   const handleStop = useCallback(() => {
     if (!processingSessionId) return;
-    useSteerStore.getState().clearForSession(processingSessionId);
     invoke("abort_turn", { sessionId: processingSessionId }).catch(() => {});
   }, [processingSessionId]);
 
-  // ── pending 气泡点击取消：cancel_steer 成功才移除（消失即反馈，不回填）──
+  // ── pending 气泡点击取消：cancel_steer 成功才移除（消失即反馈，不回填）；
+  // 寻址用条目自带的提交轮 sessionId（跨轮保留件为旧轮 id，仍可命中）──
   const handleCancelSteer = useCallback(
     (entryId: string) => {
-      if (!processingSessionId) return;
+      if (!activeId) return;
+      const list = useSteerStore.getState().pendingByConversation[activeId];
+      const entry = list?.find((e) => e.id === entryId);
+      if (!entry) return;
       invoke<boolean>("cancel_steer", {
-        sessionId: processingSessionId,
+        sessionId: entry.sessionId,
         entryId,
       })
         .then((ok) => {
           if (ok) {
-            useSteerStore.getState().removePending(processingSessionId, entryId);
+            useSteerStore.getState().removePending(activeId, entryId);
           }
         })
         .catch(() => {});
     },
-    [processingSessionId]
+    [activeId]
   );
 
   // ── 首次使用 ──

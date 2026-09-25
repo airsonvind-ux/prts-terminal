@@ -235,9 +235,10 @@ pub fn run() {
     // abort_turn 命令置位中止；设置闸（set_settings）消费 active_count()。
     let turn_registry = Arc::new(TurnRegistry::new());
 
-    // ── 插话待注入队列（设计定稿：生成中插话入队 → dispatch Completed 出口注入）──
+    // ── 插话待注入队列（2026-09-25 语义修订：步边界领取 + 保留交付）──
     // 键 = session_id（与 turn_registry 同键）；命令层 steer_message 入队 /
-    // cancel_steer 移除；abort_turn 路径 clear（中止 = 停段 + 清队列）。
+    // cancel_steer 移除；dispatch 每个 step 请求前领取注入；中止不清队列——
+    // 未交付条目由 agent_process 收尾 preserve、同对话下一轮 adopt 领取。
     let steer_queue = Arc::new(SteerQueue::new());
 
     // ── 装配 Tauri Builder ──

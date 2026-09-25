@@ -592,6 +592,27 @@ async fn dispatch_turn_with_memory(
 
     loop {
         step += 1;
+        // ── 插话领取（步边界，2026-09-25 语义修订）──
+        // 每个 step 的请求发出前领取队首：上一 step 结束后（工具结果已回填）
+        // 到达的插话，在本 step 第一时间进入模型视野——工具连跑时不再等到
+        // 回答段收尾（对齐 DSH「步骤之间只领 next-step」）。轮内首个 step
+        // 同样领取：承接上一轮中止/错误保留的未交付插话（轮次边界领取）。
+        // 每次只取一条：一条走完其回答段再注入下一条（FIFO）。
+        // 中止已置位时不领取（未交付条目由命令层保留，同对话下一轮领取）；
+        // 注入口径与既有收尾出口一致：log+IPC 双写，messages 与
+        // derive(log) 一致性不变量保持。
+        if !abort.is_aborted() {
+            if let Some(entry) = steer_queue.take_next(session_id) {
+                messages.push(ChatMessage::user(entry.text.clone()));
+                sink.emit(SessionEvent::user_message(session_id, &entry.text));
+                debug!(
+                    "step" => step,
+                    "action" => "steer_injected",
+                    "chars" => entry.text.chars().count()
+                );
+            }
+        }
+
         // system prompt 静态（2026-08）：人格 + Skill 目录，轮内不变；
         // 仍按 step 重写 messages[0] 保持不变量（首条恒为 system），
         // push_header 去重后不追加（prompt 无变化）
@@ -668,23 +689,15 @@ async fn dispatch_turn_with_memory(
             let elapsed_ms = t0.elapsed().as_millis() as u64;
             sink.log_only(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
 
-            // ── 插话注入口（设计定稿）──
-            // 队列非空 → 注入队首为轮内下一条 user 消息（log+IPC 双写，与
-            // messages/derive(log) 一致性不变量一致），continue 继续 step：
-            // system 重写 / push_header 去重 / step 计数 / TurnState 自然延续；
-            // messages 已含本段最终 assistant 消息——下轮 LLM 看到
-            // 「已完成回答段 + 插话指令」，即插话不打断当前段的语义落点。
+            // ── 插话关轮重读（2026-09-25 语义修订）──
+            // 本段已收尾（assistant 消息归档、step/end 已闭）：重读队列——
+            // 有未交付条目 → continue 续跑（领取在 loop 顶统一进行：下一次
+            // step 请求前注入队首；messages 已含本段最终 assistant 消息，
+            // 下轮 LLM 看到「已完成回答段 + 插话指令」，FIFO 一条一条来）。
             // 队列空 → 走既有 turn/end 收尾（后端零行为变化）。
-            // 与中止无竞态：abort_turn 路径先 clear 队列再置位，取消点先于
-            // 本出口返回（此处可达时队列必已清空或被消费至空）。
-            if let Some(entry) = steer_queue.take_next(session_id) {
-                messages.push(ChatMessage::user(entry.text.clone()));
-                sink.emit(SessionEvent::user_message(session_id, &entry.text));
-                debug!(
-                    "step" => step,
-                    "action" => "steer_injected",
-                    "chars" => entry.text.chars().count()
-                );
+            // 中止已置位且队列非空时：续跑由 loop 顶守卫短路为 Aborted
+            // （条目保留，下一轮领取）——不向中止轮注入。
+            if steer_queue.len(session_id) > 0 {
                 continue;
             }
 
@@ -2675,6 +2688,8 @@ mod tests {
     struct ScriptedClient {
         queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>>,
         snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+        /// 每次请求前回调（入参 = 0 基请求序号；模拟「轮中到达」的旁路注入）。
+        on_call: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     }
 
     impl ScriptedClient {
@@ -2682,7 +2697,24 @@ mod tests {
             queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>>,
             snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
         ) -> Self {
-            Self { queue, snapshots }
+            Self {
+                queue,
+                snapshots,
+                on_call: None,
+            }
+        }
+
+        /// 带请求前回调的构造：供「轮中插话到达」时序测试使用。
+        fn new_with_hook(
+            queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>>,
+            snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>>,
+            on_call: Arc<dyn Fn(usize) + Send + Sync>,
+        ) -> Self {
+            Self {
+                queue,
+                snapshots,
+                on_call: Some(on_call),
+            }
         }
     }
 
@@ -2706,9 +2738,17 @@ mod tests {
         ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
             let snapshots = self.snapshots.clone();
             let queue = self.queue.clone();
+            let on_call = self.on_call.clone();
             Box::pin(async move {
                 // 快照先落账（含重组后的 system prompt），再从脚本队列取结果
-                snapshots.lock().unwrap().push(messages.to_vec());
+                let call_index = {
+                    let mut snaps = snapshots.lock().unwrap();
+                    snaps.push(messages.to_vec());
+                    snaps.len() - 1
+                };
+                if let Some(hook) = &on_call {
+                    hook(call_index);
+                }
                 queue.lock().unwrap().pop_front().expect("脚本队列已空")
             })
         }
@@ -4408,9 +4448,10 @@ mod tests {
         );
     }
 
-    // ── 插话（steer）注入口集成测试（设计定稿）──
+    // ── 插话（steer）步边界领取集成测试（2026-09-25 语义修订）──
 
-    /// 脚本化三连无工具回答，验证 FIFO 注入形成轮内多问答段。
+    /// 脚本化三连无工具回答 + 轮中两条插话（请求钩子按时序入队），
+    /// 验证步边界领取的 FIFO 注入形成轮内多问答段。
     #[tokio::test]
     async fn steer_injection_forms_multi_segment_turn_with_single_turn_end() {
         use crate::llm::{ApiType, LlmError};
@@ -4436,15 +4477,30 @@ mod tests {
         queue.lock().unwrap().push_back(mk("第三段回答", 300));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
+        // 两条插话在轮中到达（模拟生成中提交）：第 1/2 次请求处理期间入队，
+        // 分别在下一个步边界被领取注入（步边界领取时序 = 本测试核心）。
+        let steer_queue = Arc::new(SteerQueue::new());
+        let hook_queue = Arc::clone(&steer_queue);
+        let ids: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let hook_ids = Arc::clone(&ids);
+        let hook = Arc::new(move |idx: usize| {
+            let id = match idx {
+                0 => hook_queue.enqueue("s1", "插话一"),
+                1 => hook_queue.enqueue("s1", "插话二"),
+                _ => None,
+            };
+            if let Some(id) = id {
+                hook_ids.lock().unwrap().push(id);
+            }
+        });
+        let scripted = Arc::new(ScriptedClient::new_with_hook(
+            queue,
+            snapshots.clone(),
+            hook,
+        ));
         let tools = Arc::new(ToolRegistry::new());
         let (sink, _events, log, mut messages, tool_defs, client_registry, _tools2) =
             setup_dispatch_env(tools.clone(), scripted, vec![user_msg("原始问题")]);
-
-        // 两条插话 FIFO
-        let steer_queue = SteerQueue::new();
-        let id_first = steer_queue.enqueue("s1", "插话一").unwrap();
-        steer_queue.enqueue("s1", "插话二").unwrap();
 
         let abort = AbortSignal::new();
         let outcome = dispatch_turn(
@@ -4470,8 +4526,9 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, TurnOutcome::Completed);
         assert_eq!(steer_queue.len("s1"), 0, "插话队列应被全部消费");
+        let consumed_id = ids.lock().unwrap()[0].clone();
         assert!(
-            !steer_queue.contains("s1", &id_first),
+            !steer_queue.contains("s1", &consumed_id),
             "消费后条目不可再取消"
         );
 
@@ -4545,7 +4602,8 @@ mod tests {
         );
     }
 
-    /// cancel 移除队首后：该条不被注入，其余按序注入。
+    /// cancel 移除队首后：该条不被注入；剩余条目在首个步边界（首步请求前）
+    /// 领取注入。
     #[tokio::test]
     async fn steer_cancel_prevents_injection_of_cancelled_entry() {
         use crate::llm::{ApiType, LlmError};
@@ -4562,7 +4620,6 @@ mod tests {
             })
         };
         queue.lock().unwrap().push_back(mk("段一"));
-        queue.lock().unwrap().push_back(mk("段二"));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
@@ -4599,6 +4656,11 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, TurnOutcome::Completed);
 
+        let snapshots = snapshots.lock().unwrap();
+        assert_eq!(snapshots.len(), 1, "恰一次 LLM 调用（首步请求即领取剩余插话）");
+        assert_eq!(snapshots[0].last().unwrap().content, "保留的插话");
+        drop(snapshots);
+
         let log = log.lock().unwrap();
         let injected: Vec<&str> = log
             .events()
@@ -4620,8 +4682,9 @@ mod tests {
         assert_eq!(steer_queue.len("s1"), 0);
     }
 
-    /// abort 置位：队列不被消费不注入（中止清队列由命令层 abort_turn 的
-    /// steer_queue.clear 负责——此处验证 dispatch 侧不触碰队列）。
+    /// abort 置位：队列不被消费不注入（dispatch 侧不触碰队列）；中止后未
+    /// 交付条目由命令层收尾置保留态、同对话下一轮 adopt 领取——尾部以
+    /// 队列 API 直接演练该流转。
     #[tokio::test]
     async fn steer_queue_not_consumed_when_aborted_before_dispatch() {
         use crate::llm::{ApiType, LlmError};
@@ -4669,7 +4732,7 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, TurnOutcome::Aborted);
 
-        // 队列原样保留（dispatch 未消费）；中止清队列是命令层 abort_turn 职责
+        // 队列原样保留（dispatch 未消费）；中止后由命令层收尾置保留态
         assert_eq!(steer_queue.len("s1"), 1, "中止路径不触碰队列");
         let log = log.lock().unwrap();
         assert!(
@@ -4680,12 +4743,191 @@ mod tests {
             "中止不得注入"
         );
         drop(log);
-        // 模拟命令层 abort_turn：clear 后队列空（幂等）
-        assert!(steer_queue.clear("s1"));
-        assert_eq!(steer_queue.len("s1"), 0);
-        assert!(!steer_queue.clear("s1"));
+        // 模拟命令层收尾（保留语义）：preserve 置保留态 → 同对话下一轮 adopt 领取
+        assert!(steer_queue.preserve("s1", "conv-1"), "保留态标记");
+        assert_eq!(steer_queue.adopt("conv-1", "s2"), 1, "下一轮领取合并");
+        assert_eq!(steer_queue.len("s2"), 1, "保留条目落在新轮分区");
+        assert_eq!(steer_queue.take_next("s2").unwrap().text, "中止前已入队");
         let snapshots = snapshots.lock().unwrap();
         assert_eq!(snapshots.len(), 0, "中止优先：LLM 不应被调用");
+    }
+
+    /// 工具步之间到达的插话在下一个步边界领取：不再等回答段收尾。
+    ///
+    /// 时序：请求 0 收到工具调用（插话在请求 0 处理期间入队）→ 工具执行 →
+    /// 请求 1 发出前领取注入（旧语义要等到请求 1 收尾后的 Completed 出口
+    /// 才领取，需多消耗一次请求）。断言请求 1 上下文中已含插话。
+    #[tokio::test]
+    async fn steer_arriving_during_tool_step_lands_at_next_step_boundary() {
+        use crate::llm::{ApiType, LlmError, ToolCall, ToolCallFunction};
+        use std::collections::VecDeque;
+
+        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: String::new(),
+            tool_calls: vec![ToolCall {
+                id: "call_echo".into(),
+                call_type: "function".into(),
+                function: ToolCallFunction {
+                    name: "echo".into(),
+                    arguments: "{\"message\":\"工具执行\"}".into(),
+                },
+            }],
+            reasoning: None,
+            usage: None,
+        }));
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: "工具步后的收尾回答".into(),
+            tool_calls: vec![],
+            reasoning: None,
+            usage: None,
+        }));
+        // 第三组仅作旧语义对照留存（新语义不应消费——snapshots.len 断言）
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: "不应被调用".into(),
+            tool_calls: vec![],
+            reasoning: None,
+            usage: None,
+        }));
+
+        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+        // 插话在请求 0 处理期间（工具步中）到达
+        let steer_queue = Arc::new(SteerQueue::new());
+        let hook_queue = Arc::clone(&steer_queue);
+        let hook = Arc::new(move |idx: usize| {
+            if idx == 0 {
+                hook_queue.enqueue("s1", "工具步中插话").unwrap();
+            }
+        });
+        let scripted = Arc::new(ScriptedClient::new_with_hook(
+            queue,
+            snapshots.clone(),
+            hook,
+        ));
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(crate::tools::EchoTool)).unwrap();
+        let tools = Arc::new(tools);
+        let (sink, _events, log, mut messages, tool_defs, client_registry, _tools2) =
+            setup_dispatch_env(tools.clone(), scripted, vec![user_msg("原始问题")]);
+
+        let abort = AbortSignal::new();
+        let outcome = dispatch_turn(
+            "s1",
+            &sink,
+            &mut messages,
+            &Arc::new(crate::skills_index::SkillIndex::empty()),
+            &tools,
+            &tool_defs,
+            &**client_registry
+                .select(&ApiType::OpenAiCompletions)
+                .unwrap(),
+            &LlmConfig::default(),
+            None,
+            ReasoningPolicy::Preserve,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &abort,
+            &steer_queue,
+            std::path::Path::new(&std::env::temp_dir()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, TurnOutcome::Completed);
+        assert_eq!(steer_queue.len("s1"), 0, "插话已被领取");
+
+        let snapshots = snapshots.lock().unwrap();
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "两次调用：工具步 + 领取后的收尾步（旧语义需三次）"
+        );
+        assert!(
+            !snapshots[0]
+                .iter()
+                .any(|m| m.content == "工具步中插话"),
+            "请求 0（工具步）不应含插话"
+        );
+        assert_eq!(
+            snapshots[1].last().unwrap().content,
+            "工具步中插话",
+            "请求 1 发出前领取注入（步边界）"
+        );
+        assert_eq!(
+            snapshots[1].last().unwrap().role,
+            crate::llm::MessageRole::User
+        );
+        drop(snapshots);
+
+        let log = log.lock().unwrap();
+        let turn_ends = log
+            .events()
+            .iter()
+            .filter(|e| matches!(e, SessionEvent::TurnEnd { .. }))
+            .count();
+        assert_eq!(turn_ends, 1, "turn/end 只在队列空时发一次");
+    }
+
+    /// 中止保留 → 下一轮领取：preserve/adopt 流转后，新轮首步请求即含
+    /// 保留插话（轮次边界领取）。
+    #[tokio::test]
+    async fn retained_steer_is_claimed_by_next_turn_first_request() {
+        use crate::llm::{ApiType, LlmError};
+        use std::collections::VecDeque;
+
+        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: "接续回答".into(),
+            tool_calls: vec![],
+            reasoning: None,
+            usage: None,
+        }));
+
+        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
+        let tools = Arc::new(ToolRegistry::new());
+        let (sink, _events, _log, mut messages, tool_defs, client_registry, _tools2) =
+            setup_dispatch_env(tools.clone(), scripted, vec![user_msg("新问题")]);
+
+        // 上一轮（已中止）留下的未交付插话：preserve → adopt（命令层流转）
+        let steer_queue = SteerQueue::new();
+        steer_queue.enqueue("s-old", "上一轮未交付").unwrap();
+        assert!(steer_queue.preserve("s-old", "conv-1"));
+        assert_eq!(steer_queue.adopt("conv-1", "s-new"), 1);
+
+        let abort = AbortSignal::new();
+        let outcome = dispatch_turn(
+            "s-new",
+            &sink,
+            &mut messages,
+            &Arc::new(crate::skills_index::SkillIndex::empty()),
+            &tools,
+            &tool_defs,
+            &**client_registry
+                .select(&ApiType::OpenAiCompletions)
+                .unwrap(),
+            &LlmConfig::default(),
+            None,
+            ReasoningPolicy::Preserve,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &abort,
+            &steer_queue,
+            std::path::Path::new(&std::env::temp_dir()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, TurnOutcome::Completed);
+        assert_eq!(steer_queue.len("s-new"), 0, "保留条目已被领取");
+
+        let snapshots = snapshots.lock().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].last().unwrap().content,
+            "上一轮未交付",
+            "首步请求即领取保留插话（轮次边界领取）"
+        );
     }
 }
 
