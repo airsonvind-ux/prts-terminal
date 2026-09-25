@@ -729,6 +729,8 @@ export interface MemoryExperienceItem {
   summary: string;
   tags: string[];
   absorbed: boolean;
+  /** 未收纳且重写达封存线（列表小标用） */
+  sealed: boolean;
   /** 来源：对话 id ＋ 轮次范围 */
   conversationId: string;
   turnFrom: number;

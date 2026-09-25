@@ -15,7 +15,7 @@ use crate::db::Database;
 use crate::notices::Notices;
 use crate::events::{AgentEvent, FrontendMessage, IpcEvent};
 use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo, ModelRegistry, ProviderInfo, TokenUsage};
-use crate::memory::schema::{PROFILE_NAME, SOURCE_USER};
+use crate::memory::schema::{PROFILE_NAME, REVISION_SEALED, SOURCE_USER};
 use crate::memory::{MemoryStore, SnapshotStore};
 use crate::orchestrator;
 use crate::settings::{SettingsPatch, SettingsStore};
@@ -1059,6 +1059,7 @@ pub struct GrowthPageDto {
 }
 
 /// 经历条目（memory_get experience / list）。无正文层：状态句＋标签＋来源。
+/// `absorbed`＝已蒸进长期；`sealed`＝未收纳且重写达封存线（供列表小标）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExperienceItemDto {
@@ -1068,6 +1069,8 @@ pub struct ExperienceItemDto {
     pub summary: String,
     pub tags: Vec<String>,
     pub absorbed: bool,
+    /// 未收纳且重写次数达封存线（REVISION_SEALED）
+    pub sealed: bool,
     /// 来源：对话 id ＋ 轮次范围
     pub conversation_id: String,
     pub turn_from: u64,
@@ -1122,6 +1125,7 @@ fn experience_item(e: &crate::memory::schema::ExperienceEntry) -> ExperienceItem
         summary: e.summary.clone(),
         tags: e.tags.clone(),
         absorbed: e.is_absorbed(),
+        sealed: !e.is_absorbed() && e.revision_count >= REVISION_SEALED,
         conversation_id: e.conversation_id.clone(),
         turn_from: e.turn_from,
         turn_to: e.turn_to,
