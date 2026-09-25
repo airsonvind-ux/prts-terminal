@@ -598,12 +598,18 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    *
    * 缩放保护窗期间滚动事件不可信（重排会改距离），但手势本身可信——这两条
    * 合起来才能既“缩放不动内容”，又不错过用户在缩放中真的上滑了。
+   *
+   * 前提：可滚范围真实存在。“离开底部”的引用对象是“还没看到的更早内容”——
+   * 内容整体放得下时（欢迎页、短对话），上滑不移动任何像素，翻标志只会凭空
+   * 点亮“回到最新”（2026-09 实测）。所以先量几何，无可滚范围直接忽略。
    */
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) setStick(false);
+      if (e.deltaY >= 0) return;
+      if (el.scrollHeight - el.clientHeight <= STICK_PX) return;
+      setStick(false);
     };
     el.addEventListener("wheel", onWheel, { passive: true });
     return () => el.removeEventListener("wheel", onWheel);
@@ -702,8 +708,10 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
           />
         ))}
       </div>
-      {/* 回到底部（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方） */}
-      {!atBottom && (
+      {/* 回到底部（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方）。
+          “回到最新”的引用对象是最新内容——欢迎页（isFirstUse）无对话：
+          常态不出现，几何上被压出溢出（极小窗口）时同样不出现。 */}
+      {!isFirstUse && !atBottom && (
         <button
           type="button"
           className={styles.scrollFab}

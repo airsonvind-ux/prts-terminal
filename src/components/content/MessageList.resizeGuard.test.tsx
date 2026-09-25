@@ -271,6 +271,51 @@ describe("MessageList · 回到底部按钮", () => {
     expect(spy).toHaveBeenCalled();
     expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
   });
+
+  it("内容整体放得下时，上滑不点亮按钮（“离开底部”没有引用对象）", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    fakeMetrics(listEl, 100, 100); // 无溢出：欢迎页 / 短对话的同款几何
+    await wait(450);
+
+    act(() => {
+      listEl.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true })
+      );
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
+  it("欢迎页（isFirstUse）：即便被压出溢出几何也不出现按钮", async () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(
+        React.createElement(MessageList, {
+          turns: [],
+          currentEvents: [],
+          isFirstUse: true,
+        })
+      );
+    });
+    await flush();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 1000, 100); // 极小窗口：几何上有溢出，语义上照旧无对象
+    await wait(450);
+
+    act(() => {
+      listEl.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true })
+      );
+    });
+    act(() => {
+      forceScrollTop(listEl, 0);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
 });
 
 describe("MessageList · 窗口缩放保护", () => {
