@@ -9,6 +9,7 @@
 //      + 首次使用（空列表）→ 欢迎界面照旧
 //   F9 restoring 状态切换（恢复期间 true、完成/失败后 false）
 //   F10 启动演出进度（restoreInfo：read 逐份推进 → ready）
+//   F11 并发调用合并（StrictMode 双挂载只跑一轮：list/get 各一次、进度不回退）
 //   导航决策：pickActiveIdAfterRestore 单测（updatedAt 最新 = activeId）
 
 import { describe, it, expect, beforeEach } from "vitest";
@@ -310,6 +311,43 @@ describe("F10 启动演出进度", () => {
       phase: "ready",
       readDone: 2,
       readTotal: 2,
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// F11：并发调用合并（StrictMode 双挂载）
+// ═══════════════════════════════════════════════════════
+
+describe("F11 并发调用合并", () => {
+  it("并发重复调用合并为一次执行：list/get 只发一轮，进度不回退", async () => {
+    const metaA = meta({ id: "a", updatedAt: 2 });
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaA]);
+      if (cmd === "get_conversation") {
+        return Promise.resolve({ meta: metaA, turns: [] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const p1 = restoreConversations();
+    const p2 = restoreConversations();
+    expect(p2).toBe(p1); // 复用同一 promise（第二次调用不重新起跑）
+
+    await Promise.all([p1, p2]);
+
+    const listCalls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "list_conversations"
+    );
+    const getCalls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "get_conversation"
+    );
+    expect(listCalls).toHaveLength(1);
+    expect(getCalls).toHaveLength(1);
+    expect(useUIStore.getState().restoreInfo).toEqual({
+      phase: "ready",
+      readDone: 1,
+      readTotal: 1,
     });
   });
 });

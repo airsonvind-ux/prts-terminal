@@ -17,6 +17,9 @@
 // 恢复期间 UI：restoring=true（欢迎界面判定被抑制 + 输入禁发）——防恢复完成
 // 前闪欢迎界面、防恢复竞态发消息。list 空/失败 → 降级为空历史（欢迎界面照旧）。
 //
+// 并发口径：restoreConversations 把并发重复调用合并为单次执行（StrictMode
+// 在 dev 下会双触发 effect）——既省一次重复读档，也防两条进度线写乱 readDone。
+//
 // 启动演出数据源：真实工序进度写入 useUIStore.restoreInfo（index → read[n/N]
 // → ready），由 BootSequence 消费；演出只读进度，不反向影响流程。
 // 历史冻结铁律：轮行是后端落盘的归档原文，JSON.parse 逐行重建——含
@@ -51,11 +54,14 @@ export function pickActiveIdAfterRestore(
   return best.id;
 }
 
+/** 进行中的恢复：并发调用合并为同一 promise（StrictMode 双挂载只跑一次）。
+    既省一次全量读档，也避免两条进度线并发写 readDone 导致计数回退。 */
+let inflight: Promise<void> | null = null;
+
 /**
  * 执行一次会话恢复（纯 async 逻辑，与 React 解耦——测试可直接 await）。
- * 幂等：重复调用（StrictMode 双挂载）恢复同一批数据，无副作用。
  */
-export async function restoreConversations(): Promise<void> {
+async function runRestore(): Promise<void> {
   useUIStore.getState().setRestoring(true);
   useUIStore
     .getState()
@@ -131,6 +137,19 @@ export async function restoreConversations(): Promise<void> {
     useUIStore.getState().setRestoreInfo({ phase: "ready" });
     useUIStore.getState().setRestoring(false);
   }
+}
+
+/**
+ * 启动恢复入口：并发重复调用（StrictMode 双挂载 / 快速重入）合并为单次执行，
+ * 调用方共享同一 promise。恢复完成后解绑，下一次调用重新开始。
+ */
+export function restoreConversations(): Promise<void> {
+  if (!inflight) {
+    inflight = runRestore().finally(() => {
+      inflight = null;
+    });
+  }
+  return inflight;
 }
 
 /** 应用启动时调用一次（仿 useAgentEvents：无 props、仅注册副作用） */
