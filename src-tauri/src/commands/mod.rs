@@ -623,10 +623,11 @@ pub fn list_conversations(
 
 /// 读取单个会话：meta + 轮行（坏行已跳过；恢复时前端 JSON.parse 逐行重建）。
 ///
-/// **读出侧合并流式 chunk**（2026-09）：归档按事件落盘，每个流式 chunk 一条，
-/// 长对话单行可达数 MB；返回前把「连续且同 kind 的 assistant/chunk」合并为一条
-/// （[`crate::session_store::coalesce_chunks_line`]），payload 与前端解析量下降
-/// 数量级。**落盘原文不动**——历史冻结语义不变。
+/// **读出侧合并流式 chunk（2026-09 · 单遍）**：归档按事件落盘，每个流式 chunk
+/// 一条，长对话单行可达数 MB；返回前把「连续且同 kind 的 assistant/chunk」合并
+/// 为一条（`SessionStore::get_coalesced`——校验与合并在同一次解析上完成，输出与
+/// 旧两遍路径逐字节一致），payload 与前端解析量下降数量级。**落盘原文不动**——
+/// 历史冻结语义不变。
 ///
 /// 异步执行（线程池）：读档与合并不占窗口线程，启动恢复期间窗口保持可拖。
 #[tauri::command(async)]
@@ -635,13 +636,7 @@ pub fn get_conversation(
     conversation_id: String,
 ) -> Result<ConversationRecord, String> {
     let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
-    let mut rec = s.get(&conversation_id)?;
-    for line in rec.turns.iter_mut() {
-        if let Some(merged) = crate::session_store::coalesce_chunks_line(line) {
-            *line = merged;
-        }
-    }
-    Ok(rec)
+    s.get_coalesced(&conversation_id)
 }
 
 /// 追加一轮（前端轮末归档触发）。首轮建会话文件（header + 轮行 + index 插入），
@@ -983,7 +978,8 @@ pub async fn finalize_memory(
 /// invoke finalize_memory。仅扫描 updatedAt 前 [`MEMORY_CATCH_UP_SCAN`] 条，
 /// 控制启动开销。
 ///
-/// 异步执行（线程池）：扫描档案不占窗口线程。
+/// 异步执行（线程池）：扫描不占窗口线程；轮数用轻量计数
+/// （[`SessionStore::count_turns`]——数行不解析）。
 #[tauri::command(async)]
 pub fn memory_catch_up(
     store: State<'_, Arc<Mutex<SessionStore>>>,
@@ -999,8 +995,8 @@ pub fn memory_catch_up(
         .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
     let mut out = Vec::new();
     for m in metas.into_iter().take(MEMORY_CATCH_UP_SCAN) {
-        let total = match s.get(&m.id) {
-            Ok(r) => r.turns.len() as u64,
+        let total = match s.count_turns(&m.id) {
+            Ok(n) => n as u64,
             Err(_) => continue,
         };
         if total > mem.watermark(&m.id) {
@@ -1348,7 +1344,8 @@ pub fn memory_experience_list(
 /// 清除经历记忆：清经历本体＋长期梗概；水位抬平到各对话当前总轮数
 /// （防旧轮次被补提炼挖回）；不动冻结文件。
 ///
-/// 异步执行（线程池）：抬水位的整读不占窗口线程。
+/// 异步执行（线程池）＋轻量计数（[`SessionStore::count_turns`]）：
+/// 抬水位不再为一声轮数整读档案。
 #[tauri::command(async)]
 pub fn memory_experience_clear(
     turn_registry: State<'_, Arc<TurnRegistry>>,
@@ -1371,8 +1368,8 @@ pub fn memory_experience_clear(
             .lock()
             .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         for meta in metas {
-            let total = match s.get(&meta.id) {
-                Ok(r) => r.turns.len() as u64,
+            let total = match s.count_turns(&meta.id) {
+                Ok(n) => n as u64,
                 Err(_) => continue,
             };
             m.raise_watermark(&meta.id, total, now)?;

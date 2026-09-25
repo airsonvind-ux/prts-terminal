@@ -486,6 +486,26 @@ impl SessionStore {
     /// （其余行照常返回）。meta 优先取 index（含 rename/updatedAt），index 无
     /// 条目时用 header 构造兜底（内容文件为事实源）。
     pub fn get(&mut self, conversation_id: &str) -> Result<ConversationRecord, String> {
+        self.get_inner(conversation_id, false)
+    }
+
+    /// 读取单个会话（读出侧合并 · 单遍版）：与 [`Self::get`] 同语义，但把
+    /// 「逐行校验」与「流式 chunk 合并」合成一遍——每行只解析一次。输出与旧
+    /// 两遍路径（read_turns + coalesce_chunks_line）**逐字节一致**：未合并行
+    /// 保留原文、合并行输出紧凑序列化、坏行跳过并留痕（等价性测试在 tests）。
+    /// **落盘原文不动**——历史冻结语义不变。
+    pub fn get_coalesced(
+        &mut self,
+        conversation_id: &str,
+    ) -> Result<ConversationRecord, String> {
+        self.get_inner(conversation_id, true)
+    }
+
+    fn get_inner(
+        &mut self,
+        conversation_id: &str,
+        coalesce: bool,
+    ) -> Result<ConversationRecord, String> {
         let path = self.file_path(conversation_id)?;
         let header = self.read_header(&path).map_err(|e| {
             format!("会话不存在或文件损坏（{conversation_id}）：{e}")
@@ -501,7 +521,11 @@ impl SessionStore {
                 header.schema_version
             ));
         }
-        let turns = self.read_turns(&path)?;
+        let turns = if coalesce {
+            self.read_turns_coalesced(&path)?
+        } else {
+            self.read_turns(&path)?
+        };
         // index 只读降级（Err）不影响内容读取——用 header 构造 meta 兜底
         let meta = match self.load_or_rebuild() {
             Ok(list) => list.into_iter().find(|m| m.id == conversation_id),
@@ -577,6 +601,65 @@ impl SessionStore {
             turns.push(line.to_string());
         }
         Ok(turns)
+    }
+
+    /// 读轮行原文（单遍合并版）：每行解析一次——坏行跳过留痕；数组行按连续
+    /// 同 kind chunk 合并（合并 → 紧凑序列化；未合并 → 保留原文）；其它合法
+    /// JSON 行保留原文。输出与「read_turns + coalesce_chunks_line」两遍路径
+    /// 逐字节一致（等价性测试见 tests 模块）。
+    fn read_turns_coalesced(&self, path: &Path) -> Result<Vec<String>, String> {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| format!("读取会话文件失败: {e}"))?;
+        let mut turns = Vec::new();
+        for (i, line) in raw.split('\n').enumerate() {
+            if i == 0 {
+                continue; // header 行
+            }
+            let line = line.trim_end_matches('\r');
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(line) {
+                Err(_) => {
+                    let preview: String = line.chars().take(80).collect();
+                    eprintln!(
+                        "[session_store] {} 第 {} 行损坏，跳过：{}",
+                        path.display(),
+                        i + 1,
+                        preview
+                    );
+                }
+                Ok(serde_json::Value::Array(events)) => match merge_chunks_in_events(events) {
+                    Some(merged) => turns.push(merged),
+                    None => turns.push(line.to_string()),
+                },
+                Ok(_) => turns.push(line.to_string()),
+            }
+        }
+        Ok(turns)
+    }
+
+    /// 数轮数（轻量版：不解析 JSON，只数行）。
+    ///
+    /// 与 [`Self::get`] 的 `turns.len()` 在正常档案上一致；含损坏行时可能偏多
+    /// （坏行也数进计数）——方向保守：最多多触发一次补提炼（下游 finalize 按
+    /// 真实轮数自动 no-op），不会漏触发。启动补偿与「清除记忆」抬水位用它替代
+    /// 整读，不再为一声轮数付一次全量解析。文件不可读 → Err（调用方跳过）。
+    pub fn count_turns(&self, conversation_id: &str) -> Result<usize, String> {
+        let path = self.file_path(conversation_id)?;
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取会话文件失败（{conversation_id}）：{e}"))?;
+        let mut n = 0usize;
+        for (i, line) in raw.split('\n').enumerate() {
+            if i == 0 {
+                continue; // header 行
+            }
+            if line.trim_end_matches('\r').is_empty() {
+                continue;
+            }
+            n += 1;
+        }
+        Ok(n)
     }
 
     /// 读 index.json。三态：
@@ -738,8 +821,17 @@ fn now_ms() -> u64 {
 /// 不变量：只动**返回给前端的副本**（本函数取 `&str` 返回新 `String`，碰不到文件），
 /// 落盘原文不动（历史冻结不变）；其它事件与先后顺序原样保留。无需合并时返回
 /// `None`（调用方保留原行）。
+///
+/// 单遍读取路径（[`SessionStore::get_coalesced`]）不再经过本函数——它把解析
+/// 产物直接喂给 [`merge_chunks_in_events`]（同一合并核心，输出逐字节一致）。
 pub(crate) fn coalesce_chunks_line(line: &str) -> Option<String> {
     let events: Vec<serde_json::Value> = serde_json::from_str(line).ok()?;
+    merge_chunks_in_events(events)
+}
+
+/// 合并核心：连续且同 kind 的 `assistant/chunk` 合并为一条（返回紧凑序列化）；
+/// 无需合并 → None。供单行入口与单遍读取共用（语义与旧实现逐字节一致）。
+fn merge_chunks_in_events(events: Vec<serde_json::Value>) -> Option<String> {
     let mut out: Vec<serde_json::Value> = Vec::with_capacity(events.len());
     let mut merged = false;
     for ev in events {
@@ -814,6 +906,81 @@ mod tests {
             out.contains("中文：数值 12~30"),
             "多字节内容应逐字拼接保留: {out}"
         );
+    }
+
+    // ── 单遍合并 / 轻量计数（2026-09「减时」批次）──
+
+    #[test]
+    fn get_coalesced_matches_legacy_two_pass_bytewise() {
+        let dir = unique_temp_dir("coalesce-equiv");
+        let mut s = SessionStore::new(&dir);
+
+        let line_a = r#"[{"type":"user/message","sessionId":"s1","content":"问"}]"#;
+        let line_b = r#"[{"type":"assistant/chunk","kind":"reasoning","content":"想"},{"type":"assistant/chunk","kind":"reasoning","content":"一下"},{"type":"tool/call","callId":"c1"},{"type":"assistant/chunk","kind":"text","content":"答"},{"type":"assistant/chunk","kind":"text","content":"完"}]"#;
+        let line_c = r#"[{"type":"assistant/message","content":"终"}]"#;
+        s.append_turn(&req("c1", line_a)).unwrap();
+        s.append_turn(&req("c1", line_b)).unwrap();
+        s.append_turn(&req("c1", line_c)).unwrap();
+
+        // 手工追加异常行：坏行（应跳过）+ 非数组合法 JSON（应保留原文）
+        let line_obj = r#"{"note":"非数组但合法"}"#;
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.join("sessions").join("c1.jsonl"))
+                .unwrap();
+            writeln!(f, "这不是 JSON").unwrap();
+            writeln!(f, "{line_obj}").unwrap();
+        }
+
+        // 旧两遍路径：read_turns（逐行校验）+ coalesce_chunks_line（逐行合并）
+        let path = dir.join("sessions").join("c1.jsonl");
+        let legacy: Vec<String> = s
+            .read_turns(&path)
+            .unwrap()
+            .into_iter()
+            .map(|l| coalesce_chunks_line(&l).unwrap_or(l))
+            .collect();
+
+        // 新单遍路径
+        let rec = s.get_coalesced("c1").unwrap();
+        assert_eq!(rec.turns, legacy, "单遍输出必须与旧两遍逐字节一致");
+        assert_eq!(rec.turns.len(), 4, "坏行跳过：3 轮 + 非数组行 = 4");
+        assert_eq!(rec.turns[0], line_a, "无 chunk 行逐字节保留原文");
+        assert!(rec.turns[1].contains("想一下"), "chunk 已合并");
+        assert_eq!(rec.turns[3], line_obj, "非数组合法 JSON 行保留原文");
+    }
+
+    #[test]
+    fn count_turns_matches_get_and_overcounts_bad_lines() {
+        let dir = unique_temp_dir("count-turns");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c1", &ev_user("一"))).unwrap();
+        s.append_turn(&req("c1", &ev_user("二"))).unwrap();
+        s.append_turn(&req("c1", &ev_user("三"))).unwrap();
+
+        assert_eq!(s.count_turns("c1").unwrap(), 3, "正常档案：与轮数一致");
+        assert_eq!(
+            s.count_turns("c1").unwrap(),
+            s.get("c1").unwrap().turns.len(),
+            "正常档案：count == get().len()"
+        );
+
+        // 坏行：get 跳过、count 数进（偏多 = 保守方向）
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.join("sessions").join("c1.jsonl"))
+                .unwrap();
+            writeln!(f, "坏行不是 JSON").unwrap();
+        }
+        assert_eq!(s.get("c1").unwrap().turns.len(), 3);
+        assert_eq!(s.count_turns("c1").unwrap(), 4, "坏行计入（偏多，方向保守）");
+
+        // 缺失文件 → Err（调用方 continue 跳过）
+        assert!(s.count_turns("nope").is_err());
     }
 
     /// 创建唯一临时目录（不引入 tempfile crate，沿用 notices/config 夹具模式）。
