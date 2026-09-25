@@ -196,8 +196,12 @@ describe("runCompaction 主路径", () => {
     expect(useCompactionStore.getState().compactingConversationId).toBeNull();
   });
 
-  it("链式：已压缩过的会话再次压缩 → 折叠输入前置旧摘要消息", async () => {
-    const turns = longConversation();
+  it("链式：折叠输入 = 旧摘要 + 上次边界后的轮（不回灌已折叠原文）", async () => {
+    // 每轮带唯一序号标记，便于断言“已折叠区不再回灌”
+    const turns: SessionEvent[][] = [];
+    for (let i = 0; i < 500; i++) {
+      turns.push(userTurn(`第${i}轮 ` + "问题讨论内容甲".repeat(40)));
+    }
     // 第一次压缩：cut 在中间（模拟 compaction 记录 retainedFrom=250）
     seedConversation("c1", turns);
     useConversationStore.setState({
@@ -224,8 +228,20 @@ describe("runCompaction 主路径", () => {
         request: { foldedHistory: Array<{ content: string }> };
       }
     ).request;
-    expect(req.foldedHistory[0].content).toContain("旧摘要");
-    expect(req.foldedHistory[0].content).toContain("[对话压缩摘要");
+    const folded = req.foldedHistory;
+    // 旧摘要前置（链式语义不变）
+    expect(folded[0].content).toContain("旧摘要");
+    expect(folded[0].content).toContain("[对话压缩摘要");
+    // 已折叠区（第 0..249 轮）不得回灌
+    expect(folded.some((m) => m.content.includes("第0轮"))).toBe(false);
+    expect(folded.some((m) => m.content.includes("第249轮"))).toBe(false);
+    // 上次边界后的轮（第 250 轮起）进入折叠区
+    expect(folded.some((m) => m.content.includes("第250轮"))).toBe(true);
+    // 载荷 = 1（旧摘要）+（新边界 − 上次边界）条轮消息
+    const conv = useConversationStore
+      .getState()
+      .conversations.find((c) => c.id === "c1")!;
+    expect(folded.length).toBe(1 + (conv.compaction!.retainedFrom - 250));
   });
 });
 

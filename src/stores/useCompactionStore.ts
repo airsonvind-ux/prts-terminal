@@ -4,8 +4,9 @@
 // 职责：压缩 = 前端发起的一次对话级状态转换。本 store 承载编排：
 //   1. 前端计算保留段起点（computeRetainedFrom，轮边界对齐）并做 noop 预判
 //      （对话太短 nothing / 新内容太少 too_soon——非错误提示，不发命令）；
-//   2. 折叠区派生态（含链式压缩时的旧摘要消息）发给后端
-//      `compact_conversation`（静默独立 LLM 摘要 run，无工具、无可见事件）；
+//   2. 折叠区派生态（链式 = 旧摘要 + 上次边界后的轮；已折叠原文不回灌）
+//      发给后端 `compact_conversation`（静默独立 LLM 摘要 run：system/工具面
+//      与主请求逐字节同源以复用 KV cache 前缀；无可见事件）；
 //   3. 成功后 conversationStore.applyCompaction 落记录 + 归零进度环；
 //   4. 失败：状态不变（幂等可重试），toast 直显后端错误文案；
 //   5. 取消：`abort_turn(sessionId = ctxdecay-{conversationId})` 走既有中止
@@ -81,7 +82,10 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       showToast("对话历史太短，暂无可压缩内容", { kind: "info" });
       return;
     }
-    const foldedTurns = conv.turns.slice(0, retainedFrom);
+    // 链式折叠起点 = 上次压缩边界（2026-09-25 裁决）：已折叠原文不回灌——
+    // 对 LLM 而言原文已被摘要取代，重读等于让前次压缩失去意义。
+    const foldFrom = conv.compaction?.retainedFrom ?? 0;
+    const foldedTurns = conv.turns.slice(foldFrom, retainedFrom);
     const foldEstimate = foldedTurns.reduce(
       (sum, t) => sum + estimateTurnTokens(t),
       0
@@ -94,7 +98,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       return;
     }
 
-    // ── 2. 折叠区派生态（error 等结构事件已过滤；链式：旧摘要并入输入）──
+    // ── 2. 折叠区派生态（error 等结构事件已过滤；链式：旧摘要代表已折叠区）──
     const folded = deriveMessages(foldedTurns);
     if (folded.length === 0) {
       showToast("没有可压缩的内容", { kind: "info" });

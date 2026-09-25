@@ -437,6 +437,35 @@ describe("deriveMessages 保留 reminder 块", () => {
 });
 
 // ═══════════════════════════════════════════════
+// 缓存前缀不变量（压缩摘要 run 重放的前提）
+// ═══════════════════════════════════════════════
+//
+// 摘要 run 的折叠区载荷 = deriveMessages(轮前缀)，与主历史 deriveMessages(全量)
+// 共享同一构造。一旦派生引入跨轮状态（去重/省略等），该不变量破裂会静默击穿
+// 缓存前缀同源——本测试把它钉住。
+
+describe("deriveMessages 逐轮纯函数（切片 = 前缀）", () => {
+  it("任意前缀切片派生 = 全量派生的前缀（折叠区载荷与主历史逐字节同源）", () => {
+    const turns: SessionEvent[][] = [
+      [user("s1", "第一问"), textChunk("s1", "第一答"), turnEnd("s1")],
+      [
+        user("s1", "第二问"),
+        toolCall("s1", "c1", "echo", "{}"),
+        toolResult("s1", "c1", "结果"),
+        textChunk("s1", "第二答"),
+        turnEnd("s1"),
+      ],
+      [user("s1", "第三问"), textChunk("s1", "第三答"), turnEnd("s1")],
+    ];
+    const full = deriveMessages(turns);
+    for (let k = 1; k <= turns.length; k++) {
+      const sliced = deriveMessages(turns.slice(0, k));
+      expect(sliced).toEqual(full.slice(0, sliced.length));
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════
 // buildReminderBlock（提醒拼装侧）
 // ═══════════════════════════════════════════════
 

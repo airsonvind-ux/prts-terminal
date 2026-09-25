@@ -10,7 +10,8 @@
 //! ## 静默语义
 //!
 //! 摘要 run 与主对话共享同一 provider/模型（由命令层传入已路由的 client），
-//! 但：无工具（tool_defs 传空）、流式事件全部丢弃（不推 IPC）、输出不进入
+//! 但：system（含记忆区）、工具面、折叠区消息与主请求**逐字节同源**：请求即
+//! 主请求真前缀，复用提供方 KV cache（DSH 形态）；流式事件全部丢弃（不推 IPC）、输出不进入
 //! 任何 log。推理链策略与主对话一致（`Preserve`——裁决：思考强度设置挂账，
 //! 本模块不引入第二策略面）。
 //!
@@ -31,12 +32,12 @@ use std::sync::Arc;
 
 use crate::debug;
 use crate::events::FrontendMessage;
-use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent};
+use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, ToolDef};
 use crate::session::SessionLog;
 use crate::skills_index::{skills_dir, SkillIndex};
 use crate::turn_registry::AbortSignal;
 
-use super::context::{assemble_system_prompt, estimate_messages};
+use super::context::{assemble_system_prompt_with_memory, estimate_messages};
 use super::{is_retryable, RetryPolicy};
 
 /// 摘要 run 输入占窗口的最大比例（超窗触发降级链）。
@@ -78,6 +79,8 @@ pub struct SummaryOutcome {
 /// * `config` — LLM 连接配置（turn 起始快照）
 /// * `folded_history` — 前端折叠区的派生态历史（含链式压缩时的旧摘要消息）
 /// * `context_window` — 当前模型 contextWindow（命令层经 model_registry 查得，同源）
+/// * `memory_block` — 对话冻结记忆快照（与主对话同源；空串 = 无记忆态）
+/// * `tool_defs` — 主对话工具面快照（仅保请求前缀同源；模型不应调用）
 /// * `abort` — 压缩注册项的中止信号（取消通道）
 ///
 /// 返回 Err(String)：错误文案面向用户（toast 直显）。
@@ -86,6 +89,8 @@ pub async fn run_summary(
     config: &LlmConfig,
     folded_history: Vec<FrontendMessage>,
     context_window: u32,
+    memory_block: &str,
+    tool_defs: &[ToolDef],
     abort: &AbortSignal,
 ) -> Result<SummaryOutcome, String> {
     // ── 1. 播种 + 派生（Preserve：与主对话推理链策略一致）──
@@ -107,7 +112,7 @@ pub async fn run_summary(
             SkillIndex::empty()
         }
     };
-    let system = assemble_system_prompt(&skill_index);
+    let system = assemble_system_prompt_with_memory(&skill_index, memory_block);
     let instruction = ChatMessage::user(build_summary_instruction());
     let mut messages: Vec<ChatMessage> = Vec::with_capacity(2 + folded_messages.len());
     messages.push(ChatMessage::system(system));
@@ -128,7 +133,7 @@ pub async fn run_summary(
     let summary = if degraded {
         build_fallback_summary(&messages)
     } else {
-        call_summary_llm(llm, config, &messages, abort).await?
+        call_summary_llm(llm, config, &messages, tool_defs, abort).await?
     };
 
     Ok(SummaryOutcome {
@@ -148,6 +153,7 @@ fn build_summary_instruction() -> String {
 供后续对话作为新起点使用。\n\n\
 要求：\n\
 - 只输出下面的摘要正文本身，不输出任何多余说明、mood 或思考过程；\n\
+- 不调用任何工具；\n\
 - 只总结事实与任务状态，不编造摘要中不存在的信息；\n\
 - 区分「已完成 / 进行中 / 受阻」，保留关键结论、数据出处线索与后续步骤；\n\
 - 工具查询类结果不罗列原始数据，标注「（可重查）」即可；\n\
@@ -295,6 +301,7 @@ async fn call_summary_llm(
     llm: &dyn LlmClient,
     config: &LlmConfig,
     messages: &[ChatMessage],
+    tool_defs: &[ToolDef],
     abort: &AbortSignal,
 ) -> Result<String, String> {
     let retry = RetryPolicy::default();
@@ -308,7 +315,7 @@ async fn call_summary_llm(
             started.store(true, Ordering::SeqCst);
         });
 
-        let run = llm.chat_stream(config, messages, &[], on_event);
+        let run = llm.chat_stream(config, messages, tool_defs, on_event);
         let result = tokio::select! {
             biased;
             _ = abort.wait_abort() => return Err("压缩已取消".into()),
@@ -355,9 +362,10 @@ mod tests {
 
     // ── 测试基建 ──
 
-    /// 记录型 client：捕获最近一次 chat_stream 收到的消息，返回固定文本。
+    /// 记录型 client：捕获最近一次 chat_stream 收到的消息与工具面，返回固定文本。
     struct CaptureClient {
         last_messages: Mutex<Vec<ChatMessage>>,
+        last_tools: Mutex<Vec<ToolDef>>,
     }
 
     impl LlmClient for CaptureClient {
@@ -376,14 +384,16 @@ mod tests {
             &'a self,
             _config: &'a LlmConfig,
             messages: &'a [ChatMessage],
-            _tools: &'a [crate::llm::ToolDef],
+            tools: &'a [crate::llm::ToolDef],
             on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<StreamResult, LlmError>> + Send + 'a>,
         > {
             let captured = messages.to_vec();
+            let captured_tools = tools.to_vec();
             Box::pin(async move {
                 *self.last_messages.lock().unwrap() = captured;
+                *self.last_tools.lock().unwrap() = captured_tools;
                 on_event(StreamEvent::TextDelta {
                     content: "## Goal\n测试摘要".into(),
                 });
@@ -401,6 +411,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 last_messages: Mutex::new(Vec::new()),
+                last_tools: Mutex::new(Vec::new()),
             }
         }
     }
@@ -435,7 +446,7 @@ mod tests {
     #[tokio::test]
     async fn run_summary_returns_llm_checkpoint_text() {
         let mock = MockLlmClient::simple_reply("## Goal\n达成");
-        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, &fresh_abort())
+        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &fresh_abort())
             .await
             .unwrap();
         assert_eq!(out.summary, "## Goal\n达成");
@@ -446,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn summary_input_is_system_plus_folded_plus_instruction() {
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, &fresh_abort())
+        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -467,12 +478,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn summary_input_replays_memory_and_tools_for_cache_prefix() {
+        // 前缀同源（2026-09-25 裁决 · DSH 形态）：system 含记忆区、工具面同主请求
+        let client = CaptureClient::new();
+        let tools = vec![ToolDef::new(
+            "query_enemy",
+            "查询敌人数据",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        let out = run_summary(
+            &client,
+            &cfg(),
+            simple_folded(),
+            65_536,
+            "## 记忆\n### 关于博士\n- 偏好简洁回答",
+            &tools,
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
+        assert!(!out.degraded);
+        let captured = client.last_messages.lock().unwrap().clone();
+        assert!(
+            captured[0].content.contains("## 记忆"),
+            "system 应含记忆区（与主对话同源）"
+        );
+        let captured_tools = client.last_tools.lock().unwrap().clone();
+        assert_eq!(captured_tools.len(), 1, "工具面应与主请求一致传入");
+        assert_eq!(captured_tools[0].function.name, "query_enemy");
+    }
+
+    #[tokio::test]
     async fn folded_history_derives_and_filters() {
         // 未知 role 防御兜底（seed 语义）不 panic；error role 被过滤
         let mut folded = simple_folded();
         folded.push(fm("error", "前端错误提示不应进入折叠区派生"));
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), folded, 65_536, &fresh_abort())
+        let out = run_summary(&client, &cfg(), folded, 65_536, "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -487,7 +529,7 @@ mod tests {
     #[tokio::test]
     async fn empty_folded_history_errors() {
         let mock = MockLlmClient::new(vec![]);
-        let err = run_summary(&mock, &cfg(), vec![], 65_536, &fresh_abort())
+        let err = run_summary(&mock, &cfg(), vec![], 65_536, "", &[], &fresh_abort())
             .await
             .unwrap_err();
         assert!(err.contains("没有可压缩"), "got: {err}");
@@ -509,6 +551,8 @@ mod tests {
             &cfg(),
             vec![fm("user", "q"), m],
             10_000,
+            "",
+            &[],
             &fresh_abort(),
         )
         .await
@@ -525,7 +569,7 @@ mod tests {
         // 无预设 Mock：若误走 LLM 会返回 Err("预设不足")——degraded 必须不调
         let mock = MockLlmClient::new(vec![]);
         let long = "长文本".repeat(2_000);
-        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, &fresh_abort())
+        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(out.degraded, "极端超窗应规则降级");
@@ -580,7 +624,7 @@ mod tests {
         }], 0);
         let abort = AbortSignal::new();
         abort.abort(); // 预置：wait_abort 立即返回
-        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, &abort)
+        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &abort)
             .await
             .unwrap_err();
         assert!(err.contains("取消"), "got: {err}");
@@ -602,7 +646,7 @@ mod tests {
         let handle = tokio::spawn({
             let abort = abort.clone();
             async move {
-                run_summary(&mock, &cfg(), simple_folded(), 65_536, &abort).await
+                run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &abort).await
             }
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -627,6 +671,8 @@ mod tests {
             &cfg(),
             vec![fm("user", "q"), m],
             65_536,
+            "",
+            &[],
             &fresh_abort(),
         )
         .await
@@ -647,5 +693,6 @@ mod tests {
         assert!(text.contains("## Constraints & Preferences"));
         assert!(text.contains("## Next Steps"));
         assert!(!text.contains("<mood>"), "指令禁止模型输出内部叙事标记");
+        assert!(text.contains("不调用任何工具"), "指令应禁止工具调用");
     }
 }

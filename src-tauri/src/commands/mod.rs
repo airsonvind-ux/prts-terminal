@@ -840,7 +840,9 @@ pub struct CompactionOutcome {
 ///   拒绝而非排队（避免压缩跑在被改写历史上）；
 /// - 取消：以 `ctxdecay-{conversationId}` 注册 TurnRegistry，前端可经
 ///   abort_turn 中止；注册计入 active_count（压缩中设置写闸同样生效）；
-/// - 失败语义：Err(String) 文案面向用户直显；失败不改变任何状态，幂等可重试。
+/// - 失败语义：Err(String) 文案面向用户直显；失败不改变任何状态，幂等可重试；
+/// - 请求形态（2026-09-25 · DSH 形态）：system 与主对话同源（含记忆区）、工具面
+///   同主请求、指令置折叠区末尾——请求成为主请求的真前缀，复用 KV cache。
 #[tauri::command]
 pub async fn compact_conversation(
     request: CompactRequest,
@@ -848,6 +850,9 @@ pub async fn compact_conversation(
     config: State<'_, Arc<Mutex<LlmConfig>>>,
     model_registry: State<'_, Arc<ModelRegistry>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
+    memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
+    snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
+    tools: State<'_, Arc<ToolRegistry>>,
 ) -> Result<CompactionOutcome, String> {
     if request.folded_history.is_empty() {
         return Err("没有可压缩的内容".into());
@@ -855,6 +860,23 @@ pub async fn compact_conversation(
     if turn_registry.active_count() > 0 {
         return Err("正在处理对话，请稍后再压缩".into());
     }
+    // ── 请求前缀同源（2026-09-25 裁决 · DSH 形态）：system（含记忆区）与
+    // 工具面同主对话 → 摘要请求成为主请求真前缀（KV cache 复用）。──
+    let memory_key = if request.conversation_id.is_empty() {
+        None
+    } else {
+        Some(request.conversation_id.as_str())
+    };
+    let memory_block = {
+        let mem = memory_store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        let mut snaps = snapshot_store
+            .lock()
+            .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
+        snaps.get_or_assemble(memory_key, &mem)
+    };
+    let tool_defs = tools.list_defs();
     let cfg = config
         .lock()
         .map_err(|e| format!("配置锁获取失败: {e}"))?
@@ -873,6 +895,8 @@ pub async fn compact_conversation(
         &cfg,
         request.folded_history,
         window,
+        &memory_block,
+        &tool_defs,
         &abort,
     )
     .await;
