@@ -4,7 +4,7 @@
 // 覆盖：
 //   - 回归用户：铭牌/清单/三句依次落定，[n/N] 展示真实计数；
 //     收尾句停留 → 日志退场波 → 字标收拢入场（欢迎页）→ 淡出后 onDone
-//   - 首次使用（readTotal = 0）：跳过「调取」与欢迎页幕，收尾换就绪句
+//   - 首次使用（readTotal = 0）：跳过「调取」，收尾换就绪句；欢迎幕与回归一致
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
@@ -85,7 +85,7 @@ describe("BootSequence 启动演出", () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
-  it("首次使用（readTotal=0）：跳过「调取」与欢迎页幕，收尾就绪句", async () => {
+  it("首次使用（readTotal=0）：跳过「调取」，收尾就绪句，欢迎幕照常播放", async () => {
     const onDone = vi.fn();
     await act(async () => {
       root.render(<BootSequence onDone={onDone} />);
@@ -95,8 +95,8 @@ describe("BootSequence 启动演出", () => {
 
     expect(container.textContent).not.toContain("正在调取作战记录");
     expect(container.textContent).toContain("链路建立完毕。博士，终端就绪。");
-    // 首次使用无幕二：收尾后直接淡出（欢迎页就在覆盖层之下）
-    expect(sceneNow()).toBe("log");
+    // 首次使用同样播幕二（幕二字标与欢迎页同源，淡出衔接无缝）
+    expect(sceneNow()).toBe("welcome");
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,10 +8,11 @@
 //   - [n/N] 计数仅在 N ≥ 2 时显示（单份时「1/1」无意义）
 //
 // 三幕（过渡＝一条连续的运动线，原型已验）：
-//   幕一 自检日志：铭牌 + 接入清单（CSS 入场）→ 三句日志逐句打字
-//   幕二 欢迎页（仅回归用户）：收尾句整句停留后——光标收笔 → 日志自上而下
-//        错峰退场（加速离开）→ 字标收拢入场（与退场重叠、减速落定）
-//   幕三 淡出露出对话（首次使用跳过幕二：欢迎页是目的地，与覆盖层之下无缝衔接）
+//   幕一 自检日志：铭牌 + 接入清单（CSS 入场）→ 日志句逐句打字
+//        （回归：校验索引 / 调取作战记录 / 收尾；首次使用：校验索引 / 收尾）
+//   幕二 欢迎页：收尾句整句停留后——光标收笔 → 日志自上而下错峰退场
+//        （加速离开）→ 字标收拢入场（与退场重叠、减速落定）
+//   幕三 淡出露出对话（幕二字标与欢迎页外观同源，淡出衔接无缝）
 //
 // 动效口径：出场 ease-in（cubic-bezier(.4,0,1,1)）、入场 ease-out
 // （cubic-bezier(0,0,.2,1)）；时长与错峰见下方常量（CSS 里的 transition 同步）。
@@ -36,10 +37,8 @@ const CLOSE_HOLD_MS = 900;
 const CURSOR_OFF_MS = 160;
 /** 过渡：日志退场波起点（相对过渡 t0，ms） */
 const WAVE_BASE_MS = 140;
-/** 过渡：退场波每元素错峰（ms） */
+/** 过渡：退场波每元素错峰（ms；单元素时长 330ms 见 CSS .wave） */
 const WAVE_STAGGER_MS = 42;
-/** 过渡：退场波单元素时长（ms；与 CSS .wave 同步） */
-const WAVE_DUR_MS = 330;
 /** 过渡：欢迎入场起点（相对过渡 t0，ms；与退场重叠） */
 const WELCOME_AT_MS = 320;
 /** 过渡：欢迎最后一件（细线）落定后的停留（ms） */
@@ -48,8 +47,6 @@ const HOLD_AFTER_SETTLE_MS = 400;
 const EXIT_MS = 400;
 /** 欢迎入场尾段：细线延迟 720ms + 时长 320ms（与 CSS 同步） */
 const WELCOME_TAIL_MS = 720 + 320;
-/** 日志幕的元素数：铭牌 + 清单 3 + 日志句（回归 3 / 首次 2）——退场波落定用 */
-const waveCountFor = (returning: boolean) => 4 + (returning ? 3 : 2);
 
 const INDEX_LINE = "正在校验作战记录索引…";
 const READ_LINE = "正在调取作战记录…";
@@ -187,18 +184,12 @@ export function BootSequence({ onDone }: Props) {
       if (cancelled) return;
       setWaving(true);
 
-      // 幕二（仅回归用户）：欢迎入场（与退场重叠、减速落定）
-      if (returning) {
-        await sleep(WELCOME_AT_MS - WAVE_BASE_MS);
-        if (cancelled) return;
-        setScene("welcome");
-        await sleep(WELCOME_TAIL_MS + HOLD_AFTER_SETTLE_MS);
-      } else {
-        // 首次使用跳过幕二：等退场波落定后停留
-        const waveSettle =
-          (waveCountFor(false) - 1) * WAVE_STAGGER_MS + WAVE_DUR_MS;
-        await sleep(waveSettle + HOLD_AFTER_SETTLE_MS);
-      }
+      // 幕二：欢迎入场（与退场重叠、减速落定）——首次使用与回归一致
+      // （欢迎页字标与幕二同源，两条路径的淡出衔接都是无缝的）
+      await sleep(WELCOME_AT_MS - WAVE_BASE_MS);
+      if (cancelled) return;
+      setScene("welcome");
+      await sleep(WELCOME_TAIL_MS + HOLD_AFTER_SETTLE_MS);
       if (cancelled) return;
 
       // 幕三：淡出露出对话（首次使用时欢迎页就在覆盖层之下，无缝衔接）
