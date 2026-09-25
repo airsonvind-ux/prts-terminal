@@ -1307,10 +1307,14 @@ fn execute_tools_and_append(
     verdicts: Option<&[ToolVerdict]>,
     abort: &AbortSignal,
 ) {
-    // 1. 构造 assistant 消息（含 tool_calls 和 reasoning_content），写入上下文。
+    // 1. 构造 assistant 消息（正文 + tool_calls + reasoning_content），写入上下文。
+    //    正文必须回填（2026-09 修复）：模型需要看到自己此前的输出——与
+    //    derive_messages 的既有设计（文本挂到带工具调用的消息上）同一口径；
+    //    修复前此处为 String::new()，模型轮内对自身输出失明，自指任务会退化成
+    //    工具调用死循环（实测 21 步）。
     //    RequireToolCall 策略仅丢弃"无工具轮次"的推理链，工具轮次保留。
     let assistant_msg = ChatMessage::assistant_with_tools(
-        String::new(),
+        result.text.clone(),
         result.tool_calls.clone(),
         result.reasoning.clone(),
     );
@@ -2472,6 +2476,94 @@ mod tests {
             e,
             SessionEvent::TurnEnd { reason: TurnEndReason::Completed, .. }
         )));
+    }
+
+    /// 工具步正文回填（2026-09 修复）：工具步的正文必须进入后续上下文。
+    ///
+    /// 修复前 execute_tools_and_append 以 String::new() 回填 assistant 消息，
+    /// 模型在轮内看不见自己刚写过的文本——自指任务（如"输出两段、每段带标签"）
+    /// 会因"我从没写过文本"的假象退化成工具调用死循环（实测 21 步）。
+    #[tokio::test]
+    async fn tool_step_text_is_carried_into_context() {
+        use crate::llm::{ApiType, LlmError, ToolCall, ToolCallFunction};
+        use std::collections::VecDeque;
+
+        // 脚本：第一步 = 正文 + echo 工具；第二步 = 收尾文本。
+        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: "先看一下工作区。".into(),
+            tool_calls: vec![ToolCall {
+                id: "call_1".into(),
+                call_type: "function".into(),
+                function: ToolCallFunction {
+                    name: "echo".into(),
+                    arguments: r#"{"message":"hi"}"#.into(),
+                },
+            }],
+            reasoning: None,
+            usage: None,
+        }));
+        queue.lock().unwrap().push_back(Ok(StreamResult {
+            text: "看完了。".into(),
+            tool_calls: vec![],
+            reasoning: None,
+            usage: None,
+        }));
+        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
+        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
+
+        let mut tool_registry = ToolRegistry::new();
+        tool_registry
+            .register(Box::new(crate::tools::EchoTool))
+            .unwrap();
+        let tools = Arc::new(tool_registry);
+
+        let (sink, _events, _log, mut messages, tool_defs, client_registry, _tools2) =
+            setup_dispatch_env(tools.clone(), scripted, vec![user_msg("测试")]);
+
+        let abort = AbortSignal::new();
+        let steer_queue = SteerQueue::new();
+        let outcome = dispatch_turn(
+            "s1",
+            &sink,
+            &mut messages,
+            &Arc::new(crate::skills_index::SkillIndex::empty()),
+            &tools,
+            &tool_defs,
+            &**client_registry
+                .select(&ApiType::OpenAiCompletions)
+                .unwrap(),
+            &LlmConfig::default(),
+            None,
+            ReasoningPolicy::Preserve,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &abort,
+            &steer_queue,
+            std::path::Path::new(&std::env::temp_dir()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, TurnOutcome::Completed);
+
+        // ① 第二次请求的快照里，第一步的 assistant 消息携带正文（修复前为空串）
+        let snaps = snapshots.lock().unwrap();
+        assert_eq!(snaps.len(), 2, "应恰好两次 LLM 调用");
+        let with_tools = snaps[1]
+            .iter()
+            .find(|m| m.tool_calls.is_some())
+            .expect("第二次请求应含带工具调用的 assistant 消息");
+        assert_eq!(with_tools.role, crate::llm::MessageRole::Assistant);
+        assert_eq!(
+            with_tools.content, "先看一下工作区。",
+            "工具步正文必须回填进上下文（修复前为 String::new()，模型轮内失忆）"
+        );
+
+        // ② 轮末 live 上下文同样携带正文（同一向量即后续所有请求的来源）
+        assert_eq!(messages[2].content, "先看一下工作区。");
+        assert!(messages[2].tool_calls.is_some());
+        assert_eq!(messages.last().unwrap().content, "看完了。");
     }
 
     #[tokio::test]
