@@ -329,9 +329,13 @@ impl Tool for MemoryGrowthTool {
                 if body.is_none() && brief.is_none() && tags.is_none() {
                     return Err(ToolError::Parse("update 至少需要 body / brief / tags 之一".into()));
                 }
-                store
+                let changed = store
                     .growth_update(name, body, brief, tags, SOURCE_TOOL)
                     .map_err(ToolError::Execution)?;
+                if !changed {
+                    // 内容逐字相同 → 未写盘：不发提醒，结果如实说明“没变”
+                    return Ok(ToolOutput::text(format!("「{name}」内容与当前一致，未写入")));
+                }
                 if name == PROFILE_NAME {
                     // 「关于博士」：提醒带新版全文（快照冻结不再更新，靠提醒同步）
                     let full = store

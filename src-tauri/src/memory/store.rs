@@ -598,6 +598,17 @@ impl MemoryStore {
         Ok(self.state.compression.longterm_version)
     }
 
+    /// 人工重写长期记忆（设置页入口）：与 [`Self::set_longterm`] 同构，
+    /// 但**无改动不落盘**——正文逐字相同 → 不写文件、不推进版本、不动水位，
+    /// 返回 `(当前版本, false)`；调用方据此跳过提醒。
+    pub fn set_longterm_manual(&mut self, text: String, now: u64) -> Result<(u64, bool), String> {
+        if self.longterm == text {
+            return Ok((self.longterm_version(), false));
+        }
+        let v = self.set_longterm(text, now, now)?;
+        Ok((v, true))
+    }
+
     fn persist_experiences(&self) -> Result<(), String> {
         let mut out = String::new();
         for e in &self.experiences {
@@ -657,6 +668,10 @@ impl MemoryStore {
     ///
     /// `source` 为本次写入方（调用点集中常量：工具＝「工具」/ 设置页＝「博士」），
     /// 与 `updated_at` 同期刷新。
+    ///
+    /// 返回是否有实际改动：三字段与现值逐字相同 → 不写盘、不刷新
+    /// `updated_at`/`source`，返回 `false`；调用方据此跳过提醒
+    /// （「点了保存但没改」不应产生任何变化）。
     pub fn growth_update(
         &mut self,
         name: &str,
@@ -664,11 +679,17 @@ impl MemoryStore {
         brief: Option<&str>,
         tags: Option<Vec<String>>,
         source: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let name = name.trim();
         let target = self
             .growth_get_mut(name)
             .ok_or_else(|| format!("成长页「{name}」不存在；改用 create 新建"))?;
+        let changed = body.map_or(false, |b| b != target.body)
+            || brief.map_or(false, |b| b != target.brief)
+            || tags.as_ref().map_or(false, |t| *t != target.tags);
+        if !changed {
+            return Ok(false);
+        }
         if let Some(b) = body {
             target.body = b.to_string();
         }
@@ -683,7 +704,7 @@ impl MemoryStore {
         target.updated_at = now_ms();
         let page = target.clone();
         self.write_page(&page)?;
-        Ok(())
+        Ok(true)
     }
 
     /// 删页；不存在 → Err。
@@ -951,6 +972,43 @@ mod tests {
         let mut s = MemoryStore::load(&dir).unwrap();
         assert!(s.growth_update("不存在", Some("x"), None, None, SOURCE_SYSTEM).is_err());
         assert!(s.growth_delete("不存在").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn growth_update_noop_is_not_a_write() {
+        let dir = temp_dir("noop");
+        let mut s = MemoryStore::load(&dir).unwrap();
+        s.growth_create("甲", "b", "x", vec!["t".into()], SOURCE_SYSTEM)
+            .unwrap();
+        let before = s.growth_get("甲").unwrap().clone();
+        let changed = s
+            .growth_update("甲", Some("x"), Some("b"), Some(vec!["t".into()]), SOURCE_USER)
+            .unwrap();
+        assert!(!changed, "同内容应返回无改动");
+        let after = s.growth_get("甲").unwrap();
+        assert_eq!(after.updated_at, before.updated_at, "无改动不应刷新时间");
+        assert_eq!(after.source, SOURCE_SYSTEM, "无改动不应盖章写入方");
+        let changed = s.growth_update("甲", Some("x2"), None, None, SOURCE_USER).unwrap();
+        assert!(changed, "有改动返回 true");
+        assert_eq!(s.growth_get("甲").unwrap().source, SOURCE_USER);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_longterm_manual_noop_keeps_version() {
+        let dir = temp_dir("lt-noop");
+        let mut s = MemoryStore::load(&dir).unwrap();
+        let (v, changed) = s.set_longterm_manual("老".into(), 1).unwrap();
+        assert!(changed);
+        assert_eq!(v, 1);
+        let (v2, changed2) = s.set_longterm_manual("老".into(), 2).unwrap();
+        assert!(!changed2, "同内容应返回无改动");
+        assert_eq!(v2, 1, "版本不应推进");
+        assert_eq!(s.longterm(), "老");
+        let (v3, changed3) = s.set_longterm_manual("新".into(), 3).unwrap();
+        assert!(changed3);
+        assert_eq!(v3, 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

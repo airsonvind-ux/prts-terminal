@@ -133,7 +133,10 @@
 
 .textarea {
   min-height: 96px;
-  resize: vertical;
+  /* 与阅读态展示框（.viewText）对齐：内边距同宽、随内容自增、去原生缩放柄 */
+  padding: 6px 8px;
+  resize: none;
+  overflow: hidden;
   line-height: 1.5;
 }
 

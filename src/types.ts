@@ -748,6 +748,8 @@ export interface MemoryDetail {
 export interface MemorySetLongtermResult {
   version: number;
   chars: number;
+  /** 是否有实际改动（false＝原文逐字相同：未写盘、未推进版本、未推提醒） */
+  changed: boolean;
 }
 
 /** memory_tidy 返回 */

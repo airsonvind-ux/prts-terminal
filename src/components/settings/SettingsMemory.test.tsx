@@ -5,7 +5,8 @@
 // 新建专题（memory_create）／删除（memory_delete）／「关于博士」显示复位／
 // 「查看当下记忆」（近期只读＋先前，编辑只挂长期记忆 → memory_set_longterm）／
 // 「查看记忆」（按日期分组、只标题、点开看内容、无来源标签、封存/收纳小标）／
-// 清除二次确认（memory_experience_clear）／整理（memory_tidy）／busy 禁用／返回。
+// 清除二次确认（memory_experience_clear）／整理（memory_tidy）／busy 禁用／返回／
+// 无改动保存提示（后端返回未改动）。
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
@@ -25,6 +26,10 @@ if (typeof Element.prototype.scrollIntoView !== "function") {
 
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+
+/** 写命令的“是否有实际改动”应答（测试可覆写） */
+let updateChanged = true;
+let longtermChanged = true;
 
 const UPDATED_AT = Date.UTC(2026, 8, 20, 3, 0, 0); // 2026-09-20（本地 +8 同日）
 
@@ -99,10 +104,12 @@ function route(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
       },
     ]);
   }
+  if (cmd === "memory_update") return Promise.resolve(updateChanged);
   if (cmd === "memory_set_longterm") {
     return Promise.resolve({
       version: 2,
       chars: String(args?.text ?? "").length,
+      changed: longtermChanged,
     });
   }
   if (cmd === "memory_tidy") {
@@ -177,6 +184,8 @@ function invokeCalls(cmd: string): unknown[][] {
 beforeEach(() => {
   __invokeMock.mockClear();
   __invokeMock.mockImplementation(route);
+  updateChanged = true;
+  longtermChanged = true;
   useConversationStore.setState({ conversations: [], activeId: "c1" });
   useToastStore.setState({ toasts: [] });
 });
@@ -331,6 +340,39 @@ describe("SettingsMemory（结构定稿）", () => {
     clickText("确认清除");
     await flush();
     expect(invokeCalls("memory_experience_clear")).toHaveLength(1);
+  });
+
+  it("成长页无改动保存：后端未写入 → 提示「无改动」且不重取总览", async () => {
+    updateChanged = false;
+    render();
+    await flush();
+    clickText("伤害计算");
+    await flush();
+    clickText("编辑");
+    clickText("保存");
+    await flush();
+    expect(invokeCalls("memory_update")).toHaveLength(1);
+    expect(
+      useToastStore.getState().toasts.some((t) => t.message.includes("无改动"))
+    ).toBe(true);
+    expect(invokeCalls("memory_overview")).toHaveLength(1);
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("长期记忆无改动保存：后端未写入 → 提示「无改动」且不重取总览", async () => {
+    longtermChanged = false;
+    render();
+    await flush();
+    clickText("查看当下记忆");
+    await flush();
+    clickText("编辑");
+    clickText("保存");
+    await flush();
+    expect(invokeCalls("memory_set_longterm")).toHaveLength(1);
+    expect(
+      useToastStore.getState().toasts.some((t) => t.message.includes("无改动"))
+    ).toBe(true);
+    expect(invokeCalls("memory_overview")).toHaveLength(1);
   });
 
   it("整理当下记忆 → memory_tidy + 反馈文案", async () => {

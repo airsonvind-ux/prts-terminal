@@ -1094,6 +1094,8 @@ pub struct MemorySetLongtermDto {
     pub version: u64,
     /// 写入字数
     pub chars: usize,
+    /// 是否有实际改动（false＝原文逐字相同：未写盘、未推进版本、未推提醒）
+    pub changed: bool,
 }
 
 /// memory_tidy 返回（界面反馈）。
@@ -1255,6 +1257,8 @@ pub fn memory_create(
 }
 
 /// 编辑成长页（name ＋ 简述/正文/标签任一；「关于博士」同走）。
+///
+/// 返回是否有实际改动：内容逐字相同 → 不写盘、不刷新时间、不推提醒，返回 `false`。
 #[tauri::command]
 pub fn memory_update(
     turn_registry: State<'_, Arc<TurnRegistry>>,
@@ -1264,25 +1268,30 @@ pub fn memory_update(
     brief: Option<String>,
     body: Option<String>,
     tags: Option<Vec<String>>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     ensure_not_busy(&turn_registry)?;
     if brief.is_none() && body.is_none() && tags.is_none() {
         return Err("至少提供 brief / body / tags 之一".into());
     }
-    let (is_profile, full, brief_after) = {
+    let (changed, is_profile, full, brief_after) = {
         let mut m = memory_store
             .lock()
             .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-        m.growth_update(&name, body.as_deref(), brief.as_deref(), tags, SOURCE_USER)?;
+        let changed =
+            m.growth_update(&name, body.as_deref(), brief.as_deref(), tags, SOURCE_USER)?;
         let p = m
             .growth_get(&name)
             .ok_or_else(|| format!("成长页「{name}」不存在"))?;
         (
+            changed,
             p.name == PROFILE_NAME,
             p.body.trim().to_string(),
             p.brief.trim().to_string(),
         )
     };
+    if !changed {
+        return Ok(false);
+    }
     let detail = if is_profile {
         format!("博士更新了成长页「{name}」\n{full}")
     } else if brief_after.is_empty() {
@@ -1291,7 +1300,7 @@ pub fn memory_update(
         format!("博士更新了成长页「{name}：{brief_after}」")
     };
     note_memory(&ledger, &detail);
-    Ok(())
+    Ok(true)
 }
 
 /// 删除成长页（「关于博士」删＝复位）；不含经历。
@@ -1369,6 +1378,7 @@ pub fn memory_experience_clear(
 ///
 /// 定位：**人工纠偏入口**（与成长页编辑同构）——自动沉淀跑偏时由用户改写。
 /// 上限与压缩硬闸同源（[`MAX_LONGTERM_CHARS`]）；空串允许（＝清空）。
+/// 无改动（逐字相同）→ 不写盘、不推进版本、不推提醒（见 `set_longterm_manual`）。
 /// 写入对**新对话**生效；正在进行的对话靠提醒看到新版全文（快照对话内冻结）。
 #[tauri::command]
 pub fn memory_set_longterm(
@@ -1380,16 +1390,20 @@ pub fn memory_set_longterm(
     ensure_not_busy(&turn_registry)?;
     validate_longterm(&text)?;
     let now = crate::memory::schema::now_ms();
-    let mut m = memory_store
-        .lock()
-        .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-    let version = m.set_longterm(text.clone(), now, now)?;
-    drop(m);
-    let detail = format!("长期记忆已重写（版本 {version}）\n{}", text.trim());
-    note_memory(&ledger, &detail);
+    let (version, changed) = {
+        let mut m = memory_store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        m.set_longterm_manual(text.clone(), now)?
+    };
+    if changed {
+        let detail = format!("长期记忆已重写（版本 {version}）\n{}", text.trim());
+        note_memory(&ledger, &detail);
+    }
     Ok(MemorySetLongtermDto {
         version,
         chars: text.chars().count(),
+        changed,
     })
 }
 

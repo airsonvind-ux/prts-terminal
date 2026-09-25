@@ -111,6 +111,15 @@ export function GrowthView({
     tagsText: "",
   });
   const [saving, setSaving] = useState(false);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  // 正文编辑框随内容自增（与阅读态展示框同尺寸；CSS 已去原生缩放柄）
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [draft.body, mode]);
 
   const fillDraft = useCallback((p: MemoryGrowthPage) => {
     setDraft({
@@ -160,15 +169,19 @@ export function GrowthView({
         onSaved();
         onBack();
       } else {
-        await invoke("memory_update", {
+        const changed = await invoke<boolean>("memory_update", {
           name: nm,
           brief: draft.brief,
           body: draft.body,
           tags,
         });
-        showToast(`已保存「${nm}」`, { kind: "info", dedupeKey: "memory-save" });
-        onSaved();
-        await loadPage();
+        if (changed) {
+          showToast(`已保存「${nm}」`, { kind: "info", dedupeKey: "memory-save" });
+          onSaved();
+          await loadPage();
+        } else {
+          showToast("无改动，未写入", { kind: "info", dedupeKey: "memory-save" });
+        }
         setMode("read");
       }
     } catch (e) {
@@ -272,6 +285,7 @@ export function GrowthView({
           <label className={styles.fieldLabel}>正文</label>
           <textarea
             className={styles.textarea}
+            ref={bodyRef}
             value={draft.body}
             onChange={(e) => setDraft({ ...draft, body: e.target.value })}
           />
@@ -320,6 +334,15 @@ export function CompiledView({
 }) {
   const [preEdit, setPreEdit] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const preRef = useRef<HTMLTextAreaElement>(null);
+
+  // 编辑框随内容自增（与阅读态展示框同尺寸；CSS 已去原生缩放柄）
+  useEffect(() => {
+    const el = preRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [preEdit]);
 
   const savePre = async () => {
     if (preEdit === null) return;
@@ -328,12 +351,16 @@ export function CompiledView({
       const r = await invoke<MemorySetLongtermResult>("memory_set_longterm", {
         text: preEdit,
       });
-      showToast(`长期记忆已重写（版本 ${r.version}，${r.chars} 字）`, {
-        kind: "info",
-        dedupeKey: "memory-pre-save",
-      });
+      if (r.changed) {
+        showToast(`长期记忆已重写（版本 ${r.version}，${r.chars} 字）`, {
+          kind: "info",
+          dedupeKey: "memory-pre-save",
+        });
+        onSaved();
+      } else {
+        showToast("无改动，未重写", { kind: "info", dedupeKey: "memory-pre-save" });
+      }
       setPreEdit(null);
-      onSaved();
     } catch (e) {
       showToast(`保存失败：${String(e)}`, { kind: "warning" });
     } finally {
@@ -381,6 +408,7 @@ export function CompiledView({
         <>
           <textarea
             className={styles.textarea}
+            ref={preRef}
             value={preEdit}
             onChange={(e) => setPreEdit(e.target.value)}
             data-pre-edit
