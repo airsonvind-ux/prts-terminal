@@ -270,6 +270,47 @@ export function SettingsPanel() {
     }
   }, [updateSettings]);
 
+  /** 技能页：重新拉取清单（安装 / 移除后刷新；挂载时已拉一次） */
+  const refreshSkills = useCallback(() => {
+    invoke<SkillEntry[]>("list_skills")
+      .then(setSkills)
+      .catch((e) => console.error("[settings] list_skills 失败", e));
+  }, []);
+
+  /** 技能页「安装」：选择器（文件 / 文件夹）→ install_skill → 刷新 + 可见反馈 */
+  const handleInstallSkill = useCallback(
+    async (kind: "file" | "folder") => {
+      try {
+        const picked = await invoke<string | null>(
+          kind === "file" ? "pick_skill_file" : "pick_skill_folder"
+        );
+        if (!picked) return; // 用户取消
+        const entry = await invoke<SkillEntry>("install_skill", {
+          sourcePath: picked,
+        });
+        showToast(`已安装技能「${entry.name}」`, { kind: "info" });
+        refreshSkills();
+      } catch (e) {
+        showToast(`安装失败：${String(e)}`, { kind: "warning" });
+      }
+    },
+    [refreshSkills]
+  );
+
+  /** 技能页「移除」：行内两步确认后调用（内置技能不走到这里） */
+  const handleRemoveSkill = useCallback(
+    async (entry: SkillEntry) => {
+      try {
+        await invoke<string>("remove_skill", { filePath: entry.filePath });
+        showToast(`已移除技能「${entry.name}」`, { kind: "info" });
+        refreshSkills();
+      } catch (e) {
+        showToast(`移除失败：${String(e)}`, { kind: "warning" });
+      }
+    },
+    [refreshSkills]
+  );
+
   const switchTab = (key: SettingsTabKey) => {
     setActiveTab(key);
     // 记忆上次所在页：切页即写（打开时读初始值）
@@ -339,7 +380,14 @@ export function SettingsPanel() {
               onChooseWorkspace={handleChooseWorkspace}
             />
           )}
-          {activeTab === "skills" && <SettingsSkills skills={skills} />}
+          {activeTab === "skills" && (
+            <SettingsSkills
+              skills={skills}
+              onInstallFile={() => handleInstallSkill("file")}
+              onInstallFolder={() => handleInstallSkill("folder")}
+              onRemove={handleRemoveSkill}
+            />
+          )}
           {activeTab === "memory" && <SettingsMemory busy={settingsBusy} />}
           {activeTab === "app" && (
             <SettingsApp

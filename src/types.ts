@@ -417,8 +417,11 @@ export interface AppMeta {
 export interface SkillEntry {
   name: string;
   description: string;
-  /** 源 md 绝对路径（camelCase 对齐后端；null/缺省 = 无文件可打开） */
+  /** 源 md 绝对路径（camelCase 对齐后端；null/缺省 = 无文件可打开；
+   *  文件夹包为包内 SKILL.md 路径） */
   filePath?: string | null;
+  /** 来源分层（后端 frontmatter source 原样透出；"builtin" = 内置，其余视为用户） */
+  source?: string | null;
 }
 
 /** 空间页 · 工作区树节点（list_workspace_dir 载荷；字段对齐 Rust camelCase） */
@@ -807,6 +810,7 @@ export interface Conversation {
    * sendMessage 时经 advanceNoticeSeq action 推进（拼装即防重复；invoke
    * 失败回滚）。游标为会话元数据的一部分——对话持久化落地时随会话落盘，
    * 接口不变（读写收敛于 ConversationStore action）。缺省 = 0：下轮全量告知。
+   * 压缩成功时经 applyCompaction 复位（批 4：下一条消息重发三值快照）。
    */
   lastNoticeSeq?: number;
 }

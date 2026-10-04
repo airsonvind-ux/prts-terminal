@@ -25,6 +25,8 @@ mod settings;
 mod steer_queue;
 mod skills;
 mod skills_index;
+mod skills_install;
+mod skills_snapshot;
 mod tools;
 mod llm;
 mod commands;
@@ -42,6 +44,7 @@ use crate::memory::{MemoryStore, SnapshotStore};
 use crate::llm::{ClientRegistry, ModelRegistry};
 use crate::policy::Policy;
 use crate::settings::SettingsStore;
+use crate::skills_snapshot::SkillSnapshotStore;
 use crate::tools::ToolRegistry;
 use crate::steer_queue::SteerQueue;
 use crate::turn_registry::TurnRegistry;
@@ -136,6 +139,13 @@ pub fn run() {
         &crate::session_store::sessions_dir(&config::data_dir()),
     )));
 
+    // ── 技能目录冻结快照（sessions/{cid}.skills.txt；批 2）──
+    // 首次组装即冻结（活体目录文本入 sidecar）；同一对话读回原文
+    // （system 前缀缓存硬约束），刷新点＝新对话（+ 压缩，批 4）。
+    let skills_snapshot_store = Arc::new(Mutex::new(SkillSnapshotStore::new(
+        &crate::session_store::sessions_dir(&config::data_dir()),
+    )));
+
     // ── 适配器注册表 ──
     // 按 ApiType 路由到对应 LlmClient 实现。
     // 未来添加新协议适配器只需在此改一行 register。
@@ -165,6 +175,29 @@ pub fn run() {
         Arc::new(Mutex::new(st.settings.llm.resolve_active()))
     };
 
+    // ── 内置技能同步（运行根 = data_dir()/skills；源为准；用户条目只增不删，内置退役清理）──
+    // 顺序约束：先同步 → 再建索引（下方 notices diff 与后续全部消费方）。
+    // 失败不阻断启动：记日志继续；技能目录缺失时索引侧自会降级。
+    match crate::skills_index::sync_bundled_skills(
+        &crate::skills_index::bundled_skills_dir(),
+        &crate::skills_index::skills_dir(),
+    ) {
+        Ok(r) => {
+            if !r.changed.is_empty() || !r.removed.is_empty() {
+                let mut parts: Vec<String> = Vec::new();
+                if !r.changed.is_empty() {
+                    parts.push(format!("更新 {} 个（{}）", r.changed.len(), r.changed.join("、")));
+                }
+                if !r.removed.is_empty() {
+                    parts.push(format!("退役 {} 个（{}）", r.removed.len(), r.removed.join("、")));
+                }
+                parts.push(format!("未变 {} 个", r.unchanged));
+                eprintln!("[lib] 技能同步：{}", parts.join(" / "));
+            }
+        }
+        Err(e) => eprintln!("[lib] 内置技能同步失败（继续启动）：{e}"),
+    }
+
     // ── 提醒数据源值同步 / 目录 diff（notices 已提前创建并在注册工具时注入）──
     // 值覆写：workspace/knowledge/model 三维度与当前值比对，不同才更新
     // （stamp＝++seq）；目录 diff（技能/工具）首启只记基线。前端 sendMessage 经
@@ -185,9 +218,9 @@ pub fn run() {
         // 运行仍按首启处理——空清单不覆盖真实基线）
         match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
             Ok(idx) => {
-                let names: Vec<String> =
-                    idx.names().into_iter().map(|s| s.to_string()).collect();
-                ledger.diff_skill_catalog(&names);
+                // (name, desc) 对：描述变化也可捕捉（批 3）
+                let pairs = idx.catalog_pairs();
+                ledger.diff_skill_catalog(&pairs);
             }
             Err(e) => {
                 eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
@@ -259,6 +292,7 @@ pub fn run() {
         .manage(session_store)
         .manage(memory_store)
         .manage(snapshot_store)
+        .manage(skills_snapshot_store)
         .manage(exec_settings)
         .manage(approval_registry)
         .manage(turn_registry)
@@ -285,6 +319,13 @@ pub fn run() {
                     eprintln!("[lib] 清扫孤儿记忆快照 {n} 个");
                 }
             }
+            // 技能目录快照同区清扫（批 2）
+            if let Ok(snaps) = app.state::<Arc<Mutex<SkillSnapshotStore>>>().lock() {
+                let n = snaps.sweep_orphans();
+                if n > 0 {
+                    eprintln!("[lib] 清扫孤儿技能目录快照 {n} 个");
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -294,6 +335,10 @@ pub fn run() {
             commands::reveal_api_key,
             commands::get_app_meta,
             commands::list_skills,
+            commands::pick_skill_file,
+            commands::pick_skill_folder,
+            commands::install_skill,
+            commands::remove_skill,
             commands::open_path,
             commands::open_url,
             commands::set_always_on_top,

@@ -318,7 +318,7 @@ impl EventSink {
 /// 会话日志侧（不可见，供回放/遥测）：
 /// turn/start → 播种历史 → request/header（仅变化时追加）→
 /// step/start × N … step/end × N → assistant/message → turn/end{reason}
-#[allow(dead_code)] // 测试用无记忆薄包装；生产走 process_with_memory
+#[allow(dead_code)] // 测试用无目录无记忆薄包装；生产走 process_with_memory
 #[allow(clippy::too_many_arguments)]
 pub async fn process(
     session_id: &str,
@@ -349,15 +349,17 @@ pub async fn process(
         steer_queue,
         workspace_root,
         emit,
-        String::new(),
+        String::new(), // skill_catalog（薄包装：无目录）
+        String::new(), // memory_block（薄包装：无记忆）
     )
     .await
 }
 
-/// 同 [`process`]，附加**对话冻结记忆区文本**（由命令层经 `SnapshotStore` 取）。
+/// 同 [`process`]，附加**对话冻结的目录文本与记忆区文本**（由命令层经
+/// `SkillSnapshotStore` / `SnapshotStore` 取）。
 ///
-/// `memory_block` 为空串时与旧行为逐字节一致（无记忆态）。记忆区在整个 turn
-/// 内不变（快照已冻结），故每 step 重写 `messages[0]` 的内容恒定，
+/// 两者为空串时与旧行为逐字节一致（无目录 / 无记忆态）。目录与记忆区在整个
+/// turn 内不变（快照已冻结），故每 step 重写 `messages[0]` 的内容恒定，
 /// `push_header` 去重不误判（前缀缓存不破）。
 #[allow(clippy::too_many_arguments)]
 pub async fn process_with_memory(
@@ -374,6 +376,7 @@ pub async fn process_with_memory(
     steer_queue: &SteerQueue,
     workspace_root: PathBuf,
     emit: impl Fn(IpcEvent) + Send + Sync + 'static,
+    skill_catalog: String,
     memory_block: String,
 ) -> Result<(), OrchestratorError> {
     // ── 0. 按 ApiType 选择适配器 ──
@@ -402,6 +405,7 @@ pub async fn process_with_memory(
     let tool_defs = tools.list_defs();
     // Skill 目录索引：turn 级快照（每 turn 入口重建——Skill 生命周期绑定
     // 本轮对话：轮内激活、轮末随 ActiveContext 自动卸载，跨轮按需重新激活）。
+    // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
     // 加载失败降级为空索引（激活工具恒未命中），不阻断本轮处理。
     let skill_index = Arc::new(match crate::skills_index::SkillIndex::load(
         &crate::skills_index::skills_dir(),
@@ -420,15 +424,19 @@ pub async fn process_with_memory(
         log.seed_from_history(session_id, history);
         log.push_header(
             session_id,
-            &context::assemble_system_prompt_with_memory(&skill_index, &memory_block),
+            &context::assemble_system_prompt_with_memory(&skill_catalog, &memory_block),
             &tool_defs,
         );
     }
 
     // ── 3. 派生 LLM 历史（替代 convert_history）→ 组装初始上下文 ──
     let derived = log.lock().unwrap().derive_messages(policy);
-    let mut messages =
-        context::build_context_with_memory(&derived, tool_defs.len(), &skill_index, &memory_block);
+    let mut messages = context::build_context_with_memory(
+        &derived,
+        tool_defs.len(),
+        &skill_catalog,
+        &memory_block,
+    );
 
     // ── 4. 进入调度循环（一个 turn，零或多个 step）──
     // workspace_root：自动化模式地域性信任门的信任根。命令层装配时从
@@ -452,6 +460,7 @@ pub async fn process_with_memory(
         abort,
         steer_queue,
         &workspace_root,
+        &skill_catalog,
         &memory_block,
     )
     .await;
@@ -514,7 +523,7 @@ pub async fn process_with_memory(
 ///
 /// abort 出口**不写 step/end 与 turn/end**（与 error 路径现状一致；turn/end 由
 /// process 的 Aborted 出口补写，log 容忍悬挂 step/start——前端不消费 step）。
-#[allow(dead_code)] // 测试用无记忆薄包装；生产走 dispatch_turn_with_memory
+#[allow(dead_code)] // 测试用无目录无记忆薄包装；生产走 dispatch_turn_with_memory
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_turn(
     session_id: &str,
@@ -549,12 +558,13 @@ async fn dispatch_turn(
         abort,
         steer_queue,
         workspace_root,
-        "",
+        "", // skill_catalog（薄包装：无目录）
+        "", // memory_block（薄包装：无记忆）
     )
     .await
 }
 
-/// 同 [`dispatch_turn`]，附加冻结记忆区文本（空串 = 无记忆态；测试沿用无参版本）。
+/// 同 [`dispatch_turn`]，附加冻结目录文本与记忆区文本（空串 = 无目录 / 无记忆态）。
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_turn_with_memory(
     session_id: &str,
@@ -572,6 +582,7 @@ async fn dispatch_turn_with_memory(
     abort: &AbortSignal,
     steer_queue: &SteerQueue,
     workspace_root: &Path,
+    skill_catalog: &str,
     memory_block: &str,
 ) -> Result<TurnOutcome, OrchestratorError> {
     // tool_ctx 构造：有 db 用 with_db（生产路径），无 db 用 new（Mock 场景）。
@@ -616,9 +627,27 @@ async fn dispatch_turn_with_memory(
         // system prompt 静态（2026-08）：人格 + Skill 目录，轮内不变；
         // 仍按 step 重写 messages[0] 保持不变量（首条恒为 system），
         // push_header 去重后不追加（prompt 无变化）
-        let system = context::assemble_system_prompt_with_memory(skill_index, memory_block);
+        let system = context::assemble_system_prompt_with_memory(skill_catalog, memory_block);
         messages[0] = ChatMessage::system(system.clone());
         sink.push_header(session_id, &system, tool_defs);
+
+        // ── 缓存前缀契约观测（2026-10-03）：请求前输出 system / 工具定义
+        // 字节指纹，供 PRTS_DEBUG 终端比对“跨轮 / 跨重启是否漂移”——
+        // 只出哈希与字节数，绝不出正文（request/header 全文照旧不进终端）。──
+        {
+            let system_hash = crate::observability::fnv1a64_hex(system.as_bytes());
+            let tools_json = serde_json::to_string(tool_defs).unwrap_or_default();
+            let tools_hash = crate::observability::fnv1a64_hex(tools_json.as_bytes());
+            debug!(
+                "step" => step,
+                "action" => "cache_contract",
+                "model" => config.model.as_str(),
+                "systemHash" => system_hash,
+                "systemBytes" => system.len(),
+                "toolsHash" => tools_hash,
+                "toolsBytes" => tools_json.len()
+            );
+        }
 
         // 请求前估算（模块 8 双锚：estimate 兜底锚入 log，
         // 与 step/end 的 provider usage 基线锚对齐）
@@ -2145,11 +2174,21 @@ mod tests {
         // （第二轮上下文用量低于第一轮）→ 现在取最后一次调用快照
         let mut state = TurnState::new();
         state.record_call(
-            Some(TokenUsage { input_tokens: 5000, output_tokens: 100 }),
+            Some(TokenUsage {
+                input_tokens: 5000,
+                output_tokens: 100,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
             Some("第一轮推理".into()),
         );
         state.record_call(
-            Some(TokenUsage { input_tokens: 3000, output_tokens: 200 }),
+            Some(TokenUsage {
+                input_tokens: 3000,
+                output_tokens: 200,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
             Some("第二轮推理".into()),
         );
         let (reasoning, usage) = state.finish();
@@ -2163,8 +2202,24 @@ mod tests {
     #[test]
     fn turnstate_total_cost_accumulates() {
         let mut state = TurnState::new();
-        state.record_call(Some(TokenUsage { input_tokens: 100, output_tokens: 50 }), None);
-        state.record_call(Some(TokenUsage { input_tokens: 200, output_tokens: 80 }), None);
+        state.record_call(
+            Some(TokenUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
+            None,
+        );
+        state.record_call(
+            Some(TokenUsage {
+                input_tokens: 200,
+                output_tokens: 80,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
+            None,
+        );
         assert_eq!(state.total_input_tokens, 300);
         assert_eq!(state.total_output_tokens, 130);
     }
@@ -2328,7 +2383,12 @@ mod tests {
                         },
                     }],
                     reasoning: Some("让我查一下".into()),
-                    usage: Some(TokenUsage { input_tokens: 1000, output_tokens: 50 }),
+                    usage: Some(TokenUsage {
+                        input_tokens: 1000,
+                        output_tokens: 50,
+                        cache_hit_tokens: None,
+                        cache_miss_tokens: None,
+                    }),
                 },
             },
             MockResponse {
@@ -2337,7 +2397,12 @@ mod tests {
                     text: "查到了".into(),
                     tool_calls: vec![],
                     reasoning: None,
-                    usage: Some(TokenUsage { input_tokens: 1500, output_tokens: 30 }),
+                    usage: Some(TokenUsage {
+                        input_tokens: 1500,
+                        output_tokens: 30,
+                        cache_hit_tokens: None,
+                        cache_miss_tokens: None,
+                    }),
                 },
             },
         ]));
@@ -2366,9 +2431,7 @@ mod tests {
             );
             log.push_header(
                 "s1",
-                &crate::orchestrator::context::assemble_system_prompt(
-                    &crate::skills_index::SkillIndex::empty(),
-                ),
+                &crate::orchestrator::context::assemble_system_prompt(""),
                 &tool_defs,
             );
         }
@@ -2377,7 +2440,7 @@ mod tests {
         let mut messages = crate::orchestrator::context::build_context(
             &derived,
             tool_defs.len(),
-            &crate::skills_index::SkillIndex::empty(),
+            "",
         );
 
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -2446,8 +2509,18 @@ mod tests {
             })
             .collect();
         assert_eq!(usages, vec![
-            Some(TokenUsage { input_tokens: 1000, output_tokens: 50 }),
-            Some(TokenUsage { input_tokens: 1500, output_tokens: 30 }),
+            Some(TokenUsage {
+                input_tokens: 1000,
+                output_tokens: 50,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
+            Some(TokenUsage {
+                input_tokens: 1500,
+                output_tokens: 30,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
         ]);
 
         // ── 派生一致性：messages[1..] == derive(log)（双写验证可重放）──
@@ -2627,7 +2700,7 @@ mod tests {
         let mut messages = crate::orchestrator::context::build_context(
             &derived,
             tool_defs.len(),
-            &crate::skills_index::SkillIndex::empty(),
+            "",
         );
 
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3342,9 +3415,7 @@ mod tests {
             log.seed_from_history("s1", history);
             log.push_header(
                 "s1",
-                &crate::orchestrator::context::assemble_system_prompt(
-                    &crate::skills_index::SkillIndex::empty(),
-                ),
+                &crate::orchestrator::context::assemble_system_prompt(""),
                 &tool_defs,
             );
         }
@@ -3355,7 +3426,7 @@ mod tests {
         let messages = crate::orchestrator::context::build_context(
             &derived,
             tool_defs.len(),
-            &crate::skills_index::SkillIndex::empty(),
+            "",
         );
         (sink, events, log, messages, tool_defs, client_registry, tools)
     }
@@ -4469,6 +4540,8 @@ mod tests {
                 usage: Some(TokenUsage {
                     input_tokens: input,
                     output_tokens: 10,
+                    cache_hit_tokens: None,
+                    cache_miss_tokens: None,
                 }),
             })
         };

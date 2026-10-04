@@ -28,7 +28,7 @@ impl Tool for ActivateSkillTool {
     }
 
     fn description(&self) -> &str {
-        "从 Skill 目录激活指定 Skill。激活后其正文注入上下文。目录见系统提示词的 Skill 目录节；任务简单（纯查询/闲聊）时无需激活。"
+        "从 Skill 目录激活指定 Skill。激活后其正文注入上下文。目录见系统提示词的 Skill 目录节；任务简单（纯查询/闲聊）时无需激活。工作落入某技能的范围时，先激活、再动手；技能正文是其领域内的专门指引，与一般行为条款冲突时以它为准，底线不因技能改变。"
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -91,8 +91,31 @@ impl Tool for ActivateSkillTool {
         // 命中 → 正文（剥 frontmatter）作为工具结果返回，随 tool_result
         // 消息注入对话历史。激活语义 = 读取正文进上下文（与读知识库同形态）：
         // 正文保留在历史中持续生效，不再有轮末卸载机制。
+        // 文件夹包（源为 SKILL.md）：附配套文件目录——模型可按需读取
+        // references 等资源（文件域工具已注册，技能目录可读）。
         let content = index.body(name).unwrap_or_default().to_string();
-        let mut output = ToolOutput::text(format!("已激活 Skill「{name}」\n\n{content}"));
+        let mut summary = format!("已激活 Skill「{name}」\n\n{content}");
+        if let Some(p) = index.path(name) {
+            if p.file_name().and_then(|n| n.to_str()) == Some("SKILL.md") {
+                if let Some(dir) = p.parent() {
+                    // 仅当包内有 SKILL.md 之外的配套文件时才附目录行
+                    // （内置包多为纯 SKILL.md，无资源则不加噪音）
+                    let has_resources = std::fs::read_dir(dir)
+                        .map(|rd| {
+                            rd.flatten()
+                                .any(|e| e.file_name().to_string_lossy() != "SKILL.md")
+                        })
+                        .unwrap_or(false);
+                    if has_resources {
+                        summary.push_str(&format!(
+                            "\n\n（配套文件目录：{}，引用其中资料时按需读取）",
+                            dir.display()
+                        ));
+                    }
+                }
+            }
+        }
+        let mut output = ToolOutput::text(summary);
         output.skill_events = vec![SkillEventMark::Activate { name: name.to_string() }];
         Ok(output)
     }
@@ -244,6 +267,47 @@ mod tests {
             "got: {err}"
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn activate_package_skill_appends_resource_dir_only_when_resources_exist() {
+        let root = unique_temp_dir("pkg");
+        // 带资源的包：附目录行
+        std::fs::create_dir_all(root.join("黑话小抄").join("references")).unwrap();
+        std::fs::write(
+            root.join("黑话小抄").join("SKILL.md"),
+            "---\nname: 黑话小抄\ndescription: 术语\n---\n\n## 正文",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("黑话小抄").join("references").join("terms.md"),
+            "词条",
+        )
+        .unwrap();
+        // 纯 SKILL.md 的包（无资源）：不附行
+        std::fs::create_dir_all(root.join("纯条目")).unwrap();
+        std::fs::write(
+            root.join("纯条目").join("SKILL.md"),
+            "---\nname: 纯条目\ndescription: d\n---\n\n## 正文2",
+        )
+        .unwrap();
+
+        let idx = SkillIndex::load(&root).unwrap();
+        let ctx = skill_ctx(idx);
+        let out = ActivateSkillTool
+            .execute(&ctx, r#"{"name":"黑话小抄"}"#)
+            .unwrap();
+        assert!(out.summary.starts_with("已激活 Skill「黑话小抄」\n\n## 正文"));
+        assert!(out.summary.contains("配套文件目录"), "有资源的包应附目录行");
+
+        let out2 = ActivateSkillTool
+            .execute(&ctx, r#"{"name":"纯条目"}"#)
+            .unwrap();
+        assert!(
+            !out2.summary.contains("配套文件目录"),
+            "无资源的包不应附目录行"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

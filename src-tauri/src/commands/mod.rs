@@ -17,6 +17,7 @@ use crate::events::{AgentEvent, FrontendMessage, IpcEvent};
 use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo, ModelRegistry, ProviderInfo, TokenUsage};
 use crate::memory::schema::{PROFILE_NAME, REVISION_SEALED, SOURCE_USER};
 use crate::memory::{MemoryStore, SnapshotStore};
+use crate::skills_snapshot::SkillSnapshotStore;
 use crate::orchestrator;
 use crate::settings::{SettingsPatch, SettingsStore};
 use crate::session_store::{
@@ -108,6 +109,7 @@ pub async fn agent_process(
     settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
+    skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
 ) -> Result<(), String> {
     // ── Clone Arc：从 State 引用中获得可移入 async 上下文的独立所有权 ──
     let tools = Arc::clone(&tools);
@@ -119,6 +121,7 @@ pub async fn agent_process(
     let steer_queue = Arc::clone(&steer_queue);
     let memory_store = Arc::clone(&memory_store);
     let snapshot_store = Arc::clone(&snapshot_store);
+    let skills_snapshot_store = Arc::clone(&skills_snapshot_store);
     // 缓存 State 已注释（2026-08：缓存系统停用，待升级为记忆系统）
 
     // ── 包装 emit 回调：AppHandle.emit → 闭包 ──
@@ -171,7 +174,7 @@ pub async fn agent_process(
     // 有真实 conversationId → 组装 + 落盘 sidecar（对话内冻结，唯一刷新点＝新对话）；
     // **缺 conversationId（旧前端）→ 只组装、不落盘**（sessionId 每请求唯一，
     // 用它当冻结键会名存实亡并产生垃圾快照，批 1 审查修复 🟡3）。
-    let memory_key = if conversation_id.is_empty() {
+    let conversation_key = if conversation_id.is_empty() {
         None
     } else {
         Some(conversation_id.as_str())
@@ -183,7 +186,20 @@ pub async fn agent_process(
         let mut snaps = snapshot_store
             .lock()
             .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
-        snaps.get_or_assemble(memory_key, &mem)
+        snaps.get_or_assemble(conversation_key, &mem)
+    };
+
+    // ── 技能目录冻结快照（批 2）：与记忆区同点位、同 key ──
+    // 首见冻结（活体目录文本 → sidecar）；活体不可读时不冻结（下轮重试）。
+    let skill_catalog = {
+        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
+            .map(|idx| idx.catalog_text())
+            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+            .ok();
+        let mut snaps = skills_snapshot_store
+            .lock()
+            .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
+        snaps.get_or_freeze(conversation_key, live.as_deref())
     };
 
     // ── 插话保留领取（2026-09-25）：同对话上一轮中止/错误留下的未交付
@@ -193,7 +209,7 @@ pub async fn agent_process(
         steer_queue.adopt(&conversation_id, &session_id);
     }
 
-    // ── 调用调度中枢（abort 透传：取消点消费；memory_block 注入 system 尾部）──
+    // ── 调用调度中枢（abort 透传：取消点消费；冻结目录 + 记忆区注入 system）──
     let result = orchestrator::process_with_memory(
         &session_id,
         request.history,
@@ -208,6 +224,7 @@ pub async fn agent_process(
         steer_queue.as_ref(),
         workspace_root,
         emit,
+        skill_catalog,
         memory_block,
     )
     .await;
@@ -445,13 +462,21 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub file_path: Option<String>,
+    /// 来源分层（frontmatter source 原样透出；缺省 = 用户）
+    pub source: Option<String>,
 }
 
 /// 技能清单（空间页技能节只读展示）：name + description，按 name 排序。
+/// 读技能运行根（data_dir()/skills，内置经启动同步进入）。
 /// 加载失败（目录不可读）→ 描述性 Err。只读命令不设 busy 闸。
 #[tauri::command]
 pub fn list_skills() -> Result<Vec<SkillEntry>, String> {
-    let idx = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
+    list_skills_from(&crate::skills_index::skills_dir())
+}
+
+/// list_skills 实现体（显式目录参数：命令层传运行根，测试传夹具）。
+fn list_skills_from(dir: &std::path::Path) -> Result<Vec<SkillEntry>, String> {
+    let idx = crate::skills_index::SkillIndex::load(dir)
         .map_err(|e| format!("技能目录读取失败: {e}"))?;
     Ok(idx
         .names()
@@ -465,6 +490,7 @@ pub fn list_skills() -> Result<Vec<SkillEntry>, String> {
             file_path: idx
                 .path(name)
                 .map(|p| p.to_string_lossy().into_owned()),
+            source: idx.resolve(name).and_then(|m| m.source.clone()),
         })
         .collect())
 }
@@ -551,6 +577,98 @@ pub async fn choose_workspace_directory(
         let _ = tx.send(value);
     });
     rx.await.map_err(|e| format!("目录选择失败: {e}"))
+}
+
+// ══════════════════════════════════════════════════════
+// 技能安装 / 移除（批 3 · 设置页扩展）
+// ══════════════════════════════════════════════════════
+
+/// 打开系统文件选择器选一个技能文件（.md）。
+///
+/// 实现形态同 `choose_workspace_directory`：后端命令 + dialog Rust API，
+/// 非阻塞 pick_file 内部经 run_on_main_thread 弹窗，oneshot 桥回 async 命令；
+/// 用户取消 → `Ok(None)`。安装动作独立成 `install_skill`（纯路径入参、可测）。
+#[tauri::command]
+pub async fn pick_skill_file(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    app.dialog()
+        .file()
+        .set_title("选择技能文件（.md）")
+        .add_filter("Markdown", &["md"])
+        .pick_file(move |picked| {
+            let value = picked.and_then(|fp| {
+                fp.as_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
+            let _ = tx.send(value);
+        });
+    rx.await.map_err(|e| format!("文件选择失败: {e}"))
+}
+
+/// 打开系统目录选择器选一个技能文件夹（根级需含 SKILL.md）。
+#[tauri::command]
+pub async fn pick_skill_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    app.dialog()
+        .file()
+        .set_title("选择技能文件夹（含 SKILL.md）")
+        .pick_folder(move |picked| {
+            let value = picked.and_then(|fp| {
+                fp.as_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
+            let _ = tx.send(value);
+        });
+    rx.await.map_err(|e| format!("文件夹选择失败: {e}"))
+}
+
+/// 安装技能（单 .md 文件 / 技能包文件夹，自动识别；参照 Hanako 安装器移植）。
+///
+/// 校验与拷贝在 `skills_install` 模块（纯路径入参，可测）；成功后重算技能
+/// 目录 diff 并入提醒台账——下一条消息经游标机制送达模型（目录冻结视图
+/// 不变，变化走提醒通道，批 2 定案）。
+#[tauri::command]
+pub fn install_skill(
+    source_path: String,
+    ledger: State<'_, Arc<Mutex<Notices>>>,
+) -> Result<SkillEntry, String> {
+    let source = std::path::PathBuf::from(&source_path);
+    let root = crate::skills_index::skills_dir();
+    let installed = crate::skills_install::install_skill(&source, &root)?;
+    diff_skills_now(&root, &ledger);
+    Ok(SkillEntry {
+        name: installed.name,
+        description: installed.description,
+        file_path: Some(installed.file_path.to_string_lossy().into_owned()),
+        source: installed.source,
+    })
+}
+
+/// 移除用户技能（内置拒绝；文件夹包整目录删除；确认在前端行内两步完成）。
+#[tauri::command]
+pub fn remove_skill(
+    file_path: String,
+    ledger: State<'_, Arc<Mutex<Notices>>>,
+) -> Result<String, String> {
+    let path = std::path::PathBuf::from(&file_path);
+    let root = crate::skills_index::skills_dir();
+    let name = crate::skills_install::remove_skill(&path, &root)?;
+    diff_skills_now(&root, &ledger);
+    Ok(name)
+}
+
+/// 重算技能目录 diff 并记账（best-effort：记账失败仅终端留痕，不改写安装 /
+/// 移除的结果——动作本身已成功，提醒属增量信息）。
+fn diff_skills_now(root: &std::path::Path, ledger: &Arc<Mutex<Notices>>) {
+    let pairs = crate::skills_index::SkillIndex::load(root)
+        .map(|idx| idx.catalog_pairs())
+        .unwrap_or_default();
+    match ledger.lock() {
+        Ok(mut l) => l.diff_skill_catalog(&pairs),
+        Err(e) => eprintln!("[commands] 技能目录提醒记账失败：{e}"),
+    }
 }
 
 /// 环境维度 DTO（`value` 为空串的维度不下发）。
@@ -682,7 +800,7 @@ pub fn append_turn(
 }
 
 /// 更新会话元数据（rename / contextTokens / lastNoticeSeq / compaction；
-/// 只更新非 None 字段；clearContextTokens 为显式清空开关）。游标正常随轮
+/// 只更新非 None 字段；clearContextTokens / clearNoticeSeq 为显式清空开关）。游标正常随轮
 /// 提交，本命令是独立更新路径（低频；模块 D 压缩记录的落盘通道）。
 ///
 /// `expectedTitle` 为生成标题的 CAS 守卫：Some 时仅当 index 当前 title 等于
@@ -701,6 +819,9 @@ pub fn update_conversation_meta(
     // 显式清空 contextTokens（模块 D：压缩归零的持久面——contextTokens=null
     // 与缺省同为 None 无法区分，故独立布尔；压缩完成时前端随 compaction 置 true）
     clear_context_tokens: Option<bool>,
+    // 显式清空 lastNoticeSeq（批 4：压缩后游标复位的持久面——复位为“空”才能
+    // 走“新对话”分支重发三值快照；None 同样无法表达清空，故独立布尔）
+    clear_notice_seq: Option<bool>,
 ) -> Result<(), String> {
     let patch = MetaPatch {
         title,
@@ -709,6 +830,7 @@ pub fn update_conversation_meta(
         last_notice_seq,
         compaction,
         context_tokens_clear: clear_context_tokens.unwrap_or(false),
+        last_notice_seq_clear: clear_notice_seq.unwrap_or(false),
     };
     let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.update_meta(&conversation_id, &patch)
@@ -841,8 +963,11 @@ pub struct CompactionOutcome {
 /// - 取消：以 `ctxdecay-{conversationId}` 注册 TurnRegistry，前端可经
 ///   abort_turn 中止；注册计入 active_count（压缩中设置写闸同样生效）；
 /// - 失败语义：Err(String) 文案面向用户直显；失败不改变任何状态，幂等可重试；
-/// - 请求形态（2026-09-25 · DSH 形态）：system 与主对话同源（含记忆区）、工具面
-///   同主请求、指令置折叠区末尾——请求成为主请求的真前缀，复用 KV cache。
+/// - 请求形态（2026-09-25 · DSH 形态）：system 与主对话同源（含冻结目录与
+///   记忆区）、工具面同主请求、指令置折叠区末尾——请求成为主请求的真前缀，
+///   复用 KV cache。
+/// - 成功语义（批 4）：以活体重刷该对话两份冻结快照（有差才写；best-effort）——
+///   后续轮次的 system 基线切到最新。
 #[tauri::command]
 pub async fn compact_conversation(
     request: CompactRequest,
@@ -852,6 +977,7 @@ pub async fn compact_conversation(
     turn_registry: State<'_, Arc<TurnRegistry>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
+    skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
     tools: State<'_, Arc<ToolRegistry>>,
 ) -> Result<CompactionOutcome, String> {
     if request.folded_history.is_empty() {
@@ -860,9 +986,9 @@ pub async fn compact_conversation(
     if turn_registry.active_count() > 0 {
         return Err("正在处理对话，请稍后再压缩".into());
     }
-    // ── 请求前缀同源（2026-09-25 裁决 · DSH 形态）：system（含记忆区）与
-    // 工具面同主对话 → 摘要请求成为主请求真前缀（KV cache 复用）。──
-    let memory_key = if request.conversation_id.is_empty() {
+    // ── 请求前缀同源（2026-09-25 裁决 · DSH 形态）：system（含冻结目录与
+    // 记忆区）与工具面同主对话 → 摘要请求成为主请求真前缀（KV cache 复用）。──
+    let conversation_key = if request.conversation_id.is_empty() {
         None
     } else {
         Some(request.conversation_id.as_str())
@@ -874,7 +1000,18 @@ pub async fn compact_conversation(
         let mut snaps = snapshot_store
             .lock()
             .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
-        snaps.get_or_assemble(memory_key, &mem)
+        snaps.get_or_assemble(conversation_key, &mem)
+    };
+    // 技能目录冻结快照（批 2）：压缩读旧快照——请求须复用主请求真前缀。
+    let skill_catalog = {
+        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
+            .map(|idx| idx.catalog_text())
+            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+            .ok();
+        let mut snaps = skills_snapshot_store
+            .lock()
+            .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
+        snaps.get_or_freeze(conversation_key, live.as_deref())
     };
     let tool_defs = tools.list_defs();
     let cfg = config
@@ -895,35 +1032,89 @@ pub async fn compact_conversation(
         &cfg,
         request.folded_history,
         window,
+        &skill_catalog,
         &memory_block,
         &tool_defs,
         &abort,
     )
     .await;
     turn_registry.unregister(&request.session_id);
-    result.map(|o| CompactionOutcome {
-        summary: o.summary,
-        degraded: o.degraded,
-        tokens_before: o.tokens_before,
+    result.map(|o| {
+        // 批 4 · 压缩并更新：摘要成功（含降级规则产出——上下文同样被替换）→
+        // 以活体重刷两份冻结快照（有差才写；best-effort，失败不改变压缩结果）。
+        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
+            .map(|idx| idx.catalog_text())
+            .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
+            .ok();
+        refresh_frozen_snapshots(
+            &request.conversation_id,
+            live.as_deref(),
+            &memory_store,
+            &snapshot_store,
+            &skills_snapshot_store,
+        );
+        CompactionOutcome {
+            summary: o.summary,
+            degraded: o.degraded,
+            tokens_before: o.tokens_before,
+        }
     })
 }
 
-/// 删除会话：先删持久文件（jsonl + index 条目），再清记忆快照 sidecar。
+/// 压缩成功后刷新两份冻结快照（批 4 · 压缩并更新）。
+///
+/// 记忆区以最新记忆重组装刷新；技能目录以 `live_catalog` 刷新（调用方先读
+/// 活体，不可读传 None → 跳过）。两者均有差才写。本函数 best-effort：锁失败
+/// 仅终端留痕，不改变压缩结果（调用方照常返回成功）。
+fn refresh_frozen_snapshots(
+    conversation_id: &str,
+    live_catalog: Option<&str>,
+    memory_store: &Arc<Mutex<MemoryStore>>,
+    snapshot_store: &Arc<Mutex<SnapshotStore>>,
+    skills_snapshot_store: &Arc<Mutex<SkillSnapshotStore>>,
+) {
+    if let Ok(mem) = memory_store.lock() {
+        match snapshot_store.lock() {
+            Ok(mut snaps) => {
+                snaps.refresh(conversation_id, &mem);
+            }
+            Err(e) => eprintln!("[commands] 记忆快照刷新跳过（快照锁失败）：{e}"),
+        }
+    } else {
+        eprintln!("[commands] 记忆快照刷新跳过（记忆锁失败）");
+    }
+    match skills_snapshot_store.lock() {
+        Ok(mut snaps) => {
+            snaps.refresh(conversation_id, live_catalog);
+        }
+        Err(e) => eprintln!("[commands] 技能快照刷新跳过（锁失败）：{e}"),
+    }
+}
+
+/// 删除会话：先删持久文件（jsonl + index 条目），再清冻结快照 sidecar
+/// （记忆区 + 技能目录两份，同生共死）。
 #[tauri::command]
 pub fn delete_conversation(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
+    skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
     conversation_id: String,
 ) -> Result<(), String> {
-    // 先删会话（失败上抛，不静默）；再清 sidecar（记忆区冻结快照同生共死；
+    // 先删会话（失败上抛，不静默）；再清 sidecar（冻结快照同生共死；
     // 裁决 1：先写快照后归档 → 孤儿在删除侧清扫）。
     {
         let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         s.delete(&conversation_id)?;
     }
-    let mut snaps = snapshot_store
+    {
+        let mut snaps = snapshot_store
+            .lock()
+            .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
+        snaps.remove(&conversation_id);
+    }
+    let mut snaps = skills_snapshot_store
         .lock()
-        .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
+        .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
     snaps.remove(&conversation_id);
     Ok(())
 }
@@ -2177,28 +2368,50 @@ mod tests {
         assert!(err.contains("上限"), "超限应报错而不静默截断: {err}");
     }
 
-    // ── list_skills：dev 目录真实条目（数值计算/行动推演已落盘）──
+    // ── list_skills：临时夹具目录（运行根语义；不再依赖 dev 源目录）──
 
     #[test]
-    fn list_skills_returns_dev_entries_with_description() {
-        let skills = list_skills().expect("dev 技能目录应可读");
-        assert!(!skills.is_empty());
-        // dev 目录强断言：数值计算.md 存在（skills_index 测试同款先例）
+    fn list_skills_from_returns_entries_with_description() {
+        let root = std::env::temp_dir().join(format!(
+            "prts-cmd-skills-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("calc.md"),
+            "---\nname: 数值计算\ndescription: 计算规则\n---\n\n## 正文",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("tui.md"),
+            "---\nname: 行动推演\ndescription: 推演规则\n---\n\n## 正文",
+        )
+        .unwrap();
+
+        let skills = list_skills_from(&root).expect("夹具目录应可读");
+        assert_eq!(skills.len(), 2);
         let calc = skills
             .iter()
             .find(|s| s.name == "数值计算")
             .expect("应含数值计算技能");
-        assert!(!calc.description.is_empty(), "frontmatter description 应被解析");
-        // file_path：绝对路径且在 skills_dir 内（打开链接用；文件名≠name）
+        assert_eq!(calc.description, "计算规则", "frontmatter description 应被解析");
+        assert!(calc.source.is_none(), "fixture 无 source → None（用户态）");
+        // file_path：绝对路径且在目标目录内（打开链接用；文件名≠name）
         let fp = calc.file_path.as_ref().expect("应记录源文件路径");
         let p = std::path::Path::new(fp);
-        assert!(p.is_absolute() && p.starts_with(crate::skills_index::skills_dir()));
+        assert!(p.is_absolute() && p.starts_with(&root));
         assert!(p.extension().and_then(|e| e.to_str()) == Some("md"));
         // 按 name 排序（SkillIndex.names 语义）
         let mut names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(names, sorted, "清单应按 name 排序");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ── open_path 放行校验（纯函数；不触发真实 opener）──
@@ -2212,6 +2425,7 @@ mod tests {
             name: "数值计算".into(),
             description: "d".into(),
             file_path: Some("F:/skills/数值计算.md".into()),
+            source: Some("builtin".into()),
         };
         let v = serde_json::to_value(&entry).unwrap();
         assert!(
@@ -2225,6 +2439,11 @@ mod tests {
         assert!(v.get("file_path").is_none(), "不应输出 snake_case file_path");
         assert!(v.get("name").is_some());
         assert!(v.get("description").is_some());
+        assert_eq!(
+            v.get("source").and_then(|x| x.as_str()),
+            Some("builtin"),
+            "source 应原样透出（前端据此显示来源与删除门控）"
+        );
     }
 
     #[test]
@@ -2237,8 +2456,10 @@ mod tests {
         let f = std::env::temp_dir().join(format!("prts-open-{nanos}.md"));
         std::fs::write(&f, "x").unwrap();
         assert!(is_openable_target(&f));
-        // 技能目录内真实文件 → 同样放行（不再受白名单限制）
-        let skill_md = crate::skills_index::skills_dir().join("数值计算.md");
+        // 技能源文件（真实存在，包形态）→ 同样放行（不设白名单）
+        let skill_md = crate::skills_index::bundled_skills_dir()
+            .join("数值计算")
+            .join("SKILL.md");
         assert!(is_openable_target(&skill_md));
         // 相对路径 → 拒绝
         assert!(!is_openable_target(std::path::Path::new("数值计算.md")));
@@ -2498,5 +2719,54 @@ mod tests {
         assert!(root_dir_hit.parent_subdir.is_empty(), "根级 parentSubdir 为空串");
         assert!(root_dir_hit.ancestor_dirs.is_empty(), "根级命中无祖先目录");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ── 压缩后快照刷新（批 4：压缩并更新）──
+
+    #[test]
+    fn refresh_frozen_snapshots_refreshes_both_stores() {
+        let data = space_root("snap-refresh");
+        let sessions = data.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let memory = Arc::new(Mutex::new(MemoryStore::load(&data).unwrap()));
+        let snapshots = Arc::new(Mutex::new(SnapshotStore::new(&sessions)));
+        let skills = Arc::new(Mutex::new(SkillSnapshotStore::new(&sessions)));
+
+        // 冻结初始态：记忆为空块、技能目录 A
+        {
+            let mem = memory.lock().unwrap();
+            snapshots.lock().unwrap().get_or_assemble(Some("c1"), &mem);
+        }
+        skills.lock().unwrap().get_or_freeze(Some("c1"), Some("目录 A"));
+
+        // 产生差异：记忆写入 + 技能目录 B
+        {
+            let mut mem = memory.lock().unwrap();
+            mem.growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_USER)
+                .unwrap();
+        }
+        refresh_frozen_snapshots("c1", Some("目录 B"), &memory, &snapshots, &skills);
+
+        assert_eq!(
+            std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),
+            "目录 B",
+            "技能快照应刷为新目录"
+        );
+        assert!(
+            std::fs::read_to_string(sessions.join("c1.memory.txt"))
+                .unwrap()
+                .contains("画像"),
+            "记忆快照应含新写入"
+        );
+
+        // 活体不可读 → 跳过（保持旧值）
+        refresh_frozen_snapshots("c1", None, &memory, &snapshots, &skills);
+        assert_eq!(
+            std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),
+            "目录 B",
+            "不可读时保持"
+        );
+
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

@@ -307,6 +307,10 @@ impl ActiveContext {
 
 /// 装配 system prompt：Base（人格 prts.md）→ Catalog（Skill 目录）。
 ///
+/// `skill_catalog` 为**对话冻结的目录文本**（`SkillIndex::catalog_text` 的
+/// 快照原文，由命令层经 `SkillSnapshotStore` 取；空串显示（无））——目录随
+/// 对话冻结、逐字不变，是前缀缓存的硬约束。
+///
 /// 知识库使用方式不在此注入：路径属工具实现细节（KnowledgeIndex 内部消化），
 /// 结构认知由 list_knowledge 框架模式承担，条目阅读由 read_knowledge 承担，
 /// 工具描述是唯一通道。Skill 目录注册 Catalog 层 section
@@ -315,30 +319,30 @@ impl ActiveContext {
 /// 静态两层，逐字节可复现：system 是请求前缀的最开头，任何动态注入（skill
 /// 正文、缓存条目）都会逐字节改变前缀、破坏 DeepSeek 前缀缓存命中；
 /// 动态内容一律以消息形态进历史（激活 skill = 工具结果消息）。
-pub fn assemble_system_prompt(skill_index: &crate::skills_index::SkillIndex) -> String {
-    assemble_system_prompt_with_memory(skill_index, "")
+pub fn assemble_system_prompt(skill_catalog: &str) -> String {
+    assemble_system_prompt_with_memory(skill_catalog, "")
 }
 
 /// 装配 system prompt：Base（人格）→ Catalog（Skill 目录）→ **记忆区（尾部）**。
 ///
+/// `skill_catalog` 为对话冻结目录文本（见 [`assemble_system_prompt`]）；
 /// `memory_block` 为对话冻结快照原文（由命令层经 SnapshotStore 取）；
-/// **空串时不注册记忆 section**——无记忆态输出与旧实现逐字节一致。
+/// **空块时不注册记忆 section**——无记忆态输出与旧实现逐字节一致。
 /// 记忆区不做二次改写（四节内容均为存量原文，装配不产生新内容）。
 pub fn assemble_system_prompt_with_memory(
-    skill_index: &crate::skills_index::SkillIndex,
+    skill_catalog: &str,
     memory_block: &str,
 ) -> String {
     let mut reg = builtin_registry().clone();
     // Catalog 层：Skill 目录（渐进披露——只给 name + description，正文按需
-    // activate_skill 加载）。空索引显示（无）。
-    let catalog = skill_index.catalog_text();
+    // activate_skill 加载）。空目录显示（无）。
     reg.register_section(PromptSection::new(
         "prts.skill-catalog",
         ORDER_CATALOG,
-        if catalog.is_empty() {
+        if skill_catalog.is_empty() {
             "## Skill 目录\n\n（无）".to_string()
         } else {
-            format!("## Skill 目录\n\n{catalog}")
+            format!("## Skill 目录\n\n{skill_catalog}")
         },
     ))
     .expect("builtin section 注册冲突");
@@ -353,14 +357,13 @@ pub fn assemble_system_prompt_with_memory(
 
 /// 组装 LLM 调用所需的完整消息列表。
 ///
-/// 系统提示词由注册制装配（prts.md 角色人格 + Skill 目录 Catalog +
-/// Active 已激活 Skill + Reference 缓存条目），
+/// 系统提示词由注册制装配（prts.md 角色人格 + 冻结 Skill 目录 Catalog + 记忆区）。
 ///
 /// 参数：
 ///   `history` — 已转换为 llm::ChatMessage 格式的对话历史（不含 system，
 ///               由 session log 的 derive_messages 派生）
 ///   `tool_count` — 工具数量（暂不使用，为后续 token 估算预留）
-///   `skill_index` — turn 级 Skill 索引快照（Catalog 目录文本来源）
+///   `skill_catalog` — 对话冻结目录文本（Catalog 内容来源；空串显示（无））
 ///
 /// 返回：
 ///   `Vec<ChatMessage>` — system 消息 + 历史消息
@@ -368,23 +371,23 @@ pub fn assemble_system_prompt_with_memory(
 pub fn build_context(
     history: &[ChatMessage],
     tool_count: usize,
-    skill_index: &crate::skills_index::SkillIndex,
+    skill_catalog: &str,
 ) -> Vec<ChatMessage> {
-    build_context_with_memory(history, tool_count, skill_index, "")
+    build_context_with_memory(history, tool_count, skill_catalog, "")
 }
 
 /// 同 [`build_context`]，附加冻结记忆区（空块 = 无记忆态）。
 pub fn build_context_with_memory(
     history: &[ChatMessage],
     _tool_count: usize,
-    skill_index: &crate::skills_index::SkillIndex,
+    skill_catalog: &str,
     memory_block: &str,
 ) -> Vec<ChatMessage> {
     let mut messages = Vec::with_capacity(1 + history.len());
 
-    // 系统提示词：人格 + Skill 目录 + 记忆区（尾部）
+    // 系统提示词：人格 + 冻结 Skill 目录 + 记忆区（尾部）
     messages.push(ChatMessage::system(assemble_system_prompt_with_memory(
-        skill_index,
+        skill_catalog,
         memory_block,
     )));
 
@@ -524,18 +527,17 @@ mod tests {
 
     #[test]
     fn memory_block_appended_at_tail_and_empty_is_legacy_identical() {
-        let idx = crate::skills_index::SkillIndex::empty();
-        let legacy = assemble_system_prompt(&idx);
+        let legacy = assemble_system_prompt("");
         // 空块 / 空白块 → 与旧实现逐字节一致（无记忆态兼容）
-        assert_eq!(assemble_system_prompt_with_memory(&idx, ""), legacy);
-        assert_eq!(assemble_system_prompt_with_memory(&idx, "   "), legacy);
+        assert_eq!(assemble_system_prompt_with_memory("", ""), legacy);
+        assert_eq!(assemble_system_prompt_with_memory("", "   "), legacy);
         // 非空块 → 追加在 system 尾部（前缀不变）
         let block = "## 记忆\n\n### 关于博士\n博士偏好简洁";
-        let with_mem = assemble_system_prompt_with_memory(&idx, block);
+        let with_mem = assemble_system_prompt_with_memory("", block);
         assert!(with_mem.starts_with(&legacy), "记忆区应在尾部（前缀不变）");
         assert!(with_mem.ends_with(block));
         // build_context 同样在 system 头携带记忆区
-        let msgs = build_context_with_memory(&[], 0, &idx, block);
+        let msgs = build_context_with_memory(&[], 0, "", block);
         assert!(msgs[0].content.ends_with(block));
     }
 
@@ -570,7 +572,7 @@ mod tests {
 
     #[test]
     fn builds_with_system_prompt() {
-        let messages = build_context(&[], 0, &crate::skills_index::SkillIndex::empty());
+        let messages = build_context(&[], 0, "");
         assert!(messages.len() >= 1);
         assert_eq!(messages[0].role, crate::llm::MessageRole::System);
         // system 消息应包含角色人格
@@ -583,9 +585,8 @@ mod tests {
         // 的 system 头一致，且内容以 SYSTEM_PROMPT 开头。
         // 知识库路径不再注入（路径属工具实现细节，list_knowledge 框架模式
         // 承担结构认知）——断言 prompt 不含任何文件系统痕迹。
-        let empty = &crate::skills_index::SkillIndex::empty();
-        let direct = assemble_system_prompt(empty);
-        let via_build = &build_context(&[], 0, empty)[0].content;
+        let direct = assemble_system_prompt("");
+        let via_build = &build_context(&[], 0, "")[0].content;
         assert_eq!(direct, *via_build);
         assert!(direct.starts_with(SYSTEM_PROMPT));
         // 知识库路径/索引文件/死指令不再注入（工具名含 knowledge 子串，
@@ -601,7 +602,7 @@ mod tests {
             ChatMessage::user("你好"),
             ChatMessage::assistant("你好，博士"),
         ];
-        let messages = build_context(&history, 0, &crate::skills_index::SkillIndex::empty());
+        let messages = build_context(&history, 0, "");
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[1].role, crate::llm::MessageRole::User);
         assert_eq!(messages[2].role, crate::llm::MessageRole::Assistant);
@@ -610,9 +611,8 @@ mod tests {
     #[test]
     fn tool_count_reserved() {
         // tool_count 参数当前不使用，但保留接口以保证向后兼容
-        let empty = &crate::skills_index::SkillIndex::empty();
-        let msgs_0 = build_context(&[], 0, empty);
-        let msgs_5 = build_context(&[], 5, empty);
+        let msgs_0 = build_context(&[], 0, "");
+        let msgs_5 = build_context(&[], 5, "");
         assert_eq!(msgs_0.len(), msgs_5.len());
     }
 
@@ -622,7 +622,7 @@ mod tests {
     fn assemble_prompt_never_injects_knowledge_path() {
         // 路径属工具实现细节（KnowledgeIndex 内部消化），不在 system prompt
         // 出现；结构认知由 list_knowledge 框架模式承担，工具描述是唯一通道。
-        let prompt = assemble_system_prompt(&crate::skills_index::SkillIndex::empty());
+        let prompt = assemble_system_prompt("");
         assert!(!prompt.contains("src/knowledge"));
         assert!(!prompt.contains("_index.md"));
         assert!(!prompt.contains("list_dir"));
@@ -668,7 +668,8 @@ mod tests {
         let root = skill_temp_dir("catalog");
         skill_fixture(&root);
         let idx = crate::skills_index::SkillIndex::load(&root).unwrap();
-        let prompt = assemble_system_prompt(&idx);
+        // 目录文本即系统侧来源（冻结快照与活体目录在此同构；批 2）
+        let prompt = assemble_system_prompt(&idx.catalog_text());
 
         // 层序：Base 人格 → Skill 目录（Catalog）→（无 Active/Reference）
         assert!(prompt.contains("## Skill 目录\n\n- 贝塔：条目 B\n- 阿尔法：条目 A"));
@@ -680,9 +681,9 @@ mod tests {
     }
 
     #[test]
-    fn assemble_empty_index_shows_no_skills() {
-        // 空索引（加载失败降级）：目录节仍在，显示（无）
-        let prompt = assemble_system_prompt(&crate::skills_index::SkillIndex::empty());
+    fn assemble_empty_catalog_shows_no_skills() {
+        // 空目录文本（空索引 / 未冻结）：目录节仍在，显示（无）
+        let prompt = assemble_system_prompt("");
         assert!(prompt.contains("## Skill 目录\n\n（无）"));
     }
 

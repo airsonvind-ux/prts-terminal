@@ -435,9 +435,10 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
 
 describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
   const SKILL_FIXTURE = [
-    // 字段按后端真实契约（SkillEntry camelCase：filePath）
-    { name: "数值计算", description: "数值类任务推演流程标准。", filePath: "F:/skills/数值计算.md" },
-    { name: "行动推演", description: "寻路与行动模拟。", filePath: "F:/skills/行动推演.md" },
+    // 字段按后端真实契约（SkillEntry camelCase：filePath / source）
+    { name: "数值计算", description: "数值类任务推演流程标准。", filePath: "F:/skills/数值计算.md", source: "builtin" },
+    { name: "行动推演", description: "寻路与行动模拟。", filePath: "F:/skills/行动推演.md", source: "builtin" },
+    { name: "黑话小抄", description: "术语对照。", filePath: "F:/skills/黑话小抄.md", source: "user" },
   ];
 
   it("渲染：技能容器列表（名称 + 描述）", async () => {
@@ -451,6 +452,14 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     clickTab("skills");
     expect(container!.textContent).toContain("数值计算");
     expect(container!.textContent).toContain("行动推演");
+    // 两节结构：安装节 + 列表节
+    expect(container!.textContent).toContain("安装技能");
+    expect(container!.textContent).toContain("已安装技能");
+    // 用户视角文案就位（安装节可用性 + 清单节移除语义）
+    expect(container!.textContent).toContain("安装后即可使用");
+    expect(container!.textContent).toContain("不可移除");
+    // 不把内部机制（目录冻结）写成用户约束
+    expect(container!.textContent).not.toContain("新对话");
     // 技能页不再承载工作空间内容（拆分后职责单一）
     expect(container!.textContent).not.toContain("修改后重启生效");
   });
@@ -507,6 +516,173 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     expect(
       toasts.some((t) => t.kind === "warning" && t.message.includes("无法打开文件"))
     ).toBe(true);
+  });
+
+  it("安装（文件）：选择器 → install_skill → 刷新列表 + info toast", async () => {
+    let listCalls = 0;
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") {
+        listCalls += 1;
+        return Promise.resolve(SKILL_FIXTURE);
+      }
+      if (cmd === "pick_skill_file") return Promise.resolve("F:/picked/新技能.md");
+      if (cmd === "install_skill")
+        return Promise.resolve({
+          name: "新技能",
+          description: "来自文件",
+          filePath: "C:/fake/skills/新技能.md",
+          source: null,
+        });
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    const btn = Array.from(container!.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("安装 .md 文件")
+    )!;
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const installCalls = __invokeMock.mock.calls.filter((c) => c[0] === "install_skill");
+    expect(installCalls).toHaveLength(1);
+    expect((installCalls[0][1] as { sourcePath: string }).sourcePath).toBe(
+      "F:/picked/新技能.md"
+    );
+    expect(listCalls).toBeGreaterThanOrEqual(2); // 挂载 + 安装后刷新
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.message.includes("已安装技能「新技能」"))).toBe(true);
+  });
+
+  it("安装取消（选择器返回 null）：不调用 install_skill", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      if (cmd === "pick_skill_file") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    const btn = Array.from(container!.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("安装 .md 文件")
+    )!;
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    expect(
+      __invokeMock.mock.calls.filter((c) => c[0] === "install_skill")
+    ).toHaveLength(0);
+  });
+
+  it("安装失败：warning toast（不静默）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      if (cmd === "pick_skill_file") return Promise.resolve("F:/picked/重名.md");
+      if (cmd === "install_skill")
+        return Promise.reject("与现有技能重名：「数值计算」。请先移除旧条目");
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    const btn = Array.from(container!.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("安装 .md 文件")
+    )!;
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const toasts = useToastStore.getState().toasts;
+    expect(
+      toasts.some(
+        (t) =>
+          t.kind === "warning" &&
+          t.message.includes("安装失败") &&
+          t.message.includes("重名")
+      )
+    ).toBe(true);
+  });
+
+  it("移除（用户技能）：两步确认 → remove_skill → 刷新 + toast", async () => {
+    let listCalls = 0;
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") {
+        listCalls += 1;
+        return Promise.resolve(SKILL_FIXTURE);
+      }
+      if (cmd === "remove_skill") return Promise.resolve("黑话小抄");
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    // 第一击：进入确认态、不调 remove_skill
+    const armBtn = Array.from(container!.querySelectorAll("button")).find(
+      (b) => (b.textContent ?? "") === "移除"
+    )!;
+    act(() => {
+      armBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    expect(
+      __invokeMock.mock.calls.filter((c) => c[0] === "remove_skill")
+    ).toHaveLength(0);
+
+    // 第二击：确认
+    const confirmBtn = Array.from(container!.querySelectorAll("button")).find(
+      (b) => (b.textContent ?? "") === "确认移除"
+    )!;
+    act(() => {
+      confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const removeCalls = __invokeMock.mock.calls.filter((c) => c[0] === "remove_skill");
+    expect(removeCalls).toHaveLength(1);
+    expect((removeCalls[0][1] as { filePath: string }).filePath).toBe(
+      "F:/skills/黑话小抄.md"
+    );
+    expect(listCalls).toBeGreaterThanOrEqual(2); // 挂载 + 移除后刷新
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts.some((t) => t.message.includes("已移除技能「黑话小抄」"))).toBe(true);
+  });
+
+  it("内置技能不提供移除入口；来源标签就位", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    // 两个内置一行用户：仅用户行有「移除」按钮
+    const removeButtons = Array.from(
+      container!.querySelectorAll("button")
+    ).filter((b) => (b.textContent ?? "") === "移除");
+    expect(removeButtons).toHaveLength(1);
+    // 来源标签（span 精确匹配；说明文案里的同词不算）
+    const tagTexts = Array.from(container!.querySelectorAll("span")).map(
+      (s) => s.textContent ?? ""
+    );
+    expect(tagTexts).toContain("内置");
+    expect(tagTexts).toContain("用户");
   });
 });
 

@@ -4,7 +4,7 @@
 //! - BLOCKED（连读都不行）：notices.json（提醒数据源，data_dir() 下；
 //!   迁移期旧文件 env-ledger.json 同样拦截）、
 //!   数据库文件 arknights.db
-//! - READ_ONLY（可读不可写）：知识库目录、skills 目录
+//! - READ_ONLY（可读不可写）：知识库目录、技能运行根（data_dir()/skills）
 //! - WRITABLE（可写）：工作空间 workspace_root
 //! - protected（写保护特例）：工作区 .git（可读不可写，防 LLM 破坏仓库）
 //!
@@ -64,7 +64,8 @@ impl Policy {
     ///   workspace 下——workspace 指向自定义目录时数据源仍在 data_dir）
     ///   + data_dir()/env-ledger.json（迁移期旧文件，保留拦截）
     ///   + resolve_db_path() 的 db 文件
-    /// - READ_ONLY = knowledge_dir() + skills_dir()（既有 pub fn 直接调用）
+    /// - READ_ONLY = knowledge_dir() + skills_dir()（知识库 + 技能运行根
+    ///   data_dir()/skills——内置同步副本与用户技能同住其中）
     /// - protected = workspace_root/.git
     pub fn new(workspace_root: PathBuf) -> Self {
         let ws = canonicalize_opt(workspace_root);
@@ -284,6 +285,25 @@ mod tests {
     }
 
     #[test]
+    fn read_only_covers_skills_runtime_root() {
+        // 技能运行根（data_dir()/skills）应入 READ_ONLY 名单（可读不可写）；
+        // 目录可不存在——两侧同用 canonicalize 兜底口径比较
+        let ws = ws_fixture("ro-skills");
+        let policy = Policy::new(ws.clone());
+        let sk = skills_dir();
+        let sk_c = sk.canonicalize().unwrap_or(sk);
+        assert!(
+            policy.read_only.iter().any(|b| b == &sk_c),
+            "read_only 应含技能运行根：{sk_c:?}"
+        );
+        assert!(
+            policy.is_read_only(&sk_c.join("数值计算.md")),
+            "运行根子路径应命中 READ_ONLY"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
     fn write_knowledge_dir_rejected() {
         // 知识库在工作区外 → is_in_workspace false → 拒写
         let ws = ws_fixture("wr-kb");
@@ -315,11 +335,12 @@ mod tests {
         let policy = Policy::new(ws.clone());
         let db = config::resolve_db_path().canonicalize().unwrap();
         assert!(policy.blocked.iter().any(|b| b == &db), "blocked 应含 db 路径");
-        // read_only 含知识库与 skills 目录
+        // read_only 含知识库与技能运行根（运行根可不存在，兜底口径比较）
         let kb = knowledge_dir().canonicalize().unwrap();
-        let sk = skills_dir().canonicalize().unwrap();
         assert!(policy.read_only.iter().any(|b| b == &kb));
-        assert!(policy.read_only.iter().any(|b| b == &sk));
+        let sk = skills_dir();
+        let sk_c = sk.canonicalize().unwrap_or(sk);
+        assert!(policy.read_only.iter().any(|b| b == &sk_c));
         // protected 为 workspace/.git
         let git = ws.canonicalize().unwrap().join(".git");
         assert_eq!(policy.protected, vec![git.canonicalize().unwrap_or(git)]);

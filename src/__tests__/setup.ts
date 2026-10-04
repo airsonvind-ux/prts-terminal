@@ -111,6 +111,11 @@ const __defaultInvokeImpl = (cmd: string) => {
   // open_path（资源文件打开）与目录选择器默认静默/取消
   if (cmd === "open_path") return Promise.resolve(undefined);
   if (cmd === "choose_workspace_directory") return Promise.resolve(null);
+  // 技能安装（批 3）：选择器默认取消；安装 / 移除按需 mockImplementation
+  if (cmd === "pick_skill_file") return Promise.resolve(null);
+  if (cmd === "pick_skill_folder") return Promise.resolve(null);
+  if (cmd === "install_skill" || cmd === "remove_skill")
+    return Promise.reject("测试未配置技能安装 mock");
   // 空间页（工作区查看）：默认空目录树 / 空搜索 / 资源管理器静默
   if (cmd === "list_workspace_dir") return Promise.resolve([]);
   if (cmd === "search_workspace_files") return Promise.resolve([]);

@@ -1,11 +1,44 @@
-/* 设置页 · 技能子页样式（由空间页技能节迁出） */
+/* 设置页 · 技能子页样式：安装入口按钮组 + 已安装清单 */
 
 .container {
   display: flex;
   flex-direction: column;
 }
 
-/* 容器内行式列表（成块 + 行分隔 + hover） */
+/* 安装入口按钮组 */
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 动作按钮：紧凑、不内折行 */
+.actionButton {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.actionButton:hover {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+/* 节内说明（安装节与清单节共用） */
+.sectionHint {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+/* 容器内行式清单：成块 + 行分隔 + hover */
 
 .skillList {
   border: 1px solid var(--depth-1);
@@ -16,8 +49,8 @@
 
 .skillRow {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: flex-start;
+  gap: 8px;
   padding: 5px 8px;
 }
 
@@ -27,6 +60,15 @@
 
 .skillRow:hover {
   background: var(--depth-4);
+}
+
+/* 主区（FileLink）：名称 + 描述两行，占满余宽 */
+.skillMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .skillName {
@@ -42,6 +84,24 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 侧区：来源标签 + 移除（两步确认） */
+.skillSide {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 1px;
+}
+
+.sourceTag {
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  white-space: nowrap;
 }
 
 .emptyHint {

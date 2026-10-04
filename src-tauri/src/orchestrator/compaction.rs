@@ -34,7 +34,6 @@ use crate::debug;
 use crate::events::FrontendMessage;
 use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, ToolDef};
 use crate::session::SessionLog;
-use crate::skills_index::{skills_dir, SkillIndex};
 use crate::turn_registry::AbortSignal;
 
 use super::context::{assemble_system_prompt_with_memory, estimate_messages};
@@ -79,6 +78,7 @@ pub struct SummaryOutcome {
 /// * `config` — LLM 连接配置（turn 起始快照）
 /// * `folded_history` — 前端折叠区的派生态历史（含链式压缩时的旧摘要消息）
 /// * `context_window` — 当前模型 contextWindow（命令层经 model_registry 查得，同源）
+/// * `skill_catalog` — 对话冻结目录文本（与主对话同源；空串 = 无目录）
 /// * `memory_block` — 对话冻结记忆快照（与主对话同源；空串 = 无记忆态）
 /// * `tool_defs` — 主对话工具面快照（仅保请求前缀同源；模型不应调用）
 /// * `abort` — 压缩注册项的中止信号（取消通道）
@@ -89,6 +89,7 @@ pub async fn run_summary(
     config: &LlmConfig,
     folded_history: Vec<FrontendMessage>,
     context_window: u32,
+    skill_catalog: &str,
     memory_block: &str,
     tool_defs: &[ToolDef],
     abort: &AbortSignal,
@@ -105,14 +106,9 @@ pub async fn run_summary(
     let tokens_before = estimate_messages(&folded_messages) as u64;
 
     // ── 2. system（与主对话 persona/Catalog 一致）+ 指令 ──
-    let skill_index = match SkillIndex::load(&skills_dir()) {
-        Ok(idx) => idx,
-        Err(e) => {
-            eprintln!("[compaction] Skill 索引加载失败（目录为空）：{e}");
-            SkillIndex::empty()
-        }
-    };
-    let system = assemble_system_prompt_with_memory(&skill_index, memory_block);
+    // 目录用对话冻结快照（命令层取）：压缩请求必须复用主请求真前缀的
+    // Catalog 字节——现读磁盘会在目录变化时自断 KV cache 复用。
+    let system = assemble_system_prompt_with_memory(skill_catalog, memory_block);
     let instruction = ChatMessage::user(build_summary_instruction());
     let mut messages: Vec<ChatMessage> = Vec::with_capacity(2 + folded_messages.len());
     messages.push(ChatMessage::system(system));
@@ -446,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn run_summary_returns_llm_checkpoint_text() {
         let mock = MockLlmClient::simple_reply("## Goal\n达成");
-        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &fresh_abort())
+        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &fresh_abort())
             .await
             .unwrap();
         assert_eq!(out.summary, "## Goal\n达成");
@@ -457,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn summary_input_is_system_plus_folded_plus_instruction() {
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, "", &[], &fresh_abort())
+        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, "", "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -478,8 +474,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn summary_input_replays_memory_and_tools_for_cache_prefix() {
-        // 前缀同源（2026-09-25 裁决 · DSH 形态）：system 含记忆区、工具面同主请求
+    async fn summary_input_replays_catalog_memory_and_tools_for_cache_prefix() {
+        // 前缀同源（2026-09-25 裁决 · DSH 形态）：system 含冻结目录与记忆区、
+        // 工具面同主请求
         let client = CaptureClient::new();
         let tools = vec![ToolDef::new(
             "query_enemy",
@@ -491,6 +488,7 @@ mod tests {
             &cfg(),
             simple_folded(),
             65_536,
+            "- 数值计算：计算规则\n- 行动推演：推演规则",
             "## 记忆\n### 关于博士\n- 偏好简洁回答",
             &tools,
             &fresh_abort(),
@@ -499,6 +497,10 @@ mod tests {
         .unwrap();
         assert!(!out.degraded);
         let captured = client.last_messages.lock().unwrap().clone();
+        assert!(
+            captured[0].content.contains("- 数值计算：计算规则"),
+            "system 应含冻结目录文本（与主对话同源）"
+        );
         assert!(
             captured[0].content.contains("## 记忆"),
             "system 应含记忆区（与主对话同源）"
@@ -514,7 +516,7 @@ mod tests {
         let mut folded = simple_folded();
         folded.push(fm("error", "前端错误提示不应进入折叠区派生"));
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), folded, 65_536, "", &[], &fresh_abort())
+        let out = run_summary(&client, &cfg(), folded, 65_536, "", "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -529,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn empty_folded_history_errors() {
         let mock = MockLlmClient::new(vec![]);
-        let err = run_summary(&mock, &cfg(), vec![], 65_536, "", &[], &fresh_abort())
+        let err = run_summary(&mock, &cfg(), vec![], 65_536, "", "", &[], &fresh_abort())
             .await
             .unwrap_err();
         assert!(err.contains("没有可压缩"), "got: {err}");
@@ -539,10 +541,12 @@ mod tests {
 
     #[tokio::test]
     async fn oversize_strips_reasoning_then_calls_llm() {
-        // system(≈4.2K tok 估算) + 指令 ≈ 4.6K；budget = 0.6×10000 = 6000。
-        // reasoning 2640 tok：含推理 7300 > 6000（超窗触发剥链）；
-        // 剥后 4660 ≤ 6000（回落 LLM 路径）。两端 margin > 1.3K。
-        let reasoning: String = "分析过程".repeat(1100); // 4400 CJK ≈ 2640 tok
+        // 降级链：含推理超预算 → 剥链 → 回落 LLM 路径。预算 = 0.6×10000 = 6000。
+        // 目录与记忆区均显式传参（空串）→ system 尺寸确定、无环境依赖；
+        // 场景两条不变式（含推理超预算 / 剥后落预算内）仍由下方 estimate 断言自检。
+        // reasoning 3840 tok：两侧余量 ≥0.9K。
+        let reasoning: String = "分析过程".repeat(1600); // 6400 CJK ≈ 3840 tok
+        let reasoning_tok = crate::orchestrator::context::estimate_tokens(&reasoning);
         let mut m = fm("assistant", "结论");
         m.reasoning_content = Some(reasoning);
         let client = CaptureClient::new();
@@ -552,6 +556,7 @@ mod tests {
             vec![fm("user", "q"), m],
             10_000,
             "",
+            "",
             &[],
             &fresh_abort(),
         )
@@ -559,6 +564,16 @@ mod tests {
         .unwrap();
         assert!(!out.degraded, "丢推理后应回落至 LLM 路径");
         let captured = client.last_messages.lock().unwrap().clone();
+        let stripped_total = estimate_messages(&captured);
+        assert!(
+            stripped_total + reasoning_tok > 6000,
+            "触发条件应成立：含推理 {} 应超预算 6000",
+            stripped_total + reasoning_tok
+        );
+        assert!(
+            stripped_total <= 6000,
+            "剥后应落在预算内：{stripped_total}"
+        );
         for msg in &captured {
             assert!(msg.reasoning_content.is_none(), "降级后不应携带推理链");
         }
@@ -569,7 +584,7 @@ mod tests {
         // 无预设 Mock：若误走 LLM 会返回 Err("预设不足")——degraded 必须不调
         let mock = MockLlmClient::new(vec![]);
         let long = "长文本".repeat(2_000);
-        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, "", &[], &fresh_abort())
+        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, "", "", &[], &fresh_abort())
             .await
             .unwrap();
         assert!(out.degraded, "极端超窗应规则降级");
@@ -624,7 +639,7 @@ mod tests {
         }], 0);
         let abort = AbortSignal::new();
         abort.abort(); // 预置：wait_abort 立即返回
-        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &abort)
+        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &abort)
             .await
             .unwrap_err();
         assert!(err.contains("取消"), "got: {err}");
@@ -646,7 +661,7 @@ mod tests {
         let handle = tokio::spawn({
             let abort = abort.clone();
             async move {
-                run_summary(&mock, &cfg(), simple_folded(), 65_536, "", &[], &abort).await
+                run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &abort).await
             }
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -671,6 +686,7 @@ mod tests {
             &cfg(),
             vec![fm("user", "q"), m],
             65_536,
+            "",
             "",
             &[],
             &fresh_abort(),
