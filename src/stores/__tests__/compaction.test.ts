@@ -52,7 +52,10 @@ function toastMessages(): string[] {
 function seedConversation(
   id: string,
   turns: SessionEvent[][],
-  extra?: { contextTokens?: { inputTokens: number; outputTokens: number } }
+  extra?: {
+    contextTokens?: { inputTokens: number; outputTokens: number };
+    lastNoticeSeq?: number;
+  }
 ): void {
   const conv: Record<string, unknown> = {
     id,
@@ -61,6 +64,7 @@ function seedConversation(
     createdAt: 1,
   };
   if (extra?.contextTokens) conv.contextTokens = extra.contextTokens;
+  if (extra?.lastNoticeSeq !== undefined) conv.lastNoticeSeq = extra.lastNoticeSeq;
   useConversationStore.setState({
     conversations: [
       ...useConversationStore.getState().conversations,
@@ -117,6 +121,7 @@ describe("runCompaction 主路径", () => {
   it("成功：调用 compact_conversation（含折叠区派生）→ applyCompaction 落记录 + 归零 + toast", async () => {
     seedConversation("c1", longConversation(), {
       contextTokens: { inputTokens: 50_000, outputTokens: 500 },
+      lastNoticeSeq: 7,
     });
     installCompactMock(OUTCOME);
 
@@ -140,6 +145,8 @@ describe("runCompaction 主路径", () => {
     expect(conv.compaction!.summary).toBe(OUTCOME.summary);
     expect(conv.compaction!.retainedFrom).toBeGreaterThan(0);
     expect(conv.contextTokens).toBeUndefined();
+    // 批 4：游标复位（下一条消息重发三值快照）
+    expect(conv.lastNoticeSeq).toBeUndefined();
     expect(useCompactionStore.getState().compactingConversationId).toBeNull();
 
     // 持久化提交 update_conversation_meta（compaction 记录随参数）
@@ -151,6 +158,8 @@ describe("runCompaction 主路径", () => {
         summary: OUTCOME.summary,
         tokensBefore: OUTCOME.tokensBefore,
       });
+    // 游标复位的持久面（重启后仍走快照分支）
+    expect(metaArg?.clearNoticeSeq).toBe(true);
     // toast：动作语义（可点击 → 查看分界）
     const toasts = useToastStore.getState().toasts;
     expect(toastMessages().join("|")).toContain("已压缩");
@@ -274,9 +283,10 @@ describe("runCompaction 幂等与取消通道", () => {
 });
 
 describe("applyCompaction（conversationStore 层）", () => {
-  it("内存写记录 + contextTokens 置空；持久化带 compaction 参数", () => {
+  it("内存写记录 + contextTokens 置空 + 游标复位；持久化带 compaction 与清空开关", () => {
     seedConversation("c1", [userTurn("你好")], {
       contextTokens: { inputTokens: 100, outputTokens: 20 },
+      lastNoticeSeq: 7,
     });
     useConversationStore
       .getState()
@@ -293,13 +303,16 @@ describe("applyCompaction（conversationStore 层）", () => {
       tokensBefore: 90,
     });
     expect(conv.contextTokens).toBeUndefined();
+    // 批 4：游标复位 → 下一条消息走“新对话”分支重发三值快照
+    expect(conv.lastNoticeSeq).toBeUndefined();
     const arg = lastInvokeArg("update_conversation_meta");
     expect(arg?.conversationId).toBe("c1");
     expect((arg as { compaction: Record<string, unknown> }).compaction).toMatchObject(
       { retainedFrom: 1, summary: "## Goal\n摘要" }
     );
-    // 压缩归零的持久面：contextTokens 显式置 null 写盘（重启后环保持归零）
+    // 压缩归零 / 游标复位的持久面：显式置 null 写盘（重启后语义保持）
     expect(arg?.clearContextTokens).toBe(true);
+    expect(arg?.clearNoticeSeq).toBe(true);
   });
 
   it("对话不存在 → 空操作且不发 invoke", () => {

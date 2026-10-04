@@ -254,9 +254,18 @@ impl OpenAIResponsesClient {
     fn extract_usage(usage: &Value) -> Option<TokenUsage> {
         let input = usage.get("input_tokens").and_then(|v| v.as_u64())?;
         let output = usage.get("output_tokens").and_then(|v| v.as_u64())?;
+        // 缓存观测（2026-10-03）：OpenAI Responses 仅提供 cached_tokens（命中）；
+        // 未命中不可得 → None（“未观测”与“未命中 0”区分）。
+        let cache_hit = usage
+            .get("input_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
         Some(TokenUsage {
             input_tokens: input as u32,
             output_tokens: output as u32,
+            cache_hit_tokens: cache_hit,
+            cache_miss_tokens: None,
         })
     }
 }

@@ -30,6 +30,21 @@ pub(crate) fn start_time() -> Instant {
     *START.get_or_init(Instant::now)
 }
 
+/// FNV-1a 64 位哈希（十六进制、16 字符）。
+///
+/// 用途（2026-10-03）：缓存前缀契约的漂移对比——对 system prompt / 工具定义
+/// 的字节做指纹，供 PRTS_DEBUG 终端比对“同一对话相邻请求是否逐字节稳定”。
+/// **非加密、算法固定**（不依赖 std Hasher 的实现细节，跨进程跨版本稳定）；
+/// 只服务观测，不作为安全设施。
+pub(crate) fn fnv1a64_hex(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// 遥测事件投影：从 session log 中过滤出遥测相关事件（JSON Lines）。
 ///
 /// 纯函数（不读环境变量），便于测试。log 是事实来源，投影只取子集：
@@ -85,6 +100,14 @@ mod tests {
     use crate::session::{ChunkKind, TurnEndReason};
 
     #[test]
+    fn fnv1a64_known_vectors() {
+        // FNV-1a 64 标准测试向量（算法固定的契约值）
+        assert_eq!(fnv1a64_hex(b""), "cbf29ce484222325");
+        assert_eq!(fnv1a64_hex(b"a"), "af63dc4c8601ec8c");
+        assert_eq!(fnv1a64_hex(b"foobar"), "85944171f73967e8");
+    }
+
+    #[test]
     fn project_telemetry_filters_chunks_keeps_boundaries() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::turn_start("s1"));
@@ -95,7 +118,12 @@ mod tests {
         log.append(SessionEvent::step_end(
             "s1",
             1,
-            Some(TokenUsage { input_tokens: 10, output_tokens: 5 }),
+            Some(TokenUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            }),
             12,
         ));
         log.append(SessionEvent::turn_end("s1", TurnEndReason::Completed));

@@ -675,4 +675,39 @@ describe("场景 11：Reminder 数据装配", () => {
     ).not.toContain("prts_reminder");
     expect(fresh.lastNoticeSeq).toBe(4); // 新对话基线不回滚为 0
   });
+
+  it("压缩后首条消息重发三值快照（游标复位走「新对话」分支，不回放事件）", async () => {
+    // 会话进行中（游标 4）→ 压缩成功复位游标 → 下一条消息回到快照分支
+    routeReminder(snapshotPayload(4));
+    const store = useProcessingStore.getState();
+    await store.sendMessage("第一问");
+    const { sid } = getSingleSnapshot();
+    store.finishProcessing(sid);
+    expect(useConversationStore.getState().conversations[0].lastNoticeSeq).toBe(4);
+
+    const convId = useConversationStore.getState().conversations[0].id;
+    useConversationStore.getState().applyCompaction(convId, {
+      retainedFrom: 1,
+      summary: "## Goal\n摘要",
+      tokensBefore: 90,
+      at: 123,
+    });
+    expect(
+      useConversationStore.getState().conversations[0].lastNoticeSeq
+    ).toBeUndefined();
+
+    // 快照载荷含技能目录与事件——均不得出现（仅三值快照）
+    routeReminder(snapshotPayload(10));
+    await store.sendMessage("继续");
+    const snaps = Object.values(useProcessingStore.getState().processing);
+    const content = asEvent(snaps[0].currentEvents[0], "user/message").content;
+    expect(content.startsWith("[prts_reminder]\n")).toBe(true);
+    expect(content).toContain("- 工作空间：/ws");
+    expect(content).toContain("- 知识库：/kb");
+    expect(content).toContain("- 模型：m");
+    expect(content).not.toContain("技能目录");
+    expect(content).not.toContain("记忆");
+    // 游标推进到新载荷 seq
+    expect(useConversationStore.getState().conversations[0].lastNoticeSeq).toBe(10);
+  });
 });

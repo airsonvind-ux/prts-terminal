@@ -457,6 +457,21 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     /// 输出 token 数（LLM 生成的文本 + reasoning）
     pub output_tokens: u32,
+    /// 缓存命中 token 数（2026-10-03 缓存观测）。
+    ///
+    /// `None` = 未观测（provider 不提供该字段，或旧数据缺字段——`serde(default)`
+    /// 兼容）。语义：DeepSeek = `prompt_cache_hit_tokens`；Anthropic =
+    /// `cache_read_input_tokens`（流式 message_start 同源）；OpenAI 系 =
+    /// `input_tokens_details.cached_tokens`。
+    /// 只作开发期观测（终端遥测），不参与业务判断；`None` 时序列化省略，
+    /// 旧快照输出逐字节不变。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_tokens: Option<u32>,
+    /// 缓存未命中 token 数（provider 报告）。`None` = 未观测。
+    /// DeepSeek = `prompt_cache_miss_tokens`；其余 provider 无直接字段时
+    /// 不强造口径（留 `None`——“未观测”与“未命中 0”是两种事实）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_miss_tokens: Option<u32>,
 }
 
 // ═══════════════════════════════════════════════════════

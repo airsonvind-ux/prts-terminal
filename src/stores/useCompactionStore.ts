@@ -7,7 +7,7 @@
 //   2. 折叠区派生态（链式 = 旧摘要 + 上次边界后的轮；已折叠原文不回灌）
 //      发给后端 `compact_conversation`（静默独立 LLM 摘要 run：system/工具面
 //      与主请求逐字节同源以复用 KV cache 前缀；无可见事件）；
-//   3. 成功后 conversationStore.applyCompaction 落记录 + 归零进度环；
+//   3. 成功后 conversationStore.applyCompaction 落记录 + 归零进度环 + 环境游标复位（下轮重发三值快照）；
 //   4. 失败：状态不变（幂等可重试），toast 直显后端错误文案；
 //   5. 取消：`abort_turn(sessionId = ctxdecay-{conversationId})` 走既有中止
 //      通道（与主对话同一 TurnRegistry/AbortSignal 机制）。

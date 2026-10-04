@@ -10,19 +10,10 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  // 多入口：主应用 + 情绪动画调试页（mood-debug.html，开发期视觉验收用，不进应用导航）
   build: {
     rollupOptions: {
       input: {
         main: resolve(fileURLToPath(new URL(".", import.meta.url)), "index.html"),
-        "mood-debug": resolve(
-          fileURLToPath(new URL(".", import.meta.url)),
-          "mood-debug.html"
-        ),
-        "wing-debug": resolve(
-          fileURLToPath(new URL(".", import.meta.url)),
-          "wing-debug.html"
-        ),
       },
     },
   },

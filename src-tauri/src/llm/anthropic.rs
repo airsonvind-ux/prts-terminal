@@ -313,9 +313,17 @@ impl AnthropicMessagesClient {
     fn extract_usage(usage: &Value) -> Option<TokenUsage> {
         let input = usage.get("input_tokens").and_then(|v| v.as_u64())?;
         let output = usage.get("output_tokens").and_then(|v| v.as_u64())?;
+        // 缓存观测（2026-10-03）：命中 = cache_read_input_tokens；
+        // Anthropic 无直接“未命名字段 → None（不硬造口径）。
+        let cache_hit = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
         Some(TokenUsage {
             input_tokens: input as u32,
             output_tokens: output as u32,
+            cache_hit_tokens: cache_hit,
+            cache_miss_tokens: None,
         })
     }
 }
@@ -425,7 +433,11 @@ impl LlmClient for AnthropicMessagesClient {
 /// parse_anthropic_frame 是纯函数，所有状态修改在 process_anthropic_event 中完成。
 #[derive(Debug)]
 enum AnthropicSseEvent {
-    MessageStart { input_tokens: u32 },
+    MessageStart {
+        input_tokens: u32,
+        /// 缓存读取命中（cache_read_input_tokens；无该字段 → None = 未观测）
+        cache_read_input_tokens: Option<u32>,
+    },
     ContentBlockStart { index: usize, block_type: String, block_data: Value },
     ContentBlockDelta { index: usize, delta: Value },
     ContentBlockStop { index: usize },
@@ -543,13 +555,22 @@ fn parse_anthropic_frame(frame: &str) -> Option<AnthropicSseEvent> {
 
     match event_type.as_str() {
         "message_start" => {
-            let input_tokens = data
-                .get("message")
-                .and_then(|m| m.get("usage"))
+            let usage = data.get("message").and_then(|m| m.get("usage"));
+            let input_tokens = usage
                 .and_then(|u| u.get("input_tokens"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32;
-            Some(AnthropicSseEvent::MessageStart { input_tokens })
+            // 缓存观测（2026-10-03）：cache_read_input_tokens → 命中；
+            // Anthropic 无直接“未命名字段（input_tokens 语义与未命中不完全
+            // 对齐）→ 不硬造，留 None。
+            let cache_read_input_tokens = usage
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
+            Some(AnthropicSseEvent::MessageStart {
+                input_tokens,
+                cache_read_input_tokens,
+            })
         }
         "content_block_start" => {
             let index = data.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -607,10 +628,15 @@ fn process_anthropic_event(
     usage: &mut Option<TokenUsage>,
 ) {
     match ev {
-        AnthropicSseEvent::MessageStart { input_tokens } => {
+        AnthropicSseEvent::MessageStart {
+            input_tokens,
+            cache_read_input_tokens,
+        } => {
             *usage = Some(TokenUsage {
                 input_tokens: *input_tokens,
                 output_tokens: 0,
+                cache_hit_tokens: *cache_read_input_tokens,
+                cache_miss_tokens: None,
             });
         }
         AnthropicSseEvent::ContentBlockStart {

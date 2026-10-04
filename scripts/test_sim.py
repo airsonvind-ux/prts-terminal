@@ -91,13 +91,13 @@ cases = [
     # ── 基础：路线移动情况（沙滩车属性移速 1.3 → 理论 0.65）──
     # {"level_id": "level_rogue5_t-10", "route_index": "8", "speed": "1.3"},
     # {"level_id": "level_rogue5_t-10", "route_index": "1", "speed": "1.3", "k": "1"},
-    {"level_id": "level_rogue5_t-10", "route_index": "2", "speed": "1.3", "k": "2"},
+    # {"level_id": "level_rogue5_t-10", "route_index": "8", "speed": "1.3", "k": "1"},
 
     # ── 调避障帧（阻挡偏移）──
     # {"level_id": "level_rogue5_t-10", "route_index": "1", "speed": "1.3", "k": "1",
-    #  "inject": "block@1941:at=(4,1),dur=6"},
-    # {"level_id": "level_rogue5_t-10", "route_index": "3", "speed": "1.3", "k": "1",
-    #  "inject": "block@3739:at=(2,1),dur=6"},
+    #  "inject": "block@1896:at=(3,1),dur=6"},
+    {"level_id": "level_rogue5_t-10", "route_index": "3", "speed": "1.3", "k": "1",
+     "inject": "block@3739:at=(2,1),dur=6"},
 
     # ── 推拉入坑 ──
     # {"level_id": "level_rogue5_t-10", "route_index": "5", "speed": "1.3",

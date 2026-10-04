@@ -223,9 +223,26 @@ impl OpenAiCompatibleClient {
             .get("completion_tokens")
             .or_else(|| usage.get("output_tokens"))
             .and_then(|v| v.as_u64())?;
+        // 缓存观测（2026-10-03）：DeepSeek 直给命中 / 未命中两个字段；
+        // OpenAI 系只有 cached_tokens（命中；未命中不可得 → None）。
+        let cache_hit = usage
+            .get("prompt_cache_hit_tokens")
+            .or_else(|| {
+                usage
+                    .get("prompt_tokens_details")
+                    .and_then(|d| d.get("cached_tokens"))
+            })
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let cache_miss = usage
+            .get("prompt_cache_miss_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
         Some(TokenUsage {
             input_tokens: input as u32,
             output_tokens: output as u32,
+            cache_hit_tokens: cache_hit,
+            cache_miss_tokens: cache_miss,
         })
     }
 
@@ -578,7 +595,13 @@ fn process_sse_chunk(
     if let Some(u) = chunk.get("usage") {
         let extracted = OpenAiCompatibleClient::extract_usage(u);
         if let Some(ref tu) = extracted {
-            debug!("action" => "usage_extracted", "input_tokens" => tu.input_tokens, "output_tokens" => tu.output_tokens);
+            debug!(
+                "action" => "usage_extracted",
+                "input_tokens" => tu.input_tokens,
+                "output_tokens" => tu.output_tokens,
+                "cache_hit_tokens" => tu.cache_hit_tokens,
+                "cache_miss_tokens" => tu.cache_miss_tokens
+            );
         }
         *usage = extracted;
     }
@@ -709,6 +732,14 @@ mod tests {
         )
     }
 
+    /// 带缓存字段的 usage chunk（DeepSeek 命中 / 未命中）
+    fn usage_chunk_line_with_cache(prompt: u32, completion: u32, hit: u32, miss: u32) -> String {
+        format!(
+            r#"data: {{"choices":[],"usage":{{"prompt_tokens":{},"completion_tokens":{},"prompt_cache_hit_tokens":{},"prompt_cache_miss_tokens":{}}}}}"#,
+            prompt, completion, hit, miss
+        )
+    }
+
     fn done_line() -> String {
         "data: [DONE]".to_string()
     }
@@ -819,6 +850,26 @@ mod tests {
         let usage = result.usage.unwrap();
         assert_eq!(usage.input_tokens, 150);
         assert_eq!(usage.output_tokens, 42);
+        // 无缓存字段 → 未观测（None），不是 0
+        assert_eq!(usage.cache_hit_tokens, None);
+        assert_eq!(usage.cache_miss_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn usage_chunk_cache_extraction() {
+        // 缓存观测（2026-10-03）：DeepSeek 命中 / 未命中字段原样提取
+        let lines = vec![
+            text_delta_line("回答结束"),
+            usage_chunk_line_with_cache(150, 42, 128, 22),
+            done_line(),
+        ];
+        let (_events, result) = collect_events(&lines).await;
+
+        let usage = result.usage.unwrap();
+        assert_eq!(usage.input_tokens, 150);
+        assert_eq!(usage.output_tokens, 42);
+        assert_eq!(usage.cache_hit_tokens, Some(128));
+        assert_eq!(usage.cache_miss_tokens, Some(22));
     }
 
     #[tokio::test]
