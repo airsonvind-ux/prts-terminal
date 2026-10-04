@@ -451,8 +451,15 @@ impl ToolRegistry {
     }
 
     /// 生成所有工具的 ToolDef 列表，供 orchestrator 传给 LLM。
+    ///
+    /// **按工具名升序排序**（2026-10-03 缓存前缀修复）：`tools` 为 HashMap，
+    /// 迭代序由 RandomState 决定、**随进程重启变化**——直接 `values()` 输出
+    /// 会让请求前缀在工具区断裂（DeepSeek 前缀缓存整轮全未命中）。
+    /// 排序后输出跨重启逐字节稳定，是前缀缓存的硬约束。
     pub fn list_defs(&self) -> Vec<ToolDef> {
-        self.tools.values().map(|t| t.to_def()).collect()
+        let mut defs: Vec<ToolDef> = self.tools.values().map(|t| t.to_def()).collect();
+        defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
+        defs
     }
 
     /// 执行指定工具，统一走执行管线：
@@ -792,6 +799,46 @@ mod tests {
         let defs = reg.list_defs();
         assert_eq!(defs.len(), 1);
         assert_eq!(defs[0].function.name, "echo");
+    }
+
+    /// 缓存前缀约束（2026-10-03）：list_defs 按工具名升序输出且跨调用稳定——
+    /// tools 为 HashMap（迭代序随进程变化），未排序会破坏请求前缀缓存命中。
+    #[test]
+    fn registry_list_defs_sorted_and_stable() {
+        struct StubTool(&'static str);
+        impl Tool for StubTool {
+            fn name(&self) -> &str {
+                self.0
+            }
+            fn description(&self) -> &str {
+                "排序测试桩"
+            }
+            fn parameters(&self) -> serde_json::Value {
+                serde_json::json!({ "type": "object", "properties": {} })
+            }
+            fn execute(&self, _ctx: &ToolContext, _params: &str) -> Result<ToolOutput, ToolError> {
+                Ok(ToolOutput::text("stub"))
+            }
+        }
+
+        let mut reg = ToolRegistry::new();
+        // 注册序与名字序不同（若按注册序 / 迭代序输出，本用例可识别）
+        reg.register(Box::new(StubTool("zeta"))).unwrap();
+        reg.register(Box::new(StubTool("alpha"))).unwrap();
+        reg.register(Box::new(StubTool("mike"))).unwrap();
+
+        let names: Vec<String> = reg
+            .list_defs()
+            .iter()
+            .map(|d| d.function.name.clone())
+            .collect();
+        assert_eq!(names, vec!["alpha", "mike", "zeta"], "list_defs 应按工具名升序");
+        let names_again: Vec<String> = reg
+            .list_defs()
+            .iter()
+            .map(|d| d.function.name.clone())
+            .collect();
+        assert_eq!(names, names_again, "两次调用输出顺序一致");
     }
 
     /// 展示探针工具：声明展示切片，验证 Registry::display_for 分发。

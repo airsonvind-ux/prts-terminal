@@ -147,8 +147,11 @@ pub struct MetaPatch {
     /// （不支持置 None 清除——压缩不可逆，回退态只出现在 index 自愈重建）
     pub compaction: Option<CompactionMeta>,
     /// 显式清空 contextTokens（模块 D：压缩归零的持久面——context_tokens=None
-    /// 表达"不更新"，无法表达"清空"，故单独布尔。true = 置 None 写盘）
+    /// 表达“不更新”，无法表达“清空”，故单独布尔。true = 置 None 写盘）
     pub context_tokens_clear: bool,
+    /// 显式清空 lastNoticeSeq（批 4：压缩后游标复位的持久面——置 None 写盘，
+    /// 重启读回“空”→ 下一条消息重发三值快照。true = 置 None 写盘）
+    pub last_notice_seq_clear: bool,
 }
 
 /// 生成标题的 CAS 写入结果（`try_set_title_if_expected`）。
@@ -371,6 +374,9 @@ impl SessionStore {
         }
         if patch.context_tokens_clear {
             meta.context_tokens = None;
+        }
+        if patch.last_notice_seq_clear {
+            meta.last_notice_seq = None;
         }
         meta.updated_at = now_ms();
         self.write_index(&index);
@@ -1049,6 +1055,8 @@ mod tests {
         r1.context_tokens = Some(TokenUsage {
             input_tokens: 10,
             output_tokens: 5,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         });
         r1.last_notice_seq = Some(3);
         assert!(s.append_turn(&r1).unwrap().created);
@@ -1069,7 +1077,9 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 10,
-                output_tokens: 5
+                output_tokens: 5,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None
             })
         );
         assert_eq!(list[0].last_notice_seq, Some(3));
@@ -1405,7 +1415,9 @@ mod tests {
             r.context_tokens,
             Some(TokenUsage {
                 input_tokens: 1,
-                output_tokens: 2
+                output_tokens: 2,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None
             })
         );
         assert_eq!(r.last_notice_seq, Some(3));
@@ -1435,6 +1447,8 @@ mod tests {
         r1.context_tokens = Some(TokenUsage {
             input_tokens: 100,
             output_tokens: 10,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         });
         r1.last_notice_seq = Some(5);
         s.append_turn(&r1).unwrap();
@@ -1444,6 +1458,8 @@ mod tests {
         r2.context_tokens = Some(TokenUsage {
             input_tokens: 200,
             output_tokens: 20,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         });
         r2.last_notice_seq = Some(9);
         s.append_turn(&r2).unwrap();
@@ -1456,7 +1472,9 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 200,
-                output_tokens: 20
+                output_tokens: 20,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None
             }),
             "None 不应覆盖已提交值"
         );
@@ -1472,6 +1490,7 @@ mod tests {
                 last_notice_seq: Some(11),
                 compaction: None,
                 context_tokens_clear: false,
+                last_notice_seq_clear: false,
             },
         )
         .unwrap();
@@ -1482,7 +1501,9 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 200,
-                output_tokens: 20
+                output_tokens: 20,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None
             }),
             "patch 只更新非 None 字段"
         );
@@ -1517,6 +1538,7 @@ mod tests {
                 last_notice_seq: None,
                 compaction: Some(record.clone()),
                 context_tokens_clear: false,
+                last_notice_seq_clear: false,
             },
         )
         .unwrap();
@@ -1538,6 +1560,7 @@ mod tests {
                 last_notice_seq: None,
                 compaction: None,
                 context_tokens_clear: false,
+                last_notice_seq_clear: false,
             },
         )
         .unwrap();
@@ -1601,11 +1624,15 @@ mod tests {
         r.context_tokens = Some(TokenUsage {
             input_tokens: 22_000,
             output_tokens: 500,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         });
         s.append_turn(&r).unwrap();
         assert_eq!(s.list().unwrap()[0].context_tokens, Some(TokenUsage {
             input_tokens: 22_000,
             output_tokens: 500,
+            cache_hit_tokens: None,
+            cache_miss_tokens: None,
         }));
 
         // 显式清空（压缩完成时随 compaction 一并提交）
@@ -1623,6 +1650,7 @@ mod tests {
                     at: 7,
                 }),
                 context_tokens_clear: true,
+                last_notice_seq_clear: false,
             },
         )
         .unwrap();
@@ -1746,6 +1774,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.list().unwrap()[0].title, "生成标题");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn last_notice_seq_clear_persists_null_override() {
+        // 批 4：压缩后游标复位的持久面——lastNoticeSeq 置 None 后重启必须保持
+        // “空”（下一条消息走“新对话”分支重发三值快照；None 表达“不更新”，
+        // 清空需显式开关——与 contextTokens 同款机制）。
+        let dir = unique_temp_dir("notice-clear");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c-clr2", &ev_user("你好"))).unwrap();
+        s.update_meta(
+            "c-clr2",
+            &MetaPatch {
+                last_notice_seq: Some(9),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(s.list().unwrap()[0].last_notice_seq, Some(9));
+
+        // 显式清空（压缩完成时随 compaction 一并提交）
+        s.update_meta(
+            "c-clr2",
+            &MetaPatch {
+                compaction: Some(CompactionMeta {
+                    retained_from: 2,
+                    summary: "## Goal\n摘要".into(),
+                    tokens_before: Some(11_000),
+                    at: 8,
+                }),
+                last_notice_seq_clear: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // 重新打开（模拟重启 hydration 读盘）→ 游标保持“空”
+        let mut s2 = SessionStore::new(&dir);
+        let list = s2.list().unwrap();
+        assert_eq!(
+            list[0].last_notice_seq, None,
+            "清空应持久化（重启后游标仍为空）"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

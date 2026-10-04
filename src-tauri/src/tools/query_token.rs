@@ -67,7 +67,7 @@ impl Tool for QueryToken {
                 "extra": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "状态指定，可选，每项独立生效，必须含 =（键限 等级/潜能/技能）：等级=精二40级、精一满级、精二（省略即满级），值语法同干员等级；潜能=满潜、五潜、0潜；技能=3级（1~7级）、专2（专1~专3），默认最高级，调低用。指定即替换对应默认值，属性与天赋随之重算"
+                    "description": "状态指定，可选，每项独立生效，必须含 =（键限 等级/潜能/技能）：等级=精二40级、精一满级、精二（省略即满级），值语法同干员等级；潜能=满潜、五潜、0潜；技能=3级（1~7级）、专2（专1~专3），默认最高级，调低用。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准"
                 }
             }
         })
@@ -345,22 +345,24 @@ fn parse_token_elite_status(value: &str, cfg: &mut TokenExtraConfig) {
         }
     };
     let (phase_str, level_str) = split_digits(rest);
+    let mut phase: Option<usize> = None;
+    let mut level: Option<u32> = None;
     let mut matched = false;
     // "精0"/"精1"/"精2" — 无中文标记时 0/1/2 视为阶段数字
     if phase_str.is_empty() && matches!(level_str, "0" | "1" | "2") {
-        cfg.elite_phase = Some(level_str.parse::<u32>().unwrap() as usize);
+        phase = Some(level_str.parse::<u32>().unwrap() as usize);
         matched = true;
     }
     if let Some(idx) = parse_chinese_or_digit(phase_str) {
-        cfg.elite_phase = Some(idx as usize);
+        phase = Some(idx as usize);
         matched = true;
     }
     if level_str == "满级" || level_str == "满" {
-        cfg.elite_level = None;
+        level = None;
         matched = true;
     } else if !level_str.is_empty() {
         if let Ok(n) = level_str.trim_end_matches('级').parse::<u32>() {
-            cfg.elite_level = Some(n);
+            level = Some(n);
             matched = true;
         }
     }
@@ -368,10 +370,14 @@ fn parse_token_elite_status(value: &str, cfg: &mut TokenExtraConfig) {
         cfg.errors.push(format!(
             "等级 值 '{value}' 无法解析：请用 等级=精二40级 / 等级=精一满级 / 等级=精二"
         ));
+        return;
     }
+    // 同一键重复指定时以最后一项为准：整体替换（未写明的部分回到默认语义）
+    cfg.elite_phase = phase;
+    cfg.elite_level = level;
 }
 
-/// 状态指定 · 潜能：潜能=满潜 / 潜能=五潜 / 潜能=0潜。
+/// 状态指定 · 潜能：潜能=满潜 / 潜能=五潜 / 潜能=0潜~五潜（中文或数字）。
 fn parse_token_potential_status(value: &str, cfg: &mut TokenExtraConfig) {
     if value == "满潜" {
         cfg.pot_level = Some(5);
@@ -383,7 +389,13 @@ fn parse_token_potential_status(value: &str, cfg: &mut TokenExtraConfig) {
             return;
         }
         if let Some(n) = parse_chinese_or_digit(num_part) {
-            cfg.pot_level = Some(n);
+            if n <= 5 {
+                cfg.pot_level = Some(n);
+                return;
+            }
+            cfg.errors.push(format!(
+                "潜能 值 '{value}' 超出范围：最大为满潜（五潜），请用 潜能=满潜 / 潜能=五潜 / 潜能=0潜"
+            ));
             return;
         }
     }
@@ -606,6 +618,33 @@ mod tests {
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精二","潜能=五潜"]}"#)
             .unwrap().summary;
         assert!(r4.contains("精2 满级 / 5潜"), "属性头应含阶段/等级/潜能\n结果: {r4}");
+    }
+
+    #[test]
+    fn extra_same_key_last_wins() {
+        let ctx = make_ctx();
+        let tool = QueryToken;
+        // 潜能：最后一项生效
+        let r = tool
+            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=满潜","潜能=0潜"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("/ 0潜"), "got: {r}");
+        // 等级：整体替换（精一40级 + 精二 → 精二满级）
+        let r = tool
+            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精一40级","等级=精二"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("精2 满级"), "got: {r}");
+        assert!(!r.contains("精2 40级"), "got: {r}");
+    }
+
+    #[test]
+    fn extra_potential_out_of_range_rejected() {
+        let ctx = make_ctx();
+        let tool = QueryToken;
+        let r = tool
+            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=六潜"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("超出范围"), "got: {r}");
     }
 
     #[test]

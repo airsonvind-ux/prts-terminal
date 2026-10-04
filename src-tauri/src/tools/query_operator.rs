@@ -98,7 +98,7 @@ impl Tool for QueryOperator {
                 "extra": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 等级/潜能/信赖/模组）：等级=精二40级、精一满级、精二（省略即满级）；潜能=满潜、五潜、0潜；信赖=50（50%）、满、零；模组=无模组、X模、Y模、D模、特限模组。指定即替换对应默认值，属性与天赋随之重算。附加列：技能点单（如 一技能、7级2技能、专2二技能；或技能名：火山、3级火山、专2黄昏；默认专三，可一次多个，每项独立输出），或常用列（稀有度、部署位置、代号、标签、关联token）。完整列名见知识库《干员表结构》条目"
+                    "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 等级/潜能/信赖/模组）：等级=精二40级、精一满级、精二（省略即满级）；潜能=满潜、五潜、0潜；信赖=50（50%）、满、零；模组=无模组、X模、Y模、D模、特限模组。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准。附加列：技能点单（如 一技能、7级2技能、专2二技能；或技能名：火山、3级火山、专2黄昏；默认专三，可一次多个，每项独立输出），或常用列（稀有度、部署位置、代号、标签、关联token）。完整列名见知识库《干员表结构》条目"
                 }
             }
         })
@@ -673,22 +673,24 @@ fn parse_elite_status(value: &str, cfg: &mut ExtraConfig) {
         }
     };
     let (phase_str, level_str) = split_digits(rest);
+    let mut phase: Option<usize> = None;
+    let mut level: Option<u32> = None;
     let mut matched = false;
     // "精0"/"精1"/"精2" — 无中文标记时 0/1/2 视为阶段数字
     if phase_str.is_empty() && matches!(level_str, "0" | "1" | "2") {
-        cfg.elite_phase = Some(level_str.parse::<u32>().unwrap() as usize);
+        phase = Some(level_str.parse::<u32>().unwrap() as usize);
         matched = true;
     }
     if let Some(idx) = parse_chinese_or_digit(phase_str) {
-        cfg.elite_phase = Some(idx as usize);
+        phase = Some(idx as usize);
         matched = true;
     }
     if level_str == "满级" || level_str == "满" {
-        cfg.elite_level = None;
+        level = None;
         matched = true;
     } else if !level_str.is_empty() {
         if let Ok(n) = level_str.trim_end_matches('级').parse::<u32>() {
-            cfg.elite_level = Some(n);
+            level = Some(n);
             matched = true;
         }
     }
@@ -696,10 +698,14 @@ fn parse_elite_status(value: &str, cfg: &mut ExtraConfig) {
         cfg.errors.push(format!(
             "等级 值 '{value}' 无法解析：请用 等级=精二40级 / 等级=精一满级 / 等级=精二"
         ));
+        return;
     }
+    // 同一键重复指定时以最后一项为准：整体替换（未写明的部分回到默认语义）
+    cfg.elite_phase = phase;
+    cfg.elite_level = level;
 }
 
-/// 状态指定 · 潜能：潜能=满潜 / 潜能=五潜 / 潜能=0潜。
+/// 状态指定 · 潜能：潜能=满潜 / 潜能=五潜 / 潜能=0潜~五潜（中文或数字）。
 fn parse_potential_status(value: &str, cfg: &mut ExtraConfig) {
     if value == "满潜" {
         cfg.pot_level = Some(5);
@@ -711,7 +717,13 @@ fn parse_potential_status(value: &str, cfg: &mut ExtraConfig) {
             return;
         }
         if let Some(n) = parse_chinese_or_digit(num_part) {
-            cfg.pot_level = Some(n);
+            if n <= 5 {
+                cfg.pot_level = Some(n);
+                return;
+            }
+            cfg.errors.push(format!(
+                "潜能 值 '{value}' 超出范围：最大为满潜（五潜），请用 潜能=满潜 / 潜能=五潜 / 潜能=0潜"
+            ));
             return;
         }
     }
@@ -744,22 +756,27 @@ fn parse_trust_status(value: &str, cfg: &mut ExtraConfig) {
 fn parse_module_status(value: &str, cfg: &mut ExtraConfig) {
     if value == "无模组" {
         cfg.module_none = true;
+        cfg.module_spec = None;
         return;
     }
     if value == "X模" || value == "X模组" {
         cfg.module_spec = Some("X".to_string());
+        cfg.module_none = false;
         return;
     }
     if value == "Y模" || value == "Y模组" {
         cfg.module_spec = Some("Y".to_string());
+        cfg.module_none = false;
         return;
     }
     if value == "D模" || value == "D模组" || value == "Δ模" || value == "Delta模" {
         cfg.module_spec = Some("D".to_string());
+        cfg.module_none = false;
         return;
     }
     if value.contains("特限") {
         cfg.module_spec = Some("特限".to_string());
+        cfg.module_none = false;
         return;
     }
     cfg.errors.push(format!(
@@ -1567,6 +1584,55 @@ mod tests {
             .unwrap().summary;
         assert!(r2.contains("未装配"), "模组区块应显示未装配\n结果: {r2}");
         assert!(!r2.contains("(模组)"), "属性不应有模组来源标注\n结果: {r2}");
+    }
+
+    #[test]
+    fn extra_same_key_last_wins() {
+        let ctx = make_ctx();
+        let tool = QueryOperator;
+        // 潜能：最后一项（满潜=5潜）生效；反序则 0潜生效
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=0潜","潜能=五潜","潜能=满潜"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("/ 5潜"), "got: {r}");
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=满潜","潜能=0潜"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("/ 0潜"), "got: {r}");
+        // 等级：整体替换（精一40级 + 精二 → 精二满级，不留 40级）
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精一40级","等级=精二"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("精2 80级"), "got: {r}");
+        assert!(!r.contains("精2 40级"), "got: {r}");
+    }
+
+    #[test]
+    fn extra_module_last_wins() {
+        let ctx = make_ctx();
+        let tool = QueryOperator;
+        // 无模组 → X模：以最后一项为准（X 模生效）
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=无模组","模组=X模"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("DWDB-221E"), "got: {r}");
+        assert!(!r.contains("未装配"), "got: {r}");
+        // X模 → 无模组：以最后一项为准（无模组生效）
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=X模","模组=无模组"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("未装配"), "got: {r}");
+        assert!(!r.contains("DWDB-221E"), "got: {r}");
+    }
+
+    #[test]
+    fn extra_potential_out_of_range_rejected() {
+        let ctx = make_ctx();
+        let tool = QueryOperator;
+        let r = tool
+            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=六潜"]}"#)
+            .unwrap().summary;
+        assert!(r.contains("超出范围"), "got: {r}");
     }
 
     #[test]

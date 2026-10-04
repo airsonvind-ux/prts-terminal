@@ -3,9 +3,9 @@
 //! ## 语义（对齐方案 v2 §5）
 //!
 //! sidecar 路径 = `sessions/{conversationId}.memory.txt`（与对话内容文件同目录，
-//! 同生共死）。**首次组装即写**；此后同一对话一律读回原文——**唯一刷新点＝新对话**
-//! （新 conversationId → 首见组装）。重启后读 sidecar → 与重启前逐字一致，
-//! 前缀缓存命中为硬约束。
+//! 同生共死）。**首次组装即写**；此后同一对话一律读回原文。刷新点＝新对话
+//! （首见组装）＋ 压缩（[`SnapshotStore::refresh`]：摘要成功后以活体重刷，
+//! 有差才写）。重启后读 sidecar → 与重启前逐字一致，前缀缓存命中为硬约束。
 //!
 //! ## 时序与孤儿（裁决 1）
 //!
@@ -68,6 +68,36 @@ impl SnapshotStore {
         }
         self.cache.insert(cid.to_string(), block.clone());
         block
+    }
+
+    /// 压缩后刷新（批 4 · 压缩并更新）：以最新记忆组装重写快照，**有差才写**。
+    ///
+    /// - 与当前值（缓存 → sidecar）一致：不写、不触碰（返回 false）；
+    /// - 有差异 / 尚未冻结：写盘 + 更新缓存（返回 true）；
+    /// - 非法 id（或无真实对话标识）：不落盘（返回 false）。
+    ///
+    /// 调用时机由压缩命令保证：只在摘要**成功**后调用——该对话后续轮次的
+    /// system 记忆区切到最新组装（压缩已重建上下文，属预期）。
+    pub fn refresh(&mut self, conversation_id: &str, store: &MemoryStore) -> bool {
+        if !is_safe_id(conversation_id) {
+            return false;
+        }
+        let block = assemble_memory_block(store);
+        let current = self
+            .cache
+            .get(conversation_id)
+            .cloned()
+            .or_else(|| std::fs::read_to_string(self.sidecar_path(conversation_id)).ok());
+        if current.as_deref() == Some(block.as_str()) {
+            return false;
+        }
+        let path = self.sidecar_path(conversation_id);
+        if let Err(e) = atomic_write(&path, &block) {
+            eprintln!("[memory] 快照刷新落盘失败（{}）：{e}", path.display());
+            return false;
+        }
+        self.cache.insert(conversation_id.to_string(), block);
+        true
     }
 
     /// 删除对话时清快照（内存 + 盘上；幂等）。
@@ -284,6 +314,52 @@ mod tests {
         assert!(sessions.join("index.json").exists(), "非快照文件不动");
         // 幂等
         assert_eq!(snaps.sweep_orphans(), 0);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn refresh_writes_only_on_difference() {
+        let data = temp_dir("refresh");
+        let sessions = data.join("sessions");
+        let mut store = MemoryStore::load(&data).unwrap();
+        store
+            .growth_update(PROFILE_NAME, Some("第一版画像"), None, None, SOURCE_SYSTEM)
+            .unwrap();
+
+        let mut snaps = SnapshotStore::new(&sessions);
+        let first = snaps.get_or_assemble(Some("c1"), &store);
+        assert!(first.contains("第一版画像"));
+
+        // 无差：不动
+        assert!(!snaps.refresh("c1", &store));
+
+        // 有差：写盘 + 缓存更新（刷新后冻结读回新组装）
+        store
+            .growth_update(PROFILE_NAME, Some("第二版画像"), None, None, SOURCE_SYSTEM)
+            .unwrap();
+        assert!(snaps.refresh("c1", &store));
+        let after = snaps.get_or_assemble(Some("c1"), &store);
+        assert!(after.contains("第二版画像"));
+        assert_ne!(after, first);
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn refresh_creates_when_absent_and_rejects_unsafe_id() {
+        let data = temp_dir("refresh-new");
+        let sessions = data.join("sessions");
+        let store = MemoryStore::load(&data).unwrap();
+        let mut snaps = SnapshotStore::new(&sessions);
+
+        // 尚未冻结：建立（空块也落盘，与首见冻结同口径）
+        assert!(snaps.refresh("c2", &store));
+        assert!(sessions.join("c2.memory.txt").exists());
+
+        // 非法 id：不落盘
+        assert!(!snaps.refresh("../evil", &store));
+        assert!(!sessions.join("../evil.memory.txt").exists());
+
         let _ = std::fs::remove_dir_all(&data);
     }
 }
