@@ -1,0 +1,208 @@
+/* src/components/settings/SettingsUsage.module.css */
+
+/*
+ * 设置页 · "用量"子页
+ *
+ * 面板窄（默认约 200px 内容宽）。布局自上而下：
+ * 范围选择器 → 会话清单（展开时）→ Hero（总量 + 圆环）→ 四类横条。
+ * 滚动条复用全局按需显示机制（紧凑档 --scrollbar-inset: 2px）。
+ */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── 范围选择器 ── */
+
+.scopeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.scopeBtn:hover {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.scopeLabel {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.chev {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+/* ── 会话清单（展开；限高内部滚动） ── */
+
+.scopeList {
+  display: flex;
+  flex-direction: column;
+  max-height: 168px;
+  overflow-y: auto;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+  --scrollbar-inset: 2px;
+}
+
+.scopeItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--depth-1);
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.scopeItem:last-child {
+  border-bottom: none;
+}
+
+.scopeItem:hover {
+  background: var(--depth-4);
+}
+
+.scopeItemActive {
+  color: var(--accent);
+}
+
+.itemTitle {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemValue {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ── Hero ── */
+
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.heroLabel {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+
+.heroValue {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.donutWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.donut {
+  width: 44px;
+  height: 44px;
+}
+
+.donutText {
+  fill: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+}
+
+/* ── 分类横条 ── */
+
+.cats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.catRow {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.catName {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.catBar {
+  height: 6px;
+  background: var(--depth-2);
+  overflow: hidden;
+}
+
+.catFill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.catVal {
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.catTokens {
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+.catHit {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.empty {
+  font-size: 11px;
+  color: var(--text-3);
+}

@@ -1,0 +1,22 @@
+[package]
+name = "prts-maa-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "PRTS 与 MaaCore 之间的本地桥：独立进程组件（AGPL-3.0-or-later），随 PRTS 发布，只经 IPC 与 PRTS 通信。"
+
+[[bin]]
+name = "prts-maa-bridge"
+path = "src/main.rs"
+
+[dependencies]
+# 运行时加载用户 MAA 目录里的 MaaCore.dll，避免导入库（.lib）与编译期版本绑定。
+libloading = "0.8"
+# IPC 帧的 JSON 序列化（只用 value 与 json! 宏，不引 serde derive）。
+serde_json = "1"
+# Win32 窗口枚举（发现 PC 客户端窗口）。仅 Windows 目标会链接。
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
+
+[profile.release]
+opt-level = "s"
+lto = true

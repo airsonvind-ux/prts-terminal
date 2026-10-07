@@ -1,0 +1,157 @@
+/* src/components/content/AttachmentStrip.module.css */
+/* 附件条：横向、限高一行、溢出可滚（PRTS 小窗，不换行撑高）。 */
+
+.strip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+.input {
+  padding: 6px 5px 6px 5px;
+}
+
+.message {
+  padding: 0;
+  margin-bottom: 4px;
+  justify-content: flex-end;
+}
+
+/* ── 图片：小方缩略图 ── */
+
+.imageChip {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--depth-4);
+}
+
+/* 媒体裁切层：承载图像双层，圆角裁切（不裁到角上的删除标）。 */
+.imageMedia {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.imageMedia img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 底层：整幅模糊（只在上层渐隐的外缘带露出 → “只有边缘糊”）。 */
+.imageBlur {
+  filter: blur(1.5px);
+}
+
+/* 上层：锐利；外缘一小段渐隐 → 露出底层的模糊带。
+ * 两段线性渐变沿两轴各渐隐外缘 12%，intersect 后得到均匀的“小边缘带”。
+ * 旋钮：两处 12%/88% 决定渐隐带宽；.imageBlur 的 blur 值决定模糊强度。 */
+.imageSharp {
+  border-radius: inherit;
+  -webkit-mask-image:
+    linear-gradient(to right, transparent 0, #000 12%, #000 88%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+  mask-image:
+    linear-gradient(to right, transparent 0, #000 12%, #000 88%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 12%, #000 88%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+}
+
+/* ── 其他文件：窄 chip ── */
+
+.fileChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 150px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: var(--depth-4);
+  color: var(--text-2);
+  font-size: 11px;
+  font-family: var(--font-ui);
+}
+
+.icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.fileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ── 可点击（打开文件）── */
+
+.clickable {
+  cursor: pointer;
+}
+
+/* 悬停高亮：内描边（::after 叠在内容上方，绝不被容器 overflow 裁切）。
+ * 不用 filter（使图片边缘发虚）与外发光（被横向滚动容器裁掉上下）。 */
+.imageChip.clickable::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: box-shadow 0.15s ease-out;
+}
+
+.imageChip.clickable:hover::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.fileChip.clickable:hover {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* ── 删除标 ── */
+
+.remove {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--depth-2);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.9;
+  box-shadow: 0 0 0 1px var(--depth-1, rgba(0, 0, 0, 0.3));
+}
+
+.remove:hover {
+  opacity: 1;
+  color: var(--text-1);
+}

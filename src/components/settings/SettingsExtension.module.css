@@ -1,0 +1,137 @@
+/* 设置页 · "扩展"子页样式（MAA 接入）
+   沿用现有页的令牌：--text-1/2/3、--depth-1..4、--radius-sm。
+   节间距由 SettingsSection 的 margin-bottom 管，容器不再叠一层 gap。
+   下拉用通用件 ui/Select（原生 <select> 的展开列表改不动），样式在 settings-ui。 */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 账号：两个选项同行 ── */
+
+.serverRow {
+  display: flex;
+  gap: 16px;
+}
+
+.serverOption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.serverTitle {
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+/* ── 状态与动作同一行（这页唯一"活"的东西） ── */
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.statusText {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+.testButton {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 12px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.testButton:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.testButton:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* ── 路径行：输入框 + 选择按钮 ── */
+
+.pathRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pathRow .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── 文本输入 ── */
+
+.input {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--accent);
+}
+
+.input:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+/* ── 选择按钮（与空间页 actionButton 同形） ── */
+
+.actionButton {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.actionButton:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.actionButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
