@@ -38,6 +38,16 @@ function defaultSettings(): Settings {
       thinking_level: null,
     },
     exec: { mode: "ask" },
+    maa: {
+      server: "official",
+      auto_detect: true,
+      screenshot_extras: true,
+      touch_extras: false,
+      emulator: "",
+      emulator_path: "",
+      adb_path: "",
+      address: "",
+    },
     workspace: { workspace_root: "" },
     window: { always_on_top: true },
   };

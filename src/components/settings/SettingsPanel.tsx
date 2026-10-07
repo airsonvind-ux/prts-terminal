@@ -18,11 +18,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsAbout } from "./SettingsAbout";
 import { SettingsApp } from "./SettingsApp";
+import { SettingsExtension } from "./SettingsExtension";
 import { SettingsModel } from "./SettingsModel";
 import { SettingsSafety } from "./SettingsSafety";
 import { SettingsSkills } from "./SettingsSkills";
 import { SettingsSpace } from "./SettingsSpace";
 import { SettingsMemory } from "./SettingsMemory";
+import { SettingsUsage } from "./SettingsUsage";
 import { useUIStore } from "../../stores/useUIStore";
 import {
   isProcessingBusy,
@@ -46,6 +48,8 @@ const TABS = [
   { key: "space", label: "空间" },
   { key: "skills", label: "技能" },
   { key: "memory", label: "记忆" },
+  { key: "usage", label: "用量" },
+  { key: "extension", label: "扩展" },
   { key: "about", label: "关于" },
 ] as const;
 
@@ -113,6 +117,19 @@ export function mergeSettings(cur: Settings, patch: SettingsPatch): Settings {
   }
   if (patch.window && patch.window.always_on_top !== undefined) {
     next.window.always_on_top = patch.window.always_on_top;
+  }
+  if (patch.maa) {
+    const p = patch.maa;
+    const maa: Settings["maa"] = { ...cur.maa };
+    if (p.server !== undefined) maa.server = p.server;
+    if (p.auto_detect !== undefined) maa.auto_detect = p.auto_detect;
+    if (p.screenshot_extras !== undefined) maa.screenshot_extras = p.screenshot_extras;
+    if (p.touch_extras !== undefined) maa.touch_extras = p.touch_extras;
+    if (p.emulator !== undefined) maa.emulator = p.emulator;
+    if (p.emulator_path !== undefined) maa.emulator_path = p.emulator_path;
+    if (p.adb_path !== undefined) maa.adb_path = p.adb_path;
+    if (p.address !== undefined) maa.address = p.address;
+    next.maa = maa;
   }
   return next;
 }
@@ -389,6 +406,14 @@ export function SettingsPanel() {
             />
           )}
           {activeTab === "memory" && <SettingsMemory busy={settingsBusy} />}
+          {activeTab === "usage" && <SettingsUsage />}
+          {activeTab === "extension" && (
+            <SettingsExtension
+              maa={settings.maa}
+              busy={settingsBusy}
+              onPatch={(patch, label) => updateSettings({ maa: patch }, label)}
+            />
+          )}
           {activeTab === "app" && (
             <SettingsApp
               alwaysOnTop={settings.window.always_on_top}

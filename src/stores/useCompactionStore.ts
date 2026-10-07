@@ -114,12 +114,16 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       const outcome = await invoke<CompactOutcome>("compact_conversation", {
         request: { conversationId, sessionId, foldedHistory: payload },
       });
-      convStore.applyCompaction(conversationId, {
-        retainedFrom,
-        summary: outcome.summary,
-        tokensBefore: outcome.tokensBefore,
-        at: Date.now(),
-      });
+      convStore.applyCompaction(
+        conversationId,
+        {
+          retainedFrom,
+          summary: outcome.summary,
+          tokensBefore: outcome.tokensBefore,
+          at: Date.now(),
+        },
+        outcome.usage ?? undefined
+      );
       const degraded = outcome.degraded ? "（规则摘要）" : "";
       // 可点 toast（用户裁决方案 A）：点击滚动到分界卡；自动滚动已移除
       // （压缩完成不打断当前阅读位置，可发现性交由此动作入口承担）

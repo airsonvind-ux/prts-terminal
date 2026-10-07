@@ -17,7 +17,7 @@
 use serde::Serialize;
 
 use crate::events::FrontendMessage;
-use crate::llm::{ChatMessage, ReasoningPolicy, TokenUsage, ToolCall, ToolDef};
+use crate::llm::{ChatMessage, ReasoningPolicy, TokenUsage, ToolCall, ToolDef, UsageStat};
 
 // ═══════════════════════════════════════════════════════
 // 事件词汇表
@@ -133,6 +133,9 @@ pub enum SessionEvent {
     TurnEnd {
         session_id: String,
         reason: TurnEndReason,
+        /// 本轮累计用量（统计增量；无则 None）。前端归档时随 append_turn 提交。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<UsageStat>,
     },
 
     /// step 开始：一次 LLM 请求 + 其调用的工具。
@@ -156,7 +159,14 @@ pub enum SessionEvent {
 
     /// 用户消息（含历史播种与当前输入）
     #[serde(rename = "user/message", rename_all = "camelCase")]
-    UserMessage { session_id: String, content: String },
+    UserMessage {
+        session_id: String,
+        content: String,
+        /// 附件引用（历史播种携带；空 = 无附件）。
+        /// skip_serializing_if 保持无附件事件的既有序列化字节不变。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::attachments::Attachment>,
+    },
 
     /// 流式增量片段（token 级回放保真；reasoning 与 text 分道）
     #[serde(rename = "assistant/chunk", rename_all = "camelCase")]
@@ -199,6 +209,10 @@ pub enum SessionEvent {
         tool_name: Option<String>,
         summary: String,
         ok: bool,
+        /// 工具产物的图片附件引用（如 MAA 截图）。派生时在工具结果之后
+        /// 补一条带图 user 消息——与轮内内存形态同源，故跟轮可重建。
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<crate::attachments::Attachment>,
     },
 
     /// 请求头快照：渲染后的 system prompt + 工具 schema。
@@ -332,7 +346,16 @@ impl SessionEvent {
         Self::TurnStart { session_id: session_id.to_string() }
     }
     pub fn turn_end(session_id: &str, reason: TurnEndReason) -> Self {
-        Self::TurnEnd { session_id: session_id.to_string(), reason }
+        Self::TurnEnd { session_id: session_id.to_string(), reason, usage: None }
+    }
+
+    /// turn 结束（携带本轮累计用量；用量统计用）。
+    pub fn turn_end_with_usage(
+        session_id: &str,
+        reason: TurnEndReason,
+        usage: Option<UsageStat>,
+    ) -> Self {
+        Self::TurnEnd { session_id: session_id.to_string(), reason, usage }
     }
     pub fn step_start(session_id: &str, step: u32, estimated_tokens: u64) -> Self {
         Self::StepStart {
@@ -345,7 +368,24 @@ impl SessionEvent {
         Self::StepEnd { session_id: session_id.to_string(), step, usage, elapsed_ms }
     }
     pub fn user_message(session_id: &str, content: &str) -> Self {
-        Self::UserMessage { session_id: session_id.to_string(), content: content.to_string() }
+        Self::UserMessage {
+            session_id: session_id.to_string(),
+            content: content.to_string(),
+            attachments: Vec::new(),
+        }
+    }
+
+    /// 带附件的用户消息（历史播种）。
+    pub fn user_message_with_attachments(
+        session_id: &str,
+        content: &str,
+        attachments: Vec<crate::attachments::Attachment>,
+    ) -> Self {
+        Self::UserMessage {
+            session_id: session_id.to_string(),
+            content: content.to_string(),
+            attachments,
+        }
     }
     pub fn assistant_chunk(session_id: &str, kind: ChunkKind, content: &str) -> Self {
         Self::AssistantChunk { session_id: session_id.to_string(), kind, content: content.to_string() }
@@ -395,6 +435,26 @@ impl SessionEvent {
             tool_name: tool_name.map(|s| s.to_string()),
             summary: summary.to_string(),
             ok,
+            attachments: Vec::new(),
+        }
+    }
+
+    /// 带图片附件的工具结果（工具产物走附件通路）。
+    pub fn tool_result_with_attachments(
+        session_id: &str,
+        call_id: &str,
+        tool_name: Option<&str>,
+        summary: &str,
+        ok: bool,
+        attachments: Vec<crate::attachments::Attachment>,
+    ) -> Self {
+        Self::ToolResult {
+            session_id: session_id.to_string(),
+            call_id: call_id.to_string(),
+            tool_name: tool_name.map(|s| s.to_string()),
+            summary: summary.to_string(),
+            ok,
+            attachments,
         }
     }
     pub fn request_header(session_id: &str, system_prompt: &str, tool_defs: Vec<ToolDef>) -> Self {
@@ -594,7 +654,15 @@ impl SessionLog {
                     // 前端错误提示仅用于 UI 渲染，跳过（与旧 convert_history 一致）
                 }
                 "user" => {
-                    self.append(SessionEvent::user_message(session_id, &m.content));
+                    if m.attachments.is_empty() {
+                        self.append(SessionEvent::user_message(session_id, &m.content));
+                    } else {
+                        self.append(SessionEvent::user_message_with_attachments(
+                            session_id,
+                            &m.content,
+                            m.attachments,
+                        ));
+                    }
                 }
                 "assistant" => {
                     if let Some(ref reasoning) = m.reasoning_content {
@@ -644,6 +712,58 @@ impl SessionLog {
         }
     }
 
+    /// 工具返回图片时那条 user 消息的文本。轮内（orchestrator 追加）与
+    /// 跟轮（derive 重建）必须同源，否则那条消息会多发一次字节变化。
+    pub fn tool_image_text(tool_name: Option<&str>) -> String {
+        match tool_name {
+            Some(n) if !n.is_empty() => format!("（工具 {n} 返回的图片）"),
+            _ => "（工具返回的图片）".to_string(),
+        }
+    }
+
+    /// 由工具结果的图片附件派生一条带图 user 消息（无图片附件 → None）。
+    pub fn tool_image_message(
+        tool_name: Option<&str>,
+        attachments: &[crate::attachments::Attachment],
+    ) -> Option<ChatMessage> {
+        let image_paths: Vec<String> = attachments
+            .iter()
+            .filter(|a| a.is_image())
+            .map(|a| a.path.clone())
+            .collect();
+        if image_paths.is_empty() {
+            return None;
+        }
+        Some(ChatMessage::user_with_image_paths(
+            Self::tool_image_text(tool_name),
+            image_paths,
+        ))
+    }
+
+    /// 由 user/message 事件派生 LLM 消息：图片附件 → image_paths（请求前物化）；
+    /// 所有附件追加 `[附件：名]` 文本标记（无视觉能力时模型据此知道有附件）。
+    fn derive_user_message(content: &str, attachments: &[crate::attachments::Attachment]) -> ChatMessage {
+        if attachments.is_empty() {
+            return ChatMessage::user(content);
+        }
+        let image_paths: Vec<String> = attachments
+            .iter()
+            .filter(|a| a.is_image())
+            .map(|a| a.path.clone())
+            .collect();
+        let marks: Vec<String> = attachments.iter().map(|a| format!("[附件：{}]", a.name)).collect();
+        let text = if content.is_empty() {
+            marks.join("\n")
+        } else {
+            format!("{}\n\n{}", content, marks.join("\n"))
+        };
+        if image_paths.is_empty() {
+            ChatMessage::user(text)
+        } else {
+            ChatMessage::user_with_image_paths(text, image_paths)
+        }
+    }
+
     /// 从 log 派生 LLM 可见的历史消息（替代 convert_history 的多轮穿透）。
     ///
     /// 派生规则：
@@ -666,7 +786,7 @@ impl SessionLog {
 
         for event in &self.events {
             match event {
-                SessionEvent::UserMessage { content, .. } => {
+                SessionEvent::UserMessage { content, attachments, .. } => {
                     flush_assistant(
                         &mut out,
                         &mut text_buf,
@@ -674,7 +794,7 @@ impl SessionLog {
                         &mut pending_tool_calls,
                         policy,
                     );
-                    out.push(ChatMessage::user(content.clone()));
+                    out.push(Self::derive_user_message(content, attachments));
                 }
                 SessionEvent::AssistantChunk { kind, content, .. } => match kind {
                     ChunkKind::Text => text_buf.push_str(content),
@@ -690,7 +810,7 @@ impl SessionLog {
                         },
                     });
                 }
-                SessionEvent::ToolResult { call_id, summary, .. } => {
+                SessionEvent::ToolResult { call_id, summary, tool_name, attachments, .. } => {
                     flush_assistant(
                         &mut out,
                         &mut text_buf,
@@ -699,6 +819,10 @@ impl SessionLog {
                         policy,
                     );
                     out.push(ChatMessage::tool_result(call_id.clone(), summary.clone()));
+                    // 工具图的像素只在当前轮送达，消息本身必须重建。
+                    if let Some(msg) = Self::tool_image_message(tool_name.as_deref(), attachments) {
+                        out.push(msg);
+                    }
                 }
                 // —— SkillUnload / CacheUnload 派生已注释（2026-08：卸载机制移除）──
                 // 不参与派生的结构事件（turn/step 边界、request/header、
@@ -774,6 +898,8 @@ fn flush_assistant(
         tool_calls: None,
         tool_call_id: None,
         reasoning_content: reasoning,
+        image_paths: None,
+        images: None,
     };
     if !pending_tool_calls.is_empty() {
         msg.tool_calls = Some(std::mem::take(pending_tool_calls));
@@ -797,6 +923,7 @@ mod tests {
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -989,6 +1116,46 @@ mod tests {
         assert!(derived[1].tool_calls.is_none());
     }
 
+    /// 工具结果的图片附件 → 派生时补一条带图 user 消息（跟轮可重建）。
+    #[test]
+    fn tool_result_attachments_derive_image_message() {
+        use crate::attachments::Attachment;
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::user_message("s1", "截个图看看"));
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "好"));
+        log.append(SessionEvent::tool_call(
+            "s1",
+            "call_1",
+            "run_maa_task",
+            "{}",
+        ));
+        log.append(SessionEvent::tool_result_with_attachments(
+            "s1",
+            "call_1",
+            Some("run_maa_task"),
+            "已截取当前画面：C:/x/latest.png",
+            true,
+            vec![Attachment {
+                path: "C:/x/screenshot_1.png".into(),
+                name: "screenshot_1.png".into(),
+                mime_type: "image/png".into(),
+                size: 10,
+            }],
+        ));
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        // [user, assistant(工具调用), 工具结果, 带图 user]
+        assert_eq!(derived.len(), 4);
+        assert_eq!(derived[2].role, crate::llm::MessageRole::Tool);
+        assert_eq!(derived[3].role, crate::llm::MessageRole::User);
+        assert_eq!(
+            derived[3].image_paths,
+            Some(vec!["C:/x/screenshot_1.png".to_string()]),
+            "附图引用走跟轮重建"
+        );
+        assert_eq!(derived[3].content, "（工具 run_maa_task 返回的图片）");
+    }
+
     #[test]
     fn seed_filters_error_messages() {
         let history = vec![
@@ -999,6 +1166,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
+                attachments: Vec::new(),
             },
             make_msg("assistant", "你好博士"),
         ];
@@ -1038,6 +1206,7 @@ mod tests {
                 reasoning_content: Some("需要查数据".into()),
                 tool_calls: Some(vec![tc]),
                 tool_call_id: None,
+                attachments: Vec::new(),
             },
             FrontendMessage {
                 role: "tool".into(),
@@ -1045,6 +1214,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: Some("call_1".into()),
+                attachments: Vec::new(),
             },
         ];
         let mut log = SessionLog::new();

@@ -82,6 +82,38 @@ impl OpenAiCompatibleClient {
 
     // ── 请求体构造 ──
 
+    /// 序列化消息为 OpenAI Chat Completions 请求体格式。
+    ///
+    /// 仅「带 images 的消息」把 content 从字符串展开为 content block 数组
+    /// （`[{"type":"text"},{"type":"image_url"}...]`，OpenAI 多模态格式）；
+    /// 其余消息逐字节保持既有输出（不影响无图路径与 KV cache 前缀）。
+    fn messages_to_json(messages: &[ChatMessage]) -> Result<Value, LlmError> {
+        let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+        for m in messages {
+            let mut v = serde_json::to_value(m)
+                .map_err(|e| LlmError::Parse(format!("消息序列化失败: {e}")))?;
+            if let Some(images) = m.images.as_ref().filter(|v| !v.is_empty()) {
+                let mut parts: Vec<Value> = vec![serde_json::json!({
+                    "type": "text",
+                    "text": m.content,
+                })];
+                for img in images {
+                    parts.push(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", img.mime_type, img.data),
+                        },
+                    }));
+                }
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert("content".to_string(), Value::Array(parts));
+                }
+            }
+            out.push(v);
+        }
+        Ok(Value::Array(out))
+    }
+
     /// 构造 HTTP POST 的 JSON body。
     ///
     /// 公共部分：model、messages、tools、stream。
@@ -106,10 +138,9 @@ impl OpenAiCompatibleClient {
         );
 
         // 序列化 messages（此时 reasoning_content 字段由 ChatMessage 的
-        // #[serde(skip_serializing_if)] 控制——None 时自动省略）
-        let messages_json = serde_json::to_value(messages).map_err(|e| {
-            LlmError::Parse(format!("消息序列化失败: {e}"))
-        })?;
+        // #[serde(skip_serializing_if)] 控制——None 时自动省略）。
+        // 带图像的 user 消息把 content 展开为 [text, image_url...] 数组。
+        let messages_json = Self::messages_to_json(messages)?;
 
         // compat 驱动剥离：carrier 为 "reasoning_content" 的协议原生支持，不剥离
         let messages_json = if Self::should_strip_reasoning(&compat) {
@@ -269,7 +300,8 @@ impl OpenAiCompatibleClient {
             serde_json::from_value::<Vec<ToolCall>>(v.clone()).ok()
         }).filter(|tc| !tc.is_empty());
 
-        Ok(LlmResponse { text, tool_calls })
+        let usage = body.get("usage").and_then(Self::extract_usage);
+        Ok(LlmResponse { text, tool_calls, usage })
     }
 }
 

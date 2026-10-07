@@ -2,6 +2,16 @@
 //!
 //! 覆盖：词法子集 G 扫描器 / 删除门 / 程序分类与目标提取 /
 //! 路径规范化与地域比较 / evaluate 集成（优先级链）/ reason 码断言。
+//!
+//! 2026-10-07 换轴（见 `_执行审批-设计.md`）：判据从“能静态证明无害”换成
+//! “身份受限 + 不属于已知危险族”。受影响处：
+//! - 分析不了（词法门 OUT / 未列开关 / 未知程序）→ Auto，reason
+//!   `syntax-unproven` / `target-unresolved` / `no-risk-family`；
+//! - 地域门撤掉（读/写/运行都不再因此询问），区外触及只写 `touched_external`
+//!   审计位，区内与区外一视同仁 → Auto，reason `no-risk-family`；
+//! - 删除门：可分析走 token 判定，不可分析走 `raw_delete_hit` 词表扫描（仍 ASK）；
+//! - 危险族（网络/安装/进程/配置/undo）与 CRIT 恒拦不变。
+//! 部分测试函数名沿用旧称（`region_*`），断言已按新语义更新。
 
 use super::*;
 use crate::exec::risk;
@@ -260,8 +270,8 @@ fn delete_gate_git_rm_and_robocopy_flags() {
     assert_ask(&eval(r"robocopy ws\src ws\dst /mir", None, &ws), "delete-flag-option");
     assert_ask(&eval(r"robocopy ws\src ws\dst /purge /s", None, &ws), "delete-flag-option");
     // robocopy 无删除开关：区内 AUTO（§5/§11）
-    assert_auto(&eval(r"robocopy ws\src ws\dst", None, &ws), "region-in");
-    assert_auto(&eval(r"robocopy .\src .\dst /e /nfl", None, &ws), "region-in");
+    assert_auto(&eval(r"robocopy ws\src ws\dst", None, &ws), "no-risk-family");
+    assert_auto(&eval(r"robocopy .\src .\dst /e /nfl", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -272,14 +282,14 @@ fn delete_gate_git_rm_and_robocopy_flags() {
 #[test]
 fn region_inside_auto() {
     let ws = ws_fixture("in");
-    assert_auto(&eval("copy a.txt b.txt", None, &ws), "region-in");
-    assert_auto(&eval("type a.txt", None, &ws), "region-in");
-    assert_auto(&eval("Get-Content sub\\x.txt", None, &ws), "region-in");
-    assert_auto(&eval("echo hi > a.txt", None, &ws), "region-in");
-    assert_auto(&eval("echo hi > sub\\new.txt", None, &ws), "region-in");
-    assert_auto(&eval("copy x.txt sub\\new.txt", None, &ws), "region-in");
-    assert_auto(&eval("mkdir newdir", None, &ws), "region-in");
-    assert_auto(&eval("move a.txt sub\\b.txt", None, &ws), "region-in");
+    assert_auto(&eval("copy a.txt b.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("type a.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("Get-Content sub\\x.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("echo hi > a.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("echo hi > sub\\new.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("copy x.txt sub\\new.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("mkdir newdir", None, &ws), "no-risk-family");
+    assert_auto(&eval("move a.txt sub\\b.txt", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -289,11 +299,11 @@ fn region_outside_ask() {
     let outside = outside_fixture("out-x");
     let o = outside.join("a.txt");
     let o = o.to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("copy {o} b.txt"), None, &ws), "region-external");
-    assert_ask(&eval(r"type C:\Windows\win.ini", None, &ws), "region-external");
-    assert_ask(&eval(r"Get-Content ..\..\etc\x", None, &ws), "region-external");
-    assert_ask(&eval(&format!("echo hi > {o}"), None, &ws), "region-external");
-    assert_ask(&eval("copy x.txt C:\\outside\\new.txt", None, &ws), "region-external");
+    assert_auto(&eval(&format!("copy {o} b.txt"), None, &ws), "no-risk-family");
+    assert_auto(&eval(r"type C:\Windows\win.ini", None, &ws), "no-risk-family");
+    assert_auto(&eval(r"Get-Content ..\..\etc\x", None, &ws), "no-risk-family");
+    assert_auto(&eval(&format!("echo hi > {o}"), None, &ws), "no-risk-family");
+    assert_auto(&eval("copy x.txt C:\\outside\\new.txt", None, &ws), "no-risk-family");
     // 区外目标应置 touched_external
     let v = eval(&format!("copy {o} b.txt"), None, &ws);
     assert!(v.touched_external, "区外触及应置位");
@@ -304,18 +314,18 @@ fn region_outside_ask() {
 #[test]
 fn region_cd_navigation() {
     let ws = ws_fixture("cd");
-    // ws 根 cd .. 越出工作区 → ASK
-    assert_ask(&eval("cd ..", None, &ws), "region-external");
+    // ws 根 cd .. 越出工作区 → 不再拦（地域门撤），只记审计位
+    assert_auto(&eval("cd ..", None, &ws), "no-risk-family");
     // 子目录内 cd .. 回到 ws 根 → AUTO
     let sub = ws.join("sub");
-    assert_auto(&eval("cd ..", Some(&sub), &ws), "region-in");
-    // cd 到区内目录 → AUTO；区外目录 → ASK
-    assert_auto(&eval("cd sub", None, &ws), "region-in");
+    assert_auto(&eval("cd ..", Some(&sub), &ws), "no-risk-family");
+    // cd 到区内目录 → 放行；区外目录 → 同样放行（地域门撤）
+    assert_auto(&eval("cd sub", None, &ws), "no-risk-family");
     let outside = outside_fixture("cd-x");
     let o = outside.to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("cd {o}"), None, &ws), "region-external");
+    assert_auto(&eval(&format!("cd {o}"), None, &ws), "no-risk-family");
     // popd 无参 AUTO（§4）
-    assert_auto(&eval("popd", None, &ws), "region-in");
+    assert_auto(&eval("popd", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -324,8 +334,10 @@ fn region_cd_navigation() {
 fn region_cwd_outside_whole_command_ask() {
     let ws = ws_fixture("cwdx");
     let outside = outside_fixture("cwd-x");
-    // cwd 区外 → 整条 ASK(region-cwd-external)，即使命令本身只读
-    assert_ask(&eval("Get-Content a.txt", Some(&outside), &ws), "region-cwd-external");
+    // cwd 区外：地域门撤掉后不再拦截，只记审计位
+    let v = eval("Get-Content a.txt", Some(&outside), &ws);
+    assert_auto(&v, "no-risk-family");
+    assert!(v.touched_external, "cwd 区外应置 touched_external");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -335,7 +347,7 @@ fn region_cwd_inside_subdir_resolves_relative() {
     let ws = ws_fixture("cwdsub");
     let sub = ws.join("sub");
     // 相对路径按 cwd（sub）解析：sub 下新建 out.txt 区内
-    assert_auto(&eval("copy x.txt out.txt", Some(&sub), &ws), "region-in");
+    assert_auto(&eval("copy x.txt out.txt", Some(&sub), &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -370,8 +382,8 @@ fn region_symlink_escape_ask() {
     if let Ok(()) = created {
         let cmd = format!("type {}\\a.txt", link.to_string_lossy());
         let v = eval(&cmd, None, &ws);
-        assert_eq!(v.decision, GateDecision::Ask, "symlink 逃逸应 ASK: {:?}", v);
-        assert_eq!(v.reason, "region-external");
+        assert_eq!(v.decision, GateDecision::Auto, "symlink 逃逸不再拦: {:?}", v);
+        assert_eq!(v.reason, "no-risk-family");
     }
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
@@ -381,10 +393,10 @@ fn region_symlink_escape_ask() {
 fn region_write_nonexistent_paths() {
     let ws = ws_fixture("ne");
     let outside = outside_fixture("ne-x");
-    // 不存在目标：区内 → AUTO、区外 → ASK（祖先上溯 + 词法拼接）
-    assert_auto(&eval("copy a.txt deep\\new\\file.txt", None, &ws), "region-in");
+    // 不存在目标：区内 / 区外都放行（祖先上溯 + 词法拼接仍在，只记审计位）
+    assert_auto(&eval("copy a.txt deep\\new\\file.txt", None, &ws), "no-risk-family");
     let o = outside.join("new").join("file.txt").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("copy a.txt {o}"), None, &ws), "region-external");
+    assert_auto(&eval(&format!("copy a.txt {o}"), None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -397,17 +409,17 @@ fn region_write_nonexistent_paths() {
 fn run_inside_program_auto() {
     let ws = ws_fixture("run");
     // python 脚本（区内）→ AUTO
-    assert_auto(&eval("python script.py", None, &ws), "region-in");
-    assert_auto(&eval(r#"python "script.py""#, None, &ws), "region-in");
+    assert_auto(&eval("python script.py", None, &ws), "no-risk-family");
+    assert_auto(&eval(r#"python "script.py""#, None, &ws), "no-risk-family");
     // 脚本后的选项不影响目标判定
-    assert_auto(&eval("python script.py --flag arg", None, &ws), "region-in");
+    assert_auto(&eval("python script.py --flag arg", None, &ws), "no-risk-family");
     // 路径形态命令名：区内程序 → AUTO
     let myexe = ws.join("tools").join("my.exe");
     let myexe = myexe.to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("{myexe} --go"), None, &ws), "region-in");
+    assert_auto(&eval(&format!("{myexe} --go"), None, &ws), "no-risk-family");
     // node 脚本类比（解释器族）
     std::fs::write(ws.join("s.js"), "console.log(1)").unwrap();
-    assert_auto(&eval("node s.js", None, &ws), "region-in");
+    assert_auto(&eval("node s.js", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -416,9 +428,9 @@ fn run_outside_program_ask() {
     let ws = ws_fixture("runx");
     let outside = outside_fixture("runx-o");
     let script = outside.join("script.py").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("python {script}"), None, &ws), "run-external-program");
+    assert_auto(&eval(&format!("python {script}"), None, &ws), "no-risk-family");
     let myexe = outside.join("my.exe").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("{myexe}"), None, &ws), "run-external-program");
+    assert_auto(&eval(&format!("{myexe}"), None, &ws), "no-risk-family");
     let v = eval(&format!("python {script}"), None, &ws);
     assert!(v.touched_external);
     let _ = std::fs::remove_dir_all(&ws);
@@ -428,15 +440,15 @@ fn run_outside_program_ask() {
 #[test]
 fn unknown_program_rules() {
     let ws = ws_fixture("unk");
-    // 无参未知程序 → ASK(unknown-program-no-target)
-    assert_ask(&eval("some-custom-tool", None, &ws), "unknown-program-no-target");
+    // 无参未知程序 → 放行（换轴：不认识不再等于必须问）
+    assert_auto(&eval("some-custom-tool", None, &ws), "no-risk-family");
     // 全选项无位置参数 → 同
-    assert_ask(&eval("some-custom-tool --do-thing", None, &ws), "unknown-program-no-target");
-    // 首个非选项参数 = 运行目标候选：区内 → AUTO、区外 → ASK
-    assert_auto(&eval("some-custom-tool a.txt", None, &ws), "region-in");
+    assert_auto(&eval("some-custom-tool --do-thing", None, &ws), "no-risk-family");
+    // 首个非选项参数 = 运行目标候选：区内 / 区外都放行
+    assert_auto(&eval("some-custom-tool a.txt", None, &ws), "no-risk-family");
     let outside = outside_fixture("unk-o");
     let o = outside.join("a.txt").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("some-custom-tool {o}"), None, &ws), "region-external");
+    assert_auto(&eval(&format!("some-custom-tool {o}"), None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -530,23 +542,23 @@ fn type_release_system_queries_auto() {
 #[test]
 fn git_write_family_region() {
     let ws = ws_fixture("git");
-    assert_auto(&eval("git add a.txt", None, &ws), "region-in");
-    assert_auto(&eval("git add .", None, &ws), "region-in");
-    assert_auto(&eval("git add sub\\x.txt sub\\y.txt", None, &ws), "region-in");
-    assert_auto(&eval("git commit -m msg", None, &ws), "region-in");
-    assert_auto(&eval("git commit -am msg", None, &ws), "region-in");
-    assert_auto(&eval("git checkout main", None, &ws), "region-in");
-    assert_auto(&eval("git merge dev", None, &ws), "region-in");
-    assert_auto(&eval("git tag v1.0", None, &ws), "region-in");
-    assert_auto(&eval("git branch feat", None, &ws), "region-in");
-    assert_auto(&eval("git branch -m old new", None, &ws), "region-in");
-    assert_auto(&eval("git stash push -m wip", None, &ws), "region-in");
-    assert_auto(&eval("git stash pop", None, &ws), "region-in");
-    assert_auto(&eval("git mv a.txt b.txt", None, &ws), "region-in");
-    // git add 区外路径 → ASK
+    assert_auto(&eval("git add a.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("git add .", None, &ws), "no-risk-family");
+    assert_auto(&eval("git add sub\\x.txt sub\\y.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("git commit -m msg", None, &ws), "no-risk-family");
+    assert_auto(&eval("git commit -am msg", None, &ws), "no-risk-family");
+    assert_auto(&eval("git checkout main", None, &ws), "no-risk-family");
+    assert_auto(&eval("git merge dev", None, &ws), "no-risk-family");
+    assert_auto(&eval("git tag v1.0", None, &ws), "no-risk-family");
+    assert_auto(&eval("git branch feat", None, &ws), "no-risk-family");
+    assert_auto(&eval("git branch -m old new", None, &ws), "no-risk-family");
+    assert_auto(&eval("git stash push -m wip", None, &ws), "no-risk-family");
+    assert_auto(&eval("git stash pop", None, &ws), "no-risk-family");
+    assert_auto(&eval("git mv a.txt b.txt", None, &ws), "no-risk-family");
+    // git add 区外路径 → 放行（地域门撤）
     let outside = outside_fixture("git-o");
     let o = outside.join("x.txt").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("git add {o}"), None, &ws), "region-external");
+    assert_auto(&eval(&format!("git add {o}"), None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -586,8 +598,8 @@ fn priority_crit_before_delete_before_syntax() {
     assert_blocked(&eval("reg delete HKCU\\X /v Y", None, &ws), "crit-registry-write");
     // 删除门先于分类：非递归 del → delete-always-ask（不落 FileDeleteOp 地域面）
     assert_ask(&eval("del C:\\ws\\a.txt", None, &ws), "delete-always-ask");
-    // 语法门先于删除/分类：$HOME 形态 del 无删除词命中？—— $ 使整条 OUT
-    assert_ask(&eval("del $HOME\\x", None, &ws), "unanalyzable-syntax");
+    // 换轴：$ 使整条 OUT，但原始文本的删除词扫描补上删除门 → 仍 ASK
+    assert_ask(&eval("del $HOME\\x", None, &ws), "delete-always-ask");
     // crit 命中 → rule_id 原真 id、touched_external false
     let v = eval("del /s C:\\ws\\x", None, &ws);
     assert!(!v.touched_external);
@@ -622,18 +634,18 @@ fn priority_crit_set_unchanged_from_risk_migration() {
 fn named_option_whitelist() {
     let ws = ws_fixture("opt");
     // 路径值选项参与判定：区内 → AUTO
-    assert_auto(&eval("Get-Content -Path a.txt", None, &ws), "region-in");
-    assert_auto(&eval("Get-Content -LiteralPath .\\a.txt", None, &ws), "region-in");
-    assert_auto(&eval("copy a.txt -Destination sub\\b.txt", None, &ws), "region-in");
-    // 路径值选项值在区外 → ASK
+    assert_auto(&eval("Get-Content -Path a.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("Get-Content -LiteralPath .\\a.txt", None, &ws), "no-risk-family");
+    assert_auto(&eval("copy a.txt -Destination sub\\b.txt", None, &ws), "no-risk-family");
+    // 路径值选项值在区外 → 放行
     let outside = outside_fixture("opt-o");
     let o = outside.join("x.txt").to_string_lossy().into_owned();
-    assert_ask(&eval(&format!("Get-Content -Path {o}"), None, &ws), "region-external");
+    assert_auto(&eval(&format!("Get-Content -Path {o}"), None, &ws), "no-risk-family");
     // -filter 值跳过不判
-    assert_auto(&eval("Get-Content sub -Filter *.txt", None, &ws), "region-in");
-    // 白名单外 -x（strict cmdlet 面）→ ASK(unlisted-option)
-    assert_ask(&eval("Get-ChildItem -Recurse", None, &ws), "unlisted-option");
-    assert_ask(&eval("Get-Content -Raw a.txt", None, &ws), "unlisted-option");
+    assert_auto(&eval("Get-Content sub -Filter *.txt", None, &ws), "no-risk-family");
+    // 白名单外 -x（strict cmdlet 面）→ 放行（换轴：提取不了不再等于必须问）
+    assert_auto(&eval("Get-ChildItem -Recurse", None, &ws), "target-unresolved");
+    assert_auto(&eval("Get-Content -Raw a.txt", None, &ws), "target-unresolved");
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -785,22 +797,22 @@ fn reason_code_table_complete_for_ask_auto() {
     let region_cmd = format!("copy {o} b.txt");
     let cwd_out_cmd = "Get-Content a.txt".to_string();
     let cases: &[(&str, &str, &str)] = &[
-        ("ls | more", "unanalyzable-syntax", "unanalyzable-syntax"),
+        ("ls | more", "syntax-unproven", "syntax-unproven"),
         ("del a.txt", "delete-always-ask", "delete-always-ask"),
         (r"robocopy s d /mir", "delete-flag-option", "delete-flag-option"),
-        (&region_cmd, "region-external", "region-external"),
-        (&cwd_out_cmd, "cwd-out", "region-cwd-external"),
-        ("python C:\\tools\\s.py", "run-external-program", "run-external-program"),
+        (&region_cmd, "outside-recorded", "no-risk-family"),
+        (&cwd_out_cmd, "cwd-out", "no-risk-family"),
+        ("python C:\\tools\\s.py", "run-external-program", "no-risk-family"),
         (r#"python -c "x""#, "code-exec", "code-exec"),
-        ("Get-ChildItem -Recurse", "unlisted-option", "unlisted-option"),
-        ("some-custom-tool", "unknown-program-no-target", "unknown-program-no-target"),
+        ("Get-ChildItem -Recurse", "unlisted-option", "target-unresolved"),
+        ("some-custom-tool", "unknown-program-no-target", "no-risk-family"),
         ("curl https://x", "network-op", "network-op"),
         ("winget install vlc", "install-op", "install-op"),
         ("taskkill /im x", "process-control", "process-control"),
         ("netsh show x", "config-op", "config-op"),
         ("git reset --hard", "git-undo", "git-undo"),
         ("git status", "system-query", "system-query"),
-        ("copy a.txt b.txt", "region-in", "region-in"),
+        ("copy a.txt b.txt", "no-risk-family", "no-risk-family"),
     ];
     for (cmd, tag, expected) in cases {
         let v = if *tag == "cwd-out" {
@@ -822,4 +834,38 @@ fn risk_data_consistency() {
     assert_eq!(risk::classify_program_spec("python"), None);
     assert!(risk::is_delete_word("del"));
     assert!(!risk::is_delete_word("move"), "move 不是删除语义（FileWriteOp）");
+}
+
+/// 换轴验收（2026-10-07）：昨日真机上触发过授权的 PowerShell 脚本串，
+/// 现在应当放行（不再弹卡），理由码 `syntax-unproven`。
+#[test]
+fn real_world_scripts_released_after_axis_change() {
+    let ws = ws_fixture("axis");
+    let outside = outside_fixture("axis-x");
+    let png = outside.join("latest.png").to_string_lossy().into_owned();
+    let jsonl = outside
+        .join("1791297630325-OperBoxInfo.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    // 截图尺寸：$ 变量 + 位运算 + $() 展开
+    let shot = format!(
+        r#"$f='{png}'; $i=Get-Item $f; "size=$($i.Length)"; $b=[IO.File]::ReadAllBytes($f); $w=[int]$b[16]*16777216"#
+    );
+    assert_auto(&eval(&shot, None, &ws), "syntax-unproven");
+
+    // 结果文件统计：管道 + ConvertFrom-Json
+    let stats = format!(
+        r#"$f='{jsonl}'; $t=[IO.File]::ReadAllText($f); $a=($t|ConvertFrom-Json).details.all_opers; "total=$($a.Count)""#
+    );
+    assert_auto(&eval(&stats, None, &ws), "syntax-unproven");
+
+    // 逐行查看：foreach + Substring
+    let lines = format!(
+        r#"$f='{jsonl}'; $lines=Get-Content $f; "lines=$($lines.Count)"; foreach($i in 0,1){{ $s=$lines[$i]; $s.Substring(0,[Math]::Min(500,$s.Length)) }}"#
+    );
+    assert_auto(&eval(&lines, None, &ws), "syntax-unproven");
+
+    let _ = std::fs::remove_dir_all(&ws);
+    let _ = std::fs::remove_dir_all(&outside);
 }

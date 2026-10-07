@@ -37,6 +37,8 @@ const EXACT_MAP: Record<string, string> = {
   activate_skill: "激活skill",
   // 时间参照（Phase4 1.3）
   time: "查看时间",
+  // MAA 接入：把游戏操作交给本机 MAA
+  run_maa_task: "执行MAA任务",
 };
 
 // ── 前缀兜底表（粗粒度分类，顺序即优先级） ──

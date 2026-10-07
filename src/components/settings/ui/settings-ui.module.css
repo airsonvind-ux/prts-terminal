@@ -75,3 +75,36 @@
 .rowControl {
   margin-top: 2px;
 }
+
+/* ── Row · inline 形态（控件与 label 同行，hint 在同列下方） ──
+ * 用于开关类：圆圈与标题同一行，说明缩进对齐标题（与安全子页同一形态）。
+ * 缺省仍为上方 stacked 形态（label / hint / 控件各一行）。 */
+
+.rowInline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rowInlineHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.rowInlineHint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+  padding-left: 18px;
+}
+
+.rowInlineHintWarn {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warn);
+  padding-left: 18px;
+}

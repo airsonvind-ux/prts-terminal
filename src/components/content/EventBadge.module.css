@@ -24,12 +24,24 @@
 
 /* ── 折叠行 ── */
 
+/* 折叠行同时充当「粘性卡头」。
+ * 展开长内容后向下滚动时，本行钉在滚动区顶部（top:0），随时可点以收起；
+ * 多张卡各自钉住时天然叠推（下一张顶走上一张），无需额外处理。
+ * 防「钉住突变」的三条约束（定案）：
+ *   · 底色用不透明面板色 var(--depth-2) 作基础样式（非仅钉住时给）——
+ *     钉住前后零样式差，同时遮住从下方滚过的正文；
+ *   · width:100% 作基础样式——否则钉住时遮罩只有文字宽度，右侧正文透出；
+ *   · 不加「钉住态」样式、不挂 JS 检测、不做 top/background 过渡。 */
 .toggle {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 4px;
   border: none;
-  background: transparent;
+  background: var(--depth-2);
   color: var(--text-2);
   font-size: var(--text-sm);
   font-family: var(--font-ui);

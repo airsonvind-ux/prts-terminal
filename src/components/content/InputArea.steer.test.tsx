@@ -68,7 +68,8 @@ function renderInput(props: Partial<React.ComponentProps<typeof InputArea>>) {
     );
   });
   const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
-  const button = container.querySelector("button") as HTMLButtonElement;
+  // 发送按钮以 data-mode 标记（新增附件按钮不带该属性，避免误选）
+  const button = container.querySelector("button[data-mode]") as HTMLButtonElement;
   return { callbacks, textarea, button };
 }
 

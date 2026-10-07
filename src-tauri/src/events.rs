@@ -48,6 +48,17 @@ pub enum AgentEvent {
     ConversationTitle {
         conversation_id: String,
         title: String,
+        /// 本次标题生成用量（统计增量；前端未归档时携带至下次 append_turn）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<crate::llm::UsageStat>,
+    },
+
+    /// 记忆管线用量（后端内部累加后推送；前端仅镜像进投影用于展示，不回写）。
+    /// 与 conversation/title 同属旁路信号平面（非 session log 事实）。
+    #[serde(rename = "memory/usage", rename_all = "camelCase")]
+    MemoryUsage {
+        conversation_id: String,
+        usage: crate::llm::UsageStat,
     },
 }
 
@@ -77,6 +88,28 @@ impl AgentEvent {
         AgentEvent::ConversationTitle {
             conversation_id: conversation_id.to_string(),
             title: title.to_string(),
+            usage: None,
+        }
+    }
+
+    /// 构造会话标题更新事件（携带本次标题生成用量）。
+    pub fn conversation_title_with_usage(
+        conversation_id: &str,
+        title: &str,
+        usage: Option<crate::llm::UsageStat>,
+    ) -> Self {
+        AgentEvent::ConversationTitle {
+            conversation_id: conversation_id.to_string(),
+            title: title.to_string(),
+            usage,
+        }
+    }
+
+    /// 构造记忆用量事件（`memory/usage`）。
+    pub fn memory_usage(conversation_id: &str, usage: crate::llm::UsageStat) -> Self {
+        AgentEvent::MemoryUsage {
+            conversation_id: conversation_id.to_string(),
+            usage,
         }
     }
 }
@@ -118,6 +151,9 @@ pub struct FrontendMessage {
     /// tool 消息携带的 tool_call_id（工具结果匹配）
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// user 消息附带的附件引用（不含字节）。serde default = 空（旧前端不传兼容）。
+    #[serde(default)]
+    pub attachments: Vec<crate::attachments::Attachment>,
 }
 
 use crate::llm::ToolCall;

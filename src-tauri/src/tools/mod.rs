@@ -11,6 +11,7 @@ mod fs_grep;
 mod fs_write;
 mod knowledge;
 mod list_knowledge;
+mod maa_task;
 mod memory;
 mod query_enemy;
 mod query_level;
@@ -39,6 +40,7 @@ pub use fs_grep::GrepTool;
 pub use fs_write::{EditTool, WriteFileTool};
 pub use knowledge::ReadKnowledgeTool;
 pub use list_knowledge::ListKnowledgeTool;
+pub use maa_task::MaaTaskTool;
 pub use memory::{MemoryExperienceTool, MemoryGrowthTool};
 pub use query_enemy::QueryEnemy;
 pub use query_level::QueryLevel;
@@ -293,6 +295,12 @@ pub struct ToolOutput {
     pub summary: String,
     /// 上下文变更指令（按调用顺序由中枢统一应用，详见 [`ContextOp`]）。
     pub context_ops: Vec<ContextOp>,
+    /// 工具要交给模型的图片（本地路径）。中枢会另起一条 user 消息送出——
+    /// 工具结果本身只带文本，图片得走消息附件的现成物化通路。
+    /// 纯内部通道，不序列化（前端与日志不消费；用户侧的图由工具自己的
+    /// 展示切片给可点链接）。
+    #[serde(skip)]
+    pub images: Vec<String>,
     /// 缓存操作标记（按调用顺序由中枢统一落账为 cache/* 事件）。
     /// 纯内部通道，不序列化（skip：前端/日志不消费，日志形态为 cache/* 事件）。
     /// 2026-08：缓存工具取消注册后无生产者，保留供未来记忆系统复用。
@@ -313,6 +321,7 @@ impl ToolOutput {
             canonical: serde_json::json!({ "text": summary }),
             summary,
             context_ops: Vec::new(),
+            images: Vec::new(),
             cache_events: Vec::new(),
             skill_events: Vec::new(),
         }
@@ -324,6 +333,7 @@ impl ToolOutput {
             canonical,
             summary: summary.into(),
             context_ops: Vec::new(),
+            images: Vec::new(),
             cache_events: Vec::new(),
             skill_events: Vec::new(),
         }
@@ -613,6 +623,9 @@ pub fn register_builtin(
     // + 经历记忆只读（经历写入只走后台管线，memory_experience 无写参数面）。
     reg.register(Box::new(MemoryExperienceTool::new(Arc::clone(&memory))))?;
     reg.register(Box::new(MemoryGrowthTool::new(Arc::clone(&memory), ledger)))?;
+    // MAA 接入（桥 ↔ 工具层）：把游戏操作交给本机 MAA。
+    // 有状态且带副作用（桥连接 / 任务队列 / 截图落盘），is_concurrency_safe=false。
+    reg.register(Box::new(MaaTaskTool))?;
     Ok(())
 }
 
@@ -932,13 +945,16 @@ mod tests {
         // 文件域 5 工具（M2 批 1 write_file/edit + 批 2 list_dir 恢复/grep）
         // + 既有 11 查询/知识工具 + 1 Skill 激活 + 1 SimPath + 1 run_command（M3-A）
         // + 网络域 2 工具（M5：web_search/web_fetch）+ 时间 1 工具（Phase4 1.3）
-        // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）= 24；
+        // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）
+        // + MAA 1 工具（run_maa_task）= 25；
         // echo 为测试辅助不注册（2026-08-31）；4 个缓存工具已取消注册（2026-08）。
-        assert_eq!(reg.list_defs().len(), 24);
+        assert_eq!(reg.list_defs().len(), 25);
 
         // 记忆工具确已注册且名字稳定
         assert!(reg.get("memory_experience").is_some());
         assert!(reg.get("memory_growth").is_some());
+        // MAA 工具确已注册（名字即 LLM 的调用名）
+        assert!(reg.get("run_maa_task").is_some());
 
         let _ = std::fs::remove_dir_all(&workspace_root);
         let _ = std::fs::remove_dir_all(&kb_root);

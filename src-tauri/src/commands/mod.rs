@@ -14,7 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::db::Database;
 use crate::notices::Notices;
 use crate::events::{AgentEvent, FrontendMessage, IpcEvent};
-use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo, ModelRegistry, ProviderInfo, TokenUsage};
+use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo, ModelRegistry, ProviderInfo, TokenUsage, UsageStat, usage_stat};
 use crate::memory::schema::{PROFILE_NAME, REVISION_SEALED, SOURCE_USER};
 use crate::memory::{MemoryStore, SnapshotStore};
 use crate::skills_snapshot::SkillSnapshotStore;
@@ -22,7 +22,7 @@ use crate::orchestrator;
 use crate::settings::{SettingsPatch, SettingsStore};
 use crate::session_store::{
     AppendTurnOutcome, AppendTurnReq, CompactionMeta, ConversationMeta, ConversationRecord, MetaPatch,
-    SessionStore, TitleWriteOutcome,
+    SessionStore, TitleWriteOutcome, UsageCategory, UsageDelta,
 };
 use crate::steer_queue::SteerQueue;
 use crate::tools::ToolRegistry;
@@ -306,6 +306,19 @@ fn guard_config_write(turn_registry: &TurnRegistry) -> Result<(), String> {
     Ok(())
 }
 
+/// MAA 设置页的**只读**状态（不触发连接、不起桥、不改状态）。
+#[tauri::command]
+pub fn maa_status() -> crate::maa::manager::StatusView {
+    crate::maa::manager::status_view()
+}
+
+/// 「测试连接」：会真去连一次（起桥 + 连模拟器），完了回最新状态。
+#[tauri::command]
+pub fn maa_test_connection() -> Result<crate::maa::manager::StatusView, String> {
+    crate::maa::manager::status()?;
+    Ok(crate::maa::manager::status_view())
+}
+
 /// 读取设置全量（get_settings）。返回 Settings 结构（snake_case），
 /// **逐家 api_key 掩码下发**（明文经 reveal_api_key 瞬态获取）。只读不设闸。
 #[tauri::command]
@@ -347,14 +360,15 @@ pub fn reveal_api_key(
 /// 最后落盘（写后重读校验；失败 Err 上抛 → 前端可见——内存已同步，
 /// 下次变更兜底重写）。
 ///
-/// M3-B busy 闸前置（锁序固定：store → config → exec_settings → ledger，
-/// 无任何路径反向嵌套）。只读降级（高版本文件）拒绝写。
+/// M3-B busy 闸前置（锁序固定：store → config → exec_settings → maa_settings
+/// → ledger，无任何路径反向嵌套）。只读降级（高版本文件）拒绝写。
 #[tauri::command]
 pub fn set_settings(
     turn_registry: State<'_, Arc<TurnRegistry>>,
     store: State<'_, Arc<Mutex<SettingsStore>>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
     exec_settings: State<'_, Arc<Mutex<crate::exec_settings::ExecutionSettings>>>,
+    maa_settings: State<'_, Arc<Mutex<crate::maa::settings::MaaSettings>>>,
     ledger: State<'_, Arc<Mutex<Notices>>>,
     patch: SettingsPatch,
 ) -> Result<(), String> {
@@ -376,6 +390,14 @@ pub fn set_settings(
             .lock()
             .map_err(|e| format!("执行模式配置锁获取失败: {e}"))?;
         *es = st.settings.exec;
+    }
+    if changes.maa_changed {
+        let mut ms = maa_settings
+            .lock()
+            .map_err(|e| format!("MAA 设置锁获取失败: {e}"))?;
+        *ms = st.settings.maa.clone();
+        // 推给运行期权威（桥管理器）：连接类改动在那里即作废现有连接。
+        crate::maa::manager::set_settings(ms.clone());
     }
     if changes.model_changed {
         // Model 条目：active 供应商 + 其 model（与装配/ledger 同源 resolve）
@@ -454,6 +476,78 @@ pub fn get_app_meta(
     })
 }
 
+// ═══════════════════════════════════════════════════════
+// 附件上传（通用通道）
+// ═══════════════════════════════════════════════════════
+
+/// 上传本地文件为会话附件（快照复制到会话落点）。
+///
+/// 纯搬运：不做内容解析/识别。`conversationId` 为空 → 落临时 uploads/。
+/// 逐项校验（绝对路径 / 非符号链接 / 是文件 / 体积上限）；任一不通过即整体报错。
+#[tauri::command]
+pub fn upload_attachment(
+    paths: Vec<String>,
+    conversation_id: Option<String>,
+) -> Result<Vec<crate::attachments::Attachment>, String> {
+    use crate::attachments as att;
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if paths.len() > att::MAX_FILES {
+        return Err(format!("一次最多上传 {} 个文件", att::MAX_FILES));
+    }
+    let dir = att::session_files_dir(&conversation_id.unwrap_or_default());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+
+    let mut out = Vec::with_capacity(paths.len());
+    for raw in &paths {
+        let src = std::path::Path::new(raw);
+        if !src.is_absolute() {
+            return Err(format!("附件路径必须是绝对路径：{raw}"));
+        }
+        let meta = std::fs::symlink_metadata(src)
+            .map_err(|e| format!("附件不存在或不可读：{raw}（{e}）"))?;
+        if meta.file_type().is_symlink() {
+            return Err(format!("不支持符号链接：{raw}"));
+        }
+        if !meta.is_file() {
+            return Err(format!("仅支持文件（暂不支持目录）：{raw}"));
+        }
+        if meta.len() > att::MAX_FILE_BYTES {
+            return Err(format!(
+                "文件超过体积上限（{} MB）：{raw}",
+                att::MAX_FILE_BYTES / 1024 / 1024
+            ));
+        }
+        out.push(att::copy_into(src, &dir)?);
+    }
+    Ok(out)
+}
+
+/// 上传 base64 blob（粘贴图片等无路径来源）。仅接受白名单图片 MIME。
+#[tauri::command]
+pub fn upload_attachment_blob(
+    name: String,
+    base64_data: String,
+    mime_type: String,
+    conversation_id: Option<String>,
+) -> Result<crate::attachments::Attachment, String> {
+    use crate::attachments as att;
+    if !att::is_allowed_image_mime(&mime_type) {
+        return Err(format!("不支持的图片类型：{mime_type}"));
+    }
+    // 粗估解码后体积（base64 4 字符 ≈ 3 字节），超限直接拒。
+    if (base64_data.len() as u64) / 4 * 3 > att::MAX_FILE_BYTES {
+        return Err(format!(
+            "图片超过体积上限（{} MB）",
+            att::MAX_FILE_BYTES / 1024 / 1024
+        ));
+    }
+    let dir = att::session_files_dir(&conversation_id.unwrap_or_default());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
+    att::write_blob_into(&dir, &name, &base64_data, &mime_type)
+}
+
 /// 技能清单条目（空间页只读展示）：来源 skills 目录 md 的 frontmatter。
 /// file_path = 源 md 绝对路径（None = 索引未记录，异常态）。
 #[derive(Debug, Clone, Serialize)]
@@ -530,8 +624,8 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 
 /// 拉取提醒数据（快照＝值 + 有界记忆事件）。
 ///
-/// 前端 sendMessage 时调用：新对话（游标为空）取环境值快照（仅
-/// workspace/knowledge/model 的 value）；进行中对话取增量（stamp/seq > 游标的
+/// 前端 sendMessage 时调用：新对话（游标为空）取**值维度**快照（`kind == "value"`，
+/// 由 `DimKey::kind()` 分类、前端按标记筛）；进行中对话取增量（stamp/seq > 游标的
 /// 维度与事件）。后端**无消费状态**（纯只读）——游标在前端按对话维护。
 #[tauri::command]
 pub fn get_reminder_data(
@@ -677,6 +771,8 @@ fn diff_skills_now(root: &std::path::Path, ledger: &Arc<Mutex<Notices>>) {
 pub struct ReminderDim {
     pub key: String,
     pub title: String,
+    /// 类别：`"value"`（值维度，入首轮快照）／`"catalog"`（目录维度，不入）。
+    pub kind: String,
     pub value: String,
     pub note: String,
     pub stamp: u64,
@@ -706,10 +802,11 @@ impl ReminderData {
         let dims = n
             .dim_views()
             .into_iter()
-            .filter(|(_, _, d)| !d.value.is_empty())
-            .map(|(key, title, d)| ReminderDim {
-                key: key.to_string(),
-                title: title.to_string(),
+            .filter(|(_, d)| !d.value.is_empty())
+            .map(|(k, d)| ReminderDim {
+                key: k.key().to_string(),
+                title: k.title().to_string(),
+                kind: k.kind().as_str().to_string(),
                 value: d.value.clone(),
                 note: d.note.clone(),
                 stamp: d.stamp,
@@ -784,6 +881,7 @@ pub fn append_turn(
     context_length: Option<u64>,
     context_tokens: Option<TokenUsage>,
     last_notice_seq: Option<u64>,
+    usage_deltas: Option<Vec<UsageDelta>>,
 ) -> Result<AppendTurnOutcome, String> {
     let req = AppendTurnReq {
         conversation_id,
@@ -794,6 +892,7 @@ pub fn append_turn(
         context_length,
         context_tokens,
         last_notice_seq,
+        usage_deltas,
     };
     let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.append_turn(&req)
@@ -822,6 +921,7 @@ pub fn update_conversation_meta(
     // 显式清空 lastNoticeSeq（批 4：压缩后游标复位的持久面——复位为“空”才能
     // 走“新对话”分支重发三值快照；None 同样无法表达清空，故独立布尔）
     clear_notice_seq: Option<bool>,
+    usage_deltas: Option<Vec<UsageDelta>>,
 ) -> Result<(), String> {
     let patch = MetaPatch {
         title,
@@ -831,6 +931,7 @@ pub fn update_conversation_meta(
         compaction,
         context_tokens_clear: clear_context_tokens.unwrap_or(false),
         last_notice_seq_clear: clear_notice_seq.unwrap_or(false),
+        usage_deltas: usage_deltas.unwrap_or_default(),
     };
     let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.update_meta(&conversation_id, &patch)
@@ -872,17 +973,19 @@ pub async fn generate_conversation_title(
         .select(&llm_config.api_type)
         .ok_or_else(|| format!("协议 {:?} 暂未支持", llm_config.api_type))?;
 
-    let title = match orchestrator::title::generate_title(
+    let title_result = orchestrator::title::generate_title_full(
         &**client,
         &llm_config,
         &user_text,
         &assistant_text,
+        orchestrator::title::TITLE_TIMEOUT,
     )
-    .await
-    {
+    .await;
+    let title = match title_result.title {
         Some(t) => t,
         None => return Ok(()), // 失败静默降级（保留默认标题）
     };
+    let title_usage = title_result.usage.map(|u| usage_stat(&u, llm_config.api_type));
 
     let outcome = {
         let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
@@ -901,7 +1004,11 @@ pub async fn generate_conversation_title(
         }
         Ok(outcome) => {
             // Written / NotExists → 推送事件（NotExists 由前端携带至 append_turn）
-            let event = IpcEvent::Agent(AgentEvent::conversation_title(&conversation_id, &title));
+            let event = IpcEvent::Agent(AgentEvent::conversation_title_with_usage(
+                &conversation_id,
+                &title,
+                title_usage,
+            ));
             if let Err(e) = app_handle.emit("agent-event", event) {
                 eprintln!("[commands] 标题事件推送失败: {e}");
             }
@@ -950,6 +1057,8 @@ pub struct CompactionOutcome {
     pub degraded: bool,
     /// 折叠区压缩前估算（信息用，随压缩记录落盘）
     pub tokens_before: Option<u64>,
+    /// 本次摘要 LLM 调用用量（前端随压缩记录一并提交）；降级产出时 None。
+    pub usage: Option<UsageStat>,
 }
 
 /// 压缩对话（模块 D · 上下文衰减）：对前端折叠区做一次静默独立 LLM 摘要 run。
@@ -1057,6 +1166,7 @@ pub async fn compact_conversation(
             summary: o.summary,
             degraded: o.degraded,
             tokens_before: o.tokens_before,
+            usage: o.usage.map(|u| usage_stat(&u, cfg.api_type)),
         }
     })
 }
@@ -1128,6 +1238,14 @@ const MEMORY_CATCH_UP_SCAN: usize = 20;
 /// 启动补偿单次返回的待补会话数上限。
 const MEMORY_CATCH_UP_LIMIT: usize = 5;
 
+/// 推送记忆用量事件（前端镜像进投影；后端已累加，前端不回写）。
+fn emit_memory_usage(app_handle: &AppHandle, conversation_id: &str, usage: UsageStat) {
+    let event = IpcEvent::Agent(AgentEvent::memory_usage(conversation_id, usage));
+    if let Err(e) = app_handle.emit("agent-event", event) {
+        eprintln!("[commands] 记忆用量事件推送失败: {e}");
+    }
+}
+
 /// 触发经历管线（fire-and-forget）：对指定对话"水位线之后的增量"做提炼。
 ///
 /// 前端在轮末 / 切换 / 删除 / 启动补偿时调用；后端自判阈值
@@ -1136,6 +1254,7 @@ const MEMORY_CATCH_UP_LIMIT: usize = 5;
 /// → 记录并静默返回 Ok（前端不 await）。
 #[tauri::command]
 pub async fn finalize_memory(
+    app_handle: AppHandle,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
     store: State<'_, Arc<Mutex<SessionStore>>>,
@@ -1194,8 +1313,21 @@ pub async fn finalize_memory(
     )
     .await;
     turn_registry.unregister(&bg_id);
-    if let Err(e) = result {
-        eprintln!("[commands] 记忆管线整轮报废（{conversation_id}）：{e}");
+    match result {
+        Ok(o) => {
+            if let Some(u) = o.usage {
+                let stat = usage_stat(&u, llm_config.api_type);
+                if let Ok(mut s) = store.lock() {
+                    if let Err(e) =
+                        s.accumulate_usage(&conversation_id, UsageCategory::Memory, &stat)
+                    {
+                        eprintln!("[commands] 记忆用量累加跳过（{conversation_id}）：{e}");
+                    }
+                }
+                emit_memory_usage(&app_handle, &conversation_id, stat);
+            }
+        }
+        Err(e) => eprintln!("[commands] 记忆管线整轮报废（{conversation_id}）：{e}"),
     }
     Ok(())
 }
@@ -1347,6 +1479,21 @@ fn growth_meta(page: &crate::memory::schema::GrowthPage) -> GrowthMetaDto {
         updated_at: page.updated_at,
         is_profile: page.name == PROFILE_NAME,
     }
+}
+
+/// 记忆库展示排序：批次（`ts`）新在前；同批次内按创建序**倒序**（批内新的在上），
+/// 使批内方向与批间一致（此前批内保持文件创建升序，导致最新批的顶部反而是最旧条目）。
+/// 只服务展示，不改存储顺序（文件仍是创建序）。
+fn experience_list_rows(
+    entries: &[crate::memory::schema::ExperienceEntry],
+) -> Vec<ExperienceItemDto> {
+    let mut rows: Vec<(u64, usize, ExperienceItemDto)> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.ts, i, experience_item(e)))
+        .collect();
+    rows.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+    rows.into_iter().map(|(_, _, dto)| dto).collect()
 }
 
 fn experience_item(e: &crate::memory::schema::ExperienceEntry) -> ExperienceItemDto {
@@ -1560,13 +1707,7 @@ pub fn memory_experience_list(
     let m = memory_store
         .lock()
         .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-    let mut rows: Vec<(u64, ExperienceItemDto)> = m
-        .experiences()
-        .iter()
-        .map(|e| (e.ts, experience_item(e)))
-        .collect();
-    rows.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
-    Ok(rows.into_iter().map(|(_, dto)| dto).collect())
+    Ok(experience_list_rows(m.experiences()))
 }
 
 /// 清除经历记忆：清经历本体＋长期梗概；水位抬平到各对话当前总轮数
@@ -1654,6 +1795,7 @@ fn validate_longterm(text: &str) -> Result<(), String> {
 /// 整理当下记忆：对指定对话跑一次经历管线（**忽略 6 轮阈值**；冷却不静默）。
 #[tauri::command]
 pub async fn memory_tidy(
+    app_handle: AppHandle,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
     store: State<'_, Arc<Mutex<SessionStore>>>,
@@ -1724,6 +1866,15 @@ pub async fn memory_tidy(
     )
     .await;
     turn_registry.unregister(&bg_id);
+    if let Ok(o) = &result {
+        if let Some(u) = o.usage {
+            let stat = usage_stat(&u, llm_config.api_type);
+            if let Ok(mut s) = store.lock() {
+                let _ = s.accumulate_usage(&conversation_id, UsageCategory::Memory, &stat);
+            }
+            emit_memory_usage(&app_handle, &conversation_id, stat);
+        }
+    }
     Ok(match result {
         Err(e) => MemoryTidyDto {
             status: "failed".into(),
@@ -2358,6 +2509,37 @@ pub fn open_workspace_in_explorer(
 mod tests {
     use super::*;
     use crate::llm::ApiType;
+
+    fn exp_entry(id: &str, ts: u64, title: &str) -> crate::memory::schema::ExperienceEntry {
+        crate::memory::schema::ExperienceEntry {
+            id: id.into(),
+            ts,
+            conversation_id: "c1".into(),
+            line_from: String::new(),
+            turn_from: 0,
+            turn_to: 0,
+            level: "short".into(),
+            title: title.into(),
+            summary: String::new(),
+            tags: Vec::new(),
+            revision_count: 0,
+            absorbed_in: None,
+        }
+    }
+
+    #[test]
+    fn experience_list_orders_newest_first_within_batch() {
+        // 批间新在前（ts 降序）；批内按创建序倒序（同一 ts 的末条在上）。
+        let entries = vec![
+            exp_entry("a", 100, "旧批"),
+            exp_entry("b", 200, "批2-1"),
+            exp_entry("c", 200, "批2-2"),
+            exp_entry("d", 200, "批2-3"),
+        ];
+        let rows = experience_list_rows(&entries);
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["d", "c", "b", "a"]);
+    }
 
     #[test]
     fn validate_longterm_bounds() {

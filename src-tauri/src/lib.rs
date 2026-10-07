@@ -6,14 +6,17 @@
 
 // 模块声明
 mod approval;
+mod attachments;
 mod cache;
 mod config;
 mod db;
+mod machine;
 mod notices;
 mod events;
 mod exec;
 mod exec_settings;
 mod knowledge;
+pub mod maa;
 mod memory;
 mod observability;
 mod orchestrator;
@@ -208,12 +211,28 @@ pub fn run() {
             let c = llm_config.lock().unwrap(); // 刚构造，无竞争
             crate::notices::model_label(&c.provider, &c.model)
         };
+        // 本机信息：首次启动全量探测；之后启动只做存活检查（失活才升级全量）。
+        // 路径持久化到 data_dir/machine.json（工具层据此解析，不入值维度）。
+        let machine_info = {
+            let dir = config::data_dir();
+            match crate::machine::MachineInfo::load(&dir) {
+                Some(info) if info.all_alive() => info,
+                _ => {
+                    let info = crate::machine::MachineInfo::detect(None);
+                    info.save(&dir);
+                    info
+                }
+            }
+        };
+
         let mut ledger = ledger.lock().unwrap();
         ledger.sync_environment_snapshots(
             &workspace_root.to_string_lossy(),
             &model_label,
             &knowledge_dir().to_string_lossy(),
         );
+        let (maa, emulator, game_pc) = machine_info.dim_values();
+        ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
         // 技能目录：扫描失败 → 跳过 diff（保留既有基线；首启失败则下次
         // 运行仍按首启处理——空清单不覆盖真实基线）
         match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
@@ -258,6 +277,15 @@ pub fn run() {
         Arc::new(Mutex::new(st.settings.exec))
     };
 
+    // ── MAA 设置（settings.maa 段，2026-10）──
+    // 运行期权威在桥管理器（连接类改动即作废现有连接），装配时推入初值。
+    let maa_settings = {
+        let st = settings_store.lock().unwrap();
+        let section = st.settings.maa.clone();
+        crate::maa::manager::set_settings(section.clone());
+        Arc::new(Mutex::new(section))
+    };
+
     // ── 审批注册表（M3-A：run_command 确认等待的决策通道）──
     // 内部 Mutex 串行化 register/resolve；外部 Arc 共享（orchestrator 等待端
     // 与 resolve_tool_approval 命令端）。
@@ -294,6 +322,7 @@ pub fn run() {
         .manage(snapshot_store)
         .manage(skills_snapshot_store)
         .manage(exec_settings)
+        .manage(maa_settings)
         .manage(approval_registry)
         .manage(turn_registry)
         .manage(steer_queue)
@@ -334,6 +363,8 @@ pub fn run() {
             commands::set_settings,
             commands::reveal_api_key,
             commands::get_app_meta,
+            commands::maa_status,
+            commands::maa_test_connection,
             commands::list_skills,
             commands::pick_skill_file,
             commands::pick_skill_folder,
@@ -374,6 +405,8 @@ pub fn run() {
             commands::memory_experience_clear,
             commands::memory_set_longterm,
             commands::memory_tidy,
+            commands::upload_attachment,
+            commands::upload_attachment_blob,
             // commands::clear_conversation_cache, // 已注释（2026-08：缓存系统停用）
         ])
         .run(tauri::generate_context!())

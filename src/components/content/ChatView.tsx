@@ -7,10 +7,11 @@
 // 架构升级 · 模块 1：对话数据为投影缓存（turns: SessionEvent[][]），
 // 消息气泡/事件卡片由 MessageList 内部投影派生。
 
-import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { Attachment } from "../../types";
 import { useConversationStore } from "../../stores/useConversationStore";
-import { useProcessingStore } from "../../stores/useProcessingStore";
+import { useProcessingStore, getModelInfo } from "../../stores/useProcessingStore";
 import { useUIStore } from "../../stores/useUIStore";
 import { useUIState } from "../../hooks/useUIState";
 import { useCompactionStore } from "../../stores/useCompactionStore";
@@ -21,6 +22,8 @@ import { MessageList } from "./MessageList";
 import { BootSequence } from "./BootSequence";
 import { FindBar } from "./FindBar";
 import { InputArea } from "./InputArea";
+import { AttachmentStrip } from "./AttachmentStrip";
+import { DragOverlay } from "./DragOverlay";
 import { ContextIndicator } from "./ContextIndicator";
 import styles from "./ChatView.module.css";
 
@@ -95,11 +98,103 @@ export function ChatView({ onDragHandle }: Props) {
       : EMPTY_STEER_PENDING
   );
 
+  // ── 附件（旁路输入：拖入 / 粘贴；无按钮）──
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const addAttachments = useCallback((list: Attachment[]) => {
+    if (list.length > 0) setAttachments((prev) => [...prev, ...list]);
+  }, []);
+  const removeAttachment = useCallback((index: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  /** 拖入的路径 → 上传（落点按当前对话分区）。 */
+  const uploadPaths = useCallback(
+    (paths: string[]) => {
+      if (!paths || paths.length === 0) return;
+      void invoke<Attachment[]>("upload_attachment", {
+        paths,
+        conversationId: activeId ?? null,
+      })
+        .then(addAttachments)
+        .catch((err) =>
+          showToast(String(err), { kind: "warning", dedupeKey: "attach-failed" })
+        );
+    },
+    [activeId, addAttachments]
+  );
+
+  /** 粘贴图片 blob → 上传。 */
+  const uploadBlob = useCallback(
+    async (file: File) => {
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(reader.error ?? new Error("读取失败"));
+          reader.onload = () => {
+            const s = typeof reader.result === "string" ? reader.result : "";
+            const comma = s.indexOf(",");
+            resolve(comma >= 0 ? s.slice(comma + 1) : s);
+          };
+          reader.readAsDataURL(file);
+        });
+        const item = await invoke<Attachment>("upload_attachment_blob", {
+          name: file.name || "pasted.png",
+          base64Data: base64,
+          mimeType: file.type || "image/png",
+          conversationId: activeId ?? null,
+        });
+        addAttachments([item]);
+      } catch (err) {
+        showToast(String(err), { kind: "warning", dedupeKey: "attach-failed" });
+      }
+    },
+    [activeId, addAttachments]
+  );
+
+  // 拖入（Tauri webview 事件；拖到窗口任意处即上传，拖拽中现形遮罩）
+  const [dragActive, setDragActive] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+        const off = await getCurrentWebview().onDragDropEvent((event) => {
+          const type = event.payload.type;
+          if (type === "enter" || type === "over") {
+            setDragActive(true);
+          } else if (type === "leave") {
+            setDragActive(false);
+          } else if (type === "drop") {
+            setDragActive(false);
+            uploadPaths(event.payload.paths);
+          }
+        });
+        if (disposed) off();
+        else unlisten = off;
+      } catch {
+        // 非 Tauri 环境（测试 / 浏览器）：无拖拽事件
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [uploadPaths]);
+
   const handleSubmit = useCallback(
     (text: string) => {
-      sendMessage(text);
+      const hasImage = attachments.some((a) => a.mimeType.startsWith("image/"));
+      if (hasImage && getModelInfo()?.supportsVision !== true) {
+        showToast("当前模型不支持图像输入，图片将按文件发送（模型看不到内容）", {
+          kind: "warning",
+          dedupeKey: "text-model-image-file-only",
+        });
+      }
+      sendMessage(text, attachments);
+      setAttachments([]);
     },
-    [sendMessage]
+    [attachments, sendMessage]
   );
 
   // ── 插话提交（生成中）：入队成功（返回条目 id）→ 登记 pending → 清输入；
@@ -181,6 +276,7 @@ export function ChatView({ onDragHandle }: Props) {
   return (
     <div className={styles.container}>
       <Toolbar onDragHandle={onDragHandle} />
+      <DragOverlay active={dragActive} />
       <div className={styles.messageArea}>
         {/* 恢复中且尚无内容：对话区留白（启动演出覆盖其上）；恢复后内容先挂载、
             在遮盖期间完成首帧与沉底，演出淡出时直接露出 */}
@@ -198,15 +294,22 @@ export function ChatView({ onDragHandle }: Props) {
         {bootVisible && <BootSequence onDone={handleBootDone} />}
       </div>
       {!isFirstUse && <FindBar />}
-      <div className={styles.inputRow}>
-        <ContextIndicator />
-        <InputArea
-          onSubmit={handleSubmit}
-          onSteer={handleSteer}
-          onStop={handleStop}
-          generating={generating}
-          disabled={hardDisabled}
-        />
+      <div className={styles.bottomArea}>
+        {attachments.length > 0 && (
+          <AttachmentStrip files={attachments} onRemove={removeAttachment} />
+        )}
+        <div className={styles.inputRow}>
+          <ContextIndicator />
+          <InputArea
+            onSubmit={handleSubmit}
+            onSteer={handleSteer}
+            onStop={handleStop}
+            generating={generating}
+            disabled={hardDisabled}
+            hasAttachments={attachments.length > 0}
+            onPasteImage={uploadBlob}
+          />
+        </div>
       </div>
     </div>
   );

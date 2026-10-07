@@ -401,6 +401,31 @@ fn read_target(
 // 删除门 D（M3-A 设计 §5）
 // ═══════════════════════════════════════════════════════
 
+/// 原始文本删除词扫描（换轴新增）：词法门失败时 token 不可信、删除门失效，
+/// 改用本扫描兜住“脚本式删除”。粗粒度、可绕，但挡住最直接的写法。
+pub(crate) fn raw_delete_hit(command: &str) -> Option<&'static str> {
+    // 以「非 [a-z0-9_.-]」为分隔切词；保留连字符（remove-item）与点（.exe）
+    let mut word = String::new();
+    let mut words: Vec<String> = Vec::new();
+    for ch in command.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' || ch == '.' {
+            word.push(ch.to_ascii_lowercase());
+        } else if !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    for w in &words {
+        let bare = w.strip_suffix(".exe").unwrap_or(w.as_str());
+        if risk::is_delete_word(bare) {
+            return Some("delete-always-ask");
+        }
+    }
+    None
+}
+
 /// 删除语义判定：命中 → reason（delete-always-ask / delete-flag-option）。
 /// 凡命中删除词表，无论参数指向何处（区内也问）一律询问。
 pub(crate) fn is_delete_program(tokens: &[Token]) -> Option<&'static str> {
@@ -878,10 +903,14 @@ pub fn evaluate(command: &str, cwd: &Path, workspace: &Path) -> GateVerdict {
     if let Some(cv) = risk::check_crit(command) {
         return GateVerdict::blocked(cv.rule_id);
     }
-    // 1. 词法子集门 G
+    // 1. 词法子集门 G：分析不了不再等于必须问（换轴）。
+    //    但 token 不可信 → 删除门失效，改用词表级扫描兜住脚本式删除。
     let scan = scan_tokens(command);
     if !scan.ok || scan.tokens.is_empty() {
-        return GateVerdict::ask("unanalyzable-syntax");
+        if let Some(reason) = raw_delete_hit(command) {
+            return GateVerdict::ask(reason);
+        }
+        return GateVerdict::auto("syntax-unproven");
     }
     let tokens = scan.tokens;
     // `$PSVersionTable` 单 token 特例豁免与版本探测形态（§6 类型放行）
@@ -897,18 +926,16 @@ pub fn evaluate(command: &str, cwd: &Path, workspace: &Path) -> GateVerdict {
     if let Some(reason) = cls.fixed_ask {
         return GateVerdict::ask(reason);
     }
-    // 4. 地域判定 R：cwd 信任检查先行（cwd 区外 → 整条 ASK）
+    // 4. 目标收集与区外记录（换轴：地域门撤掉——区外写被 OS 拒、读无害、
+    //    运行同受身份约束；此处只把“触及区外”记进审计位，不再驱动询问）
     let ws_norm = workspace
         .canonicalize()
         .unwrap_or_else(|_| workspace.to_path_buf());
-    let Some(cwd_norm) = normalize_path(&cwd.to_string_lossy(), &ws_norm) else {
-        return GateVerdict::ask("region-cwd-external");
-    };
-    if !inside_workspace(&cwd_norm, &ws_norm) {
-        return GateVerdict::ask("region-cwd-external");
-    }
+    let cwd_norm =
+        normalize_path(&cwd.to_string_lossy(), &ws_norm).unwrap_or_else(|| ws_norm.clone());
+    let mut watched_external = !inside_workspace(&cwd_norm, &ws_norm);
 
-    // 目标集合 = 程序目标 ∪ 重定向目标（重定向目标参与地域，任何命令均含）
+    // 目标集合 = 程序目标 ∪ 重定向目标
     let mut targets: Vec<String> = Vec::new();
     for r in &scan.redirects {
         if let Some(t) = &r.target {
@@ -917,7 +944,12 @@ pub fn evaluate(command: &str, cwd: &Path, workspace: &Path) -> GateVerdict {
     }
     match extract_targets(&cls, &tokens) {
         Ok(mut t) => targets.append(&mut t),
-        Err(reason) => return GateVerdict::ask(reason),
+        // 换轴：目标提取不了（未列开关等）不再等于必须问
+        Err(_) => {
+            let mut v = GateVerdict::auto("target-unresolved");
+            v.touched_external = watched_external;
+            return v;
+        }
     }
 
     // 无条件 ASK 族与类型放行族先行
@@ -938,28 +970,20 @@ pub fn evaluate(command: &str, cwd: &Path, workspace: &Path) -> GateVerdict {
         _ => {}
     }
 
-    // UnknownOp 无目标：无路径未知程序 → ASK(unknown-program-no-target)
-    if cls.kind == OpKind::UnknownOp && targets.is_empty() {
-        return GateVerdict::ask("unknown-program-no-target");
-    }
-
-    // 地域判定：目标全 ∈ 区内 → AUTO(region-in)；任一区外 → ASK
-    // （运行面 → run-external-program；文件操作面 → region-external）
-    let external_reason = if cls.kind == OpKind::RunProgramOp {
-        "run-external-program"
-    } else {
-        "region-external"
-    };
+    // 区外触及只记审计位（不再询问）
     for t in &targets {
-        let Some(n) = normalize_path(t, &cwd_norm) else {
-            // 不可解析路径（词法层已过滤大部分）→ 无法确认区内 → 保守询问
-            return GateVerdict::ask_external(external_reason);
-        };
-        if !inside_workspace(&n, &ws_norm) {
-            return GateVerdict::ask_external(external_reason);
+        match normalize_path(t, &cwd_norm) {
+            Some(n) => {
+                if !inside_workspace(&n, &ws_norm) {
+                    watched_external = true;
+                }
+            }
+            None => watched_external = true,
         }
     }
-    GateVerdict::auto("region-in")
+    let mut v = GateVerdict::auto("no-risk-family");
+    v.touched_external = watched_external;
+    v
 }
 
 #[cfg(test)]

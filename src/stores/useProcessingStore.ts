@@ -22,6 +22,9 @@ import type {
   ReminderData,
   Mood,
   MoodIntensity,
+  UsageDelta,
+  UsageStat,
+  Attachment,
 } from "../types";
 import {
   scanTextChunk,
@@ -44,6 +47,14 @@ import { useConversationStore } from "./useConversationStore";
 import { useCompactionStore } from "./useCompactionStore";
 import { showToast } from "./useToastStore";
 
+/** 首轮未归档时暂存的标题用量（随下一次 appendTurn 提交）。 */
+const pendingTitleUsage = new Map<string, UsageDelta>();
+
+/** 暂存标题用量（供 useAgentEvents 在会话未归档时调用）。 */
+export function stashTitleUsage(conversationId: string, delta: UsageDelta): void {
+  pendingTitleUsage.set(conversationId, delta);
+}
+
 // ── 全局模型信息缓存 ──
 //
 // 模块级 ref：SettingsProvider 在用户选模型时写入，sendMessage 创建对话时读取。
@@ -53,6 +64,8 @@ import { showToast } from "./useToastStore";
 interface ModelInfoCache {
   name: string;
   contextLength: number;
+  /** 当前模型是否支持图像输入（未知/未收录 → undefined，按不支持处理） */
+  supportsVision?: boolean;
 }
 
 const modelInfoRef: { current: ModelInfoCache | null } = { current: null };
@@ -116,7 +129,7 @@ interface ProcessingStore {
    * 以及后端回传事件的路由 key。不是 conversationId——后者标识对话，
    * 但一个对话可以有多轮 sendMessage，每轮需要独立的处理快照。
    */
-  sendMessage: (input: string) => Promise<void>;
+  sendMessage: (input: string, attachments?: Attachment[]) => Promise<void>;
 
   /**
    * 追加事件到 processing[event.sessionId].currentEvents。
@@ -157,7 +170,7 @@ interface ProcessingStore {
    *   其余逻辑（usage 扫描/快照删除/contextTokens 不覆盖）与普通轮一致——
    *   aborted 轮无 assistant/message → usage null → 不覆盖对话 contextTokens。
    */
-  finishProcessing: (sessionId: string, reason?: TurnEndReason) => void;
+  finishProcessing: (sessionId: string, reason?: TurnEndReason, turnUsage?: UsageStat | null) => void;
 
   /**
    * 处理失败。两种触发路径：
@@ -515,8 +528,14 @@ function maybeTriggerTitleFallback(conversationId: string): void {
 }
 
 /** 合成 user/message 事件（前端输入即事实，后端不镜像回传） */
-function makeUserEvent(sessionId: string, content: string): UserMessageEvent {
-  return { type: "user/message", sessionId, content };
+function makeUserEvent(
+  sessionId: string,
+  content: string,
+  attachments?: Attachment[]
+): UserMessageEvent {
+  return attachments && attachments.length > 0
+    ? { type: "user/message", sessionId, content, attachments }
+    : { type: "user/message", sessionId, content };
 }
 
 // ═══════════════════════════════════════════════════
@@ -526,7 +545,7 @@ function makeUserEvent(sessionId: string, content: string): UserMessageEvent {
 export const useProcessingStore = create<ProcessingStore>((set, get) => ({
   processing: {},
 
-  sendMessage: async (input: string) => {
+  sendMessage: async (input: string, attachments: Attachment[] = []) => {
     const convStore = useConversationStore.getState();
     const { processing } = get();
     const activeId = convStore.activeId;
@@ -543,8 +562,8 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       return;
 
     // ── Reminder：拉取提醒数据（后端 get_reminder_data：快照＝值 + 有界事件）──
-    // 新对话（lastNoticeSeq 为空）：环境值快照——仅 workspace/knowledge/model
-    //   的 value，不含事件行；游标＝payload.seq。
+    // 新对话（lastNoticeSeq 为空）：值维度快照——仅 kind === "value" 的
+    //   维度 value，不含事件行；游标＝payload.seq。
     // 进行中对话：增量——stamp>游标 的维度（note）＋ seq>游标 的事件；
     //   维度行在上、事件行在下；游标＝payload.seq。
     // 含块版本随轮归档冻结；invoke 失败仅进行中对话回滚（新对话不回滚为 0，
@@ -567,15 +586,10 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       const cursor = conv?.lastNoticeSeq;
       const lines: ReminderLine[] = [];
       if (cursor === undefined || cursor === null) {
-        // 新对话：仅环境值快照（workspace/knowledge/model）
+        // 新对话：仅值维度快照（kind === "value"）
         noticeIsNewConversation = true;
         for (const d of data.dims) {
-          if (
-            (d.key === "workspace" ||
-              d.key === "knowledge" ||
-              d.key === "model") &&
-            d.value !== ""
-          ) {
+          if (d.kind === "value" && d.value !== "") {
             lines.push({ title: d.title, detail: d.value });
           }
         }
@@ -611,10 +625,9 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
     const priorMessages: ChatMessage[] = isNewNow
       ? []
       : deriveActiveHistory(conv?.turns ?? [], conv?.compaction);
-    const history: ChatMessage[] = [
-      ...priorMessages,
-      { role: "user", content: displayContent },
-    ];
+    const lastUser: ChatMessage = { role: "user", content: displayContent };
+    if (attachments.length > 0) lastUser.attachments = attachments;
+    const history: ChatMessage[] = [...priorMessages, lastUser];
 
     // ── 模块 D：上下文窗口硬拦（发送前预估）──
     // 水位 = 最近 usage 的 inputTokens（provider 权威口径）；下一轮预估 =
@@ -671,7 +684,7 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
         [sessionId]: {
           conversationId,
           // user/message 预置为第一条（含块版本；投影缓存进行态，归档时随轮落库）
-          currentEvents: [makeUserEvent(sessionId, displayContent)],
+          currentEvents: [makeUserEvent(sessionId, displayContent, attachments)],
           agentPhase: "processing",
           // 情绪默认平静（省略）；标签匹配成功时 set mood
           mood: "平静",
@@ -800,7 +813,7 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
     // reasoning/processing → "processing"，streaming → "streaming"
   },
 
-  finishProcessing: (sessionId: string, reason?: TurnEndReason) => {
+  finishProcessing: (sessionId: string, reason?: TurnEndReason, turnUsage?: UsageStat | null) => {
     // 未闭合 pending 放行（批 2-D）：不可见的半标签最终以 chunk 落位进归档
     // （finishProcessing/failProcessing 时未闭合 pending → 放行）。
     const held = releasePending(sessionId);
@@ -845,9 +858,23 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       }
     }
 
+    // 用量增量：本轮 session（来自 turn/end）+ 首轮未归档时暂存的标题用量
+    const usageDeltas: UsageDelta[] = [];
+    if (turnUsage) usageDeltas.push({ category: "session", ...turnUsage });
+    const pendingTitle = pendingTitleUsage.get(snap.conversationId);
+    if (pendingTitle) {
+      usageDeltas.push(pendingTitle);
+      pendingTitleUsage.delete(snap.conversationId);
+    }
+
     // 整轮归档：currentEvents = [user/message, ...后端持久事实]；
-    // 持久提交（append_turn）携带本轮 usage
-    convStore.appendTurn(snap.conversationId, archiveEvents, usage ?? undefined);
+    // 持久提交（append_turn）携带本轮 usage 与用量增量
+    convStore.appendTurn(
+      snap.conversationId,
+      archiveEvents,
+      usage ?? undefined,
+      usageDeltas.length > 0 ? usageDeltas : undefined
+    );
 
     // 内存同步（纯内存 action，不再发 IPC）
     if (usage) {

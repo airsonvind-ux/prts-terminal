@@ -537,10 +537,13 @@ describe("场景 11：Reminder 数据装配", () => {
     return {
       seq,
       dims: [
-        { key: "workspace", title: "工作空间", value: "/ws", note: "/ws", stamp: 0 },
-        { key: "knowledge", title: "知识库", value: "/kb", note: "/kb", stamp: 0 },
-        { key: "model", title: "模型", value: "m", note: "m", stamp: 3 },
-        { key: "skill_catalog", title: "技能目录", value: "[\"a\"]", note: "", stamp: 0 },
+        { key: "workspace", title: "工作空间", kind: "value", value: "/ws", note: "/ws", stamp: 0 },
+        { key: "knowledge", title: "知识库", kind: "value", value: "/kb", note: "/kb", stamp: 0 },
+        { key: "model", title: "模型", kind: "value", value: "m", note: "m", stamp: 3 },
+        { key: "skill_catalog", title: "技能目录", kind: "catalog", value: "[\"a\"]", note: "", stamp: 0 },
+        { key: "maa", title: "MAA", kind: "value", value: "已安装", note: "", stamp: 0 },
+        { key: "emulator", title: "模拟器", kind: "value", value: "MuMu 12", note: "", stamp: 0 },
+        { key: "game_pc", title: "PC 端", kind: "value", value: "B服", note: "", stamp: 0 },
       ],
       events: [
         { seq: 2, title: "记忆", detail: "旧流水1", ts: "1" },
@@ -560,7 +563,7 @@ describe("场景 11：Reminder 数据装配", () => {
     });
   }
 
-  it("新对话：仅快照三行（无事件行）、游标＝payload.seq、history 含块", async () => {
+  it("新对话：仅值维度快照（无事件行）、游标＝payload.seq、history 含块", async () => {
     routeReminder(snapshotPayload(4));
     const store = useProcessingStore.getState();
     await store.sendMessage("帮我算伤害");
@@ -572,7 +575,10 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(content).toContain("- 工作空间：/ws");
     expect(content).toContain("- 知识库：/kb");
     expect(content).toContain("- 模型：m");
-    expect(content).not.toContain("技能目录"); // 快照仅三键
+    expect(content).toContain("- MAA：已安装"); // 新增值维度自动入快照（kind 分类）
+    expect(content).toContain("- 模拟器：MuMu 12");
+    expect(content).toContain("- PC 端：B服");
+    expect(content).not.toContain("技能目录"); // 目录维度不入快照
     expect(content).not.toContain("记忆"); // 无事件行
     expect(content.endsWith("帮我算伤害")).toBe(true);
 
@@ -598,8 +604,8 @@ describe("场景 11：Reminder 数据装配", () => {
     routeReminder({
       seq: 6,
       dims: [
-        { key: "workspace", title: "工作空间", value: "/ws2", note: "/ws2", stamp: 5 },
-        { key: "model", title: "模型", value: "m", note: "m", stamp: 3 },
+        { key: "workspace", title: "工作空间", kind: "value", value: "/ws2", note: "/ws2", stamp: 5 },
+        { key: "model", title: "模型", kind: "value", value: "m", note: "m", stamp: 3 },
       ],
       events: [
         { seq: 2, title: "记忆", detail: "旧流水1", ts: "1" },
@@ -645,7 +651,7 @@ describe("场景 11：Reminder 数据装配", () => {
       if (cmd === "get_reminder_data") {
         return Promise.resolve({
           seq: 5,
-          dims: [{ key: "model", title: "模型", value: "m2", note: "m2", stamp: 5 }],
+          dims: [{ key: "model", title: "模型", kind: "value", value: "m2", note: "m2", stamp: 5 }],
           events: [],
         });
       }

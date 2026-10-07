@@ -88,6 +88,8 @@ pub struct PipelineOutcome {
     pub note: Option<String>,
     /// 跳过原因（cooldown / no_delta / below_threshold）；ran=false 时用于界面反馈
     pub skipped: Option<String>,
+    /// 本次提炼 LLM 调用用量（统计用；滚动压缩子调用未计入，属已知小幅低估）
+    pub usage: Option<crate::llm::TokenUsage>,
 }
 
 /// 执行一次经历管线。Err = 整轮报废（命令层记录；水位不前移已在内部落盘）。
@@ -170,6 +172,7 @@ pub async fn run_experience_pipeline_with(
             return Err(e);
         }
     };
+    let mut usage_acc = ops_raw.usage;
     let raw_ops = ops_raw.ops;
 
     // 编号 → id/fp 映射
@@ -214,6 +217,7 @@ pub async fn run_experience_pipeline_with(
         compressed: false,
         note: None,
         skipped: None,
+        usage: usage_acc,
     };
     if !report.affected.is_empty() {
         // 提醒带内容：本次所涉条目行（日期·标题：摘要），正文细节不搬
@@ -268,38 +272,47 @@ pub async fn run_experience_pipeline_with(
 
     if let Some((ids, entries_text, through_ts, current_long)) = compress_plan {
         match compress_longterm(llm, config, abort, &current_long, &entries_text).await {
-            Ok(text) if !text.trim().is_empty() => {
-                match fit_longterm(llm, config, abort, text.trim()).await {
-                    Some(text) => {
-                        let version = {
-                            let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
-                            let v = s.set_longterm(text.clone(), through_ts, now)?;
-                            s.mark_absorbed(&ids, v)?;
-                            v
-                        };
-                        outcome.compressed = true;
-                        // 提醒带内容：附新版长期梗概全文（快照冻结不再更新，靠提醒同步）
-                        let detail = format!("长期经历已整理（版本 {version}）\n{}", text.trim());
-                        note(ledger, &detail);
-                        outcome.note = Some(detail);
+            Ok((compressed, u1)) => {
+                usage_acc = add_usage(usage_acc, u1);
+                if !compressed.trim().is_empty() {
+                    let (fitted, u2) =
+                        fit_longterm(llm, config, abort, compressed.trim()).await;
+                    usage_acc = add_usage(usage_acc, u2);
+                    match fitted {
+                        Some(text) => {
+                            let version = {
+                                let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+                                let v = s.set_longterm(text.clone(), through_ts, now)?;
+                                s.mark_absorbed(&ids, v)?;
+                                v
+                            };
+                            outcome.compressed = true;
+                            // 提醒带内容：附新版长期梗概全文（快照冻结不再更新，靠提醒同步）
+                            let detail = format!("长期经历已整理（版本 {version}）\n{}", text.trim());
+                            note(ledger, &detail);
+                            outcome.note = Some(detail);
+                        }
+                        None => {
+                            // 超限且缩短重写后仍超限：拒收——保留旧版，条目不吸收（下轮再试）。
+                            // 人工编辑入口（设置页长期记忆）是此时的出口。
+                            debug!(
+                                "action" => "memory_compress_over_limit_kept_old",
+                                "limit" => MAX_LONGTERM_CHARS
+                            );
+                        }
                     }
-                    None => {
-                        // 超限且缩短重写后仍超限：拒收——保留旧版，条目不吸收（下轮再试）。
-                        // 人工编辑入口（设置页长期记忆）是此时的出口。
-                        debug!(
-                            "action" => "memory_compress_over_limit_kept_old",
-                            "limit" => MAX_LONGTERM_CHARS
-                        );
-                    }
+                } else {
+                    debug!("action" => "memory_compress_empty");
                 }
             }
-            Ok(_) => debug!("action" => "memory_compress_empty"),
             Err(e) => {
                 // 失败静默：条目不丢，下次再试
                 debug!("action" => "memory_compress_failed", "error" => e);
             }
         }
     }
+
+    outcome.usage = usage_acc;
 
     if report.affected.is_empty() && !outcome.compressed {
         outcome.skipped = Some("no_delta".into());
@@ -324,6 +337,8 @@ struct ExtractOutcome {
     ops: Vec<RawOp>,
     /// 输入合法且为空数组（非坏件）
     empty_input_valid: bool,
+    /// 本次提炼（含修复一轮）的 LLM 用量
+    usage: Option<crate::llm::TokenUsage>,
 }
 
 async fn extract_ops(
@@ -339,9 +354,12 @@ async fn extract_ops(
     let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
     let count = numbered_count(rewritable_text);
 
-    let first = call(llm, config, &messages, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
+    let (first, u1) = call_usage(llm, config, &messages, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
     match parse_ops(&first, count) {
-        Ok(outcome) => Ok(outcome),
+        Ok(mut outcome) => {
+            outcome.usage = u1;
+            Ok(outcome)
+        }
         Err(err) => {
             // 修复一轮
             debug!("action" => "memory_extract_repair", "error" => &err);
@@ -349,8 +367,10 @@ async fn extract_ops(
                 ChatMessage::system(build_extract_system()),
                 ChatMessage::user(build_repair_user(&first, &err)),
             ];
-            let fixed = call(llm, config, &repair_msgs, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
-            parse_ops(&fixed, count).map_err(|e2| format!("修复后仍无法解析：{e2}"))
+            let (fixed, u2) = call_usage(llm, config, &repair_msgs, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
+            let mut outcome = parse_ops(&fixed, count).map_err(|e2| format!("修复后仍无法解析：{e2}"))?;
+            outcome.usage = add_usage(u1, u2);
+            Ok(outcome)
         }
     }
 }
@@ -485,6 +505,7 @@ fn parse_ops(raw: &str, recent_count: usize) -> Result<ExtractOutcome, String> {
     Ok(ExtractOutcome {
         empty_input_valid: arr.is_empty(),
         ops,
+        usage: None,
     })
 }
 
@@ -598,7 +619,7 @@ async fn compress_longterm(
     abort: &AbortSignal,
     current_long: &str,
     entries_text: &str,
-) -> Result<String, String> {
+) -> Result<(String, Option<crate::llm::TokenUsage>), String> {
     let system = compress_system_prompt();
 
     let input = {
@@ -611,8 +632,9 @@ async fn compress_longterm(
         text.chars().take(MAX_COMPRESS_INPUT_CHARS).collect::<String>()
     };
     let messages = vec![ChatMessage::system(system), ChatMessage::user(input)];
-    let raw = call(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await?;
-    Ok(strip_fences(&raw))
+    let (raw, usage) =
+        call_usage(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await?;
+    Ok((strip_fences(&raw), usage))
 }
 
 /// 长度硬闸：超限时让模型缩短重写一次；返回 None = 仍超限（调用方拒收、保留旧版）。
@@ -621,10 +643,10 @@ async fn fit_longterm(
     config: &LlmConfig,
     abort: &AbortSignal,
     text: &str,
-) -> Option<String> {
+) -> (Option<String>, Option<crate::llm::TokenUsage>) {
     let len = text.chars().count();
     if len <= MAX_LONGTERM_CHARS {
-        return Some(text.to_string());
+        return (Some(text.to_string()), None);
     }
     let system = "你是长期记忆压缩器。上一步输出的长期记忆超长，请在不丢失要点（方向、结论、约定、\
 坑）的前提下重写得更短。只输出正文本身，不要解释、代码围栏或其他文字。";
@@ -636,15 +658,17 @@ async fn fit_longterm(
         text = text
     );
     let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
-    let raw = call(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort)
-        .await
-        .ok()?;
+    let (raw, usage) =
+        match call_usage(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await {
+            Ok(v) => v,
+            Err(_) => return (None, None),
+        };
     let out = strip_fences(&raw);
     let out = out.trim();
     if out.is_empty() || out.chars().count() > MAX_LONGTERM_CHARS {
-        None
+        (None, usage)
     } else {
-        Some(out.to_string())
+        (Some(out.to_string()), usage)
     }
 }
 
@@ -653,14 +677,14 @@ async fn fit_longterm(
 // ═══════════════════════════════════════════════════════
 
 /// 单次无工具 LLM 调用（请求级覆盖：thinking off + 限额），可取消 + 超时。
-async fn call(
+async fn call_usage(
     llm: &dyn LlmClient,
     config: &LlmConfig,
     messages: &[ChatMessage],
     max_tokens: u32,
     timeout: Duration,
     abort: &AbortSignal,
-) -> Result<String, String> {
+) -> Result<(String, Option<crate::llm::TokenUsage>), String> {
     let mut cfg = config.clone();
     cfg.thinking_level = Some("off".to_string());
     let capped = cfg.max_tokens.min(max_tokens);
@@ -673,9 +697,33 @@ async fn call(
         r = tokio::time::timeout(timeout, run) => r,
     };
     match res {
-        Ok(Ok(resp)) => Ok(resp.text.unwrap_or_default()),
+        Ok(Ok(resp)) => Ok((resp.text.unwrap_or_default(), resp.usage)),
         Ok(Err(e)) => Err(format!("LLM 调用失败: {e}")),
         Err(_) => Err("LLM 调用超时".into()),
+    }
+}
+
+/// 合并两次数值（同字段相加；None 视为未观测）。
+fn add_usage(
+    a: Option<crate::llm::TokenUsage>,
+    b: Option<crate::llm::TokenUsage>,
+) -> Option<crate::llm::TokenUsage> {
+    fn opt(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+        match (a, b) {
+            (None, z) => z,
+            (z, None) => z,
+            (Some(p), Some(q)) => Some(p.saturating_add(q)),
+        }
+    }
+    match (a, b) {
+        (None, x) => x,
+        (x, None) => x,
+        (Some(x), Some(y)) => Some(crate::llm::TokenUsage {
+            input_tokens: x.input_tokens.saturating_add(y.input_tokens),
+            output_tokens: x.output_tokens.saturating_add(y.output_tokens),
+            cache_hit_tokens: opt(x.cache_hit_tokens, y.cache_hit_tokens),
+            cache_miss_tokens: opt(x.cache_miss_tokens, y.cache_miss_tokens),
+        }),
     }
 }
 
@@ -934,17 +982,19 @@ mod tests {
                 Ok(LlmResponse {
                     text: Some(self.reply.clone()),
                     tool_calls: None,
+                    usage: None,
                 })
             })
         }
         fn chat_stream<'a>(
             &'a self,
-            _c: &'a LlmConfig,
+            config: &'a LlmConfig,
             _m: &'a [ChatMessage],
             _t: &'a [ToolDef],
             _e: Box<dyn Fn(StreamEvent) + Send + Sync>,
         ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
             Box::pin(async move {
+                *self.last.lock().unwrap() = Some(config.clone());
                 Ok(StreamResult {
                     text: self.reply.clone(),
                     tool_calls: vec![],
@@ -1330,7 +1380,7 @@ mod tests {
             max_tokens: 20_000,
             ..LlmConfig::default()
         };
-        let _ = call(
+        let _ = call_usage(
             &client,
             &cfg,
             &[ChatMessage::user("x")],

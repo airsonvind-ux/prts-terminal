@@ -118,6 +118,7 @@ describe("useAgentEvents · conversation/title", () => {
       conversationId: id,
       title: "源石虫数值",
       expectedTitle: "查源石虫",
+      usageDeltas: null,
     });
   });
 

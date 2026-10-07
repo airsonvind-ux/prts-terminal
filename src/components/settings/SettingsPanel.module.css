@@ -39,6 +39,11 @@
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--depth-1);
+  /* 子页多时导航栏自己滚——不让溢出落到 .panel 上（那会多出一条外层滚动条） */
+  overflow-y: auto;
+  min-height: 0;
+  /* 紧凑档滚动条（设置页尺度小于主界面） */
+  --scrollbar-inset: 2px;
 }
 
 .sidebarTitle {

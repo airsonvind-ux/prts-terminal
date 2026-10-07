@@ -6,7 +6,7 @@
 //! ## 数据形状
 //!
 //! - `seq`：已分配的最大序号；每次变更 +1 后分配给某个 `stamp` 或 event。
-//! - `dims`：环境维度**覆写式**快照（workspace/knowledge/model 为值；
+//! - `dims`：环境维度**覆写式**快照（值维度：workspace/knowledge/model/maa/emulator/game_pc；
 //!   skill_catalog/tool_catalog 的 `value` 为基线清单的 JSON 串）：
 //!   - `value`：当前值（空串 = 该维度无值）；
 //!   - `stamp`：该维度最近一次变更的序号（从未变更 = 0）；
@@ -49,7 +49,7 @@ pub struct DimValue {
     pub note: String,
 }
 
-/// 五个环境维度。
+/// 环境维度（值维度 6 + 目录维度 2）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dims {
     #[serde(default)]
@@ -62,6 +62,13 @@ pub struct Dims {
     pub skill_catalog: DimValue,
     #[serde(default)]
     pub tool_catalog: DimValue,
+    /// 本机信息（安装态信号；见 `_本机信息-设计.md`）
+    #[serde(default)]
+    pub maa: DimValue,
+    #[serde(default)]
+    pub emulator: DimValue,
+    #[serde(default)]
+    pub game_pc: DimValue,
 }
 
 /// 记忆事件。
@@ -74,6 +81,26 @@ pub struct NoticeEvent {
     pub ts: String,
 }
 
+/// 维度类别：值维度（覆写式快照，入首轮快照）／目录维度（基线驱动，不入快照）。
+///
+/// 供前端按类别筛选（新对话快照只放值维度）——新增维度时声明一次类别即可，
+/// 名单不再需要人工维护。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DimKind {
+    Value,
+    Catalog,
+}
+
+impl DimKind {
+    /// DTO 下发用串（前端按 `"value"` 筛首轮快照）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DimKind::Value => "value",
+            DimKind::Catalog => "catalog",
+        }
+    }
+}
+
 /// 维度键（固定顺序 + 标题映射）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DimKey {
@@ -82,6 +109,9 @@ pub enum DimKey {
     Model,
     SkillCatalog,
     ToolCatalog,
+    Maa,
+    Emulator,
+    GamePc,
 }
 
 impl DimKey {
@@ -92,6 +122,9 @@ impl DimKey {
             DimKey::Model => "model",
             DimKey::SkillCatalog => "skill_catalog",
             DimKey::ToolCatalog => "tool_catalog",
+            DimKey::Maa => "maa",
+            DimKey::Emulator => "emulator",
+            DimKey::GamePc => "game_pc",
         }
     }
 
@@ -102,17 +135,36 @@ impl DimKey {
             DimKey::Model => "模型",
             DimKey::SkillCatalog => "技能目录",
             DimKey::ToolCatalog => "工具目录",
+            DimKey::Maa => "MAA",
+            DimKey::Emulator => "模拟器",
+            DimKey::GamePc => "PC 端",
+        }
+    }
+
+    /// 维度类别（值 / 目录）。**新增维度必须在此声明**——前端首轮快照按此筛。
+    pub fn kind(self) -> DimKind {
+        match self {
+            DimKey::Workspace
+            | DimKey::Knowledge
+            | DimKey::Model
+            | DimKey::Maa
+            | DimKey::Emulator
+            | DimKey::GamePc => DimKind::Value,
+            DimKey::SkillCatalog | DimKey::ToolCatalog => DimKind::Catalog,
         }
     }
 
     /// 全部维度（固定顺序）。
-    pub fn all() -> [DimKey; 5] {
+    pub fn all() -> [DimKey; 8] {
         [
             DimKey::Workspace,
             DimKey::Knowledge,
             DimKey::Model,
             DimKey::SkillCatalog,
             DimKey::ToolCatalog,
+            DimKey::Maa,
+            DimKey::Emulator,
+            DimKey::GamePc,
         ]
     }
 }
@@ -195,6 +247,9 @@ impl Notices {
             DimKey::Model => &self.dims.model,
             DimKey::SkillCatalog => &self.dims.skill_catalog,
             DimKey::ToolCatalog => &self.dims.tool_catalog,
+            DimKey::Maa => &self.dims.maa,
+            DimKey::Emulator => &self.dims.emulator,
+            DimKey::GamePc => &self.dims.game_pc,
         }
     }
 
@@ -205,6 +260,9 @@ impl Notices {
             DimKey::Model => &mut self.dims.model,
             DimKey::SkillCatalog => &mut self.dims.skill_catalog,
             DimKey::ToolCatalog => &mut self.dims.tool_catalog,
+            DimKey::Maa => &mut self.dims.maa,
+            DimKey::Emulator => &mut self.dims.emulator,
+            DimKey::GamePc => &mut self.dims.game_pc,
         }
     }
 
@@ -215,6 +273,13 @@ impl Notices {
         self.sync_value_dim(DimKey::Workspace, workspace);
         self.sync_value_dim(DimKey::Knowledge, knowledge);
         self.sync_value_dim(DimKey::Model, model);
+    }
+
+    /// 本机信息同步：maa / emulator / game_pc 三个值维度（探测结果）。
+    pub fn sync_machine_snapshots(&mut self, maa: &str, emulator: &str, game_pc: &str) {
+        self.sync_value_dim(DimKey::Maa, maa);
+        self.sync_value_dim(DimKey::Emulator, emulator);
+        self.sync_value_dim(DimKey::GamePc, game_pc);
     }
 
     /// 单值维度同步：种子（值入位、不耗序号、note 空）／变更（stamp=++seq、note=新值）。
@@ -345,11 +410,12 @@ impl Notices {
         &self.events
     }
 
-    /// 维度视图：固定顺序，`(key, title, dim)`。调用方按需过滤（value 空的不出现）。
-    pub fn dim_views(&self) -> Vec<(&'static str, &'static str, &DimValue)> {
+    /// 维度视图：固定顺序，`(key, dim)`。调用方经 `DimKey` 取 `key()/title()/kind()`，
+    /// 并自行过滤（value 空的不出现）。
+    pub fn dim_views(&self) -> Vec<(DimKey, &DimValue)> {
         DimKey::all()
             .into_iter()
-            .map(|k| (k.key(), k.title(), self.dim_ref(k)))
+            .map(|k| (k, self.dim_ref(k)))
             .collect()
     }
 }
@@ -654,6 +720,42 @@ mod tests {
         assert_eq!(n.dims.model.stamp, 1);
         assert_eq!(n.dims.model.note, "new/model-v2");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn machine_snapshots_seed_then_change() {
+        let dir = unique_temp_dir("machine");
+        let mut n = Notices::load(&dir);
+        n.sync_machine_snapshots("已安装", "MuMu 12", "B服");
+        assert_eq!(n.seq(), 0, "种子不耗序号");
+        assert_eq!(n.dims.maa.value, "已安装");
+        assert_eq!(n.dims.emulator.value, "MuMu 12");
+        assert_eq!(n.dims.game_pc.value, "B服");
+
+        n.sync_environment_snapshots("/ws", "m", "/kb");
+        n.sync_machine_snapshots("已安装", "MuMu 12", "官服；B服");
+        assert_eq!(n.seq(), 1);
+        assert_eq!(n.dims.game_pc.value, "官服；B服");
+        assert_eq!(n.dims.game_pc.stamp, 1);
+        assert_eq!(n.dims.game_pc.note, "官服；B服");
+        assert_eq!(n.dims.maa.stamp, 0, "未变的维度不动");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dim_kind_classifies_value_and_catalog() {
+        assert_eq!(DimKey::Workspace.kind(), DimKind::Value);
+        assert_eq!(DimKey::Maa.kind(), DimKind::Value);
+        assert_eq!(DimKey::Emulator.kind(), DimKind::Value);
+        assert_eq!(DimKey::GamePc.kind(), DimKind::Value);
+        assert_eq!(DimKey::SkillCatalog.kind(), DimKind::Catalog);
+        assert_eq!(DimKey::ToolCatalog.kind(), DimKind::Catalog);
+        assert_eq!(DimKey::all().len(), 8);
+        let values = DimKey::all()
+            .into_iter()
+            .filter(|k| k.kind() == DimKind::Value)
+            .count();
+        assert_eq!(values, 6, "值维度六个（前端首轮快照即这批）");
     }
 
     #[test]

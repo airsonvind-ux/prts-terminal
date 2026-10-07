@@ -7,7 +7,7 @@
 //
 // 全部为纯函数：相同输入永远相同输出，无副作用，便于测试。
 
-import type { ChatMessage, CompactionMeta, SessionEvent } from "./types";
+import type { Attachment, ChatMessage, CompactionMeta, SessionEvent } from "./types";
 
 // ── Reminder 块（M1）：build（拼装，sendMessage 用）与 strip（展示剥离）
 // 同模块自洽——块格式只在此文件定义：`[prts_reminder]` 独占行起、
@@ -106,7 +106,7 @@ export function defaultTitleForContent(content: string): string {
  * turn/aborted、error 等轮级事件随所在段归属（展示层各自特判）。
  */
 export type TurnSegment =
-  | { kind: "user"; content: string }
+  | { kind: "user"; content: string; attachments?: Attachment[] }
   | { kind: "assistant"; events: SessionEvent[] };
 
 export function splitTurnByUserBoundary(events: SessionEvent[]): TurnSegment[] {
@@ -121,7 +121,9 @@ export function splitTurnByUserBoundary(events: SessionEvent[]): TurnSegment[] {
   for (const e of events) {
     if (e.type === "user/message") {
       flush();
-      segments.push({ kind: "user", content: e.content });
+      const userSeg: TurnSegment = { kind: "user", content: e.content };
+      if (e.attachments && e.attachments.length > 0) userSeg.attachments = e.attachments;
+      segments.push(userSeg);
     } else {
       current.push(e);
     }
@@ -176,11 +178,17 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
 
     for (const e of turn) {
       switch (e.type) {
-        case "user/message":
+        case "user/message": {
           flushAssistant();
-          // 保留块：含块 user 消息是冻结历史的一部分（派生链与归档一致）
-          out.push({ role: "user", content: e.content });
+          // 保留块：含块 user 消息是冻结历史的一部分（派生链与归档一致）。
+          // 附件随消息派生（供请求侧物化，以及后端 derive 时注入 `[附件：名]`）。
+          const userMsg: ChatMessage = { role: "user", content: e.content };
+          if (e.attachments && e.attachments.length > 0) {
+            userMsg.attachments = e.attachments;
+          }
+          out.push(userMsg);
           break;
+        }
         case "assistant/chunk":
           if (e.kind === "text") textBuf += e.content;
           else reasoningBuf += e.content;

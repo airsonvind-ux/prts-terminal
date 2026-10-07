@@ -24,8 +24,11 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CompactionMeta,
   Conversation,
+  ConversationUsage,
   SessionEvent,
   TokenUsage,
+  UsageDelta,
+  UsageStat,
 } from "../types";
 import { generateId } from "../utils";
 
@@ -53,8 +56,11 @@ interface ConversationStore {
   appendTurn: (
     conversationId: string,
     events: SessionEvent[],
-    usage?: TokenUsage
+    usage?: TokenUsage,
+    usageDeltas?: UsageDelta[]
   ) => void;
+  /** 累加用量增量到投影缓存（内存态先行；后端为事实来源，重启 hydration 覆盖）。 */
+  accumulateUsage: (conversationId: string, deltas: UsageDelta[]) => void;
   /** 切换活跃对话（仅设 activeId，不恢复处理现场） */
   switchConversation: (id: string) => void;
   /** 取消选中 */
@@ -96,7 +102,37 @@ interface ConversationStore {
    * 对话不存在（已删除）→ 空操作且不发 invoke（同 appendTurn 防御模式）。
    * 幂等：重复调用覆盖为同一记录。
    */
-  applyCompaction: (conversationId: string, record: CompactionMeta) => void;
+  applyCompaction: (conversationId: string, record: CompactionMeta, usage?: UsageStat) => void;
+}
+
+const EMPTY_CATEGORY_USAGE = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheHitTokens: 0,
+  cachePromptTokens: 0,
+};
+
+/** 把一条用量增量累加进投影的 ConversationUsage（后端为事实来源，此处同步内存态）。 */
+function addUsageDelta(
+  u: ConversationUsage | undefined,
+  d: UsageDelta
+): ConversationUsage {
+  const base: ConversationUsage = u ?? {
+    session: { ...EMPTY_CATEGORY_USAGE },
+    compaction: { ...EMPTY_CATEGORY_USAGE },
+    memory: { ...EMPTY_CATEGORY_USAGE },
+    title: { ...EMPTY_CATEGORY_USAGE },
+  };
+  const cur = base[d.category];
+  return {
+    ...base,
+    [d.category]: {
+      inputTokens: cur.inputTokens + d.inputTokens,
+      outputTokens: cur.outputTokens + d.outputTokens,
+      cacheHitTokens: cur.cacheHitTokens + (d.cacheHitTokens ?? 0),
+      cachePromptTokens: cur.cachePromptTokens + (d.cachePromptTokens ?? 0),
+    },
+  };
 }
 
 export const useConversationStore = create<ConversationStore>((set, get) => ({
@@ -122,23 +158,29 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     return id;
   },
 
-  appendTurn: (conversationId, events, usage) => {
+  appendTurn: (conversationId, events, usage, usageDeltas) => {
     // 对话不存在（已被删除）→ 内存 map 空操作，且不发持久化 invoke
     // （删除后轮归档到达被前端侧吸收，后端无孤儿写入）
     const conv = get().conversations.find((c) => c.id === conversationId);
     if (!conv) return;
 
-    // 内存归档先行（同步，UI 不等待 IPC）
+    // 内存归档先行（同步，UI 不等待 IPC）；用量增量同步累加进投影
     set((state) => ({
-      conversations: state.conversations.map((c) =>
-        c.id === conversationId ? { ...c, turns: [...c.turns, events] } : c
-      ),
+      conversations: state.conversations.map((c) => {
+        if (c.id !== conversationId) return c;
+        const next: Conversation = { ...c, turns: [...c.turns, events] };
+        if (usageDeltas && usageDeltas.length > 0) {
+          next.usage = usageDeltas.reduce(addUsageDelta, c.usage);
+        }
+        return next;
+      }),
     }));
 
     // 持久化提交（fire-and-forget：失败静默降级，内存态照常）
     // metaSnapshot：首轮即携带完整 meta 建文件（title/createdAt/modelName/
     // contextLength）；contextTokens 取本轮 usage 覆盖参数（无新 usage 时不
-    // 覆盖旧值）；lastNoticeSeq 携带当前内存游标（随轮提交）。
+    // 覆盖旧值）；lastNoticeSeq 携带当前内存游标（随轮提交）；usageDeltas
+    // 为随轮用量增量（session + 首轮未归档时携带的 title）。
     const metaSnapshot = {
       title: conv.title,
       createdAt: conv.createdAt,
@@ -146,6 +188,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       contextLength: conv.contextLength ?? null,
       contextTokens: usage ?? conv.contextTokens ?? null,
       lastNoticeSeq: conv.lastNoticeSeq ?? null,
+      usageDeltas: usageDeltas ?? null,
     };
     invoke("append_turn", {
       conversationId,
@@ -154,6 +197,17 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     }).catch(() => {
       // 写盘失败静默：本轮不落盘，内存态继续（重启丢最近轮）
     });
+  },
+
+  accumulateUsage: (conversationId, deltas) => {
+    if (deltas.length === 0) return;
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        c.id === conversationId
+          ? { ...c, usage: deltas.reduce(addUsageDelta, c.usage) }
+          : c
+      ),
+    }));
   },
 
   switchConversation: (id) => {
@@ -244,23 +298,27 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       ),
     })),
 
-  applyCompaction: (conversationId, record) => {
+  applyCompaction: (conversationId, record, usage) => {
     const conv = get().conversations.find((c) => c.id === conversationId);
     if (!conv) return;
+    const usageDeltas: UsageDelta[] | undefined = usage
+      ? [{ category: "compaction", ...usage }]
+      : undefined;
     // 内存先行（同步）：compaction 覆盖写 + contextTokens 置空（归零）
     // + 环境游标复位（批 4：undefined 走“新对话”分支，下一条消息重发
-    //   三值快照，仅 workspace/knowledge/model，不回放事件）
+    //   三值快照，仅 workspace/knowledge/model，不回放事件）+ 用量累加
     set((state) => ({
-      conversations: state.conversations.map((c) =>
-        c.id === conversationId
-          ? {
-              ...c,
-              compaction: record,
-              contextTokens: undefined,
-              lastNoticeSeq: undefined,
-            }
-          : c
-      ),
+      conversations: state.conversations.map((c) => {
+        if (c.id !== conversationId) return c;
+        const next: Conversation = {
+          ...c,
+          compaction: record,
+          contextTokens: undefined,
+          lastNoticeSeq: undefined,
+        };
+        if (usageDeltas) next.usage = usageDeltas.reduce(addUsageDelta, c.usage);
+        return next;
+      }),
     }));
     // 持久化（fire-and-forget：失败静默降级，内存态先行）。
     // clearContextTokens = 压缩归零的持久面：contextTokens 显式置 null 写盘，
@@ -278,6 +336,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       },
       clearContextTokens: true,
       clearNoticeSeq: true,
+      usageDeltas: usageDeltas ?? null,
     }).catch(() => {
       // 写盘失败静默：内存态继续（重启丢最近压缩记录）
     });

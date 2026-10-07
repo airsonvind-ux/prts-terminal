@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::llm::TokenUsage;
+use crate::llm::{TokenUsage, UsageStat};
 
 /// 当前 schema 版本（内容文件 header 与 index.json 共用；升版走迁移，见方案 §1.3）。
 pub const SCHEMA_VERSION: u32 = 1;
@@ -73,6 +73,10 @@ pub struct ConversationMeta {
     pub last_notice_seq: Option<u64>,
     /// 压缩记录（模块 D；None = 未压缩过；旧 index 缺字段兼容）
     pub compaction: Option<CompactionMeta>,
+    /// 用量统计（Phase 5）：按四类累计（对话/压缩/记忆/标题）。
+    /// None = 从未记录（旧 index 兼容；Option 缺省不升 schemaVersion）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ConversationUsage>,
     /// 最近一次轮提交/元数据更新的时间（unix 毫秒）
     pub updated_at: u64,
 }
@@ -99,6 +103,86 @@ pub struct CompactionMeta {
     pub tokens_before: Option<u64>,
     /// 压缩发生时间（unix 毫秒）
     pub at: u64,
+}
+
+/// 用量类别（Phase 5 用量统计）。四类分别对应四个 LLM 调用者。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageCategory {
+    /// 主对话 / 推演（append_turn 随轮提交）
+    Session,
+    /// 上下文压缩摘要
+    Compaction,
+    /// 记忆提炼
+    Memory,
+    /// 会话标题生成
+    Title,
+}
+
+/// 一次用量增量（前端随写命令提交；类别 + 归一化统计）。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageDelta {
+    pub category: UsageCategory,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_hit_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_prompt_tokens: Option<u32>,
+}
+
+impl UsageDelta {
+    fn stat(&self) -> UsageStat {
+        UsageStat {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_hit_tokens: self.cache_hit_tokens,
+            cache_prompt_tokens: self.cache_prompt_tokens,
+        }
+    }
+}
+
+/// 单个类别的累计用量（u64：跨轮累加，防溢出）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// 命中缓存累计（0 且 cache_prompt_tokens=0 视为未观测）
+    pub cache_hit_tokens: u64,
+    /// 命中率分母累计（prompt 全量）
+    pub cache_prompt_tokens: u64,
+}
+
+impl CategoryUsage {
+    fn add_stat(&mut self, s: &UsageStat) {
+        self.input_tokens += s.input_tokens as u64;
+        self.output_tokens += s.output_tokens as u64;
+        self.cache_hit_tokens += s.cache_hit_tokens.unwrap_or(0) as u64;
+        self.cache_prompt_tokens += s.cache_prompt_tokens.unwrap_or(0) as u64;
+    }
+}
+
+/// 四类累计用量（会话元数据的一部分）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationUsage {
+    pub session: CategoryUsage,
+    pub compaction: CategoryUsage,
+    pub memory: CategoryUsage,
+    pub title: CategoryUsage,
+}
+
+impl ConversationUsage {
+    fn category_mut(&mut self, c: UsageCategory) -> &mut CategoryUsage {
+        match c {
+            UsageCategory::Session => &mut self.session,
+            UsageCategory::Compaction => &mut self.compaction,
+            UsageCategory::Memory => &mut self.memory,
+            UsageCategory::Title => &mut self.title,
+        }
+    }
 }
 
 /// get_conversation 返回：meta + 轮行原文列表（每行 = 该轮 SessionEvent 数组 JSON，
@@ -132,6 +216,9 @@ pub struct AppendTurnReq {
     pub context_tokens: Option<TokenUsage>,
     #[serde(default)]
     pub last_notice_seq: Option<u64>,
+    /// 本次归档随附的用量增量（主对话 + 首轮未归档时携带的标题用量）
+    #[serde(default)]
+    pub usage_deltas: Option<Vec<UsageDelta>>,
 }
 
 /// update_conversation_meta 补丁（只更新非 None 字段；文件必须存在）。
@@ -152,6 +239,8 @@ pub struct MetaPatch {
     /// 显式清空 lastNoticeSeq（批 4：压缩后游标复位的持久面——置 None 写盘，
     /// 重启读回“空”→ 下一条消息重发三值快照。true = 置 None 写盘）
     pub last_notice_seq_clear: bool,
+    /// 用量增量（压缩 / 标题）
+    pub usage_deltas: Vec<UsageDelta>,
 }
 
 /// 生成标题的 CAS 写入结果（`try_set_title_if_expected`）。
@@ -262,7 +351,7 @@ impl SessionStore {
             std::fs::write(&path, content)
                 .map_err(|e| format!("会话文件创建失败（{}）：{e}", path.display()))?;
 
-            index.push(ConversationMeta {
+            let mut meta = ConversationMeta {
                 id: req.conversation_id.clone(),
                 title,
                 created_at,
@@ -272,7 +361,12 @@ impl SessionStore {
                 context_tokens: req.context_tokens,
                 last_notice_seq: req.last_notice_seq,
                 compaction: None,
-            });
+                usage: None,
+            };
+            if let Some(ds) = &req.usage_deltas {
+                merge_usage(&mut meta, ds);
+            }
+            index.push(meta);
             self.write_index(&index);
             return Ok(AppendTurnOutcome { created: true });
         }
@@ -310,6 +404,9 @@ impl SessionStore {
                 if let Some(s) = req.last_notice_seq {
                     meta.last_notice_seq = Some(s);
                 }
+                if let Some(ds) = &req.usage_deltas {
+                    merge_usage(meta, ds);
+                }
             }
             None => {
                 // index 缺条目（此前 index 写失败丢失）：从 header 补回——
@@ -325,6 +422,9 @@ impl SessionStore {
                 }
                 if let Some(s) = req.last_notice_seq {
                     meta.last_notice_seq = Some(s);
+                }
+                if let Some(ds) = &req.usage_deltas {
+                    merge_usage(&mut meta, ds);
                 }
                 index.push(meta);
             }
@@ -378,7 +478,33 @@ impl SessionStore {
         if patch.last_notice_seq_clear {
             meta.last_notice_seq = None;
         }
+        merge_usage(meta, &patch.usage_deltas);
         meta.updated_at = now_ms();
+        self.write_index(&index);
+        Ok(())
+    }
+
+    /// 累加某类别的用量（后台写入：不 bump updated_at，避免把对话顶到列表最前）。
+    ///
+    /// 会话不存在（内容文件未落盘，如首轮归档前）→ Err（调用方自行决定丢弃）。
+    pub fn accumulate_usage(
+        &mut self,
+        conversation_id: &str,
+        category: UsageCategory,
+        stat: &UsageStat,
+    ) -> Result<(), String> {
+        let path = self.file_path(conversation_id)?;
+        if !path.exists() {
+            return Err(format!("会话不存在（{conversation_id}）"));
+        }
+        let mut index = self.load_or_rebuild()?;
+        let meta = index
+            .iter_mut()
+            .find(|m| m.id == conversation_id)
+            .ok_or_else(|| format!("会话不存在（{conversation_id}）"))?;
+        let mut u = meta.usage.unwrap_or_default();
+        u.category_mut(category).add_stat(stat);
+        meta.usage = Some(u);
         self.write_index(&index);
         Ok(())
     }
@@ -806,7 +932,20 @@ fn meta_from_header(h: SessionHeader) -> ConversationMeta {
         context_tokens: None,
         last_notice_seq: None,
         compaction: None,
+        usage: None,
     }
+}
+
+/// 把用量增量合并进 meta（None → 建；逐类别累加）。
+fn merge_usage(meta: &mut ConversationMeta, deltas: &[UsageDelta]) {
+    if deltas.is_empty() {
+        return;
+    }
+    let mut u = meta.usage.unwrap_or_default();
+    for d in deltas {
+        u.category_mut(d.category).add_stat(&d.stat());
+    }
+    meta.usage = Some(u);
 }
 
 /// 当前时间（unix 毫秒；clock 异常时回退 0）。
@@ -1014,7 +1153,60 @@ mod tests {
             context_length: None,
             context_tokens: None,
             last_notice_seq: None,
+            usage_deltas: None,
         }
+    }
+
+    #[test]
+    fn append_turn_accumulates_usage_and_persists() {
+        let dir = unique_temp_dir("usage-accum");
+        let mut s = SessionStore::new(&dir);
+        let mut r = req("u1", &ev_user("你好"));
+        r.title = Some("用量".into());
+        r.usage_deltas = Some(vec![UsageDelta {
+            category: UsageCategory::Session,
+            input_tokens: 100,
+            output_tokens: 20,
+            cache_hit_tokens: Some(60),
+            cache_prompt_tokens: Some(100),
+        }]);
+        s.append_turn(&r).unwrap();
+
+        // 第二轮：再加 session，并首次携带 title 用量
+        let mut r2 = req("u1", &ev_user("继续"));
+        r2.usage_deltas = Some(vec![
+            UsageDelta {
+                category: UsageCategory::Session,
+                input_tokens: 200,
+                output_tokens: 30,
+                cache_hit_tokens: Some(150),
+                cache_prompt_tokens: Some(200),
+            },
+            UsageDelta {
+                category: UsageCategory::Title,
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_hit_tokens: None,
+                cache_prompt_tokens: None,
+            },
+        ]);
+        s.append_turn(&r2).unwrap();
+
+        let list = s.list().unwrap();
+        let u = list[0].usage.unwrap();
+        assert_eq!(u.session.input_tokens, 300);
+        assert_eq!(u.session.output_tokens, 50);
+        assert_eq!(u.session.cache_hit_tokens, 210);
+        assert_eq!(u.session.cache_prompt_tokens, 300);
+        assert_eq!(u.title.input_tokens, 10);
+        assert_eq!(u.title.cache_prompt_tokens, 0, "未观测缓存计入 0");
+
+        // 重启读回（持久化）
+        let mut s2 = SessionStore::new(&dir);
+        let l2 = s2.list().unwrap();
+        assert_eq!(l2[0].usage.unwrap().session.input_tokens, 300);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 简单轮事件（user 消息）。
@@ -1491,6 +1683,7 @@ mod tests {
                 compaction: None,
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
+                usage_deltas: Vec::new(),
             },
         )
         .unwrap();
@@ -1539,6 +1732,7 @@ mod tests {
                 compaction: Some(record.clone()),
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
+                usage_deltas: Vec::new(),
             },
         )
         .unwrap();
@@ -1561,6 +1755,7 @@ mod tests {
                 compaction: None,
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
+                usage_deltas: Vec::new(),
             },
         )
         .unwrap();
@@ -1651,6 +1846,7 @@ mod tests {
                 }),
                 context_tokens_clear: true,
                 last_notice_seq_clear: false,
+                usage_deltas: Vec::new(),
             },
         )
         .unwrap();

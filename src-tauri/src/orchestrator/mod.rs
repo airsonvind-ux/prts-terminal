@@ -50,7 +50,7 @@ use crate::events::{AgentEvent, AgentPhase, FrontendMessage, IpcEvent};
 use crate::exec_settings::ExecutionMode;
 use crate::llm::{
     ChatMessage, ClientRegistry, LlmClient, LlmConfig, LlmError, ModelRegistry, ReasoningPolicy,
-    StreamEvent, StreamResult, TokenUsage,
+    StreamEvent, StreamResult, TokenUsage, UsageStat, usage_stat,
 };
 use crate::session::{
     ApprovalDecision, ApprovalPrivilege, ApprovalRejectReason, ApprovalRisk, ChunkKind,
@@ -110,7 +110,8 @@ enum TurnOutcome {
     /// 用户中止（M3-B：abort_turn 命令置位 → 取消点收敛退出）。
     /// Aborted 出口在 process（清 approvals + turn/end(aborted) 双写），
     /// dispatch_turn 内不写 step/end 与 turn/end（与 error 路径一致）。
-    Aborted,
+    /// 携带中止时已累计的本轮用量（统计诚实性：中止也是真实消耗）。
+    Aborted(UsageStat),
 }
 
 // ═══════════════════════════════════════════════════════
@@ -131,6 +132,8 @@ struct TurnState {
     /// 本轮总成本（跨调用求和，供遥测/成本展示；与上下文占用区分）
     total_input_tokens: u32,
     total_output_tokens: u32,
+    /// 本轮统计增量（缓存口径已按协议归一；随 turn/end 交前端归档）
+    stat: UsageStat,
     /// 最后一轮 LLM 推理的完整推理链（取最后一次非空值）
     final_reasoning: Option<String>,
 }
@@ -147,6 +150,7 @@ impl TurnState {
             final_usage: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
+            stat: UsageStat::default(),
             final_reasoning: None,
         }
     }
@@ -167,6 +171,20 @@ impl TurnState {
         }
         if reasoning.is_some() {
             self.final_reasoning = reasoning;
+        }
+    }
+
+    /// 累加一次调用的统计增量（缓存口径已按协议归一）。
+    fn add_stat(&mut self, s: UsageStat) {
+        self.stat.input_tokens += s.input_tokens;
+        self.stat.output_tokens += s.output_tokens;
+        if let Some(h) = s.cache_hit_tokens {
+            self.stat.cache_hit_tokens =
+                Some(self.stat.cache_hit_tokens.unwrap_or(0).saturating_add(h));
+        }
+        if let Some(p) = s.cache_prompt_tokens {
+            self.stat.cache_prompt_tokens =
+                Some(self.stat.cache_prompt_tokens.unwrap_or(0).saturating_add(p));
         }
     }
 
@@ -438,6 +456,15 @@ pub async fn process_with_memory(
         &memory_block,
     );
 
+    // ── 3.5 模型视觉能力 ──
+    // 图像物化**不在这里做**：它必须发生在每次 LLM 请求前（见 dispatch 循环的
+    // prepare_request_images）——工具返回的图是轮内追加的，只在轮起点处理会
+    // 让它永远送不到模型手里（2026-10-06 修复：MAA 截图曾因此只到路径）。
+    let supports_vision = model_registry
+        .get_model(&config.provider, &config.model)
+        .map(|m| m.supports_vision)
+        .unwrap_or(false);
+
     // ── 4. 进入调度循环（一个 turn，零或多个 step）──
     // workspace_root：自动化模式地域性信任门的信任根。命令层装配时从
     // settings.workspace 段取一次注入（与 lib.rs 装配 RunCommandTool/Policy
@@ -462,6 +489,7 @@ pub async fn process_with_memory(
         &workspace_root,
         &skill_catalog,
         &memory_block,
+        supports_vision,
     )
     .await;
     // ── M3-B 责任表⑦：Aborted 出口（dispatch 不写 turn/end，此处补）──
@@ -469,12 +497,17 @@ pub async fn process_with_memory(
     // 已对本卡补 result，此处清的是尚未轮到/滞留的余卡）；turn/end(aborted)
     // sink.emit 双写（IPC 必须——前端归档唯一轮结束信号）。
     // 复用正常收尾通道（遥测照常），turn/end 已由上方补写。
-    let outcome = if matches!(outcome, Ok(TurnOutcome::Aborted)) {
-        approvals.clear_session(session_id);
-        sink.emit(SessionEvent::turn_end(session_id, TurnEndReason::Aborted));
-        Ok(TurnOutcome::Completed)
-    } else {
-        outcome
+    let outcome = match outcome {
+        Ok(TurnOutcome::Aborted(stat)) => {
+            approvals.clear_session(session_id);
+            sink.emit(SessionEvent::turn_end_with_usage(
+                session_id,
+                TurnEndReason::Aborted,
+                Some(stat),
+            ));
+            Ok(TurnOutcome::Completed)
+        }
+        other => other,
     };
 
     // ── 5. error 路径补写 turn/end（正常路径由 dispatch_turn 自写）──
@@ -560,6 +593,7 @@ async fn dispatch_turn(
         workspace_root,
         "", // skill_catalog（薄包装：无目录）
         "", // memory_block（薄包装：无记忆）
+        false, // supports_vision（薄包装：无模型注册表，不物化）
     )
     .await
 }
@@ -584,6 +618,7 @@ async fn dispatch_turn_with_memory(
     workspace_root: &Path,
     skill_catalog: &str,
     memory_block: &str,
+    supports_vision: bool,
 ) -> Result<TurnOutcome, OrchestratorError> {
     // tool_ctx 构造：有 db 用 with_db（生产路径），无 db 用 new（Mock 场景）。
     // 缓存通道已移除（2026-08：缓存工具取消注册）；Skill 索引注入
@@ -649,6 +684,10 @@ async fn dispatch_turn_with_memory(
             );
         }
 
+        // 请求前图像准备：当前轮（最后一条 assistant 之后）的图物化为像素，
+        // 历史图只留文本标记。必须**每次请求前**跑——工具图生于轮内。
+        prepare_request_images(messages.as_mut_slice(), supports_vision);
+
         // 请求前估算（模块 8 双锚：estimate 兜底锚入 log，
         // 与 step/end 的 provider usage 基线锚对齐）
         let estimated_tokens = context::estimate_messages(messages) as u64;
@@ -663,7 +702,7 @@ async fn dispatch_turn_with_memory(
             biased;
             _ = abort.wait_abort() => {
                 debug!("step" => step, "action" => "llm_aborted");
-                return Ok(TurnOutcome::Aborted);
+                return Ok(TurnOutcome::Aborted(state.stat));
             }
             res = call_llm_with_retry(
                 session_id,
@@ -686,6 +725,9 @@ async fn dispatch_turn_with_memory(
 
         // 记录调用：usage 快照（缺陷 4）+ 推理链
         state.record_call(result.usage, result.reasoning.clone());
+        if let Some(u) = result.usage {
+            state.add_stat(usage_stat(&u, config.api_type));
+        }
 
         // ── 终止判断：tool_calls 为空 → completed ──
         if result.tool_calls.is_empty() {
@@ -730,7 +772,11 @@ async fn dispatch_turn_with_memory(
                 continue;
             }
 
-            sink.emit(SessionEvent::turn_end(session_id, TurnEndReason::Completed));
+            sink.emit(SessionEvent::turn_end_with_usage(
+                session_id,
+                TurnEndReason::Completed,
+                Some(state.stat),
+            ));
             return Ok(TurnOutcome::Completed);
         }
 
@@ -750,7 +796,7 @@ async fn dispatch_turn_with_memory(
 
         // ── M3-B：中止优先于执行段（preflight 中止出口已补本卡 result；不进 execute）──
         if abort.is_aborted() {
-            return Ok(TurnOutcome::Aborted);
+            return Ok(TurnOutcome::Aborted(state.stat));
         }
 
         // ── 执行工具，结果追加到上下文，记录指纹 ──
@@ -768,7 +814,7 @@ async fn dispatch_turn_with_memory(
 
         // ── M3-B 中止出口：不写 step/end（与 error 路径一致，log 容忍悬挂 step/start）──
         if abort.is_aborted() {
-            return Ok(TurnOutcome::Aborted);
+            return Ok(TurnOutcome::Aborted(state.stat));
         }
 
         // step/end：工具执行完成后闭合 step 边界
@@ -778,7 +824,7 @@ async fn dispatch_turn_with_memory(
         // ── 停滞检测：升格为终止原因（turn/end reason=stagnation）──
         // M3-B：停滞与中止并发 → 中止优先（中止先于停滞判定）
         if abort.is_aborted() {
-            return Ok(TurnOutcome::Aborted);
+            return Ok(TurnOutcome::Aborted(state.stat));
         }
         if state.check_stagnation() {
             sink.emit(SessionEvent::error(
@@ -786,7 +832,11 @@ async fn dispatch_turn_with_memory(
                 "调度循环检测到工具调用停滞，已终止本轮处理",
                 false,
             ));
-            sink.emit(SessionEvent::turn_end(session_id, TurnEndReason::Stagnation));
+            sink.emit(SessionEvent::turn_end_with_usage(
+                session_id,
+                TurnEndReason::Stagnation,
+                Some(state.stat),
+            ));
             debug!(
                 "action" => "turn_stagnated",
                 "steps" => step
@@ -835,6 +885,64 @@ pub fn is_retryable(e: &LlmError) -> bool {
         }
         _ => false,
     }
+}
+
+/// 请求前图像准备（**每次** LLM 请求前调用）。
+///
+/// 判据与 Hanako 同构：只给「最后一条 assistant **之后**」的消息物化像素，
+/// 之前的（历史）一律不读字节——它们只保留文本标记（`[附件：名]`、
+/// 工具结果文本里的路径），模型据此知道曾有附件。
+///
+/// 必须每次请求前跑，而不是轮起点：工具返回的图（如 MAA 截图）是轮内
+/// 追加的，轮起点那次看不到它。
+///
+/// 模型没有视觉时，图进不去——但得把「图没进去」这件事说清楚，
+/// 否则读者会当自己看过了（见 [`NO_VISION_NOTICE`]）。
+fn prepare_request_images(messages: &mut [ChatMessage], supports_vision: bool) {
+    let last_assistant_idx = messages
+        .iter()
+        .rposition(|m| matches!(m.role, crate::llm::MessageRole::Assistant));
+    for (i, msg) in messages.iter_mut().enumerate() {
+        let current_turn = match last_assistant_idx {
+            Some(idx) => i > idx,
+            None => true,
+        };
+        if current_turn && supports_vision {
+            if msg.images.is_none() {
+                if let Some(paths) = msg.image_paths.take() {
+                    let parts = crate::attachments::materialize_images(&paths);
+                    if !parts.is_empty() {
+                        msg.images = Some(parts);
+                    }
+                }
+            }
+        } else {
+            // 本轮带图、但模型看不见：把这件事说清楚，别的都不说。
+            // 只补事实，不写行为指令（要不要描述画面由读者自己决定）。
+            // 历史消息的图早该退化成文本标记，不补——否则每轮都会堆一句。
+            if current_turn && (msg.images.is_some() || msg.image_paths.is_some()) {
+                push_notice(&mut msg.content, NO_VISION_NOTICE);
+            }
+            msg.image_paths = None;
+            msg.images = None;
+        }
+    }
+}
+
+/// 模型没有视觉时，对带图消息追加的唯一一句话。
+///
+/// 只陈述事实（模型看不见），不给行为指令。
+const NO_VISION_NOTICE: &str = "[当前模型不支持视觉，无法查看图片内容]";
+
+/// 往正文末尾补一句提示；已出现过就不再补（同一轮可被多次请求，会重进这里）。
+fn push_notice(content: &mut String, notice: &str) {
+    if content.contains(notice) {
+        return;
+    }
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str(notice);
 }
 
 /// 带通用重试的 LLM 调用（缺陷 3）。
@@ -1448,15 +1556,44 @@ fn execute_tools_and_append(
                     "elapsed_ms" => t0.elapsed().as_millis(),
                     "result_len" => output.summary.len()
                 );
+                // 工具产物里的图片走附件通路：附件引用随 tool/result 落账，
+                // 跟轮 derive 重建出同一条带图 user 消息（消息数不变）。
+                let image_attachments: Vec<crate::attachments::Attachment> = output
+                    .images
+                    .iter()
+                    .map(|p| crate::attachments::reference_existing(std::path::Path::new(p)))
+                    .collect();
                 // 双写：IPC tool/result + log tool/result（presentation 用 summary）
-                sink.emit(SessionEvent::tool_result(
-                    session_id,
-                    &tc.id,
-                    Some(&tc.function.name),
-                    &output.summary,
-                    true,
-                ));
+                if image_attachments.is_empty() {
+                    sink.emit(SessionEvent::tool_result(
+                        session_id,
+                        &tc.id,
+                        Some(&tc.function.name),
+                        &output.summary,
+                        true,
+                    ));
+                } else {
+                    sink.emit(SessionEvent::tool_result_with_attachments(
+                        session_id,
+                        &tc.id,
+                        Some(&tc.function.name),
+                        &output.summary,
+                        true,
+                        image_attachments.clone(),
+                    ));
+                }
                 messages.push(ChatMessage::tool_result(&tc.id, output.summary.clone()));
+                // 工具声明了图片（如 MAA 截图）：另起一条 user 消息送进模型。
+                // 不塞进 tool 消息——OpenAI 的 tool 角色只吃文本，Anthropic 的
+                // tool_result 才带图；追加一条 user 消息是三家协议都成立的落法。
+                // 像素只在当前轮送达（prepare_request_images 按区间决定），
+                // 但消息本身落账、跟轮重建，序列不缺项。
+                if let Some(msg) = crate::session::SessionLog::tool_image_message(
+                    Some(&tc.function.name),
+                    &image_attachments,
+                ) {
+                    messages.push(msg);
+                }
                 // 缓存操作落账已停用（2026-08：缓存工具取消注册，
                 // CacheEventMark 无生产者；未来记忆系统复用时可恢复）
                 for mark in &output.skill_events {
@@ -1531,6 +1668,26 @@ fn execute_tools_and_append(
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    /// 文本模型看不到图时，必须被明确告知「图没进去」——否则会当自己看过了。
+    #[test]
+    fn text_only_model_is_told_the_image_did_not_go_through() {
+        let mut messages = vec![ChatMessage {
+            role: crate::llm::MessageRole::Tool,
+            content: "已截取当前画面（C:/x/latest.png）。".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+            image_paths: Some(vec!["C:/x/shot.png".into()]),
+            images: None,
+        }];
+        prepare_request_images(&mut messages, false);
+        assert!(messages[0].content.contains(NO_VISION_NOTICE));
+        assert!(messages[0].image_paths.is_none());
+        // 每次请求前都会进这里：补过就不再补，免得逐轮堆积。
+        prepare_request_images(&mut messages, false);
+        assert_eq!(messages[0].content.matches(NO_VISION_NOTICE).count(), 1);
+    }
     use std::future::Future;
     use std::pin::Pin;
 
@@ -1720,6 +1877,119 @@ mod tests {
     }
 
     // ── execute_tools_and_append ──
+
+    /// 测试工具：返回文本 + 一张图片路径。
+    struct ImageEchoTool;
+
+    impl crate::tools::Tool for ImageEchoTool {
+        fn name(&self) -> &str {
+            "image_echo"
+        }
+        fn description(&self) -> &str {
+            "返回一张图片（测试用）"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object" })
+        }
+        fn execute(
+            &self,
+            _ctx: &ToolContext,
+            _params: &str,
+        ) -> Result<crate::tools::ToolOutput, crate::tools::ToolError> {
+            let mut out = crate::tools::ToolOutput::text("图在这里");
+            out.images = vec!["C:/tmp/shot.png".to_string()];
+            Ok(out)
+        }
+        fn display(&self, _ctx: &ToolContext, _params: &str) -> crate::tools::ToolDisplay {
+            crate::tools::ToolDisplay::default()
+        }
+    }
+
+    /// 工具声明的图片要另起一条 user 消息，而不是塞进 tool 消息。
+    #[test]
+    fn tool_images_ride_along_as_a_user_message() {
+        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("看看画面")];
+        let tools = {
+            let mut reg = ToolRegistry::new();
+            reg.register(Box::new(ImageEchoTool)).unwrap();
+            reg
+        };
+        let ctx = ToolContext::new();
+        let (sink, _events, _log) = test_sink();
+        let tool_calls = vec![crate::llm::ToolCall {
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "image_echo".into(),
+                arguments: "{}".into(),
+            },
+        }];
+        let result = StreamResult {
+            text: String::new(),
+            tool_calls,
+            reasoning: None,
+            usage: None,
+        };
+        let mut state = TurnState::new();
+        let abort = AbortSignal::new();
+        let initial = messages.len();
+        execute_tools_and_append(
+            "s1",
+            &mut messages,
+            &result,
+            &tools,
+            &ctx,
+            &sink,
+            &mut state,
+            None,
+            &abort,
+        );
+
+        // assistant + tool_result + 带图的 user 消息
+        assert_eq!(messages.len(), initial + 3);
+        assert_eq!(messages[initial + 1].role, crate::llm::MessageRole::Tool);
+        let with_image = &messages[initial + 2];
+        assert_eq!(with_image.role, crate::llm::MessageRole::User);
+        assert_eq!(
+            with_image.image_paths,
+            Some(vec!["C:/tmp/shot.png".to_string()]),
+            "图片走消息附件通路"
+        );
+    }
+
+    /// 请求前物化：只给「最后一条 assistant 之后」的消息像素；
+    /// 历史图与不支持视觉的模型都不读字节。
+    #[test]
+    fn request_images_materialize_only_after_last_assistant() {
+        let dir = std::env::temp_dir().join(format!("prts-img-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("shot.png");
+        image::RgbImage::new(2, 2).save(&img).unwrap();
+        let path = img.to_string_lossy().into_owned();
+
+        let mut messages = vec![
+            ChatMessage::user_with_image_paths("历史图", vec![path.clone()]),
+            ChatMessage::assistant("看过了"),
+            ChatMessage::user_with_image_paths("当前图", vec![path.clone()]),
+        ];
+        prepare_request_images(&mut messages, true);
+        assert!(messages[0].images.is_none(), "历史图不物化");
+        assert!(messages[0].image_paths.is_none(), "历史图路径已清");
+        assert!(
+            messages[2].images.as_ref().is_some_and(|v| !v.is_empty()),
+            "当前图物化为像素"
+        );
+
+        // 不支持视觉：谁都不物化
+        let mut messages = vec![
+            ChatMessage::assistant("看过了"),
+            ChatMessage::user_with_image_paths("当前图", vec![path]),
+        ];
+        prepare_request_images(&mut messages, false);
+        assert!(messages[1].images.is_none(), "无视觉能力不物化");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn appends_assistant_and_tool_messages() {
@@ -2133,6 +2403,7 @@ mod tests {
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
+            attachments: Vec::new(),
         }];
 
         process(
@@ -2427,6 +2698,7 @@ mod tests {
                     reasoning_content: None,
                     tool_calls: None,
                     tool_call_id: None,
+                    attachments: Vec::new(),
                 }],
             );
             log.push_header(
@@ -3099,6 +3371,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
+                attachments: Vec::new(),
             }],
             &tool_registry,
             &client_registry,
@@ -3123,6 +3396,7 @@ mod tests {
                 reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
+                attachments: Vec::new(),
             }],
             &tool_registry,
             &client_registry,
@@ -3253,6 +3527,7 @@ mod tests {
                 Ok(crate::llm::LlmResponse {
                     text: None,
                     tool_calls: None,
+                    usage: None,
                 })
             })
         }
@@ -3438,6 +3713,7 @@ mod tests {
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -3612,7 +3888,7 @@ mod tests {
             observer.await.unwrap(),
             "观察超时：未等到 chunk（Mock 挂起点未达）"
         );
-        assert_eq!(outcome, TurnOutcome::Aborted, "LLM 段中止 → Aborted");
+        assert!(matches!(outcome, TurnOutcome::Aborted(_)), "LLM 段中止 → Aborted");
 
         // 已产出 chunk 保留（log 双写）；无 step/end（中止出口不闭合边界）
         let log = log.lock().unwrap();
@@ -3889,7 +4165,7 @@ mod tests {
             observer.await.unwrap(),
             "观察超时：审批放行或命令启动未达预期"
         );
-        assert_eq!(outcome, TurnOutcome::Aborted);
+        assert!(matches!(outcome, TurnOutcome::Aborted(_)));
 
         // tool/result ok=false（runner cancel → Killed → 中性文案「命令已被终止」）
         let log = log.lock().unwrap();
@@ -3988,7 +4264,7 @@ mod tests {
         .await
         .unwrap();
         assert!(observer.await.unwrap(), "观察器异常");
-        assert_eq!(outcome, TurnOutcome::Aborted);
+        assert!(matches!(outcome, TurnOutcome::Aborted(_)));
 
         // 两条 tool/result：槽 0 ok=true（正常收尾）、槽 1 ok=false + 未执行文案（保配对）
         let log = log.lock().unwrap();
@@ -4178,7 +4454,7 @@ mod tests {
         .await
         .unwrap();
         aborter.await.unwrap();
-        assert_eq!(outcome, TurnOutcome::Aborted, "停滞与中止并发 → 中止优先");
+        assert!(matches!(outcome, TurnOutcome::Aborted(_)), "停滞与中止并发 → 中止优先");
         // 中止出口不写 turn/end（process 补）；无 error 事件
         let log = log.lock().unwrap();
         assert!(!log.events().iter().any(|e| matches!(e, SessionEvent::TurnEnd { .. })));
@@ -4803,7 +5079,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(outcome, TurnOutcome::Aborted);
+        assert!(matches!(outcome, TurnOutcome::Aborted(_)));
 
         // 队列原样保留（dispatch 未消费）；中止后由命令层收尾置保留态
         assert_eq!(steer_queue.len("s1"), 1, "中止路径不触碰队列");

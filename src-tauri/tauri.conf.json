@@ -25,7 +25,14 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/session-files/**",
+          "$APPDATA/uploads/**"
+        ]
+      }
     }
   },
   "bundle": {

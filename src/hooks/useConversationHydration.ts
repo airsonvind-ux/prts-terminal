@@ -107,6 +107,7 @@ async function runRestore(): Promise<void> {
         contextTokens: r.meta.contextTokens ?? undefined,
         lastNoticeSeq: r.meta.lastNoticeSeq ?? undefined,
         compaction: r.meta.compaction ?? undefined,
+        usage: r.meta.usage ?? undefined,
       });
     }
 

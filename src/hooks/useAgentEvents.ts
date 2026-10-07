@@ -18,11 +18,11 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { useProcessingStore } from "../stores/useProcessingStore";
+import { useProcessingStore, stashTitleUsage } from "../stores/useProcessingStore";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useSteerStore } from "../stores/useSteerStore";
 import { defaultTitleForContent } from "../projection";
-import type { AgentEvent, UserMessageEvent } from "../types";
+import type { AgentEvent, UsageDelta, UserMessageEvent } from "../types";
 
 export function useAgentEvents(): void {
   useEffect(() => {
@@ -67,7 +67,7 @@ export function useAgentEvents(): void {
         // 已全部注入转正（后端 turn/end 只在队列空时发）；中止/错误的
         // 未交付条目由后端保留、下一轮领取，气泡跨轮留存（可点击取消）。
         case "turn/end":
-          finishProcessing(e.sessionId, e.reason);
+          finishProcessing(e.sessionId, e.reason, e.usage);
           break;
 
         // ── 瞬时信号：更新 agentPhase ──
@@ -105,13 +105,31 @@ export function useAgentEvents(): void {
           const expected = defaultTitleForContent(firstUserContent);
           if (conv.title !== expected) break; // 复检：标题已被改 → 丢弃
           convStore.setConversationTitle(e.conversationId, e.title);
+          const titleDelta: UsageDelta | null = e.usage
+            ? { category: "title", ...e.usage }
+            : null;
           if (conv.turns.length > 0) {
+            if (titleDelta) {
+              convStore.accumulateUsage(e.conversationId, [titleDelta]);
+            }
             invoke("update_conversation_meta", {
               conversationId: e.conversationId,
               title: e.title,
               expectedTitle: expected,
+              usageDeltas: titleDelta ? [titleDelta] : null,
             }).catch(() => {});
+          } else if (titleDelta) {
+            // 首轮未归档 → 暂存，随下一次 append_turn 提交
+            stashTitleUsage(e.conversationId, titleDelta);
           }
+          break;
+        }
+
+        // ── 记忆用量（后端内部累加后推送；前端镜像进投影）──
+        case "memory/usage": {
+          useConversationStore
+            .getState()
+            .accumulateUsage(e.conversationId, [{ category: "memory", ...e.usage }]);
           break;
         }
 

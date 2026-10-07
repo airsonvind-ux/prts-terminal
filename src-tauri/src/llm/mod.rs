@@ -345,28 +345,55 @@ pub struct ChatMessage {
     /// None 时序列化自动省略；Some 时携带，由 LlmClient 实现按 provider 决定是否剥离。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// 本消息附带的图像文件路径（来自 user/message 事件的附件）。
+    /// 仅供请求前物化（路径 → base64），不序列化、不进 API。
+    #[serde(skip)]
+    pub image_paths: Option<Vec<String>>,
+    /// 物化后的图像数据（请求前由 orchestrator 从 image_paths 读取填入）。
+    /// 各 client 在 build 时展开为 provider 的 content 数组；不序列化。
+    #[serde(skip)]
+    pub images: Option<Vec<ImagePart>>,
+}
+
+/// 图像输入块（已编码）。
+///
+/// 随 [`ChatMessage`] 传到各 client，在请求体构造时展开为 provider 的
+/// content 数组（OpenAI `image_url` / Anthropic `image`）。data 为纯 base64，
+/// 不带 `data:` 前缀（前缀由各 client 按 provider 格式拼）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePart {
+    /// base64 编码的图像数据（不含 data: 前缀）
+    pub data: String,
+    /// MIME 类型，如 "image/png"
+    pub mime_type: String,
 }
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::System, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None }
+        Self { role: MessageRole::System, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::User, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None }
+        Self { role: MessageRole::User, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
+    }
+
+    /// 带图像路径的 user 消息（来自 history 附件的播种）。物化由请求前完成。
+    pub fn user_with_image_paths(content: impl Into<String>, image_paths: Vec<String>) -> Self {
+        Self { role: MessageRole::User, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: Some(image_paths), images: None }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None }
+        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
     }
 
     pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>, reasoning_content: Option<String>) -> Self {
-        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: Some(tool_calls), tool_call_id: None, reasoning_content }
+        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: Some(tool_calls), tool_call_id: None, reasoning_content, image_paths: None, images: None }
     }
 
     /// 工具执行结果消息。tool_call_id 用于 LLM API 侧匹配对应的 tool_call。
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: MessageRole::Tool, content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()), reasoning_content: None }
+        Self { role: MessageRole::Tool, content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()), reasoning_content: None, image_paths: None, images: None }
     }
 }
 
@@ -439,6 +466,8 @@ pub struct ToolDefFunction {
 pub struct LlmResponse {
     pub text: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// 本次调用的 token 用量（provider 未提供 / Mock → None）
+    pub usage: Option<TokenUsage>,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -472,6 +501,46 @@ pub struct TokenUsage {
     /// 不强造口径（留 `None`——“未观测”与“未命中 0”是两种事实）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_miss_tokens: Option<u32>,
+}
+
+/// 统计增量：一次调用的归一化用量（缓存口径统一，见 [`usage_stat`]）。
+///
+/// 与 [`TokenUsage`] 分开：TokenUsage 承载「provider 报什么」（供上下文占用与
+/// 该次调用原样锚），UsageStat 承载「统计要什么」（缓存命中率分母已按协议归一）。
+/// 二者不混，避免为统计字段改动 TokenUsage 的既有序列化契约。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageStat {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    /// 命中缓存的 token（provider 未报 → None，与「命中 0」区分）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_hit_tokens: Option<u32>,
+    /// 该次可被缓存命中的 prompt 全量（命中率分母；按协议归一）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_prompt_tokens: Option<u32>,
+}
+
+/// 把一次调用的 provider 用量归一化为统计增量。
+///
+/// 缓存口径：不同协议的 `input_tokens` 含义不同——
+/// - openai-completions / openai-responses：`input_tokens` = 完整 prompt（含命中缓存）
+/// - anthropic-messages：`input_tokens` 只含未命中部分，命中单列在 cache_read
+///
+/// 统一输出 `cache_prompt_tokens` = 该次 prompt 全量（命中率分母）。
+/// provider 不报缓存（`cache_hit_tokens == None`）时两个缓存字段留 None。
+pub fn usage_stat(usage: &TokenUsage, api_type: ApiType) -> UsageStat {
+    let cache_hit = usage.cache_hit_tokens;
+    let cache_prompt = cache_hit.map(|hit| match api_type {
+        ApiType::AnthropicMessages => usage.input_tokens.saturating_add(hit),
+        _ => usage.input_tokens,
+    });
+    UsageStat {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_hit_tokens: cache_hit,
+        cache_prompt_tokens: cache_prompt,
+    }
 }
 
 // ═══════════════════════════════════════════════════════

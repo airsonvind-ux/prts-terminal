@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::exec_settings::ExecutionSettings;
 use crate::llm::{ApiType, LlmConfig};
+use crate::maa::settings::MaaSettings;
 
 /// settings.json 文件名（data_dir 下）。
 pub const SETTINGS_FILE: &str = "settings.json";
@@ -56,6 +57,8 @@ pub struct Settings {
     #[serde(default)]
     pub exec: ExecutionSettings,
     #[serde(default)]
+    pub maa: MaaSettings,
+    #[serde(default)]
     pub workspace: WorkspaceSettings,
     #[serde(default)]
     pub window: WindowSettings,
@@ -67,6 +70,7 @@ impl Default for Settings {
             schema_version: SCHEMA_VERSION,
             llm: LlmSection::default(),
             exec: ExecutionSettings::default(),
+            maa: MaaSettings::default(),
             workspace: WorkspaceSettings::default(),
             window: WindowSettings::default(),
         }
@@ -206,6 +210,7 @@ impl Default for WindowSettings {
 pub struct SettingsPatch {
     pub llm: Option<LlmPatch>,
     pub exec: Option<ExecPatch>,
+    pub maa: Option<MaaPatch>,
     pub workspace: Option<WorkspacePatch>,
     pub window: Option<WindowPatch>,
 }
@@ -251,6 +256,19 @@ pub struct ExecPatch {
     pub mode: Option<crate::exec_settings::ExecutionMode>,
 }
 
+/// MAA 段的字段 patch（per-field：缺席 = 不更新；字符串空串 = 回自动）。
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MaaPatch {
+    pub server: Option<crate::maa::settings::Server>,
+    pub auto_detect: Option<bool>,
+    pub screenshot_extras: Option<bool>,
+    pub touch_extras: Option<bool>,
+    pub emulator: Option<String>,
+    pub emulator_path: Option<String>,
+    pub adb_path: Option<String>,
+    pub address: Option<String>,
+}
+
 impl ExecPatch {
     /// 本 patch 是否触及 exec 段（保留备用；当前 apply_patch 以 mode 字段判定）。
     #[allow(dead_code)]
@@ -283,6 +301,8 @@ pub struct PatchChanges {
     pub llm_changed: bool,
     /// exec 段有实际变化。
     pub exec_changed: bool,
+    /// maa 段有实际变化。
+    pub maa_changed: bool,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -577,6 +597,37 @@ impl SettingsStore {
             if let Some(mode) = p.mode {
                 self.settings.exec.mode = mode;
                 changes.exec_changed = true;
+            }
+        }
+
+        if let Some(p) = &patch.maa {
+            let before = self.settings.maa.clone();
+            if let Some(v) = &p.server {
+                self.settings.maa.server = *v;
+            }
+            if let Some(v) = p.auto_detect {
+                self.settings.maa.auto_detect = v;
+            }
+            if let Some(v) = p.screenshot_extras {
+                self.settings.maa.screenshot_extras = v;
+            }
+            if let Some(v) = p.touch_extras {
+                self.settings.maa.touch_extras = v;
+            }
+            if let Some(v) = &p.emulator {
+                self.settings.maa.emulator = v.trim().to_string();
+            }
+            if let Some(v) = &p.emulator_path {
+                self.settings.maa.emulator_path = v.trim().to_string();
+            }
+            if let Some(v) = &p.adb_path {
+                self.settings.maa.adb_path = v.trim().to_string();
+            }
+            if let Some(v) = &p.address {
+                self.settings.maa.address = v.trim().to_string();
+            }
+            if before != self.settings.maa {
+                changes.maa_changed = true;
             }
         }
 

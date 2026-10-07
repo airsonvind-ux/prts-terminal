@@ -88,10 +88,39 @@ impl AnthropicMessagesClient {
                     }
                 }
                 MessageRole::User => {
-                    anthropic_msgs.push(serde_json::json!({
-                        "role": "user",
-                        "content": msg.content,
-                    }));
+                    // Anthropic 约定：图像 block 在前、文本在后。
+                    // 无图时保持字符串 content（与既有输出逐字节一致）。
+                    match msg.images.as_ref().filter(|v| !v.is_empty()) {
+                        Some(images) => {
+                            let mut blocks: Vec<Value> = Vec::new();
+                            for img in images {
+                                blocks.push(serde_json::json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": img.mime_type,
+                                        "data": img.data,
+                                    },
+                                }));
+                            }
+                            if !msg.content.is_empty() {
+                                blocks.push(serde_json::json!({
+                                    "type": "text",
+                                    "text": msg.content,
+                                }));
+                            }
+                            anthropic_msgs.push(serde_json::json!({
+                                "role": "user",
+                                "content": blocks,
+                            }));
+                        }
+                        None => {
+                            anthropic_msgs.push(serde_json::json!({
+                                "role": "user",
+                                "content": msg.content,
+                            }));
+                        }
+                    }
                 }
                 MessageRole::Assistant => {
                     if let Some(ref tcs) = msg.tool_calls {
@@ -305,7 +334,8 @@ impl AnthropicMessagesClient {
             Some(tool_calls)
         };
 
-        Ok(LlmResponse { text, tool_calls })
+        let usage = body.get("usage").and_then(Self::extract_usage);
+        Ok(LlmResponse { text, tool_calls, usage })
     }
 
     // ── Usage 提取 ──
@@ -833,6 +863,8 @@ mod tests {
             tool_calls: Some(vec![tc]),
             tool_call_id: None,
             reasoning_content: None,
+            image_paths: None,
+            images: None,
         };
         let (_sys, an_msgs) = AnthropicMessagesClient::convert_messages(&[msg]);
         assert_eq!(an_msgs.len(), 1);

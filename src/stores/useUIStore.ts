@@ -52,6 +52,8 @@ export type SettingsTabKey =
   | "safety"
   | "space"
   | "skills"
+  | "usage"
+  | "extension"
   | "app"
   | "about";
 

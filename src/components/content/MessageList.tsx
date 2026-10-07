@@ -11,9 +11,10 @@
 // 不再维护独立的 messages 数组。
 
 import { memo, useMemo, useRef, useEffect, useCallback, useState } from "react";
-import type { SessionEvent } from "../../types";
+import type { Attachment, SessionEvent } from "../../types";
 import type { CompactionMeta } from "../../types";
 import { deriveTextSegments, isMetaEvent, splitTurnByUserBoundary, stripReminderBlock } from "../../projection";
+import { AttachmentStrip } from "./AttachmentStrip";
 import type { TextSegment } from "../../projection";
 import { EventBadge } from "./EventBadge";
 import { Markdown } from "./Markdown";
@@ -24,7 +25,7 @@ import styles from "./MessageList.module.css";
 // ── 展示项类型 ──
 
 type DisplayItem =
-  | { type: "message"; role: "user" | "error" | "aborted"; content: string }
+  | { type: "message"; role: "user" | "error" | "aborted"; content: string; attachments?: Attachment[] }
   | {
       type: "message";
       role: "assistant";
@@ -144,6 +145,7 @@ function appendTurnItems(
         type: "message",
         role: "user",
         content: stripReminderBlock(seg.content),
+        attachments: seg.attachments,
       });
       continue;
     }
@@ -311,6 +313,9 @@ const MessageRow = memo(function MessageRow({
           data-message-area
           className={`${styles.bubble} ${styles[item.role]} ${styles.row}`}
         >
+          {item.role === "user" && item.attachments && item.attachments.length > 0 && (
+            <AttachmentStrip files={item.attachments} variant="message" />
+          )}
           <Markdown content={item.content} />
         </div>
       );

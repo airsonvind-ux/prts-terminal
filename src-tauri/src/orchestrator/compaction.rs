@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use crate::debug;
 use crate::events::FrontendMessage;
-use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, ToolDef};
+use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, ToolDef, TokenUsage};
 use crate::session::SessionLog;
 use crate::turn_registry::AbortSignal;
 
@@ -69,6 +69,8 @@ pub struct SummaryOutcome {
     pub degraded: bool,
     /// 折叠区压缩前估算 token（仅折叠消息本身）
     pub tokens_before: Option<u64>,
+    /// 本次摘要 LLM 调用的用量（降级产出时为 None）。
+    pub usage: Option<TokenUsage>,
 }
 
 /// 执行一次摘要 run。
@@ -126,8 +128,8 @@ pub async fn run_summary(
     let degraded = estimate_messages(&messages) > budget;
 
     // ── 4. 产出 ──
-    let summary = if degraded {
-        build_fallback_summary(&messages)
+    let (summary, usage) = if degraded {
+        (build_fallback_summary(&messages), None)
     } else {
         call_summary_llm(llm, config, &messages, tool_defs, abort).await?
     };
@@ -136,6 +138,7 @@ pub async fn run_summary(
         summary,
         degraded,
         tokens_before: Some(tokens_before),
+        usage,
     })
 }
 
@@ -299,7 +302,7 @@ async fn call_summary_llm(
     messages: &[ChatMessage],
     tool_defs: &[ToolDef],
     abort: &AbortSignal,
-) -> Result<String, String> {
+) -> Result<(String, Option<TokenUsage>), String> {
     let retry = RetryPolicy::default();
     let mut attempt: u32 = 0;
 
@@ -324,7 +327,7 @@ async fn call_summary_llm(
                 if text.is_empty() {
                     return Err("摘要为空，请重试".into());
                 }
-                return Ok(text.to_string());
+                return Ok((text.to_string(), sr.usage));
             }
             Err(e) => {
                 let retryable = is_retryable(&e);
@@ -373,7 +376,7 @@ mod tests {
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<crate::llm::LlmResponse, LlmError>> + Send + 'a>,
         > {
-            Box::pin(async move { Ok(crate::llm::LlmResponse { text: None, tool_calls: None }) })
+            Box::pin(async move { Ok(crate::llm::LlmResponse { text: None, tool_calls: None, usage: None }) })
         }
 
         fn chat_stream<'a>(
@@ -419,6 +422,7 @@ mod tests {
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
+            attachments: Vec::new(),
         }
     }
 

@@ -151,7 +151,7 @@ impl LlmClient for MockLlmClient {
                 Some(response.result.tool_calls.clone())
             };
 
-            Ok(LlmResponse { text, tool_calls })
+            Ok(LlmResponse { text, tool_calls, usage: None })
         })
     }
 

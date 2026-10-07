@@ -55,7 +55,7 @@ impl Tool for RunCommandTool {
     }
 
     fn description(&self) -> &str {
-        "执行 shell 命令并返回输出：非零退出码按失败返回（含退出码与输出尾部），完整输出落盘工作区可 read_file 读取。命令以受限身份运行，仅可写工作目录内，区外写入被系统拒绝；确需访问区外时声明 permission=full 请求确认（完整语义见参数说明）。审批：询问模式（默认）每次执行前弹确认卡；自动化模式仅低危只读命令自动放行，其余（含所有 full）仍弹确认卡；不可逆破坏类命令任何模式任何档位直接拒绝。仅限 Windows（powershell/cmd）；写文件请优先用 write_file/edit。"
+        "执行 shell 命令并返回输出：非零退出码按失败返回（含退出码与输出尾部），完整输出落盘工作区可 read_file 读取。命令以受限身份运行，仅可写工作目录内，区外写入被系统拒绝；确需访问区外时声明 permission=full 请求确认（完整语义见参数说明）。审批：询问模式（默认）每次执行前弹确认卡；自动化模式下只有网络访问、安装卸载、进程控制、系统配置、仓库破坏性操作、删除，以及声明 permission=full 的调用会弹确认卡，其余命令（含脚本与管道）直接执行；不可逆破坏类命令任何档位直接拒绝。仅限 Windows（powershell/cmd）；写文件请优先用 write_file/edit。"
     }
 
     fn parameters(&self) -> serde_json::Value {

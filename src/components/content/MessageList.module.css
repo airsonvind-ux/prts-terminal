@@ -30,10 +30,21 @@
    * （滚动条本体由 styles/scrollbar.css 伪元素层统一提供。）
    */
   margin-right: 8px;
-  padding: 8px 8px 8px 12px;
+  /*
+   * 顶部内边距不放在滚动容器上（改由首个条目承担，见下方 .list > :first-child）：
+   * 滚动容器的 padding-top 会把粘性卡头（EventBadge .toggle）的吸附点一并顶下去
+   * ——实测头钉在 padding-top 处、其上方那 8px 缝隙会露出滑过的内容（2026-10-05）。
+   * 挪到首个子元素的上外边距：视觉等价，且粘性卡头钉在滚动区最上沿。
+   */
+  padding: 0 8px 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 顶部留白改由首个条目承担（等价原 padding-top: 8px，不影响 sticky 吸附点）。 */
+.list > :first-child {
+  margin-top: 8px;
 }
 
 /* ── 回到底部悬浮按钮（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方）──

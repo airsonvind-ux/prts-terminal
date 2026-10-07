@@ -144,7 +144,7 @@ export type OverlayType = null | "history" | "settings" | "more";
  * assistant/chunk（kind 区分），轮次结束由 turn/end（显式 reason）表达，
  * 最终归档由 assistant/message（含 content + reasoning + usage 快照）承载。
  */
-export type AgentEvent = SessionEvent | PhaseEvent | ConversationTitleEvent;
+export type AgentEvent = SessionEvent | PhaseEvent | ConversationTitleEvent | MemoryUsageEvent;
 
 /** 持久事实（后端 session log 的事件镜像，前端投影缓存消费） */
 export type SessionEvent =
@@ -207,6 +207,8 @@ export interface TurnEndEvent {
   type: "turn/end";
   sessionId: string;
   reason: TurnEndReason;
+  /** 本轮累计用量（统计增量；后端计算，前端随 append_turn 提交） */
+  usage?: UsageStat | null;
 }
 
 /** step 开始：一次 LLM 请求 + 其调用的工具。estimatedTokens 为请求前估算（双锚兜底） */
@@ -231,6 +233,8 @@ export interface UserMessageEvent {
   type: "user/message";
   sessionId: string;
   content: string;
+  /** 附件引用（有附件时携带；无附件/旧数据缺省） */
+  attachments?: Attachment[];
 }
 
 /** 流式增量片段（token 级回放；推理与文本分道） */
@@ -321,8 +325,58 @@ export interface Settings {
   schema_version: number;
   llm: LlmSection;
   exec: ExecutionSettings;
+  maa: MaaSettings;
   workspace: WorkspaceSettings;
   window: WindowSettings;
+}
+
+// ── MAA 段（settings.json 的 maa 段；snake_case 对齐后端 MaaSettings）──
+
+/** 账号服务器（kebab-case 序列化） */
+export type MaaServer = "official" | "bilibili";
+
+/** MAA 设置。字符串字段空串 = 交由自动判定。 */
+export interface MaaSettings {
+  server: MaaServer;
+  /** 自动检测连接：开着时忽略下面的覆盖项 */
+  auto_detect: boolean;
+  /** 截图增强（MuMu / 雷电）；不可用时 MAA 自行降级 */
+  screenshot_extras: boolean;
+  /** 触控增强（MuMu / 雷电） */
+  touch_extras: boolean;
+  /** 指定模拟器（machine.json 的标签；空串 = 自动） */
+  emulator: string;
+  /** 模拟器路径（空 = 用探测到的安装目录） */
+  emulator_path: string;
+  adb_path: string;
+  address: string;
+}
+
+/** MAA 只读状态（maa_status / maa_test_connection 返回值） */
+export interface MaaStatus {
+  maa_installed: boolean;
+  bridge_available: boolean;
+  connected: boolean;
+  running: boolean;
+  stale: boolean;
+  last_error: string | null;
+  emulator: string | null;
+  address: string | null;
+  extras: boolean;
+  /** 实际生效的截图方式（如 MumuExtras；MAA 静默降级时也如实写到） */
+  screencap: string | null;
+  emulators: string[];
+  resolved: MaaResolved[];
+}
+
+/** 一个已装模拟器推导出的连接参数（页面用来显示“自动时实际在用”的值） */
+export interface MaaResolved {
+  emulator: string;
+  config: string;
+  adb_path: string;
+  address: string;
+  extras: boolean;
+  root: string;
 }
 
 /** llm 段（v2 供应商分区；snake 对齐后端 LlmSection） */
@@ -369,8 +423,21 @@ export type ThinkingLevel =
 export interface SettingsPatch {
   llm?: LlmPatch;
   exec?: ExecPatch;
+  maa?: MaaPatch;
   workspace?: WorkspacePatch;
   window?: WindowPatch;
+}
+
+/** MAA 段 patch（per-field：缺席 = 不更新） */
+export interface MaaPatch {
+  server?: MaaServer;
+  auto_detect?: boolean;
+  screenshot_extras?: boolean;
+  touch_extras?: boolean;
+  emulator?: string;
+  emulator_path?: string;
+  adb_path?: string;
+  address?: string;
 }
 
 export interface LlmPatch {
@@ -561,6 +628,18 @@ export interface ConversationTitleEvent {
   type: "conversation/title";
   conversationId: string;
   title: string;
+  /** 本次标题生成用量（未归档时前端携带至下次 append_turn） */
+  usage?: UsageStat | null;
+}
+
+/**
+ * 记忆管线用量事件（后端内部累加后推送；前端仅镜像进投影用于展示，不回写）。
+ * 与 conversation/title 同属旁路信号平面。
+ */
+export interface MemoryUsageEvent {
+  type: "memory/usage";
+  conversationId: string;
+  usage: UsageStat;
 }
 
 // ── IPC 请求契约 ──
@@ -597,6 +676,47 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
+/**
+ * 统计增量（与后端 UsageStat 对齐）。缓存口径已按协议归一：
+ * cachePromptTokens 为命中率分母；无缓存观测时二者缺省。
+ */
+export interface UsageStat {
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens?: number;
+  cachePromptTokens?: number;
+}
+
+/** 单个类别的累计用量（后端 CategoryUsage；u64 → number）。 */
+export interface CategoryUsage {
+  inputTokens: number;
+  outputTokens: number;
+  /** 命中缓存累计（与 cachePromptTokens 同为 0 时视为未观测） */
+  cacheHitTokens: number;
+  /** 命中率分母累计（prompt 全量） */
+  cachePromptTokens: number;
+}
+
+/** 四类累计用量（后端 ConversationUsage）。 */
+export interface ConversationUsage {
+  session: CategoryUsage;
+  compaction: CategoryUsage;
+  memory: CategoryUsage;
+  title: CategoryUsage;
+}
+
+/** 用量类别（与后端 UsageCategory 对齐）。 */
+export type UsageCategory = "session" | "compaction" | "memory" | "title";
+
+/** 用量增量（随写命令提交）。 */
+export interface UsageDelta {
+  category: UsageCategory;
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens?: number;
+  cachePromptTokens?: number;
+}
+
 // ── 对话数据（投影缓存） ──
 
 // ── 对话持久化（Phase 4）──
@@ -626,6 +746,8 @@ export interface CompactOutcome {
   /** true = 输入超窗规则降级产出（无 LLM 调用） */
   degraded: boolean;
   tokensBefore: number | null;
+  /** 本次摘要 LLM 调用用量（降级产出时 null） */
+  usage: UsageStat | null;
 }
 
 /**
@@ -647,6 +769,8 @@ export interface ConversationMeta {
   lastNoticeSeq: number | null;
   /** 压缩记录（模块 D；null = 未压缩过；旧存档缺字段兼容） */
   compaction: CompactionMeta | null;
+  /** 用量统计（Phase 5；null / 缺省 = 从未记录） */
+  usage?: ConversationUsage | null;
 }
 
 /**
@@ -666,6 +790,8 @@ export interface ConversationRecord {
 export interface ReminderDim {
   key: string;
   title: string;
+  /** 类别：`"value"`（值维度，入首轮快照）／`"catalog"`（目录维度，不入）。 */
+  kind: "value" | "catalog";
   value: string;
   note: string;
   stamp: number;
@@ -764,6 +890,18 @@ export interface MemoryTidyResult {
   compressed: boolean;
 }
 
+/** 会话附件引用（稳定路径 + 展示名；不含字节）。与后端 attachments::Attachment 对齐。 */
+export interface Attachment {
+  /** 会话内稳定路径（缩略图经 asset 协议读它） */
+  path: string;
+  /** 展示名（用户原始文件名） */
+  name: string;
+  /** MIME 类型 */
+  mimeType: string;
+  /** 字节数 */
+  size: number;
+}
+
 /** 历史消息（播种用投影。role: user/assistant/tool 传给 LLM，error 仅 UI 渲染） */
 export interface ChatMessage {
   /** "user" = 用户输入 | "assistant" = Agent 回答 | "error" = 错误提示（不传给 LLM）| "tool" = 工具执行结果 */
@@ -779,6 +917,8 @@ export interface ChatMessage {
   }>;
   /** tool 消息携带的 tool_call_id（工具执行结果匹配） */
   toolCallId?: string;
+  /** user 消息附带的附件（有附件时携带） */
+  attachments?: Attachment[];
 }
 
 /**
@@ -813,4 +953,6 @@ export interface Conversation {
    * 压缩成功时经 applyCompaction 复位（批 4：下一条消息重发三值快照）。
    */
   lastNoticeSeq?: number;
+  /** 用量统计（Phase 5）：按四类累计，随轮 / 压缩 / 记忆 / 标题更新。 */
+  usage?: ConversationUsage;
 }

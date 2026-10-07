@@ -12,13 +12,17 @@
 //
 // IME 处理：拼写期间冻结充能进度。
 
-import { useState, useRef, useEffect, type KeyboardEvent, type CompositionEvent, type ChangeEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent, type CompositionEvent, type ChangeEvent } from "react";
 import { measureWithoutScrollJump } from "./messageScroll";
 import styles from "./InputArea.module.css";
 
 interface Props {
-  /** 空闲发送（ready 态；乐观清空输入） */
+  /** 空闲发送（ready 态；乐观清空输入）。附件由 ChatView 侧持有并随本次发送附加。 */
   onSubmit: (text: string) => void;
+  /** 已有附件（允许“无文字仅附件”发送） */
+  hasAttachments?: boolean;
+  /** 粘贴图片（无路径 blob）→ 交给上层上传 */
+  onPasteImage?: (file: File) => void;
   /** 生成中插话：后端入队成功返回 true → 清输入；失败 false（已 toast）→ 保留输入 */
   onSteer: (text: string) => Promise<boolean>;
   /** 生成中中止（无字方块） */
@@ -29,13 +33,32 @@ interface Props {
   disabled: boolean;
 }
 
-export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: Props) {
+export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, hasAttachments = false, onPasteImage }: Props) {
   const [input, setInput] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   // 多行态：内容超过单行时切换（右端凹弧退场 → 对称圆角），见 .multiline
   const [multiline, setMultiline] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  /** 粘贴图片（无路径 blob）→ 交给上层上传；纯文本粘贴放行默认行为。 */
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const it of Array.from(items)) {
+        if (it.kind === "file" && it.type.startsWith("image/")) {
+          const file = it.getAsFile();
+          if (file) {
+            e.preventDefault();
+            onPasteImage?.(file);
+            return;
+          }
+        }
+      }
+    },
+    [onPasteImage]
+  );
   const frozenInputRef = useRef("");
   // 上次的目标高度（单行 28 起步）。动画触发条件 = target 变化
   // （而非 current ≠ target——后者在动画播放中恒成立，动画自我延续）
@@ -53,6 +76,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
     : Math.min((Math.log(effectiveLen + 1) / Math.log(31)) * 100, 100);
 
   const hasText = input.trim().length > 0;
+  const canSubmit = hasText || hasAttachments;
 
   const isCircle = isFocused;
   const isActive = isFocused || charge > 0;
@@ -97,7 +121,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
   const submit = () => {
     if (disabled) return;
     const trimmed = input.trim();
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0 && !hasAttachments) return;
     setSendRipple(true);
     if (generating) {
       void onSteer(trimmed).then((ok) => {
@@ -111,15 +135,15 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
 
   /** 中止方块：生成中且无字时按钮形变为中止（点击不经过 submit） */
   const activeGenerating = generating && !disabled;
-  const stopShape = activeGenerating && input.trim().length === 0;
+  const stopShape = activeGenerating && !hasText;
 
-  /** 按钮禁用：硬禁，或既非中止态又无字（有字发送/插话恒可点） */
-  const btnDisabled = disabled || (!hasText && !stopShape);
+  /** 按钮禁用：硬禁，或既非中止态又无内容（有文字/附件发送恒可点） */
+  const btnDisabled = disabled || (!stopShape && !canSubmit);
 
   /** 按钮形态（测试钩子；send/steer 同款样式仅行为不同） */
   const btnMode = stopShape
     ? "stop"
-    : hasText
+    : canSubmit
       ? activeGenerating
         ? "steer"
         : "send"
@@ -244,6 +268,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled }: P
         onKeyDown={handleKeyDown}
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
+        onPaste={handlePaste}
         placeholder="说点什么…"
         rows={1}
       />

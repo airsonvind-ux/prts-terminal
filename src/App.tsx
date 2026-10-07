@@ -46,13 +46,13 @@ export function App() {
         const pc = settings.llm.providers[active];
         const model = pc?.model ?? "";
         if (active && model) {
-          invoke<{ displayName: string; contextLength: number } | null>(
+          invoke<{ displayName: string; contextLength: number; supportsVision: boolean } | null>(
             "get_local_model_info",
             { provider: active, modelId: model }
           )
             .then((info) => {
               if (info) {
-                setModelInfo({ name: info.displayName, contextLength: info.contextLength });
+                setModelInfo({ name: info.displayName, contextLength: info.contextLength, supportsVision: info.supportsVision });
               } else {
                 // 自定义模型不在 models.json 中，用原始 ID 作展示名
                 setModelInfo({ name: model, contextLength: 0 });

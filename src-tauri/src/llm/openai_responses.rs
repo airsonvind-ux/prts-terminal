@@ -92,11 +92,30 @@ impl OpenAIResponsesClient {
                     })
                 }
                 _ => {
-                    // MessageRole 序列化为 lowercase 字符串，直通 API role 字面量
-                    serde_json::json!({
-                        "role": m.role,
-                        "content": m.content,
-                    })
+                    // 带图像的 user 消息：content 展开为 input_text + input_image 数组
+                    // （Responses API 多模态格式）；无图时保持字符串 content 不变。
+                    if let Some(images) = m.images.as_ref().filter(|v| !v.is_empty()) {
+                        let mut parts: Vec<Value> = vec![serde_json::json!({
+                            "type": "input_text",
+                            "text": m.content,
+                        })];
+                        for img in images {
+                            parts.push(serde_json::json!({
+                                "type": "input_image",
+                                "image_url": format!("data:{};base64,{}", img.mime_type, img.data),
+                            }));
+                        }
+                        serde_json::json!({
+                            "role": m.role,
+                            "content": parts,
+                        })
+                    } else {
+                        // MessageRole 序列化为 lowercase 字符串，直通 API role 字面量
+                        serde_json::json!({
+                            "role": m.role,
+                            "content": m.content,
+                        })
+                    }
                 }
             })
             .collect()
@@ -246,7 +265,8 @@ impl OpenAIResponsesClient {
             Some(tool_calls)
         };
 
-        Ok(LlmResponse { text, tool_calls })
+        let usage = body.get("usage").and_then(Self::extract_usage);
+        Ok(LlmResponse { text, tool_calls, usage })
     }
 
     // ── Usage ──

@@ -98,7 +98,9 @@ pub async fn generate_title(
     user_text: &str,
     assistant_text: &str,
 ) -> Option<String> {
-    generate_title_with_timeout(llm, config, user_text, assistant_text, TITLE_TIMEOUT).await
+    generate_title_full(llm, config, user_text, assistant_text, TITLE_TIMEOUT)
+        .await
+        .title
 }
 
 /// 生成标题（可指定超时；测试用）。
@@ -109,6 +111,25 @@ pub async fn generate_title_with_timeout(
     assistant_text: &str,
     timeout: Duration,
 ) -> Option<String> {
+    generate_title_full(llm, config, user_text, assistant_text, timeout)
+        .await
+        .title
+}
+
+/// 标题生成结果（标题文本 + 本次调用用量）。
+pub struct TitleResult {
+    pub title: Option<String>,
+    pub usage: Option<crate::llm::TokenUsage>,
+}
+
+/// 生成标题（返回标题 + 用量；命令层用于用量统计）。
+pub async fn generate_title_full(
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    user_text: &str,
+    assistant_text: &str,
+    timeout: Duration,
+) -> TitleResult {
     // 请求级覆盖：禁思考 + 压小输出上限（不改动调用方 config）
     let mut cfg = config.clone();
     cfg.thinking_level = Some("off".to_string());
@@ -121,20 +142,21 @@ pub async fn generate_title_with_timeout(
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             debug!("action" => "title_generation_failed", "error" => e.to_string());
-            return None;
+            return TitleResult { title: None, usage: None };
         }
         Err(_) => {
             debug!("action" => "title_generation_timeout");
-            return None;
+            return TitleResult { title: None, usage: None };
         }
     };
 
+    let usage = resp.usage;
     let text = resp.text.unwrap_or_default();
     let cleaned = clean_title(&text);
     if cleaned.is_none() {
         debug!("action" => "title_generation_empty");
     }
-    cleaned
+    TitleResult { title: cleaned, usage }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -177,18 +199,20 @@ mod tests {
                 Ok(LlmResponse {
                     text: Some(self.reply.clone()),
                     tool_calls: None,
+                    usage: None,
                 })
             })
         }
 
         fn chat_stream<'a>(
             &'a self,
-            _config: &'a LlmConfig,
+            config: &'a LlmConfig,
             _messages: &'a [ChatMessage],
             _tools: &'a [ToolDef],
             _on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
         ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
             Box::pin(async move {
+                *self.last_config.lock().unwrap() = Some(config.clone());
                 Ok(StreamResult {
                     text: self.reply.clone(),
                     tool_calls: vec![],

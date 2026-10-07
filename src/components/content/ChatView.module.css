@@ -30,6 +30,16 @@
   overflow: hidden;
 }
 
+/* ── 底部区：附件条（可选）在上、输入行在下（纵向堆叠）── */
+
+.bottomArea {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  /* 与消息区的分隔线上移到整个底部区顶部（附件条属输入侧） */
+  border-top: 1px solid var(--depth-1);
+}
+
 /* ── 输入行：承载 InputArea ── */
 
 .inputRow {
@@ -40,5 +50,4 @@
   min-height: 36px;
   flex-shrink: 0;
   padding: 3px 5px 10px 5px;
-  border-top: 1px solid var(--depth-1);
 }
