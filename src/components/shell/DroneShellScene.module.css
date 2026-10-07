@@ -11,7 +11,7 @@
 /* ── 全局默认值：Hook 通过 document.documentElement 覆写 ── */
 
 :root {
-  --face-size: 360px;
+  --face-size: 400px;
 }
 
 /* ── 容器：透明画布，.cube 的定位参照 ── */
@@ -53,17 +53,20 @@
 
   /*
    * 视觉质量补偿：立方体有左面（左外延）和尾巴（下外延），
-   * 右边和上方无附属元素。正面从居中点向右上偏移，
-   * 补偿左面和尾巴的质量，使整体视觉重心回正。
+   * 右边和上方无附属元素。
+   *   横向：正面向右偏移 h-shift，补偿左面的质量。
+   *   竖向：按“造型总高”居中（--silhouette-height），不再只看正面——
+   *         正面之上无附属元素，只按正面居中会把余量全留到头顶。
    */
   --h-shift: calc(var(--left-width) / 2);   /* 左面质量补偿，右移 */
-  --v-shift: calc(var(--face-size) * 0.067);  /* 尾巴质量补偿，上移。16px @ 240 */
+  /* 造型竖向总高 = 正面 + 底面半高 + 尾高 = 1 + 0.0625 + 0.41667 ≈ 1.4792 × face */
+  --silhouette-height: calc(var(--face-size) * 1.4792);
 
   position: fixed;
   width: var(--face-size);
   height: var(--face-size);
   left: calc(50% - var(--face-size) / 2 + var(--h-shift));
-  top:  calc(50% - var(--face-size) / 2 - var(--v-shift));
+  top:  calc(50% - var(--silhouette-height) / 2);
   /*
    * fixed 而非 absolute 的原因（2026-08-30 实测确认）：
    * WebView2 流式输出期间，.app 图层树内 absolute 合成层的 transform 更新

@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "prts-terminal",
-        "width": 660,
-        "height": 660,
+        "width": 733,
+        "height": 612,
         "transparent": true,
         "decorations": false,
         "shadow": false,

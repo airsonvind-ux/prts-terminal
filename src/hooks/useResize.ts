@@ -22,7 +22,8 @@ import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import {
   anchorPoint,
   computeResize,
-  RATIO,
+  RATIO_X,
+  RATIO_Y,
   RESIZE_SPECS,
   type ResizeAnchor,
   type ResizeDirection,
@@ -54,13 +55,14 @@ export function useResize(): {
         }
         if (!anchor) return;
         const { face, x, y } = computeResize(dir, ev.screenX, ev.screenY, anchor);
-        const size = face * RATIO;
+        const w = face * RATIO_X;
+        const h = face * RATIO_Y;
 
         // 先更新 CSS 自定义属性（同步），再并行提交位置与尺寸（异步）。
         document.documentElement.style.setProperty("--face-size", `${face}px`);
         void Promise.all([
           win.setPosition(new LogicalPosition(x, y)),
-          win.setSize(new LogicalSize(size, size)),
+          win.setSize(new LogicalSize(w, h)),
         ]);
       }
 
@@ -73,7 +75,8 @@ export function useResize(): {
             RESIZE_SPECS[dir].corner,
             pos.x / scale,
             pos.y / scale,
-            size.width / scale // 正方窗口
+            size.width / scale,
+            size.height / scale
           );
         }
       );
