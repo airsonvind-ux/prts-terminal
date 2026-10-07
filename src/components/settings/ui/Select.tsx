@@ -20,6 +20,10 @@ export interface SelectProps {
   options: SelectOption[];
   onChange: (value: string) => void;
   disabled?: boolean;
+  /** 末尾附加的单项（前面自动加分隔线），如「自定义…」 */
+  footer?: SelectOption;
+  /** 无匹配项时显示的文本（如加载中） */
+  placeholder?: string;
   /** 无障碍名（不显示） */
   ariaLabel?: string;
 }
@@ -29,6 +33,8 @@ export function Select({
   options,
   onChange,
   disabled = false,
+  footer,
+  placeholder,
   ariaLabel,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
@@ -49,6 +55,26 @@ export function Select({
 
   const current = options.find((o) => o.value === value);
 
+  /** 选中：先收菜单，值变了才回调 */
+  const pick = (next: string) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.nativeEvent.stopImmediatePropagation();
+    setOpen(false);
+    if (next !== value) onChange(next);
+  };
+
+  const item = (o: SelectOption) => (
+    <div
+      key={o.value}
+      className={`${styles.dropdownItem} ${
+        o.value === value ? styles.dropdownItemActive : ""
+      }`}
+      onMouseDown={pick(o.value)}
+    >
+      {o.label}
+    </div>
+  );
+
   return (
     <div className={styles.dropdown} ref={rootRef}>
       <button
@@ -58,28 +84,21 @@ export function Select({
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className={styles.dropdownValue}>{current?.label ?? "—"}</span>
+        <span className={styles.dropdownValue}>
+          {current?.label ?? placeholder ?? "—"}
+        </span>
         <span className={styles.dropdownArrow}>▾</span>
       </button>
       <div
         className={`${styles.dropdownMenu} ${open ? styles.dropdownMenuOpen : ""}`}
       >
-        {options.map((o) => (
-          <div
-            key={o.value}
-            className={`${styles.dropdownItem} ${
-              o.value === value ? styles.dropdownItemActive : ""
-            }`}
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              e.nativeEvent.stopImmediatePropagation();
-              setOpen(false);
-              if (o.value !== value) onChange(o.value);
-            }}
-          >
-            {o.label}
-          </div>
-        ))}
+        {options.map(item)}
+        {footer && (
+          <>
+            <div className={styles.dropdownDivider} />
+            {item(footer)}
+          </>
+        )}
       </div>
     </div>
   );

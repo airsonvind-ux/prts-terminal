@@ -50,10 +50,21 @@ const SERVER_LABELS: Record<MaaServer, string> = {
   bilibili: "B 服",
 };
 
-/** 状态行文案：只说事实——连上没有、连的是谁、上次为什么没连上。 */
+/** 状态行文案：这页的关注中心——连上没有、连的是谁、各功能的生效状态、上次为什么没连上。 */
 function statusText(s: MaaStatus): string {
   if (s.connected) {
-    return s.emulator ? `已连接 · ${s.emulator}` : "已连接";
+    let extras: string;
+    if (!s.extras) {
+      extras = "截图增强未启用";
+    } else if (s.screencap?.endsWith("Extras")) {
+      extras = `截图增强已生效（${s.screencap}）`;
+    } else if (s.screencap) {
+      extras = `截图增强已启用，当前走普通通道（${s.screencap}）`;
+    } else {
+      extras = "截图增强已启用";
+    }
+    // 地址不进状态行：用户不设它、也不关心；要看在「连接地址」那一行。
+    return [s.emulator ? `已连接：${s.emulator}` : "已连接", extras].join(" · ");
   }
   if (s.stale) return "设置已更改，下次连接生效";
   if (!s.maa_installed) return "尚未连接 · 本机没找到 MAA";
@@ -108,8 +119,10 @@ export function SettingsExtension({
   };
 
   const running = status?.running ?? false;
-  /** 任务运行中 / 对话处理中：整页只读 */
-  const locked = running || busy;
+  /** 任务运行中 / 对话处理中 / **连接测试进行中**：整页只读。
+   *  测试期间改设置会把桥拆掉（设置一变就作废旧连接），连接中断、
+   *  写入还会堵在被占住的管理器锁上，界面跟着卡住。 */
+  const locked = running || busy || testing;
   /** 自动检测开着：连接节那四项由我们识别，置灰 */
   const auto = maa.auto_detect;
   const selected = pickResolved(status, maa.emulator);

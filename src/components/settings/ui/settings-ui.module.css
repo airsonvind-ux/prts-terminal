@@ -152,6 +152,12 @@
   color: var(--accent);
 }
 
+.dropdownDivider {
+  height: 1px;
+  background: var(--depth-0);
+  margin: 2px 0;
+}
+
 /* ── Row（stacked：label 上 / hint 中 / control 下） ── */
 
 .row {
@@ -198,6 +204,11 @@
   font-size: 11px;
   color: var(--text-1);
   cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.rowInlineHead:hover {
+  background: var(--depth-4);
 }
 
 .rowInlineHint {

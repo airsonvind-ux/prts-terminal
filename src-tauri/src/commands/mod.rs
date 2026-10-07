@@ -421,8 +421,10 @@ pub fn reveal_api_key(
 ///
 /// M3-B busy 闸前置（锁序固定：store → config → exec_settings → maa_settings
 /// → ledger，无任何路径反向嵌套）。只读降级（高版本文件）拒绝写。
+/// `async` 只为不占主线程：它会把 MAA 设置推给管理器，而管理器锁在连接期间
+/// 是被占着的——同步命令会把这份等待摊到 UI 上（连接测试中改设置会卡住）。
 #[tauri::command]
-pub fn set_settings(
+pub async fn set_settings(
     turn_registry: State<'_, Arc<TurnRegistry>>,
     store: State<'_, Arc<Mutex<SettingsStore>>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,

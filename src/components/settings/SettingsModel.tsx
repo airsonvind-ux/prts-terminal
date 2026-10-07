@@ -27,6 +27,7 @@ import { setModelInfo } from "../../stores/useProcessingStore";
 import { showToast } from "../../stores/useToastStore";
 import { MASKED_SECRET } from "./SettingsPanel";
 import styles from "./SettingsProvider.module.css";
+import { Select } from "./ui/Select";
 
 const API_TYPES: { value: ApiType; label: string }[] = [
   { value: "openai-completions", label: "OpenAI Completions" },
@@ -108,15 +109,9 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
 
   // ── UI 状态 ──
-  const [providerOpen, setProviderOpen] = useState(false);
-  const [apiTypeOpen, setApiTypeOpen] = useState(false);
-  const [thinkingOpen, setThinkingOpen] = useState(false);
   const [verifyStatus, setVerifyStatus] = useState<VerifyStatus>("idle");
   const [verifyError, setVerifyError] = useState("");
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const apiTypeDropdownRef = useRef<HTMLDivElement>(null);
-  const thinkingDropdownRef = useRef<HTMLDivElement>(null);
   const llmRef = useRef(llm);
   llmRef.current = llm;
 
@@ -132,25 +127,6 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     setBaseUrlDraft(llm.base_url ?? "");
     if (!keyEdited) setKeyDraft("");
   }, [llm, keyEdited]);
-
-  // 外部点击关闭下拉
-  useEffect(() => {
-    if (!providerOpen && !apiTypeOpen && !thinkingOpen) return;
-    const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      const inside =
-        (dropdownRef.current && dropdownRef.current.contains(t)) ||
-        (apiTypeDropdownRef.current && apiTypeDropdownRef.current.contains(t)) ||
-        (thinkingDropdownRef.current && thinkingDropdownRef.current.contains(t));
-      if (!inside) {
-        setProviderOpen(false);
-        setApiTypeOpen(false);
-        setThinkingOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [providerOpen, apiTypeOpen, thinkingOpen]);
 
   // active 是否自定义（非预设且非空），或处于"自定义草稿"态
   const isCustom = useMemo(() => {
@@ -266,7 +242,6 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
 
   // ── 供应商切换（只 patch active_provider；各家配置分区保留） ──
   const handleProviderChange = (newProvider: string) => {
-    setProviderOpen(false);
     if (newProvider === "__custom__") {
       // 进入自定义草稿（名称保存才切 active）
       setCustomDraft(true);
@@ -302,7 +277,6 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
 
   // ── API 类型切换（联动 base_url）──
   const handleApiTypeChange = (t: ApiType) => {
-    setApiTypeOpen(false);
     if (customDraft) {
       setCustomApiType(t);
       return;
@@ -393,10 +367,6 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     );
   }, [isCustom, llm.provider, providers]);
 
-  const currentApiTypeLabel = customDraft
-    ? (API_TYPES.find((a) => a.value === customApiType)?.label ?? customApiType)
-    : (API_TYPES.find((a) => a.value === llm.api_type)?.label ?? llm.api_type);
-
   const keyDisplayValue =
     revealedKey !== null
       ? revealedKey
@@ -409,53 +379,23 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
   return (
     <div className={styles.container}>
       {/* ── 供应商 ── */}
-      <div className={styles.field} ref={dropdownRef}>
+      <div className={styles.field}>
         <span className={styles.label}>供应商</span>
-        <div className={styles.dropdown}>
-          <button
-            className={`${styles.dropdownTrigger} ${providerOpen ? styles.dropdownTriggerOpen : ""}`}
-            onClick={() => {
-              if (providersLoading) return;
-              setProviderOpen(!providerOpen);
-              setApiTypeOpen(false);
-              setThinkingOpen(false);
-            }}
-            disabled={providersLoading || busy}
-          >
-            <span>{providersLoading ? "加载中…" : providerDisplayName}</span>
-            <span className={styles.dropdownArrow}>▾</span>
-          </button>
-          <div className={`${styles.dropdownMenu} ${providerOpen ? styles.dropdownMenuOpen : ""}`}>
-            {providers.map((p) => (
-              <div
-                key={p.id}
-                className={`${styles.dropdownItem} ${
-                  !isCustom && p.id === llm.provider ? styles.dropdownItemActive : ""
-                }`}
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  e.nativeEvent.stopImmediatePropagation();
-                  handleProviderChange(p.id);
-                }}
-              >
-                {p.displayName}
-              </div>
-            ))}
-            <div className={styles.dropdownDivider} />
-            <div
-              className={`${styles.dropdownItem} ${
-                isCustom ? styles.dropdownItemActive : ""
-              }`}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                e.nativeEvent.stopImmediatePropagation();
-                handleProviderChange("__custom__");
-              }}
-            >
-              自定义…
-            </div>
-          </div>
-        </div>
+        <Select
+          ariaLabel="供应商"
+          value={isCustom ? "__custom__" : llm.provider}
+          disabled={providersLoading || busy}
+          placeholder={providersLoading ? "加载中…" : undefined}
+          onChange={handleProviderChange}
+          options={[
+            ...providers.map((p) => ({ value: p.id, label: p.displayName })),
+            // 自定义态：把当前自定义供应商当一项列出来（触发器要显示它的名字）
+            ...(isCustom
+              ? [{ value: "__custom__", label: providerDisplayName }]
+              : []),
+          ]}
+          footer={isCustom ? undefined : { value: "__custom__", label: "自定义…" }}
+        />
         {providersError && (
           <span className={styles.fieldHint}>获取供应商列表失败：{providersError}</span>
         )}
@@ -478,39 +418,15 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
                   placeholder="例如：my-proxy"
                 />
               </label>
-              <div className={styles.field} ref={apiTypeDropdownRef}>
+              <div className={styles.field}>
                 <span className={styles.label}>API 类型</span>
-                <div className={styles.dropdown}>
-                  <button
-                    className={`${styles.dropdownTrigger} ${apiTypeOpen ? styles.dropdownTriggerOpen : ""}`}
-                    onClick={() => {
-                      setApiTypeOpen(!apiTypeOpen);
-                      setProviderOpen(false);
-                      setThinkingOpen(false);
-                    }}
-                    disabled={busy}
-                  >
-                    <span>{currentApiTypeLabel}</span>
-                    <span className={styles.dropdownArrow}>▾</span>
-                  </button>
-                  <div className={`${styles.dropdownMenu} ${apiTypeOpen ? styles.dropdownMenuOpen : ""}`}>
-                    {API_TYPES.map((a) => (
-                      <div
-                        key={a.value}
-                        className={`${styles.dropdownItem} ${
-                          customApiType === a.value ? styles.dropdownItemActive : ""
-                        }`}
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          e.nativeEvent.stopImmediatePropagation();
-                          handleApiTypeChange(a.value);
-                        }}
-                      >
-                        {a.label}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <Select
+                  ariaLabel="API 类型"
+                  value={customApiType}
+                  disabled={busy}
+                  onChange={(v) => handleApiTypeChange(v as ApiType)}
+                  options={API_TYPES}
+                />
               </div>
               <label className={styles.field}>
                 <span className={styles.label}>Base URL</span>
@@ -533,39 +449,15 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
 
       {/* ── API 类型（非草稿态；active 家） ── */}
       {!customDraft && (
-        <div className={styles.field} ref={apiTypeDropdownRef}>
+        <div className={styles.field}>
           <span className={styles.label}>API 类型</span>
-          <div className={styles.dropdown}>
-            <button
-              className={`${styles.dropdownTrigger} ${apiTypeOpen ? styles.dropdownTriggerOpen : ""}`}
-              onClick={() => {
-                setApiTypeOpen(!apiTypeOpen);
-                setProviderOpen(false);
-                setThinkingOpen(false);
-              }}
-              disabled={busy || !llm.provider}
-            >
-              <span>{currentApiTypeLabel}</span>
-              <span className={styles.dropdownArrow}>▾</span>
-            </button>
-            <div className={`${styles.dropdownMenu} ${apiTypeOpen ? styles.dropdownMenuOpen : ""}`}>
-              {API_TYPES.map((a) => (
-                <div
-                  key={a.value}
-                  className={`${styles.dropdownItem} ${
-                    a.value === llm.api_type ? styles.dropdownItemActive : ""
-                  }`}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    handleApiTypeChange(a.value);
-                  }}
-                >
-                  {a.label}
-                </div>
-              ))}
-            </div>
-          </div>
+          <Select
+            ariaLabel="API 类型"
+            value={llm.api_type}
+            disabled={busy || !llm.provider}
+            onChange={(v) => handleApiTypeChange(v as ApiType)}
+            options={API_TYPES}
+          />
         </div>
       )}
 
@@ -665,43 +557,20 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
 
       {/* ── 思考强度（段顶层 thinking_level） ── */}
       {thinkingLevels && effectiveThinkingLevel && (
-        <div className={styles.field} ref={thinkingDropdownRef}>
+        <div className={styles.field}>
           <span className={styles.label}>思考强度</span>
-          <div className={styles.dropdown}>
-            <button
-              className={`${styles.dropdownTrigger} ${thinkingOpen ? styles.dropdownTriggerOpen : ""}`}
-              onClick={() => {
-                setThinkingOpen(!thinkingOpen);
-                setProviderOpen(false);
-                setApiTypeOpen(false);
-              }}
-              disabled={busy}
-            >
-              <span>{THINKING_LABELS[effectiveThinkingLevel] ?? effectiveThinkingLevel}</span>
-              <span className={styles.dropdownArrow}>▾</span>
-            </button>
-            <div className={`${styles.dropdownMenu} ${thinkingOpen ? styles.dropdownMenuOpen : ""}`}>
-              {thinkingLevels.map((lvl) => (
-                <div
-                  key={lvl}
-                  className={`${styles.dropdownItem} ${
-                    lvl === effectiveThinkingLevel ? styles.dropdownItemActive : ""
-                  }`}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    e.nativeEvent.stopImmediatePropagation();
-                    setThinkingOpen(false);
-                    if (lvl !== effectiveThinkingLevel) {
-                      onPatch({ thinking_level: lvl }, "思考强度");
-                    }
-                  }}
-                >
-                  {THINKING_LABELS[lvl] ?? lvl}
-                  {lvl === modelDefaultLevel ? "（默认）" : ""}
-                </div>
-              ))}
-            </div>
-          </div>
+          <Select
+            ariaLabel="思考强度"
+            value={effectiveThinkingLevel}
+            disabled={busy}
+            onChange={(v) => onPatch({ thinking_level: v }, "思考强度")}
+            options={thinkingLevels.map((lvl) => ({
+              value: lvl,
+              label: `${THINKING_LABELS[lvl] ?? lvl}${
+                lvl === modelDefaultLevel ? "（默认）" : ""
+              }`,
+            }))}
+          />
           <span className={styles.fieldNote}>推理深度档位；随所选模型能力提供</span>
         </div>
       )}

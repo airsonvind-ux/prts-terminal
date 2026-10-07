@@ -120,19 +120,33 @@ describe("SettingsExtension（扩展页）", () => {
     expect(text).not.toContain("PRTS 不会自动识别");
   });
 
-  it("测试进行中：状态行让位给「正在连接…」（否则看着像什么都没发生）", async () => {
+  it("测试进行中：状态行让位给「正在连接…」，且整页锁住（不能中途改设置）", async () => {
     currentStatus = status();
     await render(MAA, false, () => {}, () => {}, () => {}, undefined, true);
     const text = container!.textContent ?? "";
     expect(text).toContain("正在连接…");
     expect(text).toContain("连接中…");
-    expect(text).not.toContain("已连接 · MuMu 12");
+    expect(text).not.toContain("已连接：MuMu 12");
+    // 测试期间改设置会拆桥、还会卡在管理器锁上——整页必须只读
+    expect(disabledControls().length).toBeGreaterThanOrEqual(4);
   });
 
-  it("已连接时状态行只说连的是谁", async () => {
+  it("已连接时状态行是这页的关注中心：连的是谁 + 增强到底有没有生效", async () => {
     currentStatus = status();
     await render();
-    expect(container!.textContent).toContain("已连接 · MuMu 12");
+    expect(container!.textContent).toContain(
+      "已连接：MuMu 12 · 截图增强已生效（MumuExtras）"
+    );
+    // 地址是技术细节，不进状态行
+    expect(container!.textContent).not.toContain("已连接：MuMu 12 · 127.0.0.1:16384");
+  });
+
+  it("增强开着但实际降级 → 如实说走的是普通通道", async () => {
+    currentStatus = status({ screencap: "RawByNc" });
+    await render();
+    expect(container!.textContent).toContain(
+      "截图增强已启用，当前走普通通道（RawByNc）"
+    );
   });
 
   it("自动检测开着：连接节四项置灰；关掉后原地解锁（一行都不增减）", async () => {
