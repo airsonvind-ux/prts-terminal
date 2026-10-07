@@ -25,6 +25,14 @@
   gap: 8px;
 }
 
+/* ── 节级一行提示（常态小字，无底无框；长文才用 sectionNote） ── */
+
+.sectionHint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
 /* ── 说明块（长文落点） ── */
 
 .sectionNote {
@@ -45,6 +53,103 @@
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
+}
+
+/* ── 自绘下拉（原生 <select> 的展开列表是系统绘制的，改不动，所以自绘） ── */
+
+.dropdown {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.dropdownTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 26px;
+  width: 100%;
+  padding: 0 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.dropdownTrigger:hover:not(:disabled) {
+  background: var(--depth-4);
+}
+
+.dropdownTriggerOpen {
+  border-color: var(--accent);
+}
+
+.dropdownTrigger:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.dropdownValue {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.dropdownArrow {
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--text-3);
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.dropdownTriggerOpen .dropdownArrow {
+  transform: rotate(180deg);
+}
+
+.dropdownMenu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: none;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--depth-2);
+  border: 1px solid var(--depth-0);
+  border-radius: var(--radius-sm);
+  /* 紧凑档滚动条（设置页小尺度）：视觉 4px */
+  --scrollbar-inset: 2px;
+}
+
+.dropdownMenuOpen {
+  display: block;
+}
+
+.dropdownItem {
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.08s ease, color 0.08s ease;
+}
+
+.dropdownItem:hover {
+  background: var(--depth-4);
+  color: var(--text-1);
+}
+
+.dropdownItemActive {
+  color: var(--accent);
 }
 
 /* ── Row（stacked：label 上 / hint 中 / control 下） ── */

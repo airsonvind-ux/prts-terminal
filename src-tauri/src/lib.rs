@@ -365,6 +365,8 @@ pub fn run() {
             commands::get_app_meta,
             commands::maa_status,
             commands::maa_test_connection,
+            commands::pick_emulator_directory,
+            commands::pick_adb_file,
             commands::list_skills,
             commands::pick_skill_file,
             commands::pick_skill_folder,

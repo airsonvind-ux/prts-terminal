@@ -7,6 +7,10 @@
  * DroneShellScene 的 3D transform 会破坏后代 fixed 定位（fixed 相对变换祖先），
  * 与 MessageList 右键菜单同模式 portal 到 body——overlay=null 时同样可显示。
  *
+ * 水平对齐参照物是**正面**而不是窗口：窗口比正面宽（翼展），正面又因 h-shift
+ * 偏右，所以 portal 后拿窗口 50% 居中会明显偏左——加回同样的偏移量。
+ *（h-shift = left-width / 2 = 0.0835 × face；--face-size 定义在 :root，body 继承得到。）
+ *
  * 视觉：居中顶部一排小条，圆角深色底 + 警示色描边（--warn），
  * 点击小条手动关闭（dismiss）。pointer-events 在容器关、在条上开——
  * 提示不挡周围交互（设置面板按钮仍可点）。
@@ -15,7 +19,7 @@
 .host {
   position: fixed;
   top: clamp(48px, 13vh, 104px);
-  left: 50%;
+  left: calc(50% + var(--face-size) * 0.0835);
   transform: translateX(-50%);
   z-index: 9999;
   display: flex;

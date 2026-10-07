@@ -307,16 +307,75 @@ fn guard_config_write(turn_registry: &TurnRegistry) -> Result<(), String> {
 }
 
 /// MAA 设置页的**只读**状态（不触发连接、不起桥、不改状态）。
+///
+/// 同样走 `async`：它要往桥问一句 "status"（带 20s 超时），同步命令会在
+/// 主线程上等这句回话——桥忙的时候设置页就会跟着僵住。
 #[tauri::command]
-pub fn maa_status() -> crate::maa::manager::StatusView {
-    crate::maa::manager::status_view()
+pub async fn maa_status() -> crate::maa::manager::StatusView {
+    tauri::async_runtime::spawn_blocking(crate::maa::manager::status_view)
+        .await
+        .unwrap_or_default()
 }
 
-/// 「测试连接」：会真去连一次（起桥 + 连模拟器），完了回最新状态。
+/// 「测试连接」：桥在但没连上时**真的重连一次**，完了回最新状态。
+///
+/// `async` 不是为了并发，是为了**别冻界面**：Tauri 的同步命令在主线程执行，
+/// 而起桥 + 连接是几十秒的活儿，同步会把这几秒整段卡在 UI 上。
+/// 阻塞段丢进 spawn_blocking，界面照常响应，按钮的「连接中…」也才刷得出来。
 #[tauri::command]
-pub fn maa_test_connection() -> Result<crate::maa::manager::StatusView, String> {
-    crate::maa::manager::status()?;
+pub async fn maa_test_connection() -> Result<crate::maa::manager::StatusView, String> {
+    tauri::async_runtime::spawn_blocking(crate::maa::manager::test_connection)
+        .await
+        .map_err(|e| format!("连接任务失败: {e}"))??;
     Ok(crate::maa::manager::status_view())
+}
+
+/// 扩展页「选择」模拟器安装目录。
+///
+/// 按**目录**选，不是选 exe：这个值是模拟器的安装目录（MAA 侧同一个位置也是
+/// 目录），用来启用模拟器自带的截图/触控通道。形态同
+/// `choose_workspace_directory`：后端命令 + dialog Rust API，非阻塞 pick_folder
+/// 内部经 run_on_main_thread 弹窗，oneshot 桥回 async 命令；用户取消 → `Ok(None)`。
+#[tauri::command]
+pub async fn pick_emulator_directory(
+    app: AppHandle,
+    current: Option<String>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    let mut builder = app.dialog().file().set_title("选择模拟器安装目录");
+    if let Some(cur) = &current {
+        if !cur.trim().is_empty() {
+            builder = builder.set_directory(cur);
+        }
+    }
+    builder.pick_folder(move |picked| {
+        let value = picked.and_then(|fp| {
+            fp.as_path()
+                .map(|p| p.to_string_lossy().into_owned())
+        });
+        let _ = tx.send(value);
+    });
+    rx.await.map_err(|e| format!("目录选择失败: {e}"))
+}
+
+/// 扩展页「选择」adb 可执行文件（模拟器自带的 adb.exe）。
+#[tauri::command]
+pub async fn pick_adb_file(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
+    app.dialog()
+        .file()
+        .set_title("选择 adb 可执行文件")
+        .add_filter("adb", &["exe"])
+        .pick_file(move |picked| {
+            let value = picked.and_then(|fp| {
+                fp.as_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
+            let _ = tx.send(value);
+        });
+    rx.await.map_err(|e| format!("文件选择失败: {e}"))
 }
 
 /// 读取设置全量（get_settings）。返回 Settings 结构（snake_case），

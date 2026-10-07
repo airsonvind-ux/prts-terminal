@@ -25,6 +25,7 @@ import { SettingsSkills } from "./SettingsSkills";
 import { SettingsSpace } from "./SettingsSpace";
 import { SettingsMemory } from "./SettingsMemory";
 import { SettingsUsage } from "./SettingsUsage";
+import type { MaaStatus } from "../../types";
 import { useUIStore } from "../../stores/useUIStore";
 import {
   isProcessingBusy,
@@ -287,6 +288,68 @@ export function SettingsPanel() {
     }
   }, [updateSettings]);
 
+  /** 扩展页「测试连接」：状态留在本层——子页切走会卸载，留在子页就丢了。
+   *  计数而不是布尔：并发保护回「正在连接中」的那次没接手连接，
+   *  不能在 finally 里把真正在跑的那次的「进行中」抹掉。 */
+  const [maaInFlight, setMaaInFlight] = useState(0);
+  const handleTestConnection = useCallback(async (): Promise<MaaStatus | null> => {
+    setMaaInFlight((n) => n + 1);
+    try {
+      return await invoke<MaaStatus>("maa_test_connection");
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("正在连接中")) {
+        showToast("上一次连接还在进行中", { kind: "info" });
+      } else {
+        showToast(`连接失败：${msg}`, { kind: "warning" });
+      }
+      return null;
+    } finally {
+      setMaaInFlight((n) => Math.max(0, n - 1));
+    }
+  }, []);
+
+  /** 扩展页「选择」模拟器安装目录：busy 守卫 → 系统目录选择器 → 选定即存 */
+  const handleChooseEmulatorDir = useCallback(async () => {
+    if (isProcessingBusy(useProcessingStore.getState())) {
+      showToast("对话处理中不能修改路径", {
+        kind: "warning",
+        dedupeKey: "settings-busy-路径",
+      });
+      return;
+    }
+    const current = settingsRef.current?.maa.emulator_path ?? "";
+    try {
+      const picked = await invoke<string | null>("pick_emulator_directory", {
+        current: current || null,
+      });
+      if (picked) {
+        updateSettings({ maa: { emulator_path: picked } }, "安装路径");
+      }
+    } catch (e) {
+      showToast(`选择目录失败：${String(e)}`, { kind: "warning" });
+    }
+  }, [updateSettings]);
+
+  /** 扩展页「选择」adb 可执行文件：同上，文件选择器 */
+  const handleChooseAdbFile = useCallback(async () => {
+    if (isProcessingBusy(useProcessingStore.getState())) {
+      showToast("对话处理中不能修改路径", {
+        kind: "warning",
+        dedupeKey: "settings-busy-路径",
+      });
+      return;
+    }
+    try {
+      const picked = await invoke<string | null>("pick_adb_file");
+      if (picked) {
+        updateSettings({ maa: { adb_path: picked } }, "ADB 路径");
+      }
+    } catch (e) {
+      showToast(`选择文件失败：${String(e)}`, { kind: "warning" });
+    }
+  }, [updateSettings]);
+
   /** 技能页：重新拉取清单（安装 / 移除后刷新；挂载时已拉一次） */
   const refreshSkills = useCallback(() => {
     invoke<SkillEntry[]>("list_skills")
@@ -411,7 +474,11 @@ export function SettingsPanel() {
             <SettingsExtension
               maa={settings.maa}
               busy={settingsBusy}
+              testing={maaInFlight > 0}
+              onTest={handleTestConnection}
               onPatch={(patch, label) => updateSettings({ maa: patch }, label)}
+              onChooseEmulatorDir={handleChooseEmulatorDir}
+              onChooseAdbFile={handleChooseAdbFile}
             />
           )}
           {activeTab === "app" && (
