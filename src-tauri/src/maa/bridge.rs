@@ -252,7 +252,12 @@ impl Bridge {
         port: u16,
     ) -> Result<Self, BridgeError> {
         let mut command = Command::new(exe);
+        // 工作目录定在 user_dir：MaaCore 有一部分调试产出是**按相对路径**写的
+        // （如战场识别存图 `debug/map/`，见 BattleHelper::save_map），不跟着它自己的
+        // UserDir 走。不给 cwd 就继承调用方（开发时 = src-tauri/，打包后 = 启动目录），
+        // 图会掉进项目目录或安装目录里。
         command
+            .current_dir(user_dir)
             .arg("--maa-dir")
             .arg(maa_dir)
             .arg("--port")
