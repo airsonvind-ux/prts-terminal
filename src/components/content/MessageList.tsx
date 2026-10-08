@@ -204,13 +204,13 @@ function archivedItemsForTurn(events: SessionEvent[]): DisplayItem[] {
   return items;
 }
 
-/** 归档部分（turns + 压缩点卡）。只在 turns / compaction / isFirstUse 变化时重算。 */
+/** 归档部分（turns + 压缩点卡）。只在 turns / compaction / showWelcome 变化时重算。 */
 function buildArchivedItems(
   turns: SessionEvent[][],
-  isFirstUse: boolean,
+  showWelcome: boolean,
   compaction: CompactionMeta | undefined
 ): DisplayItem[] {
-  if (isFirstUse) return [{ type: "welcome" }];
+  if (showWelcome) return [{ type: "welcome" }];
 
   const items: DisplayItem[] = [];
   for (let i = 0; i < turns.length; i++) {
@@ -346,7 +346,8 @@ const MessageRow = memo(function MessageRow({
 interface Props {
   turns: SessionEvent[][];
   currentEvents: SessionEvent[];
-  isFirstUse: boolean;
+  /** 当前没有对话（草稿态 / 首次使用）→ 对话区呈现欢迎字标 */
+  showWelcome: boolean;
   /** 压缩记录（模块 D；undefined = 未压缩过）。决定压缩点提示卡位置与摘要 */
   compaction?: CompactionMeta;
   /** 当前对话的插话 pending（待注入气泡；跨轮留存，undefined/空 = 无） */
@@ -357,7 +358,7 @@ interface Props {
   conversationId?: string | null;
 }
 
-export function MessageList({ turns, currentEvents, isFirstUse, compaction, pending, onCancelPending, conversationId }: Props) {
+export function MessageList({ turns, currentEvents, showWelcome, compaction, pending, onCancelPending, conversationId }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
   /*
@@ -542,12 +543,12 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
 
   // ── 展示项派生 ──
   //
-  // 归档部分只在 turns / compaction / isFirstUse 变化时重算（内部再按轮缓存
+  // 归档部分只在 turns / compaction / showWelcome 变化时重算（内部再按轮缓存
   // 投影），流式刷新的每次 currentEvents 变更不再重算整段历史；进行中部分
   // 每次刷新重算，但规模限于当前轮。
   const archivedItems = useMemo(
-    () => buildArchivedItems(turns, isFirstUse, compaction),
-    [turns, isFirstUse, compaction]
+    () => buildArchivedItems(turns, showWelcome, compaction),
+    [turns, showWelcome, compaction]
   );
   const liveItems = useMemo(
     () => buildLiveItems(currentEvents, pending),
@@ -556,12 +557,12 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   // 无进行中内容时直接复用归档数组（引用稳定 → 不触发多余的滚底副作用）
   const items = useMemo(
     () =>
-      isFirstUse
+      showWelcome
         ? archivedItems
         : liveItems.length > 0
           ? [...archivedItems, ...liveItems]
           : archivedItems,
-    [archivedItems, liveItems, isFirstUse]
+    [archivedItems, liveItems, showWelcome]
   );
 
   /*
@@ -786,8 +787,8 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
       </div>
       {/* 回到底部（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方）。
           判据是几何事实 moreBelow（视口下方还有内容）：按钮只在点得出结果时
-          出现；欢迎页（isFirstUse）无对话，即便被压出溢出（极小窗口）也不出现。 */}
-      {!isFirstUse && moreBelow && (
+          出现；欢迎页（showWelcome）无对话，即便被压出溢出（极小窗口）也不出现。 */}
+      {!showWelcome && moreBelow && (
         <button
           type="button"
           className={styles.scrollFab}

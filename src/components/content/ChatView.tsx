@@ -273,9 +273,9 @@ export function ChatView({ onDragHandle }: Props) {
   );
 
   // ── 首次使用 ──
-  // conversations.length === 0 且 activeId === null → 欢迎界面；
+  // 当前没有对话（草稿态：启动后未选、或点了新对话）→ 欢迎界面；
   // restoring 期间抑制（防恢复完成前闪欢迎界面）
-  const isFirstUse = conversations.length === 0 && !restoring;
+  const showWelcome = activeId === null && !restoring;
 
   return (
     <div className={styles.container}>
@@ -288,7 +288,7 @@ export function ChatView({ onDragHandle }: Props) {
           <MessageList
             turns={turns}
             currentEvents={currentEvents}
-            isFirstUse={isFirstUse}
+            showWelcome={showWelcome}
             compaction={activeCompaction}
             pending={pending}
             onCancelPending={handleCancelSteer}
@@ -299,7 +299,7 @@ export function ChatView({ onDragHandle }: Props) {
           <BootSequence onDone={handleBootDone} onReveal={handleBootReveal} />
         )}
       </div>
-      {!isFirstUse && <FindBar />}
+      {!showWelcome && <FindBar />}
       <div className={styles.bottomArea}>
         {attachments.length > 0 && (
           <AttachmentStrip files={attachments} onRemove={removeAttachment} />

@@ -56,7 +56,7 @@ function render(
       React.createElement(MessageList, {
         turns,
         currentEvents: [],
-        isFirstUse: false,
+        showWelcome: false,
         compaction,
       })
     );

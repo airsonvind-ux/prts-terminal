@@ -52,7 +52,7 @@ function render(turns: SessionEvent[][], currentEvents: SessionEvent[] = []) {
       React.createElement(MessageList, {
         turns,
         currentEvents,
-        isFirstUse: false,
+        showWelcome: false,
       })
     );
   });

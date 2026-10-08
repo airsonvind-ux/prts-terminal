@@ -73,7 +73,7 @@ interface UIStore {
   // ── State ──
   /**
    * 启动会话恢复中（对话持久化 Phase 4）。
-   * true 期间：欢迎界面判定被抑制（ChatView isFirstUse 加 !restoring）
+   * true 期间：欢迎界面判定被抑制（ChatView showWelcome 加 !restoring）
    * 且输入禁发（InputArea disabled）——防恢复完成前闪欢迎/发消息竞态。
    */
   restoring: boolean;

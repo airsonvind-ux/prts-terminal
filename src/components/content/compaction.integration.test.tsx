@@ -96,7 +96,7 @@ function renderList(conversationId: string) {
       React.createElement(MessageList, {
         turns: conv.turns,
         currentEvents: [],
-        isFirstUse: false,
+        showWelcome: false,
         compaction: conv.compaction,
       })
     );

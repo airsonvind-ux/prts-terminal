@@ -87,7 +87,7 @@ async function renderList(): Promise<HTMLElement> {
       React.createElement(MessageList, {
         turns: [],
         currentEvents: [],
-        isFirstUse: false,
+        showWelcome: false,
       })
     );
   });
@@ -102,7 +102,7 @@ function rerenderList(currentEvents: SessionEvent[]): void {
       React.createElement(MessageList, {
         turns: [],
         currentEvents,
-        isFirstUse: false,
+        showWelcome: false,
       })
     );
   });
@@ -348,7 +348,7 @@ describe("MessageList · 回到底部按钮", () => {
     expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
   });
 
-  it("欢迎页（isFirstUse）：即便被压出溢出几何也不出现按钮", async () => {
+  it("欢迎页（showWelcome）：即便被压出溢出几何也不出现按钮", async () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -357,7 +357,7 @@ describe("MessageList · 回到底部按钮", () => {
         React.createElement(MessageList, {
           turns: [],
           currentEvents: [],
-          isFirstUse: true,
+          showWelcome: true,
         })
       );
     });
