@@ -16,7 +16,6 @@ function resetAllStores(): void {
   useProcessingStore.setState({ processing: {} });
   useConversationStore.setState({ conversations: [], activeId: null });
   useUIStore.setState({
-    hiddenMode: null,
     errorMsg: null,
     overlay: null,
   });

@@ -65,7 +65,6 @@ function resetStores(): void {
   useUIStore.setState({
     overlay: null,
     errorMsg: null,
-    hiddenMode: null,
     settingsInitialTab: "app",
   });
 }

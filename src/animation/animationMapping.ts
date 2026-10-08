@@ -46,7 +46,7 @@ export type ThermalState =
   | "reasoning" // 处理中：LLM 思考 → 周期向最小加速
   | "executing" // 处理中：调工具/等工具 → 周期冻结
   | "streaming" // 生成最终回答 → 周期缓慢回升
-  | "stopped";  // hidden/error：立即冻结停扇
+  | "stopped";  // error：立即冻结停扇
 
 /** uiState + agentPhase → 散热分段状态（纯映射） */
 export function thermalStateOf(
@@ -56,7 +56,6 @@ export function thermalStateOf(
   switch (uiState) {
     case "ready":
       return "idle";
-    case "hidden":
     case "error":
       return "stopped";
     case "processing":

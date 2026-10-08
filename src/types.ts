@@ -82,27 +82,20 @@ export interface ModelInfo {
   enriched: boolean;
 }
 
-// ── UI 状态机（五状态） ──
+// ── UI 状态机（四状态） ──
 
 /**
  * 前端 UI 状态机：当前画面处于哪个阶段。
  * 无 idle 状态：应用启动时初始为 ready，配合 activeId=null 表现与 idle 完全一致。
  * conversations.length === 0 用于判断首次使用，不单独维护状态。
+ * 无 hidden 状态（2026-10-08 删除）：窗口隐藏体系（全局快捷键 / 边缘吸附）已撤销，
+ * 该状态与 HiddenMode 一并清掉；将来若真要做隐藏，加回来只是几行。
  */
 export type UIState =
   | "ready"
   | "processing"
   | "streaming"
-  | "hidden"
   | "error";
-
-/**
- * hidden 状态的子形态：决定隐藏后的渲染行为。
- *  null：hidden 未激活（窗口正常可见时）。
- *  "shortcut"：快捷键隐藏，窗口完全不可见，不渲染任何内容。
- *  "edge_snap"：边缘吸附隐藏，窗口收缩为标签。
- */
-export type HiddenMode = null | "shortcut" | "edge_snap";
 
 // ── 情绪（批 2-D 动画映射 · 情绪通道） ──
 

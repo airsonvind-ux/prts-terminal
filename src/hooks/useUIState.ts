@@ -1,7 +1,7 @@
 // src/hooks/useUIState.ts
 // 派生 UI 状态查询 Hook
 //
-// 职责：订阅 hiddenMode/activeId/error/agentPhase 四个原始事实，
+// 职责：订阅 activeId/error/agentPhase 三个原始事实，
 //       调用 deriveUIState() 返回派生 UIState。
 //       组件通过它获取当前 UI 状态，不跨三个 store 手工组合。
 //
@@ -16,7 +16,6 @@ import { useProcessingStore } from "../stores/useProcessingStore";
 import type { UIState } from "../types";
 
 export function useUIState(): UIState {
-  const hiddenMode = useUIStore((s) => s.hiddenMode);
   const errorMsg = useUIStore((s) => s.errorMsg);
   const activeId = useConversationStore((s) => s.activeId);
 
@@ -32,5 +31,5 @@ export function useUIState(): UIState {
     )?.agentPhase;
   });
 
-  return deriveUIState(hiddenMode, activeId, errorMsg, agentPhase);
+  return deriveUIState(activeId, errorMsg, agentPhase);
 }

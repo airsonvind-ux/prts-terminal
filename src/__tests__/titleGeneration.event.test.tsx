@@ -46,7 +46,6 @@ function resetAll(): void {
     pendingTitle: null,
   });
   useUIStore.setState({
-    hiddenMode: null,
     errorMsg: null,
     overlay: null,
     restoring: false,

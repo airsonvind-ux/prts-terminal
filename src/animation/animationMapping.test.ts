@@ -159,7 +159,6 @@ describe("散热分段 · 各阶段目标周期", () => {
     expect(mapTargets("processing", "streaming", "平静", 0).thermal).toBe("executing"); // 异常组合兜底
     expect(mapTargets("streaming", "streaming", "平静", 0).thermal).toBe("streaming");
     expect(mapTargets("ready", undefined, "平静", 0).thermal).toBe("idle");
-    expect(mapTargets("hidden", undefined, "平静", 0).thermal).toBe("stopped");
     expect(mapTargets("error", undefined, "平静", 0).thermal).toBe("stopped");
   });
 

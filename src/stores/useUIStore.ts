@@ -2,12 +2,11 @@
 // UI 元数据容器 + uiState 派生计算
 //
 // 职责边界：
-//   持有 hiddenMode、errorMsg、overlay 三个原始事实。
+//   持有 errorMsg、overlay 与启动恢复 / 自检相关的原始事实。
 //   不持有 uiState（uiState 是派生值，由 deriveUIState() 纯函数计算）。
 //   不依赖任何 store，不被任何 store 依赖。
 //
 // uiState 推导规则：
-//   hiddenMode !== null          → "hidden"
 //   errorMsg !== null            → "error"
 //   activeId === null            → "ready"
 //   活跃对话无 processing 快照    → "ready"
@@ -15,28 +14,25 @@
 //   其余                          → "processing"
 
 import { create } from "zustand";
-import type { BootStatus, HiddenMode, OverlayType, UIState } from "../types";
+import type { BootStatus, OverlayType, UIState } from "../types";
 
 // ── 派生计算（纯函数，模块级导出） ──
 
 /**
- * 从四个原始事实推导当前 UI 状态。
+ * 从三个原始事实推导当前 UI 状态。
  * 纯函数：相同输入永远返回相同输出，无副作用。
  * 不存储任何状态——每次组件渲染时由 useUIState() Hook 调用。
  *
- * @param hiddenMode        来自 useUIStore.hiddenMode
  * @param activeId          来自 useConversationStore.activeId
  * @param error             来自 useUIStore.errorMsg
  * @param processingAgentPhase  活跃对话的 processing 快照的 agentPhase，
  *                              无快照时传 undefined。来自 useProcessingStore
  */
 export function deriveUIState(
-  hiddenMode: HiddenMode,
   activeId: string | null,
   error: string | null,
   processingAgentPhase: "reasoning" | "processing" | "streaming" | undefined
 ): UIState {
-  if (hiddenMode !== null) return "hidden";
   if (error !== null) return "error";
   if (!activeId) return "ready";
   if (!processingAgentPhase) return "ready";
@@ -96,13 +92,6 @@ interface UIStore {
    */
   restoreFailed: boolean;
   /**
-   * hidden 的触发方式。
-   * null = 窗口正常可见。
-   * "shortcut" = 快捷键隐藏，"edge_snap" = 边缘吸附隐藏。
-   * 设非 null 时，deriveUIState() 自动返回 "hidden"——不需要手动联动。
-   */
-  hiddenMode: HiddenMode;
-  /**
    * 当前错误信息。null = 无错误。
    * 设非 null 时，deriveUIState() 自动返回 "error"。
    */
@@ -121,8 +110,6 @@ interface UIStore {
   setBootStatus: (status: BootStatus | null) => void;
   /** 记录启动恢复失败（恢复 hook 调用） */
   setRestoreFailed: (failed: boolean) => void;
-  /** 设置隐藏方式 */
-  setHiddenMode: (mode: HiddenMode) => void;
   /** 记录错误信息 */
   setError: (msg: string) => void;
   /** 清除错误 */
@@ -142,7 +129,6 @@ export const useUIStore = create<UIStore>((set) => ({
   restoreInfo: { phase: "index", readDone: 0, readTotal: 0 },
   bootStatus: null,
   restoreFailed: false,
-  hiddenMode: null,
   errorMsg: null,
   overlay: null,
   settingsInitialTab: "app",
@@ -155,8 +141,6 @@ export const useUIStore = create<UIStore>((set) => ({
   setBootStatus: (status) => set({ bootStatus: status }),
 
   setRestoreFailed: (failed) => set({ restoreFailed: failed }),
-
-  setHiddenMode: (mode) => set({ hiddenMode: mode }),
 
   setError: (msg) => set({ errorMsg: msg }),
 
