@@ -104,6 +104,14 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
   // 揭示前（启动演出期间）按“无对话”的初始态呈现：宽 0、不占位——
   // 输入框因此保持初始位置，揭示时再靠 width 过渡自然地向右缩。
   const shown = visible && reveal;
+
+  // 落位重演：启动揭示与切换对话各触发一次「从空扫到当前水位」。
+  // 用 key 换新元素来重放一次动画（.fill 的 dashoffset 过渡仍在，
+  // 动画期间由动画接管，落定值与它一致）。
+  const [arcKey, setArcKey] = useState(0);
+  useEffect(() => {
+    if (reveal && visible) setArcKey((k) => k + 1);
+  }, [reveal, visible, activeId]);
   // 压缩中 = 活跃对话正在进行压缩（输入区禁用 + 圆环旋转）
   const compacting = activeId !== null && compactingConversationId === activeId;
 
@@ -222,7 +230,8 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
             />
           ) : (
             <circle
-              className={styles.fill}
+              key={arcKey}
+              className={`${styles.fill} ${styles.sweep}`}
               cx={SIZE / 2}
               cy={SIZE / 2}
               r={RADIUS}
@@ -232,7 +241,12 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
               strokeDashoffset={shownOffset}
               strokeLinecap="round"
               transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
-              style={{ stroke: ringColor(pct) }}
+              style={
+                {
+                  stroke: ringColor(pct),
+                  "--ring-empty": CIRCUMFERENCE,
+                } as React.CSSProperties
+              }
             />
           )}
         </svg>

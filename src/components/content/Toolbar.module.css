@@ -32,8 +32,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: color 180ms ease, opacity 260ms cubic-bezier(0, 0, 0.2, 1),
-    transform 260ms cubic-bezier(0, 0, 0.2, 1);
+  transition: color 180ms ease;
 }
 
 .title:hover {
@@ -52,13 +51,6 @@
 
 .titleActive {
   color: var(--accent);
-}
-
-/* 启动演出期间：标题留白（占位保留、不剧透），随演出淡出渐显 */
-.titleHidden {
-  opacity: 0;
-  transform: translateY(2px);
-  pointer-events: none;
 }
 
 .titleActive::before {

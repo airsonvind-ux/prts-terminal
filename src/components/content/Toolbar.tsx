@@ -8,11 +8,12 @@ import { type MouseEvent } from "react";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { isProcessingBusy, useProcessingStore } from "../../stores/useProcessingStore";
 import { useUIStore } from "../../stores/useUIStore";
+import { useTypewriter } from "../../hooks/useTypewriter";
 import styles from "./Toolbar.module.css";
 
 interface Props {
   onDragHandle?: (e: MouseEvent) => void;
-  /** false = 启动演出期间：标题留白（不剧透已有对话），演出淡出时渐显 */
+  /** false = 启动演出期间：标题留白（不剧透已有对话），演出淡出时开始逐字展开 */
   showTitle?: boolean;
 }
 
@@ -26,6 +27,10 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
   const pendingTitle = useConversationStore((s) => s.pendingTitle);
 
   const displayTitle = title ?? pendingTitle;
+
+  // 标题逐字展开（45ms/字）：启动揭示那一刻开始打，切换对话时从零重打；
+  // 旧标题没有退出动画，文字直接不见。
+  const typedTitle = useTypewriter(displayTitle, showTitle);
 
   const newChat = useConversationStore((s) => s.newChat);
   const overlay = useUIStore((s) => s.overlay);
@@ -52,13 +57,15 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
   return (
     <div className={styles.bar} onMouseDown={onDragHandle} onContextMenu={(e) => e.preventDefault()}>
       <span
-        className={`${styles.title} ${
-          isHistoryOpen ? styles.titleActive : ""
-        } ${showTitle ? "" : styles.titleHidden}`}
-        onClick={displayTitle ? () => toggleOverlay("history") : undefined}
+        className={`${styles.title} ${isHistoryOpen ? styles.titleActive : ""}`}
+        onClick={
+          showTitle && displayTitle
+            ? () => toggleOverlay("history")
+            : undefined
+        }
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {displayTitle}
+        {typedTitle}
       </span>
       <div className={styles.actions}>
         <button

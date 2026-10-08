@@ -51,6 +51,19 @@
   transition: stroke-dashoffset 0.3s ease, stroke 0.4s ease;
 }
 
+/* 落位：从空扫到当前水位（启动揭示 / 切换对话各播放一次）。
+   --ring-empty 由组件内联写入（= 圆周），from-only 关键帧的终态
+   就是元素自身的 stroke-dashoffset。 */
+.sweep {
+  animation: ringSettle 240ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+
+@keyframes ringSettle {
+  from {
+    stroke-dashoffset: var(--ring-empty);
+  }
+}
+
 /* ── 悬停浮层（Portal → body，fixed 定位） ── */
 
 .tooltip {
