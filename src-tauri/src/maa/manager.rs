@@ -42,6 +42,13 @@ const CODE_ALL_TASKS_COMPLETED: i64 = crate::maa::records::CODE_ALL_TASKS_COMPLE
 /// MaaCore 回调码：异步调用的回执（连接完成的真信号在这里）。
 const CODE_ASYNC_CALL_INFO: i64 = 4;
 
+/// 已有任务在跑时的派发拒绝文案（工具层原样交给模型与用户）。
+///
+/// 2026-10-08：MAA 只有一个实例、一条队列，同一时刻只该有一个派发者。
+const DISPATCH_BUSY_MSG: &str = "MAA 正在执行另一个对话派发的任务，本次派发被拒绝：\
+     同一时刻只允许一个派发者。等它跑完，或先中止它（action=\"stop\"）；\
+     要一次安排多个任务，请把它们放进同一次 tasks 数组（MAA 依次执行）。";
+
 /// 连上的那个模拟器。
 #[derive(Debug, Clone)]
 pub struct ConnectedInfo {
@@ -157,6 +164,22 @@ pub fn submit(tasks: &[Value], wait_secs: u64) -> Result<SubmitOutcome, String> 
     let (task_ids, connected) = {
         let mut m = lock()?;
         ensure(&mut m)?;
+        // 派发互斥（2026-10-08）：MAA 只有一个实例、一条队列，同一时刻只该有一个派发者。
+        // 已有任务在跑（含 wait=0 派出去、出轮后仍在跑的长任务）→ 拒绝并说明原因。
+        // 判据放在这把锁内，避免“检查与排队”之间被人插进来；ensure 在前，桥断了会
+        // 先丢掉重建，旧记录随之消失，不会拿一条死桥的残留记录把人堵在外面。
+        //
+        // 为何不是“追加给它”：运行记录（结果文件 / 最近一次）、事件缓冲与等待结果
+        // 都是单槽的——两处派发会让“谁在等、超时算谁的、这份结果是谁的”全部串味。
+        // 要一次安排多项，放进同一次调用的 tasks 数组（MAA 依次执行）。
+        if m
+            .bridge
+            .as_ref()
+            .map(|b| b.run_in_flight())
+            .unwrap_or(false)
+        {
+            return Err(DISPATCH_BUSY_MSG.to_string());
+        }
         let connected = m
             .connected
             .clone()
