@@ -11,8 +11,6 @@
  */
 
 .root {
-  /* 状态位颜色（启动自检的成败）：想调就改这里一处 */
-  --boot-ok: #8fc79a;
   position: absolute;
   inset: 0;
   z-index: 3;
@@ -59,8 +57,18 @@
 }
 
 .module {
+  padding-left: 22px;
   color: var(--text-3);
   animation: bootFadeUp 240ms ease backwards;
+}
+
+/* 自检未定音：更暗一点（值仍是「接入中」）；未就绪：转告警色 */
+.modulePending {
+  opacity: 0.6;
+}
+
+.moduleFailed {
+  color: var(--warning, #e0a03a);
 }
 .module:nth-child(1) {
   animation-delay: 140ms;
@@ -91,28 +99,9 @@
   color: var(--text-1);
 }
 
-/* ── 状态位：定宽 6 字符（等宽字体下 [ OK ] / [ .. ] / [FAIL] / [WARN] 对齐） ── */
-
-.bit {
-  display: inline-block;
-  width: 6ch;
-  flex-shrink: 0;
-}
-
-.bitOk {
-  color: var(--boot-ok);
-}
-
-.bitRun {
+.prompt {
   color: var(--text-3);
-}
-
-.bitWarn {
-  color: var(--warning, #e0a03a);
-}
-
-.bitFail {
-  color: var(--danger, #c0605a);
+  margin-right: 6px;
 }
 
 .count {
