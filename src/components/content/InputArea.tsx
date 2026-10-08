@@ -149,6 +149,9 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, has
         : "send"
       : "idle";
 
+  /** 悬停说明：只写功能名（细节由用户自己理解功能后判断） */
+  const btnTitle = btnMode === "stop" ? "中止" : btnMode === "steer" ? "插话" : "发送";
+
   /** 内容高度同步：复位 → 判定 → 撑高/回落。
    * 复位必须在判定前——Chrome 的 scrollHeight = max(内容, 客户区)，
    * 不复位则元素残留高度抬高读数（「删除不回落」的根因）。
@@ -279,6 +282,8 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, has
           onClick={stopShape ? onStop : submit}
           disabled={btnDisabled}
           data-mode={btnMode}
+          title={btnTitle}
+          aria-label={btnTitle}
         >
           {stopShape ? (
             /* 中止方块（--warn 警示色；与发送/插话箭头同定位与形态语言） */
