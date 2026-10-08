@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import type { SkillEntry } from "../../types";
-import { SettingsSection, SectionHint } from "./ui/SettingsSection";
+import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
 import { FileLink } from "../ui/FileLink";
 import styles from "./SettingsSkills.module.css";
 
@@ -38,9 +38,9 @@ export function SettingsSkills({
     <div className={styles.container}>
       <SettingsSection title="安装技能">
         {busy && (
-          <SectionHint>
+          <SectionWarning>
             对话处理中仍可安装；技能改动从下一轮生效，当前对话不受影响
-          </SectionHint>
+          </SectionWarning>
         )}
         <p className={styles.sectionHint}>
           支持 .md 文件，或包含 SKILL.md 的技能文件夹；安装后即可使用

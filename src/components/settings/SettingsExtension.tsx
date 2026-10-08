@@ -167,7 +167,7 @@ export function SettingsExtension({
         </div>
         {running && <SectionWarning>MAA 正在运行，暂不可改</SectionWarning>}
         {busy && (
-          <SectionHint>对话处理中，MAA 连接与增强设置暂不可改</SectionHint>
+          <SectionWarning>对话处理中，MAA 连接与增强设置暂不可改</SectionWarning>
         )}
 
         <SettingsRow

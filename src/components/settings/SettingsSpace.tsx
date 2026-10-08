@@ -12,7 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
-import { SettingsSection, SectionHint } from "./ui/SettingsSection";
+import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
 import { WorkspaceTree } from "./WorkspaceTree";
 import styles from "./SettingsSpace.module.css";
 
@@ -45,7 +45,7 @@ export function SettingsSpace({
     <div className={styles.container}>
       <SettingsSection title="工作空间">
         {busy && (
-          <SectionHint>对话处理中，工作空间路径暂不可改</SectionHint>
+          <SectionWarning>对话处理中，工作空间路径暂不可改</SectionWarning>
         )}
         {/* 多行排布：label / 路径行（路径 + 选择目录）/ 打开行 / hint */}
         <div className={styles.wsLabel}>路径</div>

@@ -478,11 +478,12 @@ pub async fn set_settings(
 #[tauri::command]
 pub fn set_always_on_top(
     app: AppHandle,
-    turn_registry: State<'_, Arc<TurnRegistry>>,
+    _turn_registry: State<'_, Arc<TurnRegistry>>,
     store: State<'_, Arc<Mutex<SettingsStore>>>,
     enabled: bool,
 ) -> Result<(), String> {
-    guard_config_write(&turn_registry)?;
+    // 不受“对话处理中”限制（2026-10-08）：置顶是纯窗口属性，不参与任何轮次
+    // 快照，与 guard_config_write 的立意（锁住“本次运行所依据的配置”）无关。
     let win = app
         .get_webview_window("main")
         .ok_or_else(|| "找不到主窗口".to_string())?;

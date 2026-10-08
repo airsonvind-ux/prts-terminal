@@ -10,7 +10,7 @@
 // （Panel 单漏斗：busy 守卫 + 即时保存）。
 
 import type { ExecutionMode } from "../../types";
-import { SectionHint } from "./ui/SettingsSection";
+import { SectionWarning } from "./ui/SettingsSection";
 import { SettingsRow } from "./ui/SettingsRow";
 import choiceStyles from "./ui/choice.module.css";
 import styles from "./SettingsSafety.module.css";
@@ -54,7 +54,7 @@ export function SettingsSafety({
 
   return (
     <div className={styles.container}>
-      {busy && <SectionHint>对话处理中，执行模式暂不可改</SectionHint>}
+      {busy && <SectionWarning>对话处理中，执行模式暂不可改</SectionWarning>}
       {option("ask", "操作前询问")}
       {option("auto", "自动化")}
     </div>

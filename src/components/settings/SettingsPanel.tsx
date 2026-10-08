@@ -229,10 +229,12 @@ export function SettingsPanel() {
     (
       patch: SettingsPatch,
       label: string | undefined,
-      save: (p: SettingsPatch) => Promise<unknown>
+      save: (p: SettingsPatch) => Promise<unknown>,
+      /** 纯窗口类改动（置顶）：不受“对话处理中”限制，与后端同一口径 */
+      windowOnly = false
     ) => {
       // 即时查 busy（getState 快照，避免为一次性读订阅重渲染）
-      if (isProcessingBusy(useProcessingStore.getState())) {
+      if (!windowOnly && isProcessingBusy(useProcessingStore.getState())) {
         showToast(`对话处理中不能修改${label ?? "设置"}`, {
           kind: "warning",
           dedupeKey: `settings-busy-${label ?? ""}`,
@@ -262,7 +264,8 @@ export function SettingsPanel() {
     [commit]
   );
 
-  /** 置顶开关：带窗口副作用的专用命令（应用窗口 + 落盘由后端原子完成） */
+  /** 置顶开关：带窗口副作用的专用命令（应用窗口 + 落盘由后端原子完成）。
+   *  纯窗口属性，与对话运行态无关——不受 busy 限制（windowOnly）。 */
   const handleSetAlwaysOnTop = useCallback(
     (enabled: boolean) =>
       commit(
@@ -271,7 +274,8 @@ export function SettingsPanel() {
         (p) =>
           invoke("set_always_on_top", {
             enabled: p.window?.always_on_top ?? enabled,
-          })
+          }),
+        true
       ),
     [commit]
   );

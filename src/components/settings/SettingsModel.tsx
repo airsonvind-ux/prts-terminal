@@ -25,7 +25,7 @@ import type {
 } from "../../types";
 import { setModelInfo } from "../../stores/useProcessingStore";
 import { showToast } from "../../stores/useToastStore";
-import { SectionHint } from "./ui/SettingsSection";
+import { SectionWarning } from "./ui/SettingsSection";
 import { MASKED_SECRET } from "./SettingsPanel";
 import styles from "./SettingsProvider.module.css";
 import { Select } from "./ui/Select";
@@ -379,7 +379,7 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
 
   return (
     <div className={styles.container}>
-      {busy && <SectionHint>对话处理中，模型与供应商暂不可改</SectionHint>}
+      {busy && <SectionWarning>对话处理中，模型与供应商暂不可改</SectionWarning>}
       {/* ── 供应商 ── */}
       <div className={styles.field}>
         <span className={styles.label}>供应商</span>

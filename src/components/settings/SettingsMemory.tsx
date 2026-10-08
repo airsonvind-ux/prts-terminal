@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { SettingsSection, SectionNote } from "./ui/SettingsSection";
+import { SettingsSection, SectionNote, SectionWarning } from "./ui/SettingsSection";
 import { showToast } from "../../stores/useToastStore";
 import { useConversationStore } from "../../stores/useConversationStore";
 import type { MemoryOverview, MemoryTidyResult } from "../../types";
@@ -109,7 +109,7 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
   return (
     <div className={styles.container}>
       {busy && (
-        <p className={styles.busyHint}>对话处理中：写操作暂不可用，查看不受限</p>
+        <SectionWarning>对话处理中：写操作暂不可用，查看不受限</SectionWarning>
       )}
 
       {view ? (

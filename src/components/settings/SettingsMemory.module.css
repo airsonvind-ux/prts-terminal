@@ -5,12 +5,6 @@
   flex-direction: column;
 }
 
-.busyHint {
-  font-size: 11px;
-  color: var(--warn);
-  line-height: 1.4;
-}
-
 /* ── 通用按钮 ── */
 
 .btn {
