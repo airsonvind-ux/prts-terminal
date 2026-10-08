@@ -361,24 +361,34 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   const listRef = useRef<HTMLDivElement>(null);
 
   /*
-   * 用户手动上滑标志位。
+   * 跟底意图（ref）：true = 用户已离开底部，停止自动钉底。
    *
-   * true  = 用户向上滚动了（距离底部 > 5px），停止自动滚底
-   * false = 用户在最底部，允许自动滚底
+   * 用 useRef 而非 useState：滚动事件回调里不需要触发重渲染；它只在自动钉底
+   * 逻辑（useEffect）里被读。
    *
-   * 用 useRef 而非 useState 的原因：
-   * 滚动事件回调里不需要触发重渲染——这个值只在 useEffect 的
-   * 自动滚底逻辑中被读取，ref 的变更不会导致额外渲染。
+   * 与下面的 moreBelow 是两件事：这里记「意图」（还跟不跟底），moreBelow 记
+   * 「事实」（视口下方此刻还有没有内容）。2026-10-08 之前只有一个 atBottom
+   * 同时回答两个问题，而只有意图那半有维护机制——内容在滚动容器内部变矮不产生
+   * 任何事件（见「内容尺寸观测」），于是卡片收起后按钮永久占位（实测缺口）。
    */
-  const [atBottom, setAtBottom] = useState(true);
   const userScrolledUpRef = useRef(false);
 
-  /** 贴底状态唯一写入口：ref（热路径读）+ state（按钮显示用），仅在变化时更新 state */
+  /*
+   * 下方还有内容（几何事实）：按钮的唯一判据。
+   *
+   * 只在刷新点读一次「离底距离」，结论变了才 setState。刷新点覆盖所有可能改变
+   * 几何的地方：滚动事件、内容尺寸变化、滚轮、列表自身尺寸变化、缩放窗结束。
+   *
+   * 为什么按钮只认事实：按钮的语义是「回到底部」，只有下方真有内容（离底距离
+   * > STICK_PX）时它才可点得出结果。此前它由意图闩锁驱动，于是出现过「内容
+   * 缩回、按钮仍在、点击也无事可做」的假阳性（2026-10-08 实测）。事实为真 ⇒
+   * 按钮一定有意义，这条由构造保证。
+   */
+  const [moreBelow, setMoreBelow] = useState(false);
+
+  /** 跟底意图的唯一写入口（ref，热路径读；不触发重渲染） */
   const setStick = useCallback((stick: boolean) => {
-    const next = !stick;
-    if (userScrolledUpRef.current === next) return;
-    userScrolledUpRef.current = next;
-    setAtBottom(stick);
+    userScrolledUpRef.current = !stick;
   }, []);
 
   /* 滚动写入白名单 / 观测记录（照 Hanako 的两条通用判据）
@@ -400,6 +410,9 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    *   4. 输入框布局测量（messageScroll.ts）→ 测量期间接管，贴底续贴底、
    *      否则原位。
    * 用户上滑（离底 > STICK_PX）立即停自动钉底；滑回底部恢复。
+   *
+   * 第 5 条（2026-10-08 补）：内容尺寸变化 → 只更新「下方还有没有内容」这个
+   * 事实（按钮判据），不动滚动位置；见下面的内容观测副作用。
    */
 
   /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。 */
@@ -409,10 +422,12 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     el.scrollTop = el.scrollHeight;
   }, []);
 
-  /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底 */
+  /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底。
+   *  落底后「下方还有内容」必然为假——直接写死，省一次布局读。 */
   const scrollToBottomNow = useCallback(() => {
     setStick(true);
     pinNow();
+    setMoreBelow(false);
   }, [pinNow, setStick]);
 
   /*
@@ -429,6 +444,22 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
    */
   const windowResizingRef = useRef(false);
   const resizeGuardTimerRef = useRef(0);
+
+  /*
+   * 几何事实的读入口：量一次「离底距离」并写回 moreBelow（只在结论变化时更新）。
+   *
+   * 判定顺序与 handleScroll 同构：先给「已经在底部」让路，再谈屏蔽。
+   * 缩放保护窗期间只挡「有内容在下方」的判定（重排会改距离，此刻读到的大不
+   * 可信）；「已回到贴底」（距离 ≤ STICK_PX）不需要前提，任何时候都成立——
+   * 屏蔽它就会出现「滚到底按钮也不消失」的老毛病（2026-09 教训）。
+   */
+  const refreshBelow = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const next = el.scrollHeight - el.scrollTop - el.clientHeight > STICK_PX;
+    if (next && windowResizingRef.current) return;
+    setMoreBelow((prev) => (prev === next ? prev : next));
+  }, []);
   /** 最近一次已知视口尺寸（由 ResizeObserver 回调维护） */
   const lastViewportRef = useRef({ w: 0, h: 0 });
   /** 最近一次已知界面缩放基准（--face-size） */
@@ -476,8 +507,10 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     resizeGuardTimerRef.current = window.setTimeout(() => {
       windowResizingRef.current = false;
       anchorRef.current = null;
+      // 缩放结束、重排已定：把几何事实重判一次（缩放期间 refreshBelow 被挂起）
+      refreshBelow();
     }, WINDOW_RESIZE_GUARD_MS);
-  }, []);
+  }, [refreshBelow]);
 
   useEffect(() => {
     window.addEventListener("resize", armResizeGuard);
@@ -563,6 +596,8 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
   const handleScroll = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
+    // 几何事实先对齐：下面的屏蔽只针对「意图」的推断，不该拦事实
+    refreshBelow();
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     /*
      * 判定顺序（结构不变量）：先给“回到贴底”让路，再谈屏蔽。
@@ -596,7 +631,7 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
       return;
     }
     setStick(false);
-  }, [armResizeGuard, setStick]);
+  }, [armResizeGuard, refreshBelow, setStick]);
 
   /*
    * 用户意图（手势）：向上滚轮 → 立即停止跟随。
@@ -612,13 +647,21 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
     const el = listRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY >= 0) return;
+      if (e.deltaY >= 0) {
+        // 下滚：位置由 scroll 事件回报，这里只顺手重判一次事实（滚到底、或
+        // 内容已放得下时按钮该消失，而那种情形恰好不会有滚动事件）。
+        refreshBelow();
+        return;
+      }
+      // 上滑：溢出守卫已证明有可滚范围，「离开底部」即意味着下方还有内容。
+      // 缩放保护窗期间滚动事件不可信，这条手势通道必须独立成立（2026-09）。
       if (el.scrollHeight - el.clientHeight <= STICK_PX) return;
       setStick(false);
+      setMoreBelow(true);
     };
     el.addEventListener("wheel", onWheel, { passive: true });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [setStick]);
+  }, [refreshBelow, setStick]);
 
   /*
    * 切换对话：重置滑底标志。
@@ -654,6 +697,8 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
       if (performance.now() < deadline) raf = requestAnimationFrame(tick);
     };
     tick();
+    // 首次钉底后：下方必然无内容——直接写死，不必读几何
+    setMoreBelow(false);
     return () => cancelAnimationFrame(raf);
   }, [items, conversationId, pinNow]);
 
@@ -693,12 +738,38 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
         restoreAnchor();
         return;
       }
+      // 列表自身盒子变了（输入框展开/回落）⇒ 可见高度变 ⇒ 几何事实重判
+      refreshBelow();
       if (userScrolledUpRef.current) return;
       pinNow();
+      setMoreBelow(false);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [pinNow, armResizeGuard, captureAnchor, restoreAnchor]);
+  }, [pinNow, armResizeGuard, captureAnchor, refreshBelow, restoreAnchor]);
+
+  /*
+   * 内容尺寸观测（2026-10-08 补）。
+   *
+   * 缺口：内容在滚动容器内部变高/变矮时，一个事件都不会来——scroll 只在滚动
+   * 位置变化时触发（卡片收起时 scrollTop 本就停在 0，不需要钳位），上面的
+   * ResizeObserver 观测的是容器自身（盒子由外层 flex 定死，内容变化不动它），
+   * items 也没变（卡片展开/收起是 EventBadge 的局部 state）。于是「下方还有
+   * 没有内容」无人维护：按钮挂在屏幕上、点了也无事可做（实测缺口）。
+   *
+   * 用 MutationObserver 补这个信号：本应用里内容高度变化都来自 DOM 变更
+   *（流式文本、卡片展开/收起、Markdown 迟到渲染）。已知盲区：纯样式引起的
+   * 尺寸变化（图片/字体迟到排版）不产生 DOM 变更——这条路径当前无受害面
+   *（附件是定尺寸缩略图，字体随包本地加载），滚动/钉底/缩放窗结束时的重判
+   * 也仍会兜住。
+   */
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof MutationObserver !== "function") return;
+    const mo = new MutationObserver(() => refreshBelow());
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => mo.disconnect();
+  }, [refreshBelow]);
 
   return (
     <div className={styles.listArea}>
@@ -714,9 +785,9 @@ export function MessageList({ turns, currentEvents, isFirstUse, compaction, pend
         ))}
       </div>
       {/* 回到底部（外观与位置照 Hanako：圆形、水平居中、浮在输入区上方）。
-          “回到最新”的引用对象是最新内容——欢迎页（isFirstUse）无对话：
-          常态不出现，几何上被压出溢出（极小窗口）时同样不出现。 */}
-      {!isFirstUse && !atBottom && (
+          判据是几何事实 moreBelow（视口下方还有内容）：按钮只在点得出结果时
+          出现；欢迎页（isFirstUse）无对话，即便被压出溢出（极小窗口）也不出现。 */}
+      {!isFirstUse && moreBelow && (
         <button
           type="button"
           className={styles.scrollFab}

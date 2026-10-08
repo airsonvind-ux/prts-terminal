@@ -6,6 +6,10 @@
 //
 // 覆盖：resize 打头后，列表尺寸变化（ResizeObserver 回调）不写滚动位置；
 //       保护窗过后恢复钉底。
+//
+// 2026-10-08 补：「回到最新」按钮改由几何事实驱动（视口下方还有内容）。这里
+//       覆盖卡片展开/收起这两个内容尺寸变化——它们不产生任何滚动事件
+//       （scrollTop 停在 0，不需要钳位），旧实现下按钮会永久占位。
 // jsdom 无布局，只能断言"写没写"：用可触发回调的 ResizeObserver stub +
 // scrollTop 设值 spy。
 
@@ -269,6 +273,64 @@ describe("MessageList · 回到底部按钮", () => {
       btn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(spy).toHaveBeenCalled();
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
+  it("卡片展开：内容撑出底部即出现按钮（不改位置、无滚动事件）", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 100, 100); // 初始放得下
+    await wait(450);
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+
+    // 展开思考卡片：内容变高（一次 DOM 变更，位置由浏览器保持不动）
+    act(() => {
+      forceScrollTop(listEl, 0);
+    });
+    fakeMetrics(listEl, 1000, 100);
+    act(() => {
+      listEl.appendChild(document.createElement("div"));
+    });
+    await flush();
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeTruthy();
+  });
+
+  it("卡片收起：内容缩回、下方已空 → 按钮自动消失", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 1000, 100);
+    await wait(450);
+
+    // 上滑 → 按钮出现（离底 800px）
+    act(() => {
+      forceScrollTop(listEl, 100);
+      listEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeTruthy();
+
+    // 内容缩回：不再溢出。此刻不会有任何 scroll 事件（位置停在原处、无需钳位），
+    // 事实只能靠内容变更观测纠正回来——这正是旧实现里按钮永久占位的那条路径。
+    fakeMetrics(listEl, 100, 100);
+    act(() => {
+      listEl.appendChild(document.createElement("div"));
+    });
+    await flush();
+    expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
+  });
+
+  it("贴底跟随时，新内容到来不点亮按钮（钉底把事实压回底部）", async () => {
+    await renderList();
+    const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+    spyOnScrollTopClamped(listEl, 900);
+    fakeMetrics(listEl, 1000, 100); // 有溢出，但钉在底部
+    await wait(450);
+
+    act(() => {
+      rerenderList([chunk("新内容")]);
+    });
+    await flush();
     expect(container.querySelector('[aria-label="回到最新"]')).toBeNull();
   });
 
