@@ -31,9 +31,11 @@ interface Props {
   generating: boolean;
   /** 硬禁（错误 / 会话恢复中 / 压缩中）——不发送也不插话不中止 */
   disabled: boolean;
+  /** 中止已发出、轮未收尾（2026-10-08）：按钮转细环 + 输入框提示「正在中止…」 */
+  aborting?: boolean;
 }
 
-export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, hasAttachments = false, onPasteImage }: Props) {
+export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, aborting = false, hasAttachments = false, onPasteImage }: Props) {
   const [input, setInput] = useState("");
   const [isFocused, setIsFocused] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
@@ -272,21 +274,36 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, has
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
         onPaste={handlePaste}
-        placeholder="说点什么…"
+        placeholder={aborting ? "正在中止…" : "说点什么…"}
         rows={1}
       />
       <div className={styles.btnWrapper}>
         <button
-          className={`${styles.sendBtn} ${isCircle ? styles.sendBtnFocused : ""} ${sendRipple ? styles.sendBtnRipple : ""}${stopShape ? ` ${styles.sendBtnStop}` : ""}`}
+          className={`${styles.sendBtn} ${isCircle ? styles.sendBtnFocused : ""} ${sendRipple ? styles.sendBtnRipple : ""}${stopShape || aborting ? ` ${styles.sendBtnStop}` : ""}${aborting ? ` ${styles.sendBtnStopping}` : ""}`}
           style={{ "--send-charge": `${sendCharge}%` } as React.CSSProperties}
           onClick={stopShape ? onStop : submit}
-          disabled={btnDisabled}
+          disabled={btnDisabled || aborting}
           data-mode={btnMode}
           title={btnTitle}
           aria-label={btnTitle}
         >
-          {stopShape ? (
-            /* 中止方块（--warn 警示色；与发送/插话箭头同定位与形态语言） */
+          {aborting ? (
+            /* 正在中止（2026-10-08 反馈）：细环旋转；此时不可再点 */
+            <svg className={styles.arrowSvg} viewBox="0 0 20 20">
+              <circle
+                className={styles.stoppingRing}
+                cx="10"
+                cy="10"
+                r="6.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeDasharray="30 11"
+              />
+            </svg>
+          ) : stopShape ? (
+            /* 中止方块（--danger 危险色；与发送/插话箭头同定位与形态语言） */
             <svg className={styles.arrowSvg} viewBox="0 0 20 20">
               <rect x="4.5" y="4.5" width="11" height="11" rx="2" fill="currentColor" />
             </svg>

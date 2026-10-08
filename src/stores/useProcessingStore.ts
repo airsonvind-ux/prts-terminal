@@ -104,6 +104,11 @@ interface ProcessingState {
    */
   agentPhase: "reasoning" | "processing" | "streaming";
   /**
+   * 中止已发出、轮未收尾（2026-10-08）：按钮与输入框据此给出「正在中止」反馈。
+   * 乐观置位（点击即置），后端报告没有活动轮时撤回；随快照删除自动清除。
+   */
+  aborting?: boolean;
+  /**
    * 情绪标签状态（批 2-D · 情绪通道）。
    * sendMessage 建快照默认 "平静"（省略）；标签匹配成功时 set mood。
    * 快照删除（finishProcessing / failProcessing）时随快照自动清空，无显式清理动作。
@@ -395,6 +400,25 @@ function pushChunk(event: AssistantChunkEvent): void {
 function pushTextChunk(sessionId: string, content: string): void {
   if (content.length === 0) return;
   pushChunk({ type: "assistant/chunk", sessionId, kind: "text", content });
+}
+
+/**
+ * 标记「中止已发出、轮未收尾」（2026-10-08）。
+ *
+ * 乐观：点击中止即置位，界面当场给出反馈；后端报告没有活动轮（`abort_turn`
+ * 返回 false）时撤回。快照随轮收尾被删除，这个状态无需另行清理。
+ */
+export function markAborting(sessionId: string, on: boolean): void {
+  useProcessingStore.setState((state) => {
+    const snap = state.processing[sessionId];
+    if (!snap) return state;
+    return {
+      processing: {
+        ...state.processing,
+        [sessionId]: { ...snap, aborting: on },
+      },
+    };
+  });
 }
 
 /** 更新指定 session 快照的 mood 与强度（标签匹配成功时调用；快照已被清理则忽略） */

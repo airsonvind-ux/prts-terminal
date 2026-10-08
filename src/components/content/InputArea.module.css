@@ -192,6 +192,19 @@
   100% { transform: translate(-50%, -50%) scale(4); opacity: 0; border-width: 0.5px; }
 }
 
+/* ── 正在中止（2026-10-08）：细环旋转 ──
+ * transform-box: fill-box 让 SVG 子元素绕自身中心转，不去触动 .arrowSvg
+ * 那层 translate(-50%, -50%) 的居中位移。 */
+@keyframes sendStoppingSpin {
+  to { transform: rotate(360deg); }
+}
+
+.stoppingRing {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sendStoppingSpin 0.9s linear infinite;
+}
+
 
 
 

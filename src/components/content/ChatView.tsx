@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types";
 import { useConversationStore } from "../../stores/useConversationStore";
-import { useProcessingStore, getModelInfo } from "../../stores/useProcessingStore";
+import { useProcessingStore, getModelInfo, markAborting } from "../../stores/useProcessingStore";
 import { useUIStore } from "../../stores/useUIStore";
 import { useUIState } from "../../hooks/useUIState";
 import { useCompactionStore } from "../../stores/useCompactionStore";
@@ -55,6 +55,8 @@ export function ChatView({ onDragHandle }: Props) {
     () => processingSnapshot?.currentEvents ?? [],
     [processingSnapshot?.currentEvents]
   );
+  // 中止已发出、轮未收尾（乐观态，见 handleStop）
+  const aborting = processingSnapshot?.aborting ?? false;
 
   // ── 模块 D：压缩状态（压缩中禁发 + 提示卡数据源） ──
   const compactingConversationId = useCompactionStore(
@@ -244,10 +246,18 @@ export function ChatView({ onDragHandle }: Props) {
 
   // ── 中止（生成中无字方块）：中止不再清插话队列（2026-09-25 保留语义）
   // ——未交付 pending 气泡留存（可点击取消），后端保留、下一轮领取交付；
-  // 轮尾 turn/end(aborted) 走现有归档链路 ──
+  // 轮尾 turn/end(aborted) 走现有归档链路。
+  // 反馈（2026-10-08）：点击即乐观置「正在中止」（按钮形变 + 输入框提示 + 轮尾
+  // 一条），后端报告没有活动轮（返回 false）时撤回——否则界面空等，像出了 bug ──
   const handleStop = useCallback(() => {
     if (!processingSessionId) return;
-    invoke("abort_turn", { sessionId: processingSessionId }).catch(() => {});
+    const sid = processingSessionId;
+    markAborting(sid, true);
+    invoke<boolean>("abort_turn", { sessionId: sid })
+      .then((found) => {
+        if (!found) markAborting(sid, false);
+      })
+      .catch(() => markAborting(sid, false));
   }, [processingSessionId]);
 
   // ── pending 气泡点击取消：cancel_steer 成功才移除（消失即反馈，不回填）；
@@ -289,6 +299,7 @@ export function ChatView({ onDragHandle }: Props) {
             turns={turns}
             currentEvents={currentEvents}
             showWelcome={showWelcome}
+            aborting={aborting}
             compaction={activeCompaction}
             pending={pending}
             onCancelPending={handleCancelSteer}
@@ -312,6 +323,7 @@ export function ChatView({ onDragHandle }: Props) {
             onSubmit={handleSubmit}
             onSteer={handleSteer}
             onStop={handleStop}
+            aborting={aborting}
             generating={generating}
             disabled={hardDisabled}
             hasAttachments={attachments.length > 0}

@@ -8,9 +8,10 @@
 //   4. getProcessingSessionId 命中/未命中/边界
 //   5. 派生层约定：deriveMessages 忽略标记（半截成完整 assistant）、
 //      deriveTextSegments 显示半截、isMetaEvent 不含标记
+//   6. markAborting：中止反馈态（乐观置位/撤回、随快照消失）
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { useProcessingStore } from "../useProcessingStore";
+import { useProcessingStore, markAborting } from "../useProcessingStore";
 import { useConversationStore } from "../useConversationStore";
 import {
   deriveMessages,
@@ -184,6 +185,35 @@ describe("getProcessingSessionId", () => {
     // 归档（中止）后快照删除 → undefined（按钮自动 disabled 的依据）
     useProcessingStore.getState().finishProcessing(sid, "aborted");
     expect(useProcessingStore.getState().getProcessingSessionId(convId)).toBeUndefined();
+  });
+});
+
+// ═══════════════════════════════════════════════════
+// markAborting（中止反馈：正在中止态）
+// ═══════════════════════════════════════════════════
+
+describe("markAborting", () => {
+  it("置位/撤回落在快照上；轮收尾后随快照消失", async () => {
+    await useProcessingStore.getState().sendMessage("中止反馈");
+    const { sid } = getSingle();
+
+    markAborting(sid, true);
+    expect(useProcessingStore.getState().processing[sid].aborting).toBe(true);
+
+    markAborting(sid, false);
+    expect(useProcessingStore.getState().processing[sid].aborting).toBe(false);
+
+    // 再置位后收尾：状态随快照一起消失，无需显式清理
+    markAborting(sid, true);
+    useProcessingStore.getState().finishProcessing(sid, "aborted");
+    expect(useProcessingStore.getState().processing[sid]).toBeUndefined();
+  });
+
+  it("没有对应快照时无副作用（不新建条目）", () => {
+    markAborting("no-such-session", true);
+    expect(
+      useProcessingStore.getState().processing["no-such-session"]
+    ).toBeUndefined();
   });
 });
 

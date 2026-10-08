@@ -54,6 +54,7 @@ function renderInput(props: Partial<React.ComponentProps<typeof InputArea>>) {
     onStop: vi.fn<() => void>(),
     generating: false,
     disabled: false,
+    aborting: false,
     ...props,
   };
   act(() => {
@@ -64,6 +65,7 @@ function renderInput(props: Partial<React.ComponentProps<typeof InputArea>>) {
         onStop: callbacks.onStop,
         generating: callbacks.generating,
         disabled: callbacks.disabled,
+        aborting: callbacks.aborting,
       })
     );
   });
@@ -168,6 +170,15 @@ describe("InputArea · 三态按钮", () => {
     expect(button.disabled).toBe(true);
     click(button);
     expect(button.dataset.mode).toBe("send"); // 样式仍为发送（按钮禁用不可点）
+  });
+
+  it("aborting（正在中止）→ 细环图标 + 输入框提示；按钮禁用", () => {
+    const { button, textarea } = renderInput({ generating: true, aborting: true });
+    expect(textarea.placeholder).toBe("正在中止…");
+    expect(button.disabled).toBe(true);
+    // 细环旋转图标（替下中止方块）
+    expect(button.querySelector("circle")).not.toBeNull();
+    expect(button.querySelector("rect")).toBeNull();
   });
 });
 

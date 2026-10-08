@@ -25,7 +25,7 @@ import styles from "./MessageList.module.css";
 // ── 展示项类型 ──
 
 type DisplayItem =
-  | { type: "message"; role: "user" | "error" | "aborted"; content: string; attachments?: Attachment[] }
+  | { type: "message"; role: "user" | "error" | "aborted" | "aborting"; content: string; attachments?: Attachment[] }
   | {
       type: "message";
       role: "assistant";
@@ -231,7 +231,8 @@ function buildArchivedItems(
 /** 进行中部分（当前轮 + 插话 pending；pending 含跨轮未交付项）。随每次流式刷新重算，规模限于当前轮/当前对话。 */
 function buildLiveItems(
   currentEvents: SessionEvent[],
-  pending: readonly { id: string; text: string }[] | undefined
+  pending: readonly { id: string; text: string }[] | undefined,
+  aborting: boolean
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   if (currentEvents.length > 0) {
@@ -242,6 +243,10 @@ function buildLiveItems(
     for (const p of pending) {
       items.push({ type: "pending", id: p.id, text: p.text });
     }
+  }
+  // 中止已发出、轮未收尾：轮尾一条「正在中止…」（收尾后由 turn/aborted 标记接替）
+  if (aborting) {
+    items.push({ type: "message", role: "aborting", content: "正在中止…" });
   }
   return items;
 }
@@ -297,8 +302,9 @@ const MessageRow = memo(function MessageRow({
           </div>
         );
       }
-      // M3-B：轮中止标记条（灰/斜体小字，独立样式——不走 error 分支）
-      if (item.role === "aborted") {
+      // M3-B：轮中止标记条（灰/斜体小字，独立样式——不走 error 分支；
+      // 「正在中止…」与「该轮已中止」同一套样式，前者是过程、后者是结果）
+      if (item.role === "aborted" || item.role === "aborting") {
         return (
           <div
             data-message-area
@@ -348,6 +354,8 @@ interface Props {
   currentEvents: SessionEvent[];
   /** 当前没有对话（草稿态 / 首次使用）→ 对话区呈现欢迎字标 */
   showWelcome: boolean;
+  /** 中止已发出、轮未收尾（2026-10-08）：轮尾追加一条「正在中止…」 */
+  aborting?: boolean;
   /** 压缩记录（模块 D；undefined = 未压缩过）。决定压缩点提示卡位置与摘要 */
   compaction?: CompactionMeta;
   /** 当前对话的插话 pending（待注入气泡；跨轮留存，undefined/空 = 无） */
@@ -358,7 +366,7 @@ interface Props {
   conversationId?: string | null;
 }
 
-export function MessageList({ turns, currentEvents, showWelcome, compaction, pending, onCancelPending, conversationId }: Props) {
+export function MessageList({ turns, currentEvents, showWelcome, compaction, pending, onCancelPending, conversationId, aborting = false }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
   /*
@@ -551,8 +559,8 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
     [turns, showWelcome, compaction]
   );
   const liveItems = useMemo(
-    () => buildLiveItems(currentEvents, pending),
-    [currentEvents, pending]
+    () => buildLiveItems(currentEvents, pending, aborting),
+    [currentEvents, pending, aborting]
   );
   // 无进行中内容时直接复用归档数组（引用稳定 → 不触发多余的滚底副作用）
   const items = useMemo(
