@@ -162,8 +162,18 @@ impl Database {
     /// 仅当文件无法打开时返回错误。某张表不存在不会导致整体失败，
     /// 该表的列集合为空，后续查询时返回明确的"表不存在"错误。
     pub fn open(path: &str) -> Result<Self, String> {
-        let conn =
-            Connection::open(path).map_err(|e| format!("无法打开数据库 {}: {e}", path))?;
+        // 显式存在性检查：SQLite 对不存在的路径会**静默新建**一个空库，于是
+        // “db 没就位”会伪装成“打开了但查不到任何数据”（2026-10-08 实测：把文件
+        // 改名后应用照常启动，还凭空生成了一个 0 字节 db）。这种失败最难发现，
+        // 先在这里挡住，并给出明确原因。
+        if !std::path::Path::new(path).exists() {
+            return Err(format!("未找到数据库文件：{path}"));
+        }
+
+        // 只读打开：本应用对 db 只查不写（写入由 data-pipeline 离线完成），
+        // 只读同时杜绝上述隐式创建。
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("无法打开数据库 {}: {e}", path))?;
 
         let mut valid_columns: HashMap<String, HashSet<String>> = HashMap::new();
 
@@ -178,6 +188,13 @@ impl Database {
                 }
             }
             valid_columns.insert(table.to_string(), cols);
+        }
+
+        // 空库/错库校验：一张已知表都没有 ⇒ 这不是能用的作战数据库
+        if valid_columns.values().all(|cols| cols.is_empty()) {
+            return Err(format!(
+                "数据库不含任何已知数据表（文件是否完整？）：{path}"
+            ));
         }
 
         Ok(Self {
@@ -204,6 +221,14 @@ impl Database {
     /// 数据库是否不可用；不可用时返回原因（启动自检用）。
     pub fn unavailable_reason(&self) -> Option<&str> {
         self.unavailable.as_deref()
+    }
+
+    /// 就位的数据表数（列集合非空的表）。启动自检据此报事实。
+    pub fn present_table_count(&self) -> usize {
+        self.valid_columns
+            .values()
+            .filter(|cols| !cols.is_empty())
+            .count()
     }
 
     /// 查询入口统一闸：不可用态短路成明确错误。
@@ -530,6 +555,33 @@ mod tests {
         assert!(err.contains("数据库不可用"), "错误应说明不可用：{err}");
         let err = db.query_count("enemies", &[]).unwrap_err();
         assert!(err.contains("数据库不可用"), "错误应说明不可用：{err}");
+    }
+
+    #[test]
+    fn open_missing_path_reports_instead_of_creating() {
+        let dir = std::env::temp_dir().join(format!("prts-db-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("nope.db");
+        assert!(!missing.exists());
+
+        let err = Database::open(&missing.to_string_lossy()).unwrap_err();
+        assert!(err.contains("未找到数据库文件"), "应报未找到：{err}");
+        assert!(!missing.exists(), "不得隐式创建空库");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_empty_file_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("prts-db-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let empty = dir.join("empty.db");
+        std::fs::write(&empty, b"").unwrap();
+
+        let err = Database::open(&empty.to_string_lossy()).unwrap_err();
+        assert!(err.contains("不含任何已知数据表"), "应报空库：{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -550,7 +550,7 @@ pub fn get_boot_status(
     let database = match db.unavailable_reason() {
         None => BootComponent {
             ok: true,
-            note: "已接入".into(),
+            note: format!("已接入 · {} 张表", db.present_table_count()),
         },
         Some(reason) => BootComponent {
             ok: false,
