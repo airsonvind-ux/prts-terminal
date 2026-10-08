@@ -10,6 +10,7 @@
 // （Panel 单漏斗：busy 守卫 + 即时保存）。
 
 import type { ExecutionMode } from "../../types";
+import { SectionHint } from "./ui/SettingsSection";
 import { SettingsRow } from "./ui/SettingsRow";
 import choiceStyles from "./ui/choice.module.css";
 import styles from "./SettingsSafety.module.css";
@@ -22,11 +23,17 @@ const OPTION_NOTES: Record<ExecutionMode, string> = {
 
 export interface SettingsSafetyProps {
   mode: ExecutionMode;
+  /** 对话处理中：执行模式暂不可改（会改到在飞命令的判定） */
+  busy?: boolean;
   /** 变更上抛（Panel 漏斗：busy 守卫 + 即时保存；busy 时无回调 + toast） */
   onModeChange: (mode: ExecutionMode) => void;
 }
 
-export function SettingsSafety({ mode, onModeChange }: SettingsSafetyProps) {
+export function SettingsSafety({
+  mode,
+  busy = false,
+  onModeChange,
+}: SettingsSafetyProps) {
   const option = (value: ExecutionMode, title: string) => (
     <SettingsRow
       controlInline
@@ -37,6 +44,7 @@ export function SettingsSafety({ mode, onModeChange }: SettingsSafetyProps) {
           type="radio"
           name="execMode"
           className={choiceStyles.choice}
+          disabled={busy}
           checked={mode === value}
           onChange={() => onModeChange(value)}
         />
@@ -46,6 +54,7 @@ export function SettingsSafety({ mode, onModeChange }: SettingsSafetyProps) {
 
   return (
     <div className={styles.container}>
+      {busy && <SectionHint>对话处理中，执行模式暂不可改</SectionHint>}
       {option("ask", "操作前询问")}
       {option("auto", "自动化")}
     </div>

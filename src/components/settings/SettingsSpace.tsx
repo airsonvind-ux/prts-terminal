@@ -12,13 +12,15 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
-import { SettingsSection } from "./ui/SettingsSection";
+import { SettingsSection, SectionHint } from "./ui/SettingsSection";
 import { WorkspaceTree } from "./WorkspaceTree";
 import styles from "./SettingsSpace.module.css";
 
 export interface SettingsSpaceProps {
   /** 当前生效 workspace 根（空串 = 未设置，装配回退 data_dir） */
   workspaceRoot: string;
+  /** 对话处理中：工作空间路径暂不可改（目录浏览不受限） */
+  busy?: boolean;
   /** 「选择目录」按钮上抛（Panel：busy 守卫 → 目录选择器 → 选中 patch 保存） */
   onChooseWorkspace: () => void;
 }
@@ -26,6 +28,7 @@ export interface SettingsSpaceProps {
 export function SettingsSpace({
   workspaceRoot,
   onChooseWorkspace,
+  busy = false,
 }: SettingsSpaceProps) {
   /** 在系统文件管理器打开工作区根（可见反馈契约：成败都有 toast） */
   const openInExplorer = () => {
@@ -41,6 +44,9 @@ export function SettingsSpace({
   return (
     <div className={styles.container}>
       <SettingsSection title="工作空间">
+        {busy && (
+          <SectionHint>对话处理中，工作空间路径暂不可改</SectionHint>
+        )}
         {/* 多行排布：label / 路径行（路径 + 选择目录）/ 打开行 / hint */}
         <div className={styles.wsLabel}>路径</div>
         <div className={styles.wsPathRow}>
@@ -53,6 +59,7 @@ export function SettingsSpace({
           <button
             className={styles.actionButton}
             onClick={onChooseWorkspace}
+            disabled={busy}
             title="选择一个目录作为工作空间根"
           >
             选择目录

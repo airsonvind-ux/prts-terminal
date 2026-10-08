@@ -7,13 +7,15 @@
 
 import { useState } from "react";
 import type { SkillEntry } from "../../types";
-import { SettingsSection } from "./ui/SettingsSection";
+import { SettingsSection, SectionHint } from "./ui/SettingsSection";
 import { FileLink } from "../ui/FileLink";
 import styles from "./SettingsSkills.module.css";
 
 export interface SettingsSkillsProps {
   /** 技能清单（Panel 挂载时拉取一次，安装/移除后刷新）；null = 加载中/失败 */
   skills: SkillEntry[] | null;
+  /** 对话处理中：仍可安装（本轮技能清单已冻结，改动从下一轮生效） */
+  busy?: boolean;
   /** 安装 .md 文件（Panel 负责选择器、命令与刷新） */
   onInstallFile: () => void;
   /** 安装技能文件夹（根级含 SKILL.md；Panel 负责选择器、命令与刷新） */
@@ -24,6 +26,7 @@ export interface SettingsSkillsProps {
 
 export function SettingsSkills({
   skills,
+  busy = false,
   onInstallFile,
   onInstallFolder,
   onRemove,
@@ -34,6 +37,11 @@ export function SettingsSkills({
   return (
     <div className={styles.container}>
       <SettingsSection title="安装技能">
+        {busy && (
+          <SectionHint>
+            对话处理中仍可安装；技能改动从下一轮生效，当前对话不受影响
+          </SectionHint>
+        )}
         <p className={styles.sectionHint}>
           支持 .md 文件，或包含 SKILL.md 的技能文件夹；安装后即可使用
         </p>

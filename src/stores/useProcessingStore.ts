@@ -211,6 +211,30 @@ export function isProcessingBusy(state: { processing: Record<string, ProcessingS
   return Object.keys(state.processing).length > 0;
 }
 
+/**
+ * 「有待审批」口径（设置入口收窄用）：任一处理中快照里存在**未配对**的
+ * `tool/approval-request`（有 request 无 result）即为有待审批。
+ *
+ * 与 EventBadge 的配对规则同源（callId 精确配对）。设置遮罩真正会盖住的只有
+ * 审批确认卡，而不是“任何对话在跑”——后者让长对话里只能干等。
+ */
+export function hasPendingApproval(state: {
+  processing: Record<string, ProcessingState>;
+}): boolean {
+  for (const snap of Object.values(state.processing)) {
+    const decided = new Set(
+      snap.currentEvents
+        .filter((e) => e.type === "tool/approval-result")
+        .map((e) => e.callId)
+    );
+    const pending = snap.currentEvents.some(
+      (e) => e.type === "tool/approval-request" && !decided.has(e.callId)
+    );
+    if (pending) return true;
+  }
+  return false;
+}
+
 /** 事件处理器内即时查 busy（getState 快照，避免为一次性读订阅重渲染） */
 export function isAnyProcessing(): boolean {
   return isProcessingBusy(useProcessingStore.getState());

@@ -6,7 +6,6 @@
 
 import { type MouseEvent } from "react";
 import { useConversationStore } from "../../stores/useConversationStore";
-import { isProcessingBusy, useProcessingStore } from "../../stores/useProcessingStore";
 import { useUIStore } from "../../stores/useUIStore";
 import { useTypewriter } from "../../hooks/useTypewriter";
 import styles from "./Toolbar.module.css";
@@ -35,17 +34,17 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
   const newChat = useConversationStore((s) => s.newChat);
   const overlay = useUIStore((s) => s.overlay);
   const setOverlay = useUIStore((s) => s.setOverlay);
-  // M3-B：busy（任一对话处理中）→ 设置入口禁用（防处理中打开设置遮住
-  // 审批确认卡——overlay 遮罩会盖住 EventBadge 的确认按钮直到 300s 超时）
-  const settingsBusy = useProcessingStore(isProcessingBusy);
 
   /*
    * 覆盖层按钮切换逻辑：当前已打开则关闭，否则打开目标面板。
    * 这样 ◷ 和 ⚙ 既是打开按钮也是关闭按钮，减少 UI 中的关闭入口。
-   * busy 时 ⚙ 直接禁用（不进入 toggle——处理中不可开设置）。
+   *
+   * 对话处理中不再挡在门口（2026-10-08）：面板内按项锁，用户进得去、也看得见
+   * 哪里可改、哪里暂不可改。原先整页禁用，用户点到的是一颗原生 disabled 按钮，
+   * 连 title 提示都弹不出来——看起来就像坏了。
+   * 真正需要挡的只有“有待审批”（确认卡会被遮罩盖住），那由 SettingsPanel 处理。
    */
   const toggleOverlay = (type: "history" | "settings") => {
-    if (type === "settings" && settingsBusy) return;
     setOverlay(overlay === type ? null : type);
   };
 
@@ -81,8 +80,7 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
           className={btn("settings")}
           style={{ "--btn-expand-ratio": "0.217" } as React.CSSProperties}
           onClick={() => toggleOverlay("settings")}
-          title={settingsBusy ? "对话处理中，暂不能打开设置" : "设置"}
-          disabled={settingsBusy}
+          title="设置"
         >
           <span className={styles.icon}>⚙</span>
           <span className={styles.label}>设置</span>
