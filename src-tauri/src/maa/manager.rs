@@ -229,6 +229,21 @@ pub fn submit(tasks: &[Value], wait_secs: u64) -> Result<SubmitOutcome, String> 
     })
 }
 
+/// 是否有任务正在跑（桥在、且有未收尾的运行）。
+///
+/// 给设置写入用：MAA 设置一变就作废连接（`set_settings` 会关桥），正在跑的任务
+/// 会被腰斩。只看活着的桥——死桥的残留记录不算。
+pub fn is_running() -> bool {
+    lock()
+        .map(|m| {
+            m.bridge
+                .as_ref()
+                .map(|b| b.is_alive() && b.run_in_flight())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
 /// 各任务类型的默认等待上限（秒）。`0` = 派发即返回。
 ///
 /// 数值来自真机实测（OperBox 42s、Depot 5s、StartUp 25s，见
@@ -1487,5 +1502,47 @@ mod tests {
         println!("缓冲事件 = {} 条", bridge.drain_events().len());
         bridge.shutdown();
         println!("已请求桥退出");
+    }
+
+    /// 真机验证：派发互斥——已有任务在跑时，第二次 submit 必须被拒。
+    ///
+    /// **不连模拟器、不碰游戏**：管理器里放一个真桥，造一个「未收尾的运行」，
+    /// 只验闸的位置与判据（submit 的锁内、ensure 之后）。
+    /// 运行：`cargo test --lib maa::manager::tests::dispatch_mutex -- --ignored --nocapture`
+    #[test]
+    #[ignore = "真机验证，手动运行"]
+    fn dispatch_mutex() {
+        let data_dir = crate::config::data_dir();
+        let info = MachineInfo::load(&data_dir).expect("需要 machine.json（先跑一次 PRTS 生成）");
+        let maa_dir = info.maa.clone().expect("本机需要已安装 MAA");
+        let exe = bridge::resolve_exe().expect("要能定位桥可执行文件");
+        let port = bridge::free_port().expect("取空闲端口");
+        let user_dir = data_dir.join("maa");
+
+        let bridge = Bridge::spawn(&exe, &maa_dir, &user_dir, port).expect("起桥");
+        // 真跑任务才会置「未收尾」；这里直接造出来，第二个 submit 就该被拒。
+        bridge.begin_run(vec![1]);
+        assert!(bridge.run_in_flight(), "begin_run 之后应视为在跑");
+
+        {
+            let mut m = lock().expect("管理器锁");
+            m.bridge = Some(bridge);
+            // connected 留空：ensure 只在「没有桥」时才起桥连接，
+            // 而闸又排在连接检查之前，所以这样就能单独验闸。
+            m.connected = None;
+        }
+
+        let err = submit(&[json!({ "type": "Depot" })], 0).expect_err("在跑时就该拒");
+        println!("拒绝理由 = {err}");
+        assert_eq!(err, DISPATCH_BUSY_MSG);
+
+        // 收尾：清空管理器状态并关桥，不留孤儿进程
+        let taken = {
+            let mut m = lock().expect("管理器锁");
+            (m.bridge.take(), m.connected.take())
+        };
+        if let Some(b) = taken.0 {
+            b.shutdown();
+        }
     }
 }

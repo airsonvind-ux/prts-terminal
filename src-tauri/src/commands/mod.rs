@@ -440,6 +440,14 @@ pub async fn set_settings(
             "设置文件 schemaVersion 高于当前，拒绝写入（需升级应用）"
         ));
     }
+    // MAA 运行期间拒绝任何带 maa 段的写入：这项改动会作废连接、关掉桥，
+    // 把正在跑的任务腰斩（长任务出轮后仍在跑，属常见情形）。扩展页的只读锁定
+    // 是前端那一层，这里是后端那一层。
+    // 判据用请求里的键，而不是 apply_patch 之后的变化摘要——必须在改动内存态
+    // 之前拒绝，否则会出现「设置半数落进 store、却没落盘」。
+    if patch.maa.is_some() && crate::maa::manager::is_running() {
+        return Err("MAA 正在执行任务，暂不能修改连接设置；等它跑完，或先中止它".to_string());
+    }
     let changes = st.apply_patch(&patch);
     if changes.llm_changed {
         let mut c = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
