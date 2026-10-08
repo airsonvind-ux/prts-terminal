@@ -101,6 +101,9 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
     ? conversations.find((c) => c.id === activeId)
     : undefined;
   const visible = activeConv !== undefined;
+  // 揭示前（启动演出期间）按“无对话”的初始态呈现：宽 0、不占位——
+  // 输入框因此保持初始位置，揭示时再靠 width 过渡自然地向右缩。
+  const shown = visible && reveal;
   // 压缩中 = 活跃对话正在进行压缩（输入区禁用 + 圆环旋转）
   const compacting = activeId !== null && compactingConversationId === activeId;
 
@@ -177,16 +180,16 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
     <>
       <div
         ref={setRingEl}
-        className={`${styles.ringWrapper} ${visible ? styles.visible : ""}`}
+        className={`${styles.ringWrapper} ${shown ? styles.visible : ""}`}
         onMouseEnter={handleRingEnter}
         onMouseLeave={handleRingLeave}
         onClick={handleRingClick}
         role="button"
-        tabIndex={visible ? 0 : -1}
+        tabIndex={shown ? 0 : -1}
         aria-label={compacting ? "压缩进行中，点击取消" : "压缩对话"}
         aria-expanded={menuOpen}
         onKeyDown={(e) => {
-          if (visible && (e.key === "Enter" || e.key === " ")) {
+          if (shown && (e.key === "Enter" || e.key === " ")) {
             e.preventDefault();
             handleRingClick();
           }
@@ -274,7 +277,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
 
       {/* 压缩菜单（点击圆环：单一动作项，随状态切换，点击即执行——无确认卡） */}
       {menuOpen &&
-        visible &&
+        shown &&
         menuStyle &&
         createPortal(
           <div

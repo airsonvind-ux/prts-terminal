@@ -305,14 +305,9 @@ export function ChatView({ onDragHandle }: Props) {
           <AttachmentStrip files={attachments} onRemove={removeAttachment} />
         )}
         <div className={styles.inputRow}>
-          {/* 指示环同样等到揭示才出现；reveal 让圆环从空扫到当前水位（落位） */}
-          <div
-            className={`${styles.ringSlot} ${
-              chromeVisible ? styles.ringSlotIn : ""
-            }`}
-          >
-            <ContextIndicator reveal={chromeVisible} />
-          </div>
+          {/* 指示环自己负责揭示：启动演出期间宽 0（与无对话时同态，不占位），
+              揭示时靠它自己的 width 过渡把输入框自然地向右缩过去 */}
+          <ContextIndicator reveal={chromeVisible} />
           <InputArea
             onSubmit={handleSubmit}
             onSteer={handleSteer}
