@@ -437,7 +437,7 @@ export function SettingsPanel() {
 
   return (
     <div className={styles.container}>
-      {/* ── 左侧导航（5 项，全 2 字名；侧栏不扩张） ── */}
+      {/* ── 左侧导航（9 项，全 2 字名；侧栏不扩张） ── */}
       <nav className={styles.sidebar}>
         <div className={styles.sidebarTitle}>设置</div>
         {TABS.map((tab) => (
