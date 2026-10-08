@@ -119,6 +119,11 @@ impl KnowledgeIndex {
         })
     }
 
+    /// 条目数（启动自检报事实用）。
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     /// 降级启动用的空索引（root 为空路径、无条目）。
     ///
     /// 索引加载失败时使用，保证 read_knowledge 工具可注册但恒未命中。

@@ -40,6 +40,19 @@
   border-top: 1px solid var(--depth-1);
 }
 
+/* ── 指示环占位（启动揭示前不显示；显示时与标题同步渐显） ── */
+
+.ringSlot {
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 260ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.ringSlotIn {
+  opacity: 1;
+}
+
 /* ── 输入行：承载 InputArea ── */
 
 .inputRow {

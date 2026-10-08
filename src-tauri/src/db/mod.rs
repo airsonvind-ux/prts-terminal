@@ -141,11 +141,19 @@ pub struct QueryResult {
 ///
 /// `valid_columns` 在 `open()` 时通过 PRAGMA table_info 动态填充，
 /// 数据管线新增列时无需修改 Rust 代码。
+///
+/// # 不可用态
+///
+/// 启动时打不开数据库不再 panic：`Database::unavailable(原因)` 顶上，
+/// 所有查询入口短路为明确错误（不静默返回空结果）。启动自检读该原因。
 #[derive(Debug)]
 pub struct Database {
-    conn: Mutex<Connection>,
+    /// None = 不可用态（启动时打不开）：所有查询入口短路返回明确错误。
+    conn: Option<Mutex<Connection>>,
     /// 表名 → 该表的所有合法列名
     valid_columns: HashMap<String, HashSet<String>>,
+    /// 不可用态的原因原文（Some = 不可用）。保留原因供启动自检与工具报错复用。
+    unavailable: Option<String>,
 }
 
 impl Database {
@@ -173,9 +181,37 @@ impl Database {
         }
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Some(Mutex::new(conn)),
             valid_columns,
+            unavailable: None,
         })
+    }
+
+    /// 不可用态：启动时数据库打不开时顶上。
+    ///
+    /// 任何查询入口都会短路成 `数据库不可用：{原因}`，不 panic、也不静默返回
+    /// 空结果。原因原文保留，供 `get_boot_status`（启动自检）与工具层报错复用——
+    /// 发布形态下 db 落位异常时，用户看到的是可解释的提示，而不是一个起不来的
+    /// 应用，或"查不到任何数据"的假象。
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self {
+            conn: None,
+            valid_columns: HashMap::new(),
+            unavailable: Some(reason.into()),
+        }
+    }
+
+    /// 数据库是否不可用；不可用时返回原因（启动自检用）。
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.unavailable.as_deref()
+    }
+
+    /// 查询入口统一闸：不可用态短路成明确错误。
+    fn ensure_available(&self) -> Result<(), String> {
+        match &self.unavailable {
+            Some(reason) => Err(format!("数据库不可用：{reason}")),
+            None => Ok(()),
+        }
     }
 
     /// 执行白名单过滤的只读查询，返回原始结构化数据。
@@ -202,6 +238,8 @@ impl Database {
         filters: &[Filter],
         limit: u32,
     ) -> Result<QueryResult, String> {
+        self.ensure_available()?;
+
         // ── 1. 校验表存在 ──
         let valid = self
             .valid_columns
@@ -279,6 +317,8 @@ impl Database {
         // ── 5. 执行查询 ──
         let conn = self
             .conn
+            .as_ref()
+            .ok_or_else(|| "数据库不可用".to_string())?
             .lock()
             .map_err(|e| format!("数据库锁获取失败: {e}"))?;
 
@@ -342,6 +382,8 @@ impl Database {
         table: &str,
         filters: &[Filter],
     ) -> Result<u32, String> {
+        self.ensure_available()?;
+
         // ── 1. 校验表存在 ──
         let valid = self
             .valid_columns
@@ -387,6 +429,8 @@ impl Database {
         // ── 4. 执行 ──
         let conn = self
             .conn
+            .as_ref()
+            .ok_or_else(|| "数据库不可用".to_string())?
             .lock()
             .map_err(|e| format!("数据库锁获取失败: {e}"))?;
 
@@ -475,6 +519,18 @@ mod tests {
     }
 
     // ── 基础功能 ──
+
+    #[test]
+    fn unavailable_state_short_circuits_queries() {
+        let db = Database::unavailable("测试原因");
+        assert_eq!(db.unavailable_reason(), Some("测试原因"));
+        let err = db
+            .query_filtered("enemies", &["名称".into()], &[], 1)
+            .unwrap_err();
+        assert!(err.contains("数据库不可用"), "错误应说明不可用：{err}");
+        let err = db.query_count("enemies", &[]).unwrap_err();
+        assert!(err.contains("数据库不可用"), "错误应说明不可用：{err}");
+    }
 
     #[test]
     fn open_database_succeeds() {

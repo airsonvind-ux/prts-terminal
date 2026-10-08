@@ -506,6 +506,84 @@ pub fn set_always_on_top(
     Ok(())
 }
 
+/// 启动自检事实（lib.rs 装配期写入，只读命令 `get_boot_status` 消费）。
+///
+/// 只报事实、不参与业务判定：数据库可用性从 `Database` 自身读，这里带的是
+/// 装配期一次性得到的知识库 / 记忆结果。
+#[derive(Debug, Clone)]
+pub struct BootFacts {
+    /// 知识库索引建起来的条目数（加载失败 = 0）
+    pub knowledge_count: usize,
+    /// 知识库索引加载失败原因（正常 = None）
+    pub knowledge_error: Option<String>,
+    /// 记忆存储加载失败原因（正常 = None）
+    pub memory_error: Option<String>,
+}
+
+/// 启动自检单件的报告：ok + 一行注记（成功时是事实，失败时是原因）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootComponent {
+    pub ok: bool,
+    pub note: String,
+}
+
+/// 启动自检报告（启动演出消费；不参与业务判定）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootStatus {
+    pub database: BootComponent,
+    pub knowledge: BootComponent,
+    pub memory: BootComponent,
+}
+
+/// 启动自检：三件内置资源是否就位。只读、无副作用。
+///
+/// 演出在载入时按这个报告翻牌（`[ OK ]` / `[FAIL]`）——载入是真检测，
+/// 不是纯动画。`note` 在成功时是事实（如「已接入 · 128 条」），
+/// 失败时是原因原文（给提示悬停与排查用）。
+#[tauri::command]
+pub fn get_boot_status(
+    db: State<'_, Arc<Database>>,
+    facts: State<'_, Arc<BootFacts>>,
+) -> Result<BootStatus, String> {
+    let database = match db.unavailable_reason() {
+        None => BootComponent {
+            ok: true,
+            note: "已接入".into(),
+        },
+        Some(reason) => BootComponent {
+            ok: false,
+            note: reason.to_string(),
+        },
+    };
+    let knowledge = match &facts.knowledge_error {
+        None => BootComponent {
+            ok: true,
+            note: format!("已接入 · {} 条", facts.knowledge_count),
+        },
+        Some(e) => BootComponent {
+            ok: false,
+            note: e.clone(),
+        },
+    };
+    let memory = match &facts.memory_error {
+        None => BootComponent {
+            ok: true,
+            note: "已接入".into(),
+        },
+        Some(e) => BootComponent {
+            ok: false,
+            note: e.clone(),
+        },
+    };
+    Ok(BootStatus {
+        database,
+        knowledge,
+        memory,
+    })
+}
+
 /// 应用只读元信息（关于页 + 空间页共用）：版本 + 当前生效路径。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

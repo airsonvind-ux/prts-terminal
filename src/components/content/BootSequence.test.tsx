@@ -23,6 +23,8 @@ beforeEach(() => {
   useUIStore.setState({
     restoring: false,
     restoreInfo: { phase: "ready", readDone: 0, readTotal: 0 },
+    bootStatus: null,
+    restoreFailed: false,
   });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -64,19 +66,21 @@ describe("BootSequence 启动演出", () => {
     });
 
     // 静态块挂载即渲染（CSS 动画负责入场）；初始为日志幕
+    // 自检报告未到：清单三行先从 [ .. ] 起（状态位不编造）
     expect(container.textContent).toContain(
-      "PRTS · Preliminary RodesIsland Terminal System"
+      "PRTS · Preliminary Rhodes Island Terminal System"
     );
-    expect(container.textContent).toContain("作战数据库 … 已接入");
-    expect(container.textContent).toContain("知识库 … 已接入");
-    expect(container.textContent).toContain("记忆模块 … 已接入");
+    expect(container.textContent).toContain("[ .. ]");
+    expect(container.textContent).toContain("数据库: 接入中");
+    expect(container.textContent).toContain("知识库: 接入中");
+    expect(container.textContent).toContain("记忆模块: 接入中");
     expect(sceneNow()).toBe("log");
     expect(onDone).not.toHaveBeenCalled();
 
     await playThrough();
 
-    expect(container.textContent).toContain("正在校验作战记录索引…");
-    expect(container.textContent).toContain("正在调取作战记录…");
+    expect(container.textContent).toContain("校验: 作战记录索引");
+    expect(container.textContent).toContain("调取: 作战记录");
     expect(container.textContent).toContain("[2/2]");
     expect(container.textContent).toContain("链路建立完毕。欢迎回来，博士。");
     // 幕二：欢迎页（字标 + 标语）且已停在欢迎幕
@@ -93,10 +97,52 @@ describe("BootSequence 启动演出", () => {
 
     await playThrough();
 
-    expect(container.textContent).not.toContain("正在调取作战记录");
+    expect(container.textContent).not.toContain("调取: 作战记录");
     expect(container.textContent).toContain("链路建立完毕。博士，终端就绪。");
     // 首次使用同样播幕二（幕二字标与欢迎页同源，淡出衔接无缝）
     expect(sceneNow()).toBe("welcome");
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("自检报告到位：清单行翻牌（[ OK ] / [FAIL]）；揭示时回调 onReveal", async () => {
+    useUIStore.setState({
+      bootStatus: {
+        database: { ok: true, note: "已接入" },
+        knowledge: { ok: true, note: "已接入 · 128 条" },
+        memory: { ok: false, note: "目录不可写" },
+      },
+    });
+    const onDone = vi.fn();
+    const onReveal = vi.fn();
+    await act(async () => {
+      root.render(<BootSequence onDone={onDone} onReveal={onReveal} />);
+    });
+
+    expect(container.textContent).toContain("数据库: 已接入");
+    expect(container.textContent).toContain("知识库: 已接入 · 128 条");
+    expect(container.textContent).toContain("[FAIL]");
+    expect(container.textContent).toContain("记忆模块: 未就绪");
+    // 揭示回调在淡出时才触发
+    expect(onReveal).not.toHaveBeenCalled();
+
+    await playThrough();
+
+    expect(onReveal).toHaveBeenCalledTimes(1);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("恢复失败：多报一行 [WARN]，且不进入「调取」", async () => {
+    useUIStore.setState({ restoreFailed: true });
+    const onDone = vi.fn();
+    await act(async () => {
+      root.render(<BootSequence onDone={onDone} />);
+    });
+
+    await playThrough();
+
+    expect(container.textContent).toContain("[WARN]");
+    expect(container.textContent).toContain("读取: 失败，按新建处理");
+    expect(container.textContent).not.toContain("调取: 作战记录");
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 });

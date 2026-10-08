@@ -83,6 +83,14 @@ const __defaultInvokeImpl = (cmd: string) => {
       window: { always_on_top: true },
     });
   }
+  // 启动自检（启动演出的清单行翻牌）：默认三件就位，测试可覆盖单次行为
+  if (cmd === "get_boot_status") {
+    return Promise.resolve({
+      database: { ok: true, note: "已接入" },
+      knowledge: { ok: true, note: "已接入 · 2 条" },
+      memory: { ok: true, note: "已接入" },
+    });
+  }
   if (cmd === "get_app_meta") {
     return Promise.resolve({
       version: "0.1.0",

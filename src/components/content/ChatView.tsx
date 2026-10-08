@@ -71,6 +71,10 @@ export function ChatView({ onDragHandle }: Props) {
   // 启动演出覆盖层（2026-09 定稿）：播完（含淡出）才撤下、露出对话
   const [bootVisible, setBootVisible] = useState(true);
   const handleBootDone = useCallback(() => setBootVisible(false), []);
+  // 标题与指示环的揭示（启动演出开始淡出时置位）：演出期间它们不显示，
+  // 否则“已有对话”会在载入过程中就露面，载入过程反而看不出来。
+  const [chromeVisible, setChromeVisible] = useState(false);
+  const handleBootReveal = useCallback(() => setChromeVisible(true), []);
 
   // ── 当前对话处理中轮次的 sessionId（processing 字典 key = 后端
   // abort_turn / steer_message 的活动 turn 目标）──
@@ -275,7 +279,7 @@ export function ChatView({ onDragHandle }: Props) {
 
   return (
     <div className={styles.container}>
-      <Toolbar onDragHandle={onDragHandle} />
+      <Toolbar onDragHandle={onDragHandle} showTitle={chromeVisible} />
       <DragOverlay active={dragActive} />
       <div className={styles.messageArea}>
         {/* 恢复中且尚无内容：对话区留白（启动演出覆盖其上）；恢复后内容先挂载、
@@ -291,7 +295,9 @@ export function ChatView({ onDragHandle }: Props) {
             conversationId={activeId}
           />
         )}
-        {bootVisible && <BootSequence onDone={handleBootDone} />}
+        {bootVisible && (
+          <BootSequence onDone={handleBootDone} onReveal={handleBootReveal} />
+        )}
       </div>
       {!isFirstUse && <FindBar />}
       <div className={styles.bottomArea}>
@@ -299,7 +305,14 @@ export function ChatView({ onDragHandle }: Props) {
           <AttachmentStrip files={attachments} onRemove={removeAttachment} />
         )}
         <div className={styles.inputRow}>
-          <ContextIndicator />
+          {/* 指示环同样等到揭示才出现；reveal 让圆环从空扫到当前水位（落位） */}
+          <div
+            className={`${styles.ringSlot} ${
+              chromeVisible ? styles.ringSlotIn : ""
+            }`}
+          >
+            <ContextIndicator reveal={chromeVisible} />
+          </div>
           <InputArea
             onSubmit={handleSubmit}
             onSteer={handleSteer}

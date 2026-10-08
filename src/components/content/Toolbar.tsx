@@ -12,9 +12,11 @@ import styles from "./Toolbar.module.css";
 
 interface Props {
   onDragHandle?: (e: MouseEvent) => void;
+  /** false = 启动演出期间：标题留白（不剧透已有对话），演出淡出时渐显 */
+  showTitle?: boolean;
 }
 
-export function Toolbar({ onDragHandle }: Props) {
+export function Toolbar({ onDragHandle, showTitle = true }: Props) {
   const activeId = useConversationStore((s) => s.activeId);
   const conversations = useConversationStore((s) => s.conversations);
 
@@ -50,7 +52,9 @@ export function Toolbar({ onDragHandle }: Props) {
   return (
     <div className={styles.bar} onMouseDown={onDragHandle} onContextMenu={(e) => e.preventDefault()}>
       <span
-        className={`${styles.title} ${isHistoryOpen ? styles.titleActive : ""}`}
+        className={`${styles.title} ${
+          isHistoryOpen ? styles.titleActive : ""
+        } ${showTitle ? "" : styles.titleHidden}`}
         onClick={displayTitle ? () => toggleOverlay("history") : undefined}
         onMouseDown={(e) => e.stopPropagation()}
       >

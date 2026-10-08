@@ -15,7 +15,7 @@
 //   其余                          → "processing"
 
 import { create } from "zustand";
-import type { HiddenMode, OverlayType, UIState } from "../types";
+import type { BootStatus, HiddenMode, OverlayType, UIState } from "../types";
 
 // ── 派生计算（纯函数，模块级导出） ──
 
@@ -86,6 +86,16 @@ interface UIStore {
    */
   restoreInfo: RestoreInfo;
   /**
+   * 启动自检报告（get_boot_status）：三件内置资源是否就位。
+   * 只喂启动演出（清单行翻牌），不参与任何业务判定。null = 尚未取到。
+   */
+  bootStatus: BootStatus | null;
+  /**
+   * 启动会话恢复是否失败（list/get 失败 → 降级为空历史）。
+   * 只喂启动演出（失败时多报一行），不参与任何业务判定。
+   */
+  restoreFailed: boolean;
+  /**
    * hidden 的触发方式。
    * null = 窗口正常可见。
    * "shortcut" = 快捷键隐藏，"edge_snap" = 边缘吸附隐藏。
@@ -107,6 +117,10 @@ interface UIStore {
   setRestoring: (value: boolean) => void;
   /** 推进启动恢复工序进度（部分字段合并；恢复 hook 调用） */
   setRestoreInfo: (patch: Partial<RestoreInfo>) => void;
+  /** 写入启动自检报告（恢复 hook 调用；取不到时保持 null） */
+  setBootStatus: (status: BootStatus | null) => void;
+  /** 记录启动恢复失败（恢复 hook 调用） */
+  setRestoreFailed: (failed: boolean) => void;
   /** 设置隐藏方式 */
   setHiddenMode: (mode: HiddenMode) => void;
   /** 记录错误信息 */
@@ -126,6 +140,8 @@ export const useUIStore = create<UIStore>((set) => ({
      restoring 期间对话区显示占位、输入禁发。 */
   restoring: true,
   restoreInfo: { phase: "index", readDone: 0, readTotal: 0 },
+  bootStatus: null,
+  restoreFailed: false,
   hiddenMode: null,
   errorMsg: null,
   overlay: null,
@@ -135,6 +151,10 @@ export const useUIStore = create<UIStore>((set) => ({
 
   setRestoreInfo: (patch) =>
     set((s) => ({ restoreInfo: { ...s.restoreInfo, ...patch } })),
+
+  setBootStatus: (status) => set({ bootStatus: status }),
+
+  setRestoreFailed: (failed) => set({ restoreFailed: failed }),
 
   setHiddenMode: (mode) => set({ hiddenMode: mode }),
 

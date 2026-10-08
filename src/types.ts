@@ -467,6 +467,21 @@ export interface WindowPatch {
   always_on_top?: boolean;
 }
 
+/** get_boot_status 载荷：启动自检单件（只报事实，不参与业务判定） */
+export interface BootComponent {
+  /** 是否就位 */
+  ok: boolean;
+  /** ok 时是事实（如「已接入 · 128 条」）；失败时是原因原文 */
+  note: string;
+}
+
+/** get_boot_status 载荷：三件内置资源的启动自检报告（启动演出消费） */
+export interface BootStatus {
+  database: BootComponent;
+  knowledge: BootComponent;
+  memory: BootComponent;
+}
+
 /** get_app_meta 载荷（关于页 + 空间页共用只读信息） */
 export interface AppMeta {
   version: string;

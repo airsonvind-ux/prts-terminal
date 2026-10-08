@@ -30,6 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useUIStore } from "../stores/useUIStore";
 import type {
+  BootStatus,
   Conversation,
   ConversationMeta,
   ConversationRecord,
@@ -66,6 +67,15 @@ async function runRestore(): Promise<void> {
   useUIStore
     .getState()
     .setRestoreInfo({ phase: "index", readDone: 0, readTotal: 0 });
+
+  // 启动自检（只报事实，不参与业务判定）：与索引读取并行，失败静默——
+  // 探不到就不显示状态位，不阻断恢复。
+  void invoke<BootStatus>("get_boot_status")
+    .then((status) => {
+      if (status) useUIStore.getState().setBootStatus(status);
+    })
+    .catch(() => {});
+
   try {
     const metas = (await invoke<ConversationMeta[]>("list_conversations")) ?? [];
     if (metas.length === 0) return; // 首次使用/无持久数据 → 欢迎界面照旧
@@ -133,6 +143,8 @@ async function runRestore(): Promise<void> {
   } catch (err) {
     // list/get 失败（后端不可达/损坏）→ 降级为空历史（欢迎界面），不抛给 UI
     console.warn("[hydration] 会话恢复失败（降级为空历史）：", err);
+    // 演出据此多报一行（[WARN] 读取: 失败，按新建处理）——降级别没痕迹
+    useUIStore.getState().setRestoreFailed(true);
   } finally {
     // 先置 ready（演出据此收尾），再复位 restoring（业务闸）
     useUIStore.getState().setRestoreInfo({ phase: "ready" });

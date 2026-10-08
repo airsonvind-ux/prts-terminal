@@ -80,7 +80,7 @@ function anchorAbove(ringEl: HTMLElement): React.CSSProperties {
   };
 }
 
-export function ContextIndicator() {
+export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
   const [hovered, setHovered] = useState(false);
   const [ringEl, setRingEl] = useState<HTMLDivElement | null>(null);
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -114,6 +114,9 @@ export function ContextIndicator() {
     : 0;
   const pct = contextWindow > 0 ? Math.round((used / contextWindow) * 100) : 0;
   const offset = calcOffset(used, contextWindow);
+  // 揭示前显示空环：圆环随覆盖层淡出从空扫到当前水位（.fill 已有
+  // stroke-dashoffset 过渡，无需额外动画）。reveal 缺省 true = 无揭示行为。
+  const shownOffset = reveal ? offset : CIRCUMFERENCE;
   const warning =
     !compacting && contextWindow > 0 && used / contextWindow >= CONTEXT_WARNING_RATIO;
 
@@ -223,7 +226,7 @@ export function ContextIndicator() {
               fill="none"
               strokeWidth={STROKE}
               strokeDasharray={CIRCUMFERENCE}
-              strokeDashoffset={offset}
+              strokeDashoffset={shownOffset}
               strokeLinecap="round"
               transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
               style={{ stroke: ringColor(pct) }}

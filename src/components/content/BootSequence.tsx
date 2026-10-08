@@ -3,9 +3,15 @@
 //
 // 演出与真实的关系（定稿规则）：
 //   - 总时长 = max(真实, 剧本最小)：真实慢 → 停在当前句等它；真实快 → 剧本照走完
-//   - 文案只报真实在做的事：全篇消费 useUIStore.restoreInfo
-//     （index → read[n/N] → ready），不产生任何虚构进度
+//   - 文案只报真实在做的事：全篇消费 useUIStore.restoreInfo（index → read[n/N]
+//     → ready）与 useUIStore.bootStatus（启动自检报告），不产生任何虚构进度
 //   - [n/N] 计数仅在 N ≥ 2 时显示（单份时「1/1」无意义）
+//
+// 终端风格（2026-10 定稿）：每行 = 「状态位 + 字段名: 值」。
+//   - 状态位：[ .. ]（进行中）→ 原地翻 [ OK ]；失败 [FAIL] / [WARN]。
+//     翻牌时机绑真实工序，状态位因此是真信号，不是装饰。
+//   - 清单三行同样从 [ .. ] 起，等 bootStatus 到达后翻牌。
+//   - 收尾问候句不带状态位（终端风不该吃掉这处人情味）。
 //
 // 三幕（过渡＝一条连续的运动线，原型已验）：
 //   幕一 自检日志：铭牌 + 接入清单（CSS 入场）→ 日志句逐句打字
@@ -48,26 +54,60 @@ const EXIT_MS = 400;
 /** 欢迎入场尾段：细线延迟 720ms + 时长 320ms（与 CSS 同步） */
 const WELCOME_TAIL_MS = 720 + 320;
 
-const INDEX_LINE = "正在校验作战记录索引…";
-const READ_LINE = "正在调取作战记录…";
+/** 铭牌（拼写：罗德岛 = Rhodes Island） */
+const BANNER = "PRTS · Preliminary Rhodes Island Terminal System";
+
+/** 接入清单：label + bootStatus 的取值键。状态位随自检报告翻牌。 */
+const MODULES: { key: "database" | "knowledge" | "memory"; label: string }[] = [
+  { key: "database", label: "数据库" },
+  { key: "knowledge", label: "知识库" },
+  { key: "memory", label: "记忆模块" },
+];
+
+/** 状态位：定宽 6 字符（等宽字体下对齐） */
+type Bit = "run" | "ok" | "fail" | "warn";
+const BITS: Record<Bit, string> = {
+  run: "[ .. ]",
+  ok: "[ OK ]",
+  fail: "[FAIL]",
+  warn: "[WARN]",
+};
+
+const INDEX_LINE = "校验: 作战记录索引";
+const READ_LINE = "调取: 作战记录";
+const WARN_LINE = "读取: 失败，按新建处理";
 const CLOSE_LINE_RETURNING = "链路建立完毕。欢迎回来，博士。";
 const CLOSE_LINE_FIRST_USE = "链路建立完毕。博士，终端就绪。";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface Line {
-  id: "index" | "read" | "close";
+  id: "index" | "read" | "warn" | "close";
   text: string;
+  /** 完成后翻成的状态位（收尾句不渲染） */
+  bit: Bit;
 }
 
 type Scene = "log" | "welcome";
 
+/** 状态位 → 颜色类（ok 轻绿 / 失败与警告各一色 / 进行中降级灰） */
+const bitClass = (bit: Bit): string =>
+  bit === "ok"
+    ? styles.bitOk
+    : bit === "warn"
+      ? styles.bitWarn
+      : bit === "fail"
+        ? styles.bitFail
+        : styles.bitRun;
+
 interface Props {
   /** 演出完成（含淡出）后回调；由 ChatView 撤下本覆盖层 */
   onDone: () => void;
+  /** 覆盖层开始淡出的那一刻回调；ChatView 据此把标题与指示环渐显出来 */
+  onReveal?: () => void;
 }
 
-export function BootSequence({ onDone }: Props) {
+export function BootSequence({ onDone, onReveal }: Props) {
   /** 已完成的行（变暗展示） */
   const [doneLines, setDoneLines] = useState<Line[]>([]);
   /** 当前行 + 已打出字数（打字机） */
@@ -85,6 +125,7 @@ export function BootSequence({ onDone }: Props) {
 
   const readDone = useUIStore((s) => s.restoreInfo.readDone);
   const readTotal = useUIStore((s) => s.restoreInfo.readTotal);
+  const bootStatus = useUIStore((s) => s.bootStatus);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,7 +187,7 @@ export function BootSequence({ onDone }: Props) {
       if (cancelled) return;
 
       // 句 1：校验索引（真实工序：读会话索引）
-      await playLine({ id: "index", text: INDEX_LINE });
+      await playLine({ id: "index", text: INDEX_LINE, bit: "ok" });
       if (cancelled) return;
 
       // 等索引结果定音（有记录 → 进入「调取」；无记录/失败 → 直奔收尾）
@@ -155,9 +196,18 @@ export function BootSequence({ onDone }: Props) {
       );
       if (cancelled) return;
 
+      // 恢复失败（list/get 降级为空历史）：报一行，别让静默降级没痕迹
+      if (useUIStore.getState().restoreFailed) {
+        await playLine({ id: "warn", text: WARN_LINE, bit: "warn" });
+        if (cancelled) return;
+      }
+
       // 句 2：调取作战记录（仅当有记录；展示期间 [n/N] 实时刷新）
       if (useUIStore.getState().restoreInfo.readTotal > 0) {
-        await playLine({ id: "read", text: READ_LINE }, { holdUntil: realDone });
+        await playLine(
+          { id: "read", text: READ_LINE, bit: "ok" },
+          { holdUntil: realDone }
+        );
         if (cancelled) return;
       }
 
@@ -169,7 +219,10 @@ export function BootSequence({ onDone }: Props) {
       const readTotalNow = useUIStore.getState().restoreInfo.readTotal;
       const returning = readTotalNow > 0;
       const closeText = returning ? CLOSE_LINE_RETURNING : CLOSE_LINE_FIRST_USE;
-      await playLine({ id: "close", text: closeText }, { keepActive: true });
+      await playLine(
+        { id: "close", text: closeText, bit: "ok" },
+        { keepActive: true }
+      );
       if (cancelled) return;
 
       // 整句停留：先把最后一句话读完，再开始过渡
@@ -193,7 +246,9 @@ export function BootSequence({ onDone }: Props) {
       if (cancelled) return;
 
       // 幕三：淡出露出对话（首次使用时欢迎页就在覆盖层之下，无缝衔接）
+      // 标题与指示环随这次淡出一起渐显 / 落位（onReveal）
       setClosing(true);
+      onReveal?.();
       await sleep(EXIT_MS);
       if (cancelled) return;
       onDone();
@@ -202,7 +257,7 @@ export function BootSequence({ onDone }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [onDone]);
+  }, [onDone, onReveal]);
 
   /** 退场波延迟：序号 × 错峰（铭牌 0、清单 1-3、日志句 4+） */
   const waveDelay = (index: number) =>
@@ -222,23 +277,29 @@ export function BootSequence({ onDone }: Props) {
           data-wave="0"
           style={{ transitionDelay: waveDelay(0) }}
         >
-          PRTS · Preliminary RodesIsland Terminal System
+          {BANNER}
         </div>
         <div className={styles.modules}>
-          {["作战数据库 … 已接入", "知识库 … 已接入", "记忆模块 … 已接入"].map(
-            (text, i) => (
+          {MODULES.map((m, i) => {
+            const report = bootStatus?.[m.key];
+            const bit: Bit = !report ? "run" : report.ok ? "ok" : "fail";
+            return (
               <div
-                key={text}
+                key={m.key}
                 className={`${styles.module} ${styles.wave} ${
                   waving ? styles.gone : ""
                 }`}
                 data-wave={1 + i}
                 style={{ transitionDelay: waveDelay(1 + i) }}
+                title={report && !report.ok ? report.note : undefined}
               >
-                {text}
+                <span className={`${styles.bit} ${bitClass(bit)}`}>
+                  {BITS[bit]}
+                </span>
+                {m.label}: {!report ? "接入中" : report.ok ? report.note : "未就绪"}
               </div>
-            )
-          )}
+            );
+          })}
         </div>
         <div className={styles.log}>
           {doneLines.map((line, i) => (
@@ -250,7 +311,11 @@ export function BootSequence({ onDone }: Props) {
               data-wave={4 + i}
               style={{ transitionDelay: waveDelay(4 + i) }}
             >
-              <span className={styles.prompt}>{">"}</span>
+              {line.id !== "close" && (
+                <span className={`${styles.bit} ${bitClass(line.bit)}`}>
+                  {BITS[line.bit]}
+                </span>
+              )}
               <span>{line.text}</span>
               {line.id === "read" && readTotal >= 2 && (
                 <span className={styles.count}>
@@ -268,7 +333,11 @@ export function BootSequence({ onDone }: Props) {
               data-wave={4 + doneLines.length}
               style={{ transitionDelay: waveDelay(4 + doneLines.length) }}
             >
-              <span className={styles.prompt}>{">"}</span>
+              {active.line.id !== "close" && (
+                <span className={`${styles.bit} ${styles.bitRun}`}>
+                  {BITS.run}
+                </span>
+              )}
               <span>{active.line.text.slice(0, active.typed)}</span>
               {active.line.id === "read" &&
                 readTotal >= 2 &&

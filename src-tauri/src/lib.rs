@@ -59,11 +59,17 @@ use crate::llm::openai_responses::OpenAIResponsesClient;
 pub fn run() {
     // ── 数据库 ──
     // M1 批 3：db 路径解析收口于 config::resolve_db_path（原 get_db_path 删除）
+    // 打不开不再 panic：降级成“不可用态”——启动自检会把它报出来，之后的查库
+    // 调用返回明确错误。发布形态下 db 落位异常时，用户拿到的是可解释的终端，
+    // 而不是一个起不来的应用。
     let db_path = config::resolve_db_path();
-    let db = Arc::new(
-        Database::open(db_path.to_str().unwrap())
-            .expect("无法打开 arknights.db，请确认 data-pipeline 已运行")
-    );
+    let db = Arc::new(match Database::open(db_path.to_string_lossy().as_ref()) {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("[lib] 数据库打开失败（降级为不可用态）：{e}");
+            Database::unavailable(e)
+        }
+    });
 
     // ── 模型注册表（从 models.json 加载）──
     let model_registry = {
@@ -88,29 +94,48 @@ pub fn run() {
     };
 
     // ── 知识库索引（read_knowledge 的查询底表；加载失败降级为空索引）──
-    let knowledge_index = {
+    // 启动自检要报的是“索引到底建起来没有”，故结果（条目数 / 失败原因）留住。
+    let (knowledge_index, knowledge_count, knowledge_error) = {
         let root = knowledge_dir();
         match KnowledgeIndex::load(&root) {
-            Ok(idx) => Arc::new(idx),
+            Ok(idx) => {
+                let n = idx.entry_count();
+                (Arc::new(idx), n, None)
+            }
             Err(e) => {
                 eprintln!("[lib] 知识库索引加载失败（read_knowledge 将不可用）：{e}");
-                Arc::new(KnowledgeIndex::empty_for_boot_failure())
+                (Arc::new(KnowledgeIndex::empty_for_boot_failure()), 0, Some(e))
             }
         }
     };
 
     // ── 记忆存储（Phase 4 任务二 · 批 1）：落于 data_dir()/memory/ ──
-    // 目录创建失败时降级为空存储（记忆工具仍可注册，只读为空），不阻断启动。
+    // 目录创建失败时降级为空存储（记忆工具仍可注册，只读为空），不阻断启动；
+    // 失败原因留住，启动自检会报出来。
+    let memory_error: Option<String>;
     let memory_store = {
         let dir = config::data_dir();
         match MemoryStore::load(&dir) {
-            Ok(s) => Arc::new(Mutex::new(s)),
+            Ok(s) => {
+                memory_error = None;
+                Arc::new(Mutex::new(s))
+            }
             Err(e) => {
                 eprintln!("[lib] 记忆存储加载失败（降级为空）：{e}");
+                memory_error = Some(e);
                 Arc::new(Mutex::new(MemoryStore::empty(dir.join("memory"))))
             }
         }
     };
+
+    // ── 启动自检事实（get_boot_status 消费）──
+    // 只报事实、不参与业务判定：启动演出据此在载入时翻牌。数据库的可用性
+    // 从 Database 自身读，这里带的是装配期一次性得到的知识库 / 记忆结果。
+    let boot_facts = Arc::new(commands::BootFacts {
+        knowledge_count,
+        knowledge_error,
+        memory_error,
+    });
 
     // ── 提醒数据源（notices：快照＝值、环境零累积、事件有界）━━
     // 提前创建：记忆工具（memory_growth）写成功需向数据源发记忆事件，
@@ -329,6 +354,7 @@ pub fn run() {
         .manage(settings_store)
         // .manage(cache_stores)
         // .manage(last_unloads)
+        .manage(Arc::clone(&boot_facts))
         // 置顶初值：tauri.conf.json 静态 alwaysOnTop=true 为窗口创建兜底；
         // settings.window.always_on_top=false 时启动即关闭（文件值优先）。
         .setup(|app| {
@@ -363,6 +389,7 @@ pub fn run() {
             commands::set_settings,
             commands::reveal_api_key,
             commands::get_app_meta,
+            commands::get_boot_status,
             commands::maa_status,
             commands::maa_test_connection,
             commands::pick_emulator_directory,
