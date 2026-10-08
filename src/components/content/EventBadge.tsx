@@ -40,10 +40,7 @@ import { toolAction } from "../../toolDisplay";
 import { FileLink } from "../ui/FileLink";
 import styles from "./EventBadge.module.css";
 
-// ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案（2026-10-08 重写） ──
-//
-// 写法：只写心情与劲头，动作只给方向（浮 / 歪 / 沉）——不转述动画的幅度、次数、
-// 时长，不用需要参照物的词（「更」「比」），也不写动画里没有的动作。
+// ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案 ──
 
 const MOOD_DESCRIPTIONS: Record<
   "高兴" | "困惑" | "沮丧",
