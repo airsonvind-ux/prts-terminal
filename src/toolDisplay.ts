@@ -28,7 +28,7 @@ const EXACT_MAP: Record<string, string> = {
   write_file: "写入",
   edit: "编辑",
   grep: "搜索",
-  list_dir: "浏览",
+  list_dir: "浏览目录",
   // 命令执行（M3-A）
   run_command: "执行命令",
   // 行动推演

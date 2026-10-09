@@ -273,23 +273,27 @@ impl Tool for ListDirTool {
         })
     }
 
-    /// 展示切片：列出哪个目录（可点击打开）。
-    /// 此前无实现 → 卡片只剩「PRTS浏览完成」，用户不知道在浏览什么。
+    /// 展示切片：只给目录名，不给可点击链接。
+    /// 为什么不做成链接：`open_path` 刻意拒绝目录（见 commands::is_openable_target），
+    /// 点了只会弹失败——与其如此，不如只告诉用户它在浏览哪个目录。
     fn display(&self, _ctx: &ToolContext, params: &str) -> ToolDisplay {
-        let raw = serde_json::from_str::<serde_json::Value>(params)
+        let name = serde_json::from_str::<serde_json::Value>(params)
             .ok()
             .and_then(|v| {
                 v.get("path")
                     .and_then(|p| p.as_str())
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-            });
-        let target = match raw {
-            Some(r) => r,
-            None => self.policy.workspace_root.to_string_lossy().into_owned(),
-        };
-        ToolDisplay::link(file_link(&self.policy, &target))
+                    .map(|s| {
+                        std::path::Path::new(s)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or_else(|| s.to_string())
+                    })
+            })
+            .unwrap_or_else(|| "工作目录".to_string());
+        ToolDisplay::info(name)
     }
 
     fn execute(&self, _ctx: &ToolContext, params: &str) -> Result<ToolOutput, ToolError> {
@@ -429,21 +433,21 @@ mod tests {
         ListDirTool::new(Arc::new(Policy::new(root.to_path_buf())))
     }
 
-    /// list_dir 的展示切片：给目录链接（此前无实现 → 卡片只剩「浏览完成」）。
+    /// list_dir 的展示切片：只给目录名（不提供打开目录的功能）。
     #[test]
-    fn list_dir_display_links_target_directory() {
+    fn list_dir_display_shows_directory_name() {
         let dir = unique_temp_dir("list-display");
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let tool = list_tool(&dir);
 
         let d = tool.display(&ToolContext::new(), r#"{"path":"sub"}"#);
-        let json = serde_json::to_value(&d).unwrap();
-        assert_eq!(json["link"]["kind"], "file");
-        assert_eq!(json["link"]["label"], "sub");
+        assert_eq!(d.text, "sub");
+        assert!(d.link.is_none(), "目录不给链接（open_path 拒绝目录）");
 
-        // 省略 path → 工作目录本身
+        // 省略 path → 工作目录
         let d2 = tool.display(&ToolContext::new(), "{}");
-        assert_eq!(serde_json::to_value(&d2).unwrap()["link"]["kind"], "file");
+        assert_eq!(d2.text, "工作目录");
+        assert!(d2.link.is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
