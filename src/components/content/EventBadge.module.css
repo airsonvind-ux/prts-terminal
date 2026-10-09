@@ -167,6 +167,25 @@
   word-break: break-all;
 }
 
+/* ── 展示切片的「复制」按钮：文本被截断时给用户一条能核对的渠道 ── */
+
+.displayCopy {
+  font: inherit;
+  font-size: 0.92em;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.displayCopy:hover {
+  text-decoration-style: solid;
+}
+
 /* ── 审批确认态（M3-A：run_command 等待用户确认的第四态） ── */
 
 /* 审批中的工具条目：醒目边框（等待用户输入，非自动流程）

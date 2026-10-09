@@ -38,6 +38,7 @@ import type {
 } from "../../types";
 import { toolAction } from "../../toolDisplay";
 import { FileLink } from "../ui/FileLink";
+import { showToast } from "../../stores/useToastStore";
 import styles from "./EventBadge.module.css";
 
 // ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案 ──
@@ -86,7 +87,15 @@ function truncateDisplay(s: string): string {
 
 /** 展示切片是否有可渲染内容（决定进行中态是否保留「...」尾缀） */
 function hasDisplay(display: ToolDisplay | null): boolean {
-  return Boolean(display && (display.text || display.link));
+  return Boolean(display && (display.text || display.link || display.copy));
+}
+
+/** 复制完整原文（截断时的「能确认」渠道；必有可见反馈） */
+function copyFullText(text: string) {
+  void navigator.clipboard
+    .writeText(text)
+    .then(() => showToast("已复制完整内容", { kind: "info" }))
+    .catch(() => showToast("复制失败：剪贴板不可用", { kind: "warning" }));
 }
 
 /**
@@ -97,9 +106,23 @@ function renderDisplaySuffix(display: ToolDisplay | null, failed: boolean) {
   if (!display || !hasDisplay(display)) return null;
   const text = display.text ? truncateDisplay(display.text) : "";
   const link = display.link ?? null;
+  const copy = display.copy ?? null;
   return (
     <>
       {text && `${failed ? " " : "："}${text}`}
+      {copy && (
+        <>
+          {" "}
+          <button
+            type="button"
+            className={styles.displayCopy}
+            title="点击复制完整内容"
+            onClick={() => copyFullText(copy)}
+          >
+            复制
+          </button>
+        </>
+      )}
       {link && (
         <>
           {" "}

@@ -273,6 +273,25 @@ impl Tool for ListDirTool {
         })
     }
 
+    /// 展示切片：列出哪个目录（可点击打开）。
+    /// 此前无实现 → 卡片只剩「PRTS浏览完成」，用户不知道在浏览什么。
+    fn display(&self, _ctx: &ToolContext, params: &str) -> ToolDisplay {
+        let raw = serde_json::from_str::<serde_json::Value>(params)
+            .ok()
+            .and_then(|v| {
+                v.get("path")
+                    .and_then(|p| p.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
+        let target = match raw {
+            Some(r) => r,
+            None => self.policy.workspace_root.to_string_lossy().into_owned(),
+        };
+        ToolDisplay::link(file_link(&self.policy, &target))
+    }
+
     fn execute(&self, _ctx: &ToolContext, params: &str) -> Result<ToolOutput, ToolError> {
         let v: serde_json::Value =
             serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
@@ -408,6 +427,25 @@ mod tests {
     /// 以临时目录为工作区构造 list_dir 工具（沙箱策略注入）。
     fn list_tool(root: &Path) -> ListDirTool {
         ListDirTool::new(Arc::new(Policy::new(root.to_path_buf())))
+    }
+
+    /// list_dir 的展示切片：给目录链接（此前无实现 → 卡片只剩「浏览完成」）。
+    #[test]
+    fn list_dir_display_links_target_directory() {
+        let dir = unique_temp_dir("list-display");
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let tool = list_tool(&dir);
+
+        let d = tool.display(&ToolContext::new(), r#"{"path":"sub"}"#);
+        let json = serde_json::to_value(&d).unwrap();
+        assert_eq!(json["link"]["kind"], "file");
+        assert_eq!(json["link"]["label"], "sub");
+
+        // 省略 path → 工作目录本身
+        let d2 = tool.display(&ToolContext::new(), "{}");
+        assert_eq!(serde_json::to_value(&d2).unwrap()["link"]["kind"], "file");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 搭建测试目录（工作区内）：sub/ 与 empty/ 两个子目录，a.txt（3 行）、

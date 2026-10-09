@@ -492,6 +492,46 @@ describe("EventBadge · 展示切片（进行中即显示 / 失败保留 / 链�
     unmount();
   });
 
+  it("截断时给「复制」渠道：点击写入完整原文；未截断不出按钮", async () => {
+    const full = "x".repeat(300);
+    const writes: string[] = [];
+    const original = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
+
+    const events = [
+      toolCallWithDisplay("run_command", "c_copy", {
+        text: `${full.slice(0, 60)}…`,
+        copy: full,
+      }),
+    ];
+    const { unmount } = renderBadge(events, true);
+    openTools();
+    const btn = document.querySelector(
+      "button[title='点击复制完整内容']"
+    ) as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    await clickAndFlush(btn!);
+    expect(writes).toEqual([full]);
+    unmount();
+
+    // 无 copy（未截断）→ 不出现复制按钮
+    const short = [toolCallWithDisplay("run_command", "c_short", { text: "echo hi" })];
+    const r2 = renderBadge(short, true);
+    openTools();
+    expect(document.querySelector("button[title='点击复制完整内容']")).toBeNull();
+    r2.unmount();
+
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: original });
+  });
+
   it("点击文件链接 → invoke open_path（path=target）", async () => {
     __invokeMock.mockImplementation(() => Promise.resolve(undefined));
     const events = [

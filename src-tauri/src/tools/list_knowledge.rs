@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use crate::knowledge::index::KnowledgeIndex;
-use crate::tools::{Tool, ToolContext, ToolError, ToolOutput};
+use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 /// 知识库目录导航：指定目录的下一级内容（子目录列表 + 直属条目清单）。
 pub struct ListKnowledgeTool {
@@ -46,6 +46,23 @@ impl Tool for ListKnowledgeTool {
                     "description": "相对知识库根目录的目录路径，例如 基础概念/移动与阻挡；省略=知识库整体框架"
                 }
             }
+        })
+    }
+
+    /// 展示切片：在知识库的哪里（下钻目录 / 整体框架）。
+    /// 此前无实现 → 卡片只剩「PRTS浏览完成」，用户不知道在浏览什么。
+    fn display(&self, _ctx: &ToolContext, params: &str) -> ToolDisplay {
+        let dir = serde_json::from_str::<serde_json::Value>(params)
+            .ok()
+            .and_then(|v| {
+                v.get("dir")
+                    .and_then(|d| d.as_str())
+                    .map(|s| s.trim().trim_matches('/').to_string())
+                    .filter(|s| !s.is_empty())
+            });
+        ToolDisplay::info(match dir {
+            Some(d) => format!("知识库 › {d}"),
+            None => "知识库框架".to_string(),
         })
     }
 
