@@ -414,14 +414,13 @@ enum ResponsesSseEvent {
 
 /// 解析 Responses API SSE 字节流。
 async fn parse_responses_sse_stream<St, E>(
-    mut stream: St,
+    stream: St,
     on_event: &(dyn Fn(StreamEvent) + Send + Sync),
 ) -> Result<StreamResult, LlmError>
 where
     St: futures_util::Stream<Item = Result<Vec<u8>, E>> + Unpin,
     E: std::fmt::Display,
 {
-    let mut line_buf = String::new();
     let mut text = String::new();
     let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
@@ -430,57 +429,48 @@ where
     // 按 call_id 累积 tool_call 的 arguments 和 name
     let mut pending_calls: HashMap<String, (Option<String>, String)> = HashMap::new();
 
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                line_buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                while let Some(pos) = line_buf.find("\n\n") {
-                    let frame = line_buf[..pos].to_string();
-                    line_buf = line_buf[pos + 2..].to_string();
-
-                    if frame.trim().is_empty() {
-                        continue;
-                    }
-
-                    if let Some(ev) = parse_responses_frame(&frame) {
-                        match ev {
-                            ResponsesSseEvent::TextDelta { content } => {
-                                text.push_str(&content);
-                                on_event(StreamEvent::TextDelta {
-                                    content: content.clone(),
-                                });
-                            }
-                            ResponsesSseEvent::ReasoningDelta { content } => {
-                                reasoning.push_str(&content);
-                                on_event(StreamEvent::ReasoningDelta {
-                                    content: content.clone(),
-                                });
-                            }
-                            ResponsesSseEvent::FunctionCallDelta {
-                                call_id,
-                                name,
-                                arguments_delta,
-                            } => {
-                                let entry = pending_calls.entry(call_id).or_default();
-                                if let Some(n) = name {
-                                    entry.0 = Some(n);
-                                }
-                                entry.1.push_str(&arguments_delta);
-                            }
-                            ResponsesSseEvent::Completed { usage: u } => {
-                                if let Some(u) = u {
-                                    usage = OpenAIResponsesClient::extract_usage(&u);
-                                }
-                            }
-                        }
-                    }
+    // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
+    if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
+        if frame.trim().is_empty() {
+            return;
+        }
+        let Some(ev) = parse_responses_frame(frame) else {
+            return;
+        };
+        match ev {
+            ResponsesSseEvent::TextDelta { content } => {
+                text.push_str(&content);
+                on_event(StreamEvent::TextDelta {
+                    content: content.clone(),
+                });
+            }
+            ResponsesSseEvent::ReasoningDelta { content } => {
+                reasoning.push_str(&content);
+                on_event(StreamEvent::ReasoningDelta {
+                    content: content.clone(),
+                });
+            }
+            ResponsesSseEvent::FunctionCallDelta {
+                call_id,
+                name,
+                arguments_delta,
+            } => {
+                let entry = pending_calls.entry(call_id).or_default();
+                if let Some(n) = name {
+                    entry.0 = Some(n);
+                }
+                entry.1.push_str(&arguments_delta);
+            }
+            ResponsesSseEvent::Completed { usage: u } => {
+                if let Some(u) = u {
+                    usage = OpenAIResponsesClient::extract_usage(&u);
                 }
             }
-            Err(e) => {
-                return Err(LlmError::Api(format!("流读取异常: {e}")));
-            }
         }
+    })
+    .await
+    {
+        return Err(LlmError::Api(format!("流读取异常: {e}")));
     }
 
     // 流结束后 emit 所有累积的 tool_call
@@ -523,16 +513,14 @@ where
 /// ```
 fn parse_responses_frame(frame: &str) -> Option<ResponsesSseEvent> {
     let mut event_type = String::new();
-    let mut data_str = String::new();
-
     for line in frame.lines() {
-        if let Some(ev) = line.strip_prefix("event: ") {
+        if let Some(ev) = line.strip_prefix("event:") {
             event_type = ev.trim().to_string();
-        } else if let Some(d) = line.strip_prefix("data: ") {
-            data_str = d.to_string();
         }
     }
 
+    // data 负载经共享读取器取（前缀空格可有可无、多行按规范拼接）
+    let data_str = crate::llm::sse::frame_data(frame).unwrap_or_default();
     if data_str.is_empty() {
         return None;
     }

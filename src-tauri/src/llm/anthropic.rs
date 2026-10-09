@@ -503,15 +503,13 @@ struct BlockAccumulator {
 /// Anthropic SSE 使用 `event:` + `data:` 行对，完全不同于
 /// OpenAI 的 `data: {"choices":[...]}` 格式。
 async fn parse_anthropic_sse_stream<St, E>(
-    mut stream: St,
+    stream: St,
     on_event: &(dyn Fn(StreamEvent) + Send + Sync),
 ) -> Result<StreamResult, LlmError>
 where
     St: futures_util::Stream<Item = Result<Vec<u8>, E>> + Unpin,
     E: std::fmt::Display,
 {
-    let mut line_buf = String::new();
-
     // ── 累积状态 ──
     let mut text = String::new();
     let mut reasoning = String::new();
@@ -519,37 +517,26 @@ where
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut usage: Option<TokenUsage> = None;
 
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                line_buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                // Anthropic SSE 帧以 \n\n 分隔
-                while let Some(pos) = line_buf.find("\n\n") {
-                    let frame = line_buf[..pos].to_string();
-                    line_buf = line_buf[pos + 2..].to_string();
-
-                    if frame.trim().is_empty() {
-                        continue;
-                    }
-
-                    if let Some(ev) = parse_anthropic_frame(&frame) {
-                        process_anthropic_event(
-                            &ev,
-                            on_event,
-                            &mut text,
-                            &mut reasoning,
-                            &mut blocks,
-                            &mut tool_calls,
-                            &mut usage,
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(LlmError::Api(format!("流读取异常: {e}")));
-            }
+    // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
+    if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
+        if frame.trim().is_empty() {
+            return;
         }
+        if let Some(ev) = parse_anthropic_frame(frame) {
+            process_anthropic_event(
+                &ev,
+                on_event,
+                &mut text,
+                &mut reasoning,
+                &mut blocks,
+                &mut tool_calls,
+                &mut usage,
+            );
+        }
+    })
+    .await
+    {
+        return Err(LlmError::Api(format!("流读取异常: {e}")));
     }
 
     Ok(StreamResult {
@@ -573,16 +560,14 @@ where
 /// ```
 fn parse_anthropic_frame(frame: &str) -> Option<AnthropicSseEvent> {
     let mut event_type = String::new();
-    let mut data_str = String::new();
-
     for line in frame.lines() {
-        if let Some(ev) = line.strip_prefix("event: ") {
+        if let Some(ev) = line.strip_prefix("event:") {
             event_type = ev.trim().to_string();
-        } else if let Some(d) = line.strip_prefix("data: ") {
-            data_str = d.to_string();
         }
     }
 
+    // data 负载经共享读取器取（前缀空格可有可无、多行按规范拼接）
+    let data_str = crate::llm::sse::frame_data(frame).unwrap_or_default();
     if data_str.is_empty() {
         return None;
     }

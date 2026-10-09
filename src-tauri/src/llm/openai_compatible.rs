@@ -484,7 +484,7 @@ impl ToolCallAccumulator {
 ///   `St` — 字节流（`Vec<u8>` 或 `bytes::Bytes`）
 ///   `E`  — 错误类型（生产环境 reqwest::Error，测试用 &str）
 async fn parse_sse_stream<St, E>(
-    mut stream: St,
+    stream: St,
     on_event: &(dyn Fn(StreamEvent) + Send + Sync),
 ) -> Result<StreamResult, LlmError>
 where
@@ -497,46 +497,28 @@ where
     let mut tool_call_acc: HashMap<usize, ToolCallAccumulator> = HashMap::new();
     let mut usage: Option<TokenUsage> = None;
 
-    // 行缓冲：SSE chunk 可能跨越多个 "\n\n" 分隔的事件帧
-    let mut line_buf = String::new();
+    // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
+    let read = crate::llm::sse::read_frames(stream, |frame| {
+        process_sse_frame(
+            frame,
+            on_event,
+            &mut text,
+            &mut reasoning,
+            &mut tool_call_acc,
+            &mut usage,
+        );
+    })
+    .await;
 
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(bytes) => {
-                line_buf.push_str(&String::from_utf8_lossy(&bytes));
-
-                // 逐帧处理：按 "\n\n" 分割完整的事件帧
-                // 未闭合的帧留在 line_buf 中，等待下一个 chunk 拼接
-                while let Some(pos) = line_buf.find("\n\n") {
-                    let frame = line_buf[..pos].to_string();
-                    line_buf = line_buf[pos + 2..].to_string();
-
-                    if frame.is_empty() {
-                        continue;
-                    }
-
-                    // 处理当前帧
-                    process_sse_frame(
-                        &frame,
-                        on_event,
-                        &mut text,
-                        &mut reasoning,
-                        &mut tool_call_acc,
-                        &mut usage,
-                    );
-                }
-            }
-            Err(e) => {
-                // 流异常：若有已累积内容，emit 错误但不丢弃已有输出
-                let error_msg = format!("流读取异常: {e}");
-                if !text.is_empty() || !tool_call_acc.is_empty() {
-                    on_event(StreamEvent::TextDelta {
-                        content: format!("\n\n[错误] {error_msg}"),
-                    });
-                }
-                return Err(LlmError::Api(error_msg));
-            }
+    if let Err(e) = read {
+        // 流异常：若有已累积内容，emit 错误但不丢弃已有输出
+        let error_msg = format!("流读取异常: {e}");
+        if !text.is_empty() || !tool_call_acc.is_empty() {
+            on_event(StreamEvent::TextDelta {
+                content: format!("\n\n[错误] {error_msg}"),
+            });
         }
+        return Err(LlmError::Api(error_msg));
     }
 
     // ── 流结束：emit 所有累积的 tool_call，同时收集到 Vec 供 orchestrator 判断 ──
@@ -574,9 +556,8 @@ where
     })
 }
 
-/// 处理单个 SSE 事件帧（一行或多行 `data: ...` 组成）。
+/// 处理单个 SSE 事件帧（一帧即一条 JSON，多 `data:` 行属同一 JSON 的换行拼接）。
 ///
-/// 单帧内可能有多条 `data:` 行（OpenAI 协议允许），逐条解析。
 /// `data: [DONE]` 标记流终止——此时如果 choices 为空的 chunk 带 usage，
 /// 该 usage 已被上一轮 process_sse_chunk 暂存。
 fn process_sse_frame(
@@ -587,22 +568,27 @@ fn process_sse_frame(
     tool_call_acc: &mut HashMap<usize, ToolCallAccumulator>,
     usage: &mut Option<TokenUsage>,
 ) {
-    for line in frame.lines() {
-        let data = line.strip_prefix("data: ");
-        let Some(data) = data else { continue; };
-        log::trace!("[LLM] SSE ← {}", data);
+    let Some(payload) = crate::llm::sse::frame_data(frame) else {
+        return;
+    };
+    log::trace!("[LLM] SSE ← {}", payload);
 
-        if data == "[DONE]" {
-            return; // 流终止标记，不解析
-        }
+    if payload == "[DONE]" {
+        return; // 流终止标记，不解析
+    }
 
-        // 反序列化 JSON chunk
-        let chunk: Value = match serde_json::from_str(data) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+    // 一帧即一条 JSON。个别供应商把多条 JSON 塞进多个 data 行（非规范）→
+    // 整段解析失败时逐行兜底。
+    let chunks: Vec<Value> = match serde_json::from_str::<Value>(&payload) {
+        Ok(v) => vec![v],
+        Err(_) => payload
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .collect(),
+    };
 
-        process_sse_chunk(&chunk, on_event, text, reasoning, tool_call_acc, usage);
+    for chunk in &chunks {
+        process_sse_chunk(chunk, on_event, text, reasoning, tool_call_acc, usage);
     }
 }
 

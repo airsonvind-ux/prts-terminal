@@ -20,6 +20,7 @@ pub mod openai_compatible;
 pub mod anthropic;
 pub mod openai_responses;
 pub mod thinking;
+pub mod sse;
 
 // ═══════════════════════════════════════════════════════
 // 统一 HTTP 客户端
