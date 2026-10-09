@@ -579,6 +579,12 @@
         "context": 1000000,
         "reasoning": true,
         "supports_vision": true
+      },
+      "claude-opus-5": {
+        "name": "Claude Opus 5",
+        "context": 1000000,
+        "reasoning": true,
+        "supports_vision": true
       }
     }
   },
@@ -873,6 +879,11 @@
         "name": "GLM-4.7",
         "context": 200000,
         "reasoning": true
+      },
+      "glm-4.5-air": {
+        "name": "GLM-4.5 Air",
+        "context": 200000,
+        "reasoning": true
       }
     }
   },
@@ -920,6 +931,84 @@
       "qwen3-235b-a22b": {
         "name": "Qwen3 235B",
         "context": 131072,
+        "reasoning": true
+      },
+      "qwen-long": {
+        "name": "Qwen Long",
+        "context": 10000000
+      },
+      "qwen-flash": {
+        "name": "Qwen Flash",
+        "context": 997952,
+        "reasoning": true
+      },
+      "qwen-vl-max": {
+        "name": "Qwen Vl Max",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "qwen-vl-plus": {
+        "name": "Qwen Vl Plus",
+        "context": 128000,
+        "supports_vision": true
+      },
+      "qwen3-coder-flash": {
+        "name": "Qwen3 Coder Flash",
+        "context": 997952,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3-coder-plus": {
+        "name": "Qwen3 Coder Plus",
+        "context": 997952,
+        "reasoning": true
+      },
+      "qwen3-max": {
+        "name": "Qwen 3 Max",
+        "context": 262144,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3-mini": {
+        "name": "Qwen 3 Mini",
+        "context": 131072,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3-plus": {
+        "name": "Qwen 3 Plus",
+        "context": 131072,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3.5-flash": {
+        "name": "Qwen 3.5 Flash",
+        "context": 131072,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3.5-max": {
+        "name": "Qwen 3.5 Max",
+        "context": 1000000,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3.5-plus": {
+        "name": "Qwen 3.5 Plus",
+        "context": 1000000,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3.6-flash": {
+        "name": "Qwen 3.6 Flash",
+        "context": 131072,
+        "supports_vision": true,
+        "reasoning": true
+      },
+      "qwen3.6-plus": {
+        "name": "Qwen 3.6 Plus",
+        "context": 1000000,
+        "supports_vision": true,
         "reasoning": true
       }
     }
@@ -1013,6 +1102,11 @@
       }
     },
     "models": {
+      "deepseek-r1": {
+        "name": "DeepSeek R1",
+        "context": 131072,
+        "reasoning": true
+      },
       "deepseek-v3.1:671b-cloud": {
         "name": "Deepseek V3.1:671b Cloud",
         "context": 163840
