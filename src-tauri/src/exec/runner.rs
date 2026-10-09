@@ -238,15 +238,50 @@ impl OutputCollector {
         }
     }
 
-    /// 尾部解码文本（lossy UTF-8）。
+    /// 尾部解码文本。
+    ///
+    /// 滚动窗口的起点可能落在字符中间（chunk 被整块丢弃），所以先退到字符边界。
+    /// 编码策略见 [`decode_output`]。
     fn tail_text(&self) -> String {
         let bytes: Vec<u8> = self.tail.iter().flatten().copied().collect();
-        String::from_utf8_lossy(&bytes).into_owned()
+        decode_output(&bytes).0
     }
 
     fn spilled_path(&self) -> Option<PathBuf> {
         self.spill_path.clone()
     }
+}
+
+/// 解码子进程输出。
+///
+/// 为什么不能一句 lossy 了事：Windows 的控制台程序（cmd 内建命令、不少 CLI）
+/// 按本机代码页输出，中文环境即 GBK；当 UTF-8 解会全篇乱码。策略：严格 UTF-8
+/// 通过就用它；否则 Windows 上按 GBK 解一次；其余平台保留 lossy。
+/// 返回 (文本, 是否按本机代码页转码)。
+fn decode_output(bytes: &[u8]) -> (String, bool) {
+    if bytes.is_empty() {
+        return (String::new(), false);
+    }
+    let bytes = skip_utf8_continuation(bytes);
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return (s.to_owned(), false);
+    }
+    if cfg!(windows) {
+        use encoding_rs::GBK;
+        let (text, _, _) = GBK.decode(bytes);
+        return (text.into_owned(), true);
+    }
+    (String::from_utf8_lossy(bytes).into_owned(), false)
+}
+
+/// 跳过多字节字符的续接字节（0b10xxxxxx）：窗口起点落在字符中间时退到边界，
+/// 免得解码结果开头多一个替换符。
+fn skip_utf8_continuation(bytes: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
+        i += 1;
+    }
+    &bytes[i..]
 }
 
 /// 执行命令。返回统一 [`RunOutput`]（spawn 失败编码在 outcome 内）。
@@ -470,6 +505,22 @@ mod tests {
         assert!(out.stdout_tail.contains("hello-runner"), "stdout: {:?}", out.stdout_tail);
         assert!(!out.truncated);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// GBK 兜底：Windows 控制台的中文输出按本机代码页解（"中文" 的 CP936 字节）。
+    #[test]
+    fn decode_output_falls_back_to_gbk_on_windows() {
+        let gbk = [0xD6u8, 0xD0, 0xCE, 0xC4];
+        let (text, transcoded) = decode_output(&gbk);
+        if cfg!(windows) {
+            assert_eq!(text, "中文");
+            assert!(transcoded, "非 UTF-8 应记为转码");
+        } else {
+            assert!(!transcoded);
+        }
+        let (utf8, t2) = decode_output("中文".as_bytes());
+        assert_eq!(utf8, "中文");
+        assert!(!t2, "合法 UTF-8 不应转码");
     }
 
     #[test]

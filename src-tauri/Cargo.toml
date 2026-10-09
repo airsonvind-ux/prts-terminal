@@ -26,6 +26,8 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 命令输出的 GBK 兜底解码（Windows 中文控制台，见 exec/runner.rs）
+encoding_rs = "0.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 # 图片附件的物化压缩（解码 → 缩边 → 重编码 JPEG）。
