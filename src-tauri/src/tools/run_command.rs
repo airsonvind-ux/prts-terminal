@@ -108,7 +108,7 @@ impl Tool for RunCommandTool {
         } else {
             cmd.to_string()
         };
-        ToolDisplay::info_with_copy(text.clone(), text)
+        ToolDisplay::info_with_full(text.clone(), text)
     }
 
     /// 工具级默认超时（执行内核消费点：params.timeout 覆盖此值）。
@@ -506,13 +506,13 @@ mod tests {
         // 命令内容常显
         let d = tool.display(&ctx, r#"{"command":"Get-Process"}"#);
         assert_eq!(d.text, "Get-Process");
-        assert!(d.copy.is_none(), "未截断不必附带原文");
+        assert!(d.full.is_none(), "未截断不必附带原文");
 
-        // 超长命令：展示截断，但带可核对的原文（前端的点击复制渠道）
+        // 超长命令：展示截断，但带完整原文（前端悬停显示全文）
         let long = "x".repeat(300);
         let d = tool.display(&ctx, &format!(r#"{{"command":"{long}"}}"#));
         assert!(d.text.ends_with('…'), "展示应截断: {}", d.text);
-        assert_eq!(d.copy.as_deref(), Some(long.as_str()));
+        assert_eq!(d.full.as_deref(), Some(long.as_str()));
 
         // permission=full → 标注完整权限
         let d = tool.display(

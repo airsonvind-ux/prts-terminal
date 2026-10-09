@@ -25,7 +25,7 @@ pub(crate) const MAX_DISPLAY_TEXT_CHARS: usize = 200;
 // 展示切片
 // ═══════════════════════════════════════════════════════
 
-/// 一次工具调用的展示切片：文本信息 +（可选）链接。
+/// 一次工具调用的展示切片：文本信息 +（可选）链接 +（可选）完整原文。
 ///
 /// 序列化时字段为空即省略（`skip_serializing_if`），旧归档无此字段 →
 /// 前端按缺省处理（不附加任何信息）。
@@ -38,16 +38,16 @@ pub struct ToolDisplay {
     /// 链接（文件可点击打开 / URL 浏览器打开）；None = 无链接
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<DisplayLink>,
-    /// 完整原文（供用户点击复制核对）。展示面仍截断——这里给的是「能确认」的
-    /// 渠道，不必在窄卡片里读全文；仅在展示确实被截断时才附带（见 info_with_copy）。
+    /// 完整原文（展示被截断时给出，供前端悬停显示）。截断只是视觉约束，用户始终
+    /// 要有看到全文的渠道；仅在确实被截断时才附带（见 info_with_full）。
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub copy: Option<String>,
+    pub full: Option<String>,
 }
 
 impl ToolDisplay {
     /// 空切片判定（serde `skip_serializing_if` 消费）。
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.link.is_none() && self.copy.is_none()
+        self.text.is_empty() && self.link.is_none() && self.full.is_none()
     }
 
     /// 仅文本信息（超长截断）。
@@ -55,15 +55,15 @@ impl ToolDisplay {
         Self {
             text: truncate_chars(&text.into(), MAX_DISPLAY_TEXT_CHARS),
             link: None,
-            copy: None,
+            full: None,
         }
     }
 
-    /// 文本信息（展示仍截断）+ 完整原文（仅当展示被截断时附带，供点击复制）。
-    pub fn info_with_copy(text: impl Into<String>, full: impl Into<String>) -> Self {
+    /// 文本信息（展示仍截断）+ 完整原文（仅当展示被截断时附带，供悬停显示全文）。
+    pub fn info_with_full(text: impl Into<String>, full: impl Into<String>) -> Self {
         let full: String = full.into();
         let truncated = truncate_chars(&text.into(), MAX_DISPLAY_TEXT_CHARS);
-        let copy = if full.chars().count() > MAX_DISPLAY_TEXT_CHARS {
+        let full = if full.chars().count() > MAX_DISPLAY_TEXT_CHARS {
             Some(full)
         } else {
             None
@@ -71,7 +71,7 @@ impl ToolDisplay {
         Self {
             text: truncated,
             link: None,
-            copy,
+            full,
         }
     }
 
@@ -80,7 +80,7 @@ impl ToolDisplay {
         Self {
             text: String::new(),
             link: Some(link),
-            copy: None,
+            full: None,
         }
     }
 }
@@ -285,15 +285,15 @@ mod tests {
     }
 
     #[test]
-    fn info_with_copy_only_when_truncated() {
-        let short = ToolDisplay::info_with_copy("echo hi", "echo hi");
+    fn info_with_full_only_when_truncated() {
+        let short = ToolDisplay::info_with_full("echo hi", "echo hi");
         assert_eq!(short.text, "echo hi");
-        assert!(short.copy.is_none(), "未截断不必附带原文");
+        assert!(short.full.is_none(), "未截断不必附带原文");
 
         let long = "甲".repeat(MAX_DISPLAY_TEXT_CHARS + 10);
-        let d = ToolDisplay::info_with_copy(long.clone(), long.clone());
+        let d = ToolDisplay::info_with_full(long.clone(), long.clone());
         assert!(d.text.ends_with('…'));
-        assert_eq!(d.copy.as_deref(), Some(long.as_str()), "截断了就要能核对原文");
+        assert_eq!(d.full.as_deref(), Some(long.as_str()), "截断了就要给看全文的渠道");
     }
 
     #[test]
