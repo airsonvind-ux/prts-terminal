@@ -896,6 +896,7 @@
       "kimi-k2.6": {
         "name": "Kimi K2.6",
         "context": 262144,
+        "reasoning": true,
         "supports_vision": true
       },
       "kimi-k2.7-code": {
@@ -918,15 +919,18 @@
     "models": {
       "qwen-max": {
         "name": "Qwen Max",
-        "context": 32768
+        "context": 32768,
+        "supports_vision": true
       },
       "qwen-plus": {
         "name": "Qwen Plus",
-        "context": 131072
+        "context": 131072,
+        "supports_vision": true
       },
       "qwen-turbo": {
         "name": "Qwen Turbo",
-        "context": 131072
+        "context": 131072,
+        "supports_vision": true
       },
       "qwen3-235b-a22b": {
         "name": "Qwen3 235B",
