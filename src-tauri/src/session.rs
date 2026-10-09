@@ -741,7 +741,11 @@ impl SessionLog {
     }
 
     /// 由 user/message 事件派生 LLM 消息：图片附件 → image_paths（请求前物化）；
-    /// 所有附件追加 `[附件：名]` 文本标记（无视觉能力时模型据此知道有附件）。
+    /// 所有附件追加 `[附件：名，路径：落点]` 文本标记——模型据此知道有附件、
+    /// 并能按落点自己读它（无视觉能力时，这行也是它知道有图的唯一线索）。
+    ///
+    /// 给的是**会话落点**（快照副本），非用户原始路径：原文件被移动或删除后标记仍可读，
+    /// 且不把用户的目录结构带进请求。
     fn derive_user_message(content: &str, attachments: &[crate::attachments::Attachment]) -> ChatMessage {
         if attachments.is_empty() {
             return ChatMessage::user(content);
@@ -751,7 +755,11 @@ impl SessionLog {
             .filter(|a| a.is_image())
             .map(|a| a.path.clone())
             .collect();
-        let marks: Vec<String> = attachments.iter().map(|a| format!("[附件：{}]", a.name)).collect();
+        // 标记带落点路径（图片也带，无分支）：模型拿到位置就能自己读文件。
+        let marks: Vec<String> = attachments
+            .iter()
+            .map(|a| format!("[附件：{}，路径：{}]", a.name, a.path))
+            .collect();
         let text = if content.is_empty() {
             marks.join("\n")
         } else {
@@ -1114,6 +1122,24 @@ mod tests {
         assert_eq!(derived[1].role, crate::llm::MessageRole::Assistant);
         assert_eq!(derived[1].content, "你好博士");
         assert!(derived[1].tool_calls.is_none());
+    }
+
+    /// 附件标记带落点路径：模型据此能自己读文件（形状即契约，改动需同步文档）。
+    #[test]
+    fn user_attachment_mark_carries_stored_path() {
+        let att = crate::attachments::Attachment {
+            path: "C:/data/session-files/c1/note_7.txt".into(),
+            name: "note.txt".into(),
+            mime_type: "text/plain".into(),
+            size: 4,
+        };
+        let msg = SessionLog::derive_user_message("看这个", &[att]);
+        assert!(
+            msg.content.contains("[附件：note.txt，路径：C:/data/session-files/c1/note_7.txt]"),
+            "got: {}",
+            msg.content
+        );
+        assert!(msg.content.contains("看这个"), "原文应保留：{}", msg.content);
     }
 
     /// 工具结果的图片附件 → 派生时补一条带图 user 消息（跟轮可重建）。
