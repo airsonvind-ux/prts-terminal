@@ -2100,11 +2100,11 @@ pub fn quit_app(app_handle: AppHandle) {
 
 /// 验证 LLM 供应商连接是否可用。
 ///
-/// 用传入的 LlmConfig 发起一次 GET /v1/models 请求（5 秒超时）。
-/// 适用于 OpenAI 兼容 API（DeepSeek、OpenAI、Ollama）。
-/// 注意：Anthropic API 不兼容 OpenAI 协议，不存在 /v1/models 端点，
-/// provider="anthropic" 时验证必然返回 404。此为预期行为——
-/// Anthropic 适配器尚未实现，provider 选项仅为未来扩展预留。
+/// 用传入的 LlmConfig 发起一次模型列表请求（5 秒超时），验证连通性与凭据。
+///
+/// 分流：Anthropic 走 `{root}/v1/models`（`x-api-key`，`strip_api_path` 剥掉已带
+/// 的路径段）；其余按 OpenAI 兼容走 `{base}/models`（`Authorization: Bearer`，空 key
+/// 不发）。状态映射：200 → Ok；401/403 → “API Key 无效”；404 → “API 端点不存在”。
 /// 成功：返回 Ok。失败：返回可读的错误描述。
 #[tauri::command]
 pub async fn verify_connection(config: LlmConfig) -> Result<(), String> {

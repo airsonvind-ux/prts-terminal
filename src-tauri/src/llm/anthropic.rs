@@ -235,11 +235,17 @@ impl AnthropicMessagesClient {
             body["tools"] = serde_json::json!(Self::convert_tools(tools));
         }
 
-        // 思考强度注入（设置页思考强度；None = 不干预——已设档才进 anthropic wire）
+        // 思考强度注入（设置页思考强度；None = 不干预——已设档才进 anthropic wire）。
+        // 取真实效果层 compat，不用 default：本族 wire 按 api_type 分支即可（budget_tokens），
+        // 但这是「声明了就被读取」的数据通路——某模型将来在本族需要按 compat 区分时，
+        // 不必再回来改适配器。
+        let thinking_compat =
+            self.registry
+                .get_resolved_compat(&config.provider, &config.model, config.api_type);
         crate::llm::thinking::inject(
             &mut body,
             config.api_type,
-            &crate::llm::ResolvedCompat::default(),
+            &thinking_compat,
             &self.registry,
             &config.provider,
             &config.model,

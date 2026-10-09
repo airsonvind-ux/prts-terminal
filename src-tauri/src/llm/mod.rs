@@ -155,7 +155,7 @@ impl Default for ApiType {
 /// 模型所属的 thinking 家族。
 ///
 /// 来自 Hanako `fa()` 的检测结果，在 models.json 中显式声明。
-/// 决定 `resolve_compat()` 如何计算 carrier / request_param / policy / clearable。
+/// 决定 `resolve_compat()` 如何计算 carrier / request_param / policy。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingFormat {
@@ -172,8 +172,10 @@ pub enum ThinkingFormat {
 ///
 /// 字段由供应商级 defaults.compat 与模型级 compat 浅合并。
 /// 各字段独立覆盖，无嵌套子对象。
+/// `deny_unknown_fields`：键名写错直接报错，不再静默落默认档（09-19 键名错位
+/// 曾使 carrier=None，出网前把推理链整套剥掉）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Compat {
     /// 模型所属的 thinking 家族。None = 不需要特殊推理处理
     ///
@@ -197,8 +199,6 @@ pub struct ResolvedCompat {
     pub request_param: Option<String>,
     /// 多轮回传策略
     pub policy: ReasoningPolicy,
-    /// 回传后是否可清除
-    pub clearable: bool,
     /// 认证方式（直通自 Compat.auth）
     pub auth: Option<AuthMode>,
 }
@@ -209,7 +209,6 @@ impl Default for ResolvedCompat {
             carrier: None,
             request_param: None,
             policy: ReasoningPolicy::Preserve,
-            clearable: false,
             auth: None,
         }
     }
@@ -236,7 +235,7 @@ pub enum AuthMode {
 /// 从声明层 compat 计算效果层 ResolvedCompat。
 ///
 /// 翻译 Hanako `K0()` 逻辑：thinking_format + api_type + has_reasoning
-/// 三个输入唯一确定 carrier / request_param / policy / clearable。
+/// 三个输入唯一确定 carrier / request_param / policy。
 /// auth 不参与计算，由调用方从 Compat.auth 直通。
 pub fn resolve_compat(
     thinking_format: Option<ThinkingFormat>,
@@ -265,12 +264,11 @@ pub fn resolve_compat(
             carrier: Some("thinking_blocks".into()),
             ..Default::default()
         },
-        // 智谱 → reasoning_content + enable_thinking + clearable
+        // 智谱 → reasoning_content + enable_thinking
         (Some(ThinkingFormat::Zhipu), ApiType::OpenAiCompletions) => ResolvedCompat {
             carrier: Some("reasoning_content".into()),
             request_param: Some("enable_thinking".into()),
             policy: ReasoningPolicy::RequireToolCall,
-            clearable: true,
             ..Default::default()
         },
         // 通义千问 → reasoning_content + enable_thinking
@@ -762,6 +760,14 @@ pub struct ModelEntry {
 }
 
 /// 供应商条目。
+/// 思考强度的 canonical 档位全集（models.json 的 thinking_levels 自检用）。
+pub const CANONICAL_THINKING_LEVELS: &[&str] = &["off", "low", "medium", "high", "max"];
+
+/// 模型 id 归一化：去掉 `provider/` 前缀并转小写（仅用于查表匹配，不动目录原值）。
+pub fn normalize_model_id(id: &str) -> String {
+    id.rsplit('/').next().unwrap_or(id).trim().to_ascii_lowercase()
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderEntry {
     pub api_type: ApiType,
@@ -774,10 +780,14 @@ pub struct ProviderEntry {
 ///
 /// 启动时从 models.json 加载，常驻内存（Tauri State）。
 /// 提供 compat 合并查询和供应商/模型列表枚举。
+#[derive(Debug)]
 pub struct ModelRegistry {
     providers: HashMap<String, ProviderEntry>,
     /// provider id → 展示名（硬编码映射表）
     display_names: HashMap<String, String>,
+    /// provider id → （归一化模型 id → 目录内 canonical id）
+    /// 远端 /models 的写法差异（`openai/gpt-5.6`、大小写不同）靠它吸收。
+    norm_ids: HashMap<String, HashMap<String, String>>,
 }
 
 impl ModelRegistry {
@@ -790,12 +800,14 @@ impl ModelRegistry {
         }
 
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct ProviderJson {
             defaults: DefaultsJson,
             models: HashMap<String, ModelJson>,
         }
 
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct DefaultsJson {
             api_type: ApiType,
             base_url: String,
@@ -804,6 +816,7 @@ impl ModelRegistry {
         }
 
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
         struct ModelJson {
             name: String,
             context: u32,
@@ -822,6 +835,42 @@ impl ModelRegistry {
 
         let file: ModelsFile = serde_json::from_str(json)
             .map_err(|e| format!("models.json 解析失败: {e}"))?;
+
+        // ── 目录自检（2026-10-08）──
+        // 错误在加载时暴露，不在运行时静默降级。键名/多写字段已被上面的
+        // deny_unknown_fields 挡住；这里补「值必须合法」的三项。
+        let mut problems: Vec<String> = Vec::new();
+        for (pid, pj) in file.providers.iter() {
+            if pj.defaults.base_url.trim().is_empty() {
+                problems.push(format!("{pid}: defaults.base_url 为空"));
+            }
+            for (mid, m) in pj.models.iter() {
+                let at = format!("{pid}/{mid}");
+                if m.name.trim().is_empty() {
+                    problems.push(format!("{at}: name 为空"));
+                }
+                if m.context == 0 {
+                    problems.push(format!("{at}: context 为 0"));
+                }
+                for lv in m.thinking_levels.iter() {
+                    if !CANONICAL_THINKING_LEVELS.contains(&lv.as_str()) {
+                        problems.push(format!("{at}: 未知思考档位 {lv}"));
+                    }
+                }
+                if let Some(d) = m.default_thinking_level.as_deref() {
+                    if !CANONICAL_THINKING_LEVELS.contains(&d) {
+                        problems.push(format!("{at}: 未知默认思考档位 {d}"));
+                    }
+                }
+            }
+        }
+        if !problems.is_empty() {
+            return Err(format!(
+                "models.json 自检未通过（{} 处）：{}",
+                problems.len(),
+                problems.join("；")
+            ));
+        }
 
         let mut providers = HashMap::new();
         for (id, pj) in file.providers {
@@ -850,7 +899,21 @@ impl ModelRegistry {
 
         let display_names = Self::build_display_names();
 
-        Ok(Self { providers, display_names })
+        // 归一化索引：远端 /models 可能返回 `openai/gpt-5.6` 或大小写不同的写法，
+        // 查表时抹平（目录里仍是原样 id，不影响展示与序列化）。
+        let norm_ids: HashMap<String, HashMap<String, String>> = providers
+            .iter()
+            .map(|(pid, pe)| {
+                let index = pe
+                    .models
+                    .keys()
+                    .map(|k| (normalize_model_id(k), k.clone()))
+                    .collect();
+                (pid.clone(), index)
+            })
+            .collect();
+
+        Ok(Self { providers, display_names, norm_ids })
     }
 
     /// 硬编码的 provider id → 展示名映射。
@@ -966,8 +1029,15 @@ impl ModelRegistry {
     }
 
     /// 获取指定模型的能力信息（供 list_models 匹配远端 ID）。
+    ///
+    /// 先按原样查；未命中再按归一化 id 查（远端清单可能带 `provider/` 前缀或
+    /// 大小写不同，见 `normalize_model_id`）。
     pub fn get_model(&self, provider: &str, model: &str) -> Option<&ModelEntry> {
-        self.providers.get(provider)?.models.get(model)
+        let pe = self.providers.get(provider)?;
+        pe.models.get(model).or_else(|| {
+            let canonical = self.norm_ids.get(provider)?.get(&normalize_model_id(model))?;
+            pe.models.get(canonical)
+        })
     }
 }
 
@@ -1047,6 +1117,39 @@ mod tests {
             assert!(default_base_url(p).is_some(), "预设 {p} 应有默认 URL");
         }
         assert!(default_base_url("my-custom").is_none(), "自定义需显式填写");
+    }
+
+    // ── 目录自检（2026-10-08）──
+
+    #[test]
+    fn registry_rejects_unknown_key() {
+        // 键名写错（models.json 少一个 t）→ 加载期报错，不静默落默认
+        let json = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"M","context":1000,"reasoning_flag":true}}}}"#;
+        let err = ModelRegistry::from_json(json).unwrap_err();
+        assert!(err.contains("解析失败"), "got: {err}");
+    }
+
+    #[test]
+    fn registry_rejects_invalid_values() {
+        let bad_ctx = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"M","context":0}}}}"#;
+        assert!(ModelRegistry::from_json(bad_ctx).unwrap_err().contains("context 为 0"));
+
+        let bad_name = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"  ","context":1}}}}"#;
+        assert!(ModelRegistry::from_json(bad_name).unwrap_err().contains("name 为空"));
+
+        let bad_level = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"M","context":1,"thinking_levels":["low","ultra"]}}}}"#;
+        assert!(ModelRegistry::from_json(bad_level).unwrap_err().contains("未知思考档位"));
+    }
+
+    #[test]
+    fn get_model_normalizes_remote_id() {
+        let json = r#"{"openai":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"gpt-5.6":{"name":"GPT-5.6","context":1000}}}}"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+        assert!(reg.get_model("openai", "gpt-5.6").is_some());
+        assert!(reg.get_model("openai", "openai/gpt-5.6").is_some(), "带前缀应命中");
+        assert!(reg.get_model("openai", "GPT-5.6").is_some(), "大小写应命中");
+        assert!(reg.get_model("openai", "nope").is_none());
+        assert!(reg.get_model("no-such-provider", "gpt-5.6").is_none());
     }
 
     use super::*;
