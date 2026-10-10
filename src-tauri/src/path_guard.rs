@@ -286,8 +286,8 @@ mod tests {
         let policy = make_policy(&ws);
 
         // dev 下 arknights.db 真实存在 → canonicalize 成功 → BLOCKED 命中
-        let db = crate::config::resolve_db_path();
-        assert!(db.exists(), "dev 数据库应存在（测试前提）");
+        let db = crate::config::db_seed_path();
+        assert!(db.exists(), "dev 数据库种子应存在（测试前提）");
         let err = resolve_read(&policy, db.to_str().unwrap()).unwrap_err();
         assert!(
             matches!(&err, PathGuardError::Blocked(_)),

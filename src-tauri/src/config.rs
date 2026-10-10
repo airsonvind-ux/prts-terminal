@@ -87,19 +87,25 @@ fn home_dir() -> PathBuf {
 // 随包资源（开发构建 / 发布构建各一条显式路径）
 // ═══════════════════════════════════════════════════════
 
-/// arknights.db 路径（运行时读的那一份）。
+/// 数据库**种子**路径：随程序分发的只读初始副本。
 ///
-/// 开发构建 = `src-tauri/resources/arknights.db`；
-/// 发布构建 = 程序目录下的 `arknights.db`（`bundle.resources` 把它映射到安装
-/// 目录根）。**不做存在性探测**：路径就是路径，缺失由启动自检上报。
-///
-/// 数据库落位改造后，运行时会改读数据根副本，本函数届时收敛为"随包种子"。
-pub fn resolve_db_path() -> PathBuf {
+/// 开发构建 = `src-tauri/resources/arknights.db`；发布构建 = 程序目录下的
+/// `arknights.db`（`bundle.resources` 把它映射到安装目录根）。**不做存在性
+/// 探测**：路径就是路径，缺失由启动前自检拦下（发布构建）。
+pub fn db_seed_path() -> PathBuf {
     if is_dev() {
         resource_root().join("resources").join("arknights.db")
     } else {
         resource_root().join("arknights.db")
     }
+}
+
+/// 数据库**运行时副本**路径：数据根下的 `arknights.db`（可写）。
+///
+/// 数据库与 Policy 都读这一份；不存在或落后于程序版本时，由
+/// [`crate::db_seed::sync_on_boot`] 从种子恢复（首启与后续启动同一条路径）。
+pub fn resolve_db_path() -> PathBuf {
+    data_dir().join("arknights.db")
 }
 
 /// 知识库目录（随包只读资源）。
@@ -164,7 +170,7 @@ mod tests {
     #[test]
     fn resource_paths_are_explicit_and_probe_free() {
         let root = resource_root();
-        let db = resolve_db_path();
+        let db = db_seed_path();
         let kb = bundled_knowledge_dir();
         let skills = bundled_skills_dir();
 
@@ -172,6 +178,11 @@ mod tests {
         for p in [&db, &kb, &skills] {
             assert!(p.starts_with(&root), "资源必须落在基准目录下：{}", p.display());
         }
+
+        // 运行时副本与种子是两份路径：前者在数据根，后者在资源目录
+        let runtime = resolve_db_path();
+        assert!(runtime.starts_with(data_dir()), "运行时副本必须在数据根下");
+        assert_ne!(runtime, db, "种子与运行时副本不是同一份");
 
         if is_dev() {
             // 开发构建：源码树相对路径，且基准目录即源码树
@@ -187,7 +198,8 @@ mod tests {
         }
 
         // 幂等：同一次构建下解析结果唯一（不随"谁存在"改变）
-        assert_eq!(resolve_db_path(), db);
+        assert_eq!(db_seed_path(), db);
+        assert_eq!(resolve_db_path(), runtime);
         assert_eq!(bundled_knowledge_dir(), kb);
         assert_eq!(bundled_skills_dir(), skills);
     }

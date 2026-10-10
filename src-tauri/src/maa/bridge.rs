@@ -64,7 +64,7 @@ impl std::fmt::Display for BridgeError {
         match self {
             BridgeError::ExeMissing(tried) => write!(
                 f,
-                "找不到桥可执行文件 prts-maa-bridge.exe；找过：{}",
+                "MAA 运行组件缺失，重新安装 PRTS 可恢复（找不到 prts-maa-bridge.exe）；找过：{}",
                 tried
                     .iter()
                     .map(|p| p.display().to_string())

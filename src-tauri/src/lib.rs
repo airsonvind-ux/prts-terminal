@@ -10,6 +10,7 @@ mod attachments;
 mod cache;
 mod config;
 mod db;
+mod db_seed;
 mod machine;
 mod notices;
 mod events;
@@ -55,8 +56,119 @@ use crate::llm::anthropic::AnthropicMessagesClient;
 use crate::llm::openai_compatible::OpenAiCompatibleClient;
 use crate::llm::openai_responses::OpenAIResponsesClient;
 
+// ═══════════════════════════════════════════════════════
+// 启动前自检与启动失败通道（仅发布构建）
+// ═══════════════════════════════════════════════════════
+
+/// 启动诊断日志路径（数据根 `logs/` 下）。
+#[cfg(not(debug_assertions))]
+fn boot_log_path() -> std::path::PathBuf {
+    config::data_dir().join("logs").join("boot.log")
+}
+
+/// 追加一条启动诊断（best-effort：写不上不影响弹窗与退出）。
+#[cfg(not(debug_assertions))]
+fn append_boot_log(text: &str) {
+    use std::io::Write;
+    let path = boot_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let _ = write!(f, "[{stamp}] {text}\n");
+    }
+}
+
+/// 原生错误弹窗（Windows）；非 Windows 只落日志。
+#[cfg(not(debug_assertions))]
+fn show_native_error(title: &str, body: &str) {
+    #[cfg(windows)]
+    {
+        use windows::core::HSTRING;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let text = HSTRING::from(body);
+        let caption = HSTRING::from(title);
+        // SAFETY: 纯消息框调用，两个 HSTRING 均在本次调用期间有效。
+        unsafe {
+            let _ = MessageBoxW(None, &text, &caption, MB_ICONERROR | MB_OK);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        eprintln!("[boot] {title}\n{body}");
+    }
+}
+
+/// 启动失败：落一条诊断、弹原生弹窗、退出。
+#[cfg(not(debug_assertions))]
+fn fatal_startup(title: &str, body: &str) -> ! {
+    append_boot_log(&format!("{title}\n{body}"));
+    show_native_error(title, body);
+    std::process::exit(1);
+}
+
+/// 启动前自检（仅发布构建）：安装面关键文件是否齐全可读。
+///
+/// 判据与资源解析同源：不是"哪条路径存在"，而是"按当前构建类型该在的那份
+/// 在不在"。缺任何一样即弹原生弹窗（列出缺失项 + 诊断文件位置）并退出——
+/// 此时 Tauri 尚未起来，界面还不存在，只能由原生弹窗承担。
+#[cfg(not(debug_assertions))]
+fn precheck_install_surface() {
+    let mut missing: Vec<String> = Vec::new();
+
+    let knowledge = config::bundled_knowledge_dir();
+    if !knowledge.is_dir() {
+        missing.push(format!("知识库目录：{}", knowledge.display()));
+    }
+    let skills = config::bundled_skills_dir();
+    if !skills.is_dir() {
+        missing.push(format!("内置技能源：{}", skills.display()));
+    }
+    let seed = config::db_seed_path();
+    if !seed.is_file() {
+        missing.push(format!("数据库初始副本：{}", seed.display()));
+    }
+    if crate::maa::bridge::resolve_exe().is_err() {
+        missing.push("MAA 桥可执行文件：prts-maa-bridge.exe".to_string());
+    }
+
+    if missing.is_empty() {
+        return;
+    }
+
+    let mut body = String::from("缺失或不可读的文件：\n");
+    for item in &missing {
+        body.push_str(&format!("- {item}\n"));
+    }
+    body.push_str(&format!("\n诊断文件：{}", boot_log_path().display()));
+    fatal_startup("PRTS 安装不完整", &body);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ── 启动前自检（仅发布构建）：安装面完整性 ──
+    #[cfg(not(debug_assertions))]
+    precheck_install_surface();
+
+    // ── 数据库种子同步：随包初始副本 → 数据根运行时副本 ──
+    // 首启与后续启动同一条路径：缺失则复制、落后于程序版本则替换。失败意味着
+    // 数据根写不进去（磁盘满 / 权限 / 被拦截），发布构建走启动失败弹窗，
+    // 开发构建只记日志继续（开发态另有源码库可依）。
+    match db_seed::sync_on_boot() {
+        Ok(db_seed::SyncOutcome::UpToDate) => {}
+        Ok(outcome) => eprintln!("[lib] 数据库种子同步：{outcome:?}"),
+        Err(e) => {
+            eprintln!("[lib] 数据库种子同步失败：{e}");
+            #[cfg(not(debug_assertions))]
+            fatal_startup("PRTS 无法启动", &e);
+        }
+    }
+
     // ── 数据库 ──
     // M1 批 3：db 路径解析收口于 config::resolve_db_path（原 get_db_path 删除）
     // 打不开不再 panic：降级成“不可用态”——启动自检会把它报出来，之后的查库

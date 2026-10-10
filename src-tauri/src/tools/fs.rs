@@ -571,8 +571,8 @@ mod tests {
         let root = unique_temp_dir("blocked");
         let tool = read_tool(&root);
 
-        let db = crate::config::resolve_db_path();
-        assert!(db.exists(), "dev 数据库应存在（测试前提）");
+        let db = crate::config::db_seed_path();
+        assert!(db.exists(), "dev 数据库种子应存在（测试前提）");
         let err = tool
             .execute(
                 &ToolContext::new(),

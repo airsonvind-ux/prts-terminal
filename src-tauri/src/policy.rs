@@ -61,8 +61,9 @@ fn canonicalize_opt(p: PathBuf) -> PathBuf {
 impl Policy {
     /// 构造默认策略：
     /// - BLOCKED = **数据根整根**（`config::data_dir()`；会话 / 记忆 / 设置 /
-    ///   提醒台账 / 密钥 / 日志 / 数据库运行副本都在其中）+ 尚未搬入数据根的
-    ///   `resolve_db_path()` 的 db 文件（搬入后此条可删）
+    ///   提醒台账 / 密钥 / 日志 / 数据库**运行时副本**都在其中）
+    ///   + 随包数据库**种子**（`config::db_seed_path()`：与原来同理由，
+    ///   不允许绕过工具直读数据库）
     /// - READ_ONLY = knowledge_dir() + skills_dir()（知识库 + 技能运行根
     ///   data_dir()/skills——内置同步副本与用户技能同住其中）
     /// - protected = workspace_root/.git
@@ -72,8 +73,8 @@ impl Policy {
         // 因此模型**读不到**数据根内的任何文件（含 MAA 识别明细）。
         let blocked = vec![
             canonicalize_opt(config::data_dir()),
-            // 数据库尚未搬入数据根前仍需单列。
-            canonicalize_opt(config::resolve_db_path()),
+            // 随包种子另列（安装在程序目录，不在数据根内）。
+            canonicalize_opt(config::db_seed_path()),
         ];
         let read_only = vec![canonicalize_opt(knowledge_dir()), canonicalize_opt(skills_dir())];
         let protected = vec![canonicalize_opt(ws.join(".git"))];
@@ -334,8 +335,8 @@ mod tests {
         // blocked 含 db 文件（dev 下真实存在 → canonicalize 成功）
         let ws = ws_fixture("shape");
         let policy = Policy::new(ws.clone());
-        let db = config::resolve_db_path().canonicalize().unwrap();
-        assert!(policy.blocked.iter().any(|b| b == &db), "blocked 应含 db 路径");
+        let db = config::db_seed_path().canonicalize().unwrap();
+        assert!(policy.blocked.iter().any(|b| b == &db), "blocked 应含种子路径");
         // read_only 含知识库与技能运行根（运行根可不存在，兜底口径比较）
         let kb = knowledge_dir().canonicalize().unwrap();
         assert!(policy.read_only.iter().any(|b| b == &kb));

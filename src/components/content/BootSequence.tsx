@@ -62,6 +62,49 @@ const MODULES: { key: "database" | "knowledge" | "memory"; label: string }[] = [
   { key: "memory", label: "记忆模块" },
 ];
 
+/**
+ * 未就绪项的固定影响文案（不随后端字段变化）。
+ *
+ * 后端只给「是否就位 + 原因原文」；影响句固定在前端，不新增字段。
+ * 单条未就绪用 `single`（含该项自身措辞）；多条未就绪用 `noun` 并列。
+ */
+const DEGRADED_IMPACT: Record<
+  "database" | "knowledge" | "memory",
+  { noun: string; single: string }
+> = {
+  database: { noun: "数据查询与推演", single: "数据查询与推演不可用" },
+  knowledge: { noun: "机制类问答", single: "机制类问答不可用" },
+  memory: { noun: "记忆", single: "记忆功能已关闭" },
+};
+
+/** 自检报告单件（结构型，避免为一句话新增导入）。 */
+type BootReport = { ok: boolean; note: string };
+type BootStatusLike = {
+  database?: BootReport;
+  knowledge?: BootReport;
+  memory?: BootReport;
+};
+
+/**
+ * 由自检报告拼未就绪说明句（纯函数，载入界面收尾后那一行）。
+ *
+ * 全部就绪或报告未到 → 空串（不显示、不误报）；单项 → 单句；多项 → 一行。
+ * 原因原文不进载入界面（在日志与用到时的报错里）。
+ */
+export function degradedLine(status: BootStatusLike | null): string {
+  if (!status) return "";
+  const bad = MODULES.filter((m) => status[m.key] && !status[m.key]!.ok);
+  if (bad.length === 0) return "";
+  if (bad.length === 1) {
+    return `${bad[0].label}未就绪：${DEGRADED_IMPACT[bad[0].key].single}。`;
+  }
+  const names = bad.map((m) => m.label).join("、");
+  const nouns = bad
+    .map((m) => DEGRADED_IMPACT[m.key].noun)
+    .join("、");
+  return `${names}未就绪：${nouns}均不可用。`;
+}
+
 const INDEX_LINE = "正在校验作战记录索引…";
 const READ_LINE = "正在调取作战记录…";
 const WARN_LINE = "读取失败，按新建处理";
@@ -71,7 +114,7 @@ const CLOSE_LINE_FIRST_USE = "链路建立完毕。博士，终端就绪。";
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface Line {
-  id: "index" | "read" | "warn" | "close";
+  id: "index" | "read" | "warn" | "close" | "degraded";
   text: string;
 }
 
@@ -196,6 +239,14 @@ export function BootSequence({ onDone, onReveal }: Props) {
       await playLine({ id: "close", text: closeText }, { keepActive: true });
       if (cancelled) return;
 
+      // 未就绪说明（自检报告已到且有未就绪项时）：多项压成一行；
+      // 原因不进载入界面（在日志与用到时的报错里）。
+      const degraded = degradedLine(useUIStore.getState().bootStatus);
+      if (degraded) {
+        await playLine({ id: "degraded", text: degraded });
+        if (cancelled) return;
+      }
+
       // 整句停留：先把最后一句话读完，再开始过渡
       await sleep(CLOSE_HOLD_MS);
       if (cancelled) return;
@@ -268,7 +319,6 @@ export function BootSequence({ onDone, onReveal }: Props) {
                 }`}
                 data-wave={1 + i}
                 style={{ transitionDelay: waveDelay(1 + i) }}
-                title={report && !report.ok ? report.note : undefined}
               >
                 {m.label} … {value}
               </div>
