@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && python src-tauri/build-sidecar.py",
     "frontendDist": "../dist"
   },
   "app": {
@@ -40,17 +40,39 @@
   "bundle": {
     "active": true,
     "targets": "nsis",
+    "publisher": "AirsonVind",
     "resources": {
       "resources/arknights.db": "./",
       "src/knowledge/": "resources/knowledge/",
       "src/skills/": "resources/skills/"
     },
+    "externalBin": [
+      "binaries/prts-maa-bridge"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese"
+        ],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "customLanguageFiles": {
+          "SimpChinese": "./windows/SimpChinese.nsh"
+        },
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    }
   }
 }

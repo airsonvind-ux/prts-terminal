@@ -30,6 +30,7 @@ exec-test-dir/
 sim_logs/
 src-tauri/resources/*.db
 src-tauri/$null
+src-tauri/binaries/
 bridge/target/
 __pycache__/
 
