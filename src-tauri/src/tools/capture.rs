@@ -33,11 +33,18 @@ const KEPT: usize = 100;
 const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 /// PC 端游戏窗口标题（认窗口按标题，不读进程名——受保护进程会被拒）。
 const PC_WINDOW_TITLE: &str = "明日方舟";
-/// 补连候选地址的**总**预算：超了就收手，直接给结论。
+/// 找设备的**总**预算：超了就收手，直接给结论。
 ///
 /// 设备没注册时每条 `adb connect` 都要等一次 TCP 超时，十多条凑起来就是十几秒——
-/// 一次「看一眼」不该为一句「没在运行」等那么久。
-const CONNECT_BUDGET: Duration = Duration::from_millis(2500);
+/// 一次「看一眼」不该为一句结论等那么久。
+const DISCOVERY_BUDGET: Duration = Duration::from_millis(2500);
+/// 「列设备 + 空则重试」这一段的时间上限。
+///
+/// 为什么重试：`adb devices` 是**一次快照**。adb 服务冷启动（PRTS 刚开后第一次
+/// 调用）或模拟器刚起来时，第一列常常是空的，而设备几百毫秒后就注册上了。
+const LIST_BUDGET: Duration = Duration::from_millis(1200);
+/// 重试列设备之间的间隔。
+const LIST_RETRY_GAP: Duration = Duration::from_millis(300);
 /// 单条 connect 的等待上限（不超总预算）。
 const CONNECT_EACH: Duration = Duration::from_millis(1200);
 
@@ -180,9 +187,9 @@ fn decide(requested: Option<Target>, emulator_ok: bool, pc_ok: bool) -> Result<T
         (true, true) => Err(
             "模拟器与 PC 端都在运行，请指定 target：\"emulator\" 或 \"pc\"。".to_string(),
         ),
-        (false, false) => {
-            Err("没有找到运行中的游戏：模拟器未运行，PC 端未启动。".to_string())
-        }
+        (false, false) => Err(
+            "没有找到可以截取的画面：没有检测到模拟器设备，PC 端游戏也未启动。".to_string(),
+        ),
     }
 }
 
@@ -266,27 +273,39 @@ fn find_emulator() -> Result<(PathBuf, String), String> {
         return Err("没有找到可用的 adb：模拟器未安装，或 adb 路径未配置。".to_string());
     }
 
-    // 补连候选地址是有预算的：设备没注册时每条 connect 都要等一次 TCP 超时，
-    // 不设上限就会拖十几秒才回一句「没在运行」。
-    let deadline = Instant::now() + CONNECT_BUDGET;
-    'targets: for target in &resolved {
-        // 先直接列：模拟器在跑时设备通常已经注册，这是零额外开销的快路径。
-        if let Some(hit) = pick_device(connection::adb_devices(&target.adb_path))? {
-            return Ok((target.adb_path.clone(), hit));
+    // ① 先列设备，空就短暂重试。`adb devices` 是一次快照：adb 服务冷启动（PRTS 刚
+    //    开后的第一次调用）或模拟器刚起来时，第一列往往是空的，随后才注册上。
+    let list_deadline = Instant::now() + LIST_BUDGET;
+    let deadline = Instant::now() + DISCOVERY_BUDGET;
+    loop {
+        for target in &resolved {
+            if let Some(serial) = pick_device(connection::adb_devices(&target.adb_path))? {
+                return Ok((target.adb_path.clone(), serial));
+            }
         }
-        // 没列到 → 在预算内对候选地址补一次 connect，再列一次。
+        if Instant::now() >= list_deadline {
+            break;
+        }
+        std::thread::sleep(LIST_RETRY_GAP);
+    }
+
+    // ② 仍没有 → 在总预算内对候选地址补一次 connect（有些模拟器要靠它才注册），再列。
+    for target in &resolved {
         for address in &target.addresses {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                break 'targets;
+                break;
             }
             let _ = connect_with_timeout(&target.adb_path, address, CONNECT_EACH.min(left));
         }
-        if let Some(hit) = pick_device(connection::adb_devices(&target.adb_path))? {
-            return Ok((target.adb_path.clone(), hit));
+    }
+    for target in &resolved {
+        if let Some(serial) = pick_device(connection::adb_devices(&target.adb_path))? {
+            return Ok((target.adb_path.clone(), serial));
         }
     }
-    Err("模拟器未在运行。".to_string())
+
+    Err("没有检测到模拟器设备：模拟器可能未运行，或尚未连接上。".to_string())
 }
 
 /// 从一次 `adb devices` 结果里挑设备：0 台 → None；1 台 → 它；多台 → 明确报错。
@@ -585,7 +604,7 @@ mod tests {
         let both = decide(None, true, true).unwrap_err();
         assert!(both.contains("都在运行"), "{both}");
         let none = decide(None, false, false).unwrap_err();
-        assert!(none.contains("没有找到运行中的游戏"), "{none}");
+        assert!(none.contains("没有找到可以截取的画面"), "{none}");
     }
 
     #[test]
