@@ -89,7 +89,8 @@ fn cmd_name(cmd: &Value) -> String {
         .to_string()
 }
 
-/// 定位桥可执行文件：先看 PRTS 自己所在目录，再看开发期的构建产物。
+/// 定位桥可执行文件：**按构建类型给唯一路径**（开发构建读仓库构建产物，
+/// 发布构建读程序目录），不做跨环境探测。
 ///
 /// 桥是 PRTS 的组件，不是用户配置项——这里**没有**「让用户填路径」的分支。
 pub fn resolve_exe() -> Result<PathBuf, BridgeError> {
@@ -100,27 +101,26 @@ pub fn resolve_exe() -> Result<PathBuf, BridgeError> {
     };
     let mut tried: Vec<PathBuf> = Vec::new();
 
-    // 1) 随 PRTS 分发：与主程序同目录。
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for candidate in [dir.join(name), dir.join("resources").join(name)] {
-                if candidate.is_file() {
-                    return Ok(candidate);
-                }
-                tried.push(candidate);
-            }
-        }
-    }
+    let candidates: Vec<PathBuf> = if crate::config::is_dev() {
+        // 开发构建：仓库内 bridge crate 的构建产物（debug 优先，再 release）。
+        ["debug", "release"]
+            .iter()
+            .map(|profile| {
+                crate::config::resource_root()
+                    .join("..")
+                    .join("bridge")
+                    .join("target")
+                    .join(profile)
+                    .join(name)
+            })
+            .collect()
+    } else {
+        // 发布构建：桥随 PRTS 分发，落程序目录（sidecar 形态）或其 resources 下。
+        let root = crate::config::resource_root();
+        vec![root.join(name), root.join("resources").join(name)]
+    };
 
-    // 2) 开发期：仓库内 bridge crate 的构建产物（debug 优先，再 release）。
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for profile in ["debug", "release"] {
-        let candidate = manifest
-            .join("..")
-            .join("bridge")
-            .join("target")
-            .join(profile)
-            .join(name);
+    for candidate in candidates {
         if candidate.is_file() {
             return Ok(candidate);
         }

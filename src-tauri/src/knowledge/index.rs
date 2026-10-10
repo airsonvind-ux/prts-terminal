@@ -234,26 +234,13 @@ fn path_to_slash(rel: &Path) -> String {
         .join("/")
 }
 
-/// 知识库目录解析。
+/// 知识库目录解析（随包只读资源）。
 ///
-/// 优先级（模式照 `lib.rs::get_db_path`）：
-/// 1. 开发目录 `CARGO_MANIFEST_DIR/src/knowledge`（存在即返回）
-/// 2. 打包后可执行文件同级 `resources/knowledge`（存在即返回）
-/// 3. 否则返回 dev 路径兜底
+/// 收口于 [`crate::config::bundled_knowledge_dir`]：开发构建 = 源码树
+/// `src/knowledge`；发布构建 = 程序目录下 `resources/knowledge`。
+/// **不做存在性探测**——"哪条路存在走哪条"会让开发机上的安装版偷读源码目录。
 pub fn knowledge_dir() -> PathBuf {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/knowledge");
-    if dev_path.is_dir() {
-        return dev_path;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let prod_path = dir.join("resources/knowledge");
-            if prod_path.is_dir() {
-                return prod_path;
-            }
-        }
-    }
-    dev_path
+    crate::config::bundled_knowledge_dir()
 }
 
 // ═══════════════════════════════════════════════════════

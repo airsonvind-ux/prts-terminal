@@ -210,27 +210,13 @@ pub fn skills_dir() -> PathBuf {
     crate::config::data_dir().join("skills")
 }
 
-/// 内置技能源目录解析。
+/// 内置技能源目录解析（随包只读资源）。
 ///
-/// 优先级（模式照 knowledge::index::knowledge_dir）：
-/// 1. dev 路径 `CARGO_MANIFEST_DIR/src/skills`（存在即返回）
-/// 2. 打包后可执行文件同级 `resources/skills`（存在即返回；
-///    由 tauri.conf bundle.resources 从 `src/skills/` 铺入）
-/// 3. 否则返回 dev 路径兜底
+/// 收口于 [`crate::config::bundled_skills_dir`]：开发构建 = 源码树 `src/skills`；
+/// 发布构建 = 程序目录下 `resources/skills`（由 tauri.conf bundle.resources
+/// 从 `src/skills/` 铺入）。**不做存在性探测**。
 pub fn bundled_skills_dir() -> PathBuf {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/skills");
-    if dev_path.is_dir() {
-        return dev_path;
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let prod_path = dir.join("resources/skills");
-            if prod_path.is_dir() {
-                return prod_path;
-            }
-        }
-    }
-    dev_path
+    crate::config::bundled_skills_dir()
 }
 
 /// 同步结果：本次被写入 / 退役的文件（名，遍历序确定）+ 未触碰计数。
