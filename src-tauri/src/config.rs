@@ -1,26 +1,50 @@
-//! config —— data_dir 定位 + 数据文件路径解析（M1 地基）
+//! config —— 数据根定位 + 数据文件路径解析（M1 地基）
 //!
 //! 设置页扩展定稿后职责收拢：workspace 根已并入 settings.json（`settings.rs`
-//! workspace 段；空 = 回退 data_dir），`PRTS_WORKSPACE` env 与
+//! workspace 段；空 = 回退数据根），`PRTS_WORKSPACE` env 与
 //! `resources/config.json` 链**已废弃**（dev.ps1 不再设置）。本模块仅保留：
 //!
-//! - [`data_dir`]：应用数据目录（settings.json / notices.json / sessions/
-//!   的落点）。开发期 = `APPDATA\com.tauri-app.prts-terminal`；APPDATA 缺失
-//!   回退 `./.prts-workspace`。纯路径解析，不建目录——需要目录存在的地方
-//!   （SettingsStore::load / SessionStore / Notices）自行 create_dir_all。
+//! - [`data_dir`]：数据根（settings.json / notices.json / sessions/ / memory/ /
+//!   skills/ / 附件 / 截图 / MAA 记录 / 数据库运行副本 / 密钥 的落点）。用户主目录
+//!   下的 `.prts`；开发构建用 `.prts-dev`（编译期判定，开发与安装版互不干扰）。
+//!   **与 identifier 解耦**：identifier 只负责系统集成，不参与目录名。
+//!   纯路径解析，不建目录——需要目录存在的地方（SettingsStore::load /
+//!   SessionStore / Notices）自行 create_dir_all。
 //! - [`resolve_db_path`]：arknights.db 路径（dev resources/ → 打包 exe 同级）。
 
 use std::path::PathBuf;
 
-/// 应用数据目录。
+/// 数据根目录名（发布构建）。
+pub const DATA_ROOT_NAME: &str = ".prts";
+/// 数据根目录名（开发构建）。
+pub const DATA_ROOT_NAME_DEV: &str = ".prts-dev";
+
+/// 应用数据根目录：用户主目录下的 `.prts`（开发构建 = `.prts-dev`）。
 ///
-/// 开发期 = `APPDATA\com.tauri-app.prts-terminal`；APPDATA 缺失时回退
-/// `./.prts-workspace`（原样沿用旧逻辑，含空串不 trim 的行为）。
+/// 主目录不可解析时回退当前目录。纯路径解析，不建目录。
 pub fn data_dir() -> PathBuf {
-    match std::env::var("APPDATA") {
-        Ok(d) => PathBuf::from(d).join("com.tauri-app.prts-terminal"),
-        Err(_) => PathBuf::from(".").join(".prts-workspace"),
+    home_dir().join(data_root_name())
+}
+
+/// 生效的数据根目录名（编译期判定）。
+pub fn data_root_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        DATA_ROOT_NAME_DEV
+    } else {
+        DATA_ROOT_NAME
     }
+}
+
+/// 用户主目录：USERPROFILE（Windows）→ HOME（其它平台）→ `.` 兜底。
+fn home_dir() -> PathBuf {
+    for key in ["USERPROFILE", "HOME"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.trim().is_empty() {
+                return PathBuf::from(v);
+            }
+        }
+    }
+    PathBuf::from(".")
 }
 
 /// arknights.db 路径解析。
@@ -51,28 +75,32 @@ pub fn resolve_db_path() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// 串行化修改进程环境变量的测试（cargo test 同进程并行；
-    /// set_var/remove_var 无同步保护，env 相关测试持锁互斥）。
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[test]
+    fn data_root_is_home_dot_prts_and_decoupled_from_identifier() {
+        let root = data_dir();
+        // 目录名 = 数据根名（开发构建为 .prts-dev）
+        assert_eq!(
+            root.file_name().unwrap().to_string_lossy(),
+            data_root_name(),
+            "目录名必须是数据根名"
+        );
+        // 落在用户主目录下
+        assert!(root.starts_with(home_dir()), "数据根必须在主目录下");
+        // 与 identifier / 旧落点解耦（改名不回头）
+        let text = root.to_string_lossy();
+        assert!(!text.contains("com.tauri-app"), "不得再用 identifier 当目录名");
+        assert!(!text.contains("prts-workspace"), "旧兜底目录名不得复现");
+        assert!(!text.contains("AppData"), "数据根不再落在 AppData");
+    }
 
     #[test]
-    fn data_dir_appdata_and_fallback_branches() {
-        let _g = ENV_LOCK.lock().unwrap();
-        let orig = std::env::var("APPDATA").ok();
-        let fake = std::env::temp_dir().join("prts-fake-appdata");
-
-        // APPDATA 存在 → <appdata>/com.tauri-app.prts-terminal
-        std::env::set_var("APPDATA", &fake);
-        assert_eq!(data_dir(), fake.join("com.tauri-app.prts-terminal"));
-
-        // APPDATA 缺失 → ./.prts-workspace
-        std::env::remove_var("APPDATA");
-        assert_eq!(data_dir(), PathBuf::from(".").join(".prts-workspace"));
-
-        // 恢复原值
-        match orig {
-            Some(v) => std::env::set_var("APPDATA", v),
-            None => std::env::remove_var("APPDATA"),
-        }
+    fn dev_and_release_root_names_differ() {
+        assert_ne!(DATA_ROOT_NAME, DATA_ROOT_NAME_DEV);
+        let expected = if cfg!(debug_assertions) {
+            DATA_ROOT_NAME_DEV
+        } else {
+            DATA_ROOT_NAME
+        };
+        assert_eq!(data_root_name(), expected);
     }
 }

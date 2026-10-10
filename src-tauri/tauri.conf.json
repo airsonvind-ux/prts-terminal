@@ -29,8 +29,10 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/session-files/**",
-          "$APPDATA/uploads/**"
+          "$HOME/.prts/session-files/**",
+          "$HOME/.prts/uploads/**",
+          "$HOME/.prts-dev/session-files/**",
+          "$HOME/.prts-dev/uploads/**"
         ]
       }
     }

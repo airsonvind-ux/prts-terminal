@@ -14,7 +14,7 @@ source: builtin
 - `wait` 是最多等多少秒：省略时按任务类型取默认——OperBox 180、Depot 60、StartUp 90、CloseDown 与 SwitchTheme 60、Award 60；其余类型为 `0`。
 - 长任务（Fight / Infrast / Roguelike / Copilot 等）默认 `0`：派发式——发出去就返回，任务在后台跑，不阻塞当前对话；要进度用 `status`，跑完后 `status` 的“最近一次”就是它的结果。
 - **队列的默认是各项的合成：任一项默认 `0`，整条就是 `0`；否则为各项之和。**
-- 返回给这次做了什么、耗时多少；回执里的次数是实际发生的量。工具返回是完备结论；文件只在要看识别明细时才用——识别结果另存一份 JSONL（`%APPDATA%\com.tauri-app.prts-terminal\maa\results\`），带 `done` 的只留终帧，其余一帧一行（一行一个 JSON 对象）。
+- 返回给这次做了什么、耗时多少；回执里的次数是实际发生的量。**工具返回是完备结论**：识别明细随工具返回，不提供文件读取通道（明细文件仅供排查，落点在数据目录的 `maa/results/`），带 `done` 的只留终帧，其余一帧一行（一行一个 JSON 对象）。
 
 ## 任务类型
 

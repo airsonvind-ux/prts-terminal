@@ -1,9 +1,9 @@
 //! policy —— 沙箱策略层（M1 地基）：读写访问的四级权限判定
 //!
 //! 四级模型（M1 规格）：
-//! - BLOCKED（连读都不行）：notices.json（提醒数据源，data_dir() 下；
-//!   迁移期旧文件 env-ledger.json 同样拦截）、
-//!   数据库文件 arknights.db
+//! - BLOCKED（连读都不行）：**数据根整根**（会话、记忆、设置、提醒台账、密钥、
+//!   日志、数据库运行副本全在其中；普通用户与其工具都不需要碰它），
+//!   以及尚未搬入数据根的数据库文件 arknights.db（搬入后此条可删）
 //! - READ_ONLY（可读不可写）：知识库目录、技能运行根（data_dir()/skills）
 //! - WRITABLE（可写）：工作空间 workspace_root
 //! - protected（写保护特例）：工作区 .git（可读不可写，防 LLM 破坏仓库）
@@ -60,18 +60,19 @@ fn canonicalize_opt(p: PathBuf) -> PathBuf {
 
 impl Policy {
     /// 构造默认策略：
-    /// - BLOCKED = data_dir()/notices.json（提醒数据源在 data_dir 而非
-    ///   workspace 下——workspace 指向自定义目录时数据源仍在 data_dir）
-    ///   + data_dir()/env-ledger.json（迁移期旧文件，保留拦截）
-    ///   + resolve_db_path() 的 db 文件
+    /// - BLOCKED = **数据根整根**（`config::data_dir()`；会话 / 记忆 / 设置 /
+    ///   提醒台账 / 密钥 / 日志 / 数据库运行副本都在其中）+ 尚未搬入数据根的
+    ///   `resolve_db_path()` 的 db 文件（搬入后此条可删）
     /// - READ_ONLY = knowledge_dir() + skills_dir()（知识库 + 技能运行根
     ///   data_dir()/skills——内置同步副本与用户技能同住其中）
     /// - protected = workspace_root/.git
     pub fn new(workspace_root: PathBuf) -> Self {
         let ws = canonicalize_opt(workspace_root);
+        // 数据根整根拦截：此项按组件级前缀匹配，覆盖全部子树，
+        // 因此模型**读不到**数据根内的任何文件（含 MAA 识别明细）。
         let blocked = vec![
-            canonicalize_opt(config::data_dir().join("notices.json")),
-            canonicalize_opt(config::data_dir().join("env-ledger.json")),
+            canonicalize_opt(config::data_dir()),
+            // 数据库尚未搬入数据根前仍需单列。
             canonicalize_opt(config::resolve_db_path()),
         ];
         let read_only = vec![canonicalize_opt(knowledge_dir()), canonicalize_opt(skills_dir())];
