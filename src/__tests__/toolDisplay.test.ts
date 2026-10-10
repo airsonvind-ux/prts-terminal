@@ -25,6 +25,7 @@ describe("toolAction · 精确映射（在册工具）", () => {
     ["edit", "编辑"],
     ["grep", "搜索"],
     ["list_dir", "浏览目录"],
+    ["capture_game_screen", "截取画面"],
     // 命令执行（M3-A）
     ["run_command", "执行命令"],
     // 行动推演

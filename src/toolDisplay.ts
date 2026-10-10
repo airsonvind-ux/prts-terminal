@@ -29,6 +29,8 @@ const EXACT_MAP: Record<string, string> = {
   edit: "编辑",
   grep: "搜索",
   list_dir: "浏览目录",
+  // 游戏画面截图（与 MAA 独立：模拟器走 adb，PC 端走窗口捕获）
+  capture_game_screen: "截取画面",
   // 命令执行（M3-A）
   run_command: "执行命令",
   // 行动推演

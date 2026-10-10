@@ -5,6 +5,7 @@
 //! 参与后续推理。每个工具实现 Tool trait，在应用启动时注册到 Registry。
 
 // mod cache; // 已注释（2026-08：缓存工具取消注册；未来记忆系统复用时可恢复）
+mod capture;
 mod display;
 mod fs;
 mod fs_grep;
@@ -588,6 +589,8 @@ pub fn register_builtin(
     reg.register(Box::new(QueryRogue))?;
     // 时间参照（Phase4 任务 1.3）：零注入方案下的唯一时间源，服务记忆系统时间戳
     reg.register(Box::new(TimeTool))?;
+    // 游戏画面截图（与 MAA 完全独立）：模拟器走 adb，PC 端走 WGC
+    reg.register(Box::new(capture::CaptureGameScreen))?;
     // 文件域（M2 批 1 + 批 2 全部注册）：read_file / list_dir / write_file /
     // edit / grep，与 policy 守卫与 10MB 上限常量共用；知识库导航（模块 A）
     // 在文件工具之后注册
@@ -946,15 +949,17 @@ mod tests {
         // + 既有 11 查询/知识工具 + 1 Skill 激活 + 1 SimPath + 1 run_command（M3-A）
         // + 网络域 2 工具（M5：web_search/web_fetch）+ 时间 1 工具（Phase4 1.3）
         // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）
-        // + MAA 1 工具（run_maa_task）= 25；
+        // + MAA 1 工具（run_maa_task）+ 截图 1 工具（capture_game_screen）= 26；
         // echo 为测试辅助不注册（2026-08-31）；4 个缓存工具已取消注册（2026-08）。
-        assert_eq!(reg.list_defs().len(), 25);
+        assert_eq!(reg.list_defs().len(), 26);
 
         // 记忆工具确已注册且名字稳定
         assert!(reg.get("memory_experience").is_some());
         assert!(reg.get("memory_growth").is_some());
         // MAA 工具确已注册（名字即 LLM 的调用名）
         assert!(reg.get("run_maa_task").is_some());
+        // 截图工具确已注册（与 MAA 独立；名字即 LLM 的调用名）
+        assert!(reg.get("capture_game_screen").is_some());
 
         let _ = std::fs::remove_dir_all(&workspace_root);
         let _ = std::fs::remove_dir_all(&kb_root);
