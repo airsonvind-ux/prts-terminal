@@ -3,10 +3,9 @@
 //! 工具本身很薄：校验参数 → 调 `maa::manager` → 把结果与事件翻译成人能读、
 //! 模型能用的形状。进程、连接、重试全在 `maa` 模块里。
 //!
-//! 四个 action：
+//! 三个 action：
 //! - `run`（默认）：把 `tasks` 整条队列派给 MAA；
 //! - `stop`：中止当前任务；
-//! - `screenshot`：截当前画面，写 PNG，卡片给可点链接；
 //! - `status`：报当前状态与「最近一次」的结果文件（**不起桥、不改状态**）。
 //!
 //! 事件分流（见 `_maa-接入模块-设计.md` §5）：`recognition`（识别结果）落盘
@@ -22,16 +21,7 @@ use crate::config;
 use crate::maa::manager;
 use crate::maa::records;
 
-use super::{DisplayLink, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
-
-/// 截图固定落点：路径可预知，展示切片（执行**前**）才能挂上链接。
-const SCREENSHOT_FILE: &str = "latest.png";
-
-/// 保留的截图份数（唯一名文件；`latest.png` 不计、永不删）。
-///
-/// 截图是机器产物（每看一次画面一张），只有近期有回看价值；
-/// 历史图不会被重新物化，所以清理不影响任何进行中的请求。
-const KEPT_SCREENSHOTS: usize = 100;
+use super::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 pub struct MaaTaskTool;
 
@@ -44,17 +34,16 @@ impl Tool for MaaTaskTool {
         concat!(
             "在本机《明日方舟》中，通过 MAA 执行游戏操作：刷关、公招、基建、领奖、肉鸽、抄作业、识别等。仅支持模拟器。\n",
             "\n参数：\n",
-            "  action：\"run\"（默认）| \"stop\" | \"screenshot\" | \"status\"\n",
+            "  action：\"run\"（默认）| \"stop\" | \"status\"\n",
             "  tasks：action=\"run\" 时要执行的任务序列，按顺序依次执行；每项 { \"type\": 任务类型, \"params\": 参数对象 }，params 可省。\n",
             "  wait：最多等多少秒。0 = 派发：发出去就返回，任务在后台跑，不阻塞当前对话；大于 0 = 等待：等到结果再返回。\n",
             "    识别这类短任务可以等待；长任务（Fight / Infrast / Roguelike / Copilot 等）默认派发，派下去跟博士说一声即可。\n",
             "    想等一个可能很久的任务跑完时（估着超过三分钟，或估不出要多久），先向博士确认执行方式与等待时间。\n",
-            "\n返回：派发即回一句确认；等就给该次的结论；截图给图片；失败给 MAA 的原话。\n",
+            "\n返回：派发即回一句确认；等就给该次的结论；失败给 MAA 的原话。\n",
             "\n示例：\n",
             "  · 识别持有的干员：{ \"action\": \"run\", \"tasks\": [ { \"type\": \"OperBox\" } ] }\n",
             "  · 启动游戏并把 1-7 刷到理智耗尽：{ \"action\": \"run\", \"tasks\": [ { \"type\": \"StartUp\" }, { \"type\": \"Fight\", \"params\": { \"stage\": \"1-7\", \"series\": 0 } } ] }\n",
             "  · 中止任务：{ \"action\": \"stop\" }\n",
-            "  · 截取屏幕：{ \"action\": \"screenshot\" }\n",
             "  · 查看状态：{ \"action\": \"status\" }\n",
             "\n任务类型、常用参数、注意事项与官方文档，见 skill「MAA 任务」。"
         )
@@ -96,13 +85,6 @@ impl Tool for MaaTaskTool {
         match v.get("action").and_then(Value::as_str).unwrap_or("run") {
             "stop" => ToolDisplay::info("中止当前任务"),
             "status" => ToolDisplay::info("查询 MAA 状态"),
-            "screenshot" => {
-                let path = screenshot_path();
-                ToolDisplay::link(DisplayLink::file(
-                    path.to_string_lossy().into_owned(),
-                    SCREENSHOT_FILE,
-                ))
-            }
             _ => match v.get("tasks").and_then(Value::as_array) {
                 Some(tasks) if !tasks.is_empty() => ToolDisplay::info(summarize_tasks(tasks)),
                 _ => ToolDisplay::default(),
@@ -136,26 +118,6 @@ impl Tool for MaaTaskTool {
                     "当前没有在跑的任务。"
                 }))
             }
-            "screenshot" => {
-                let latest = screenshot_path();
-                let shot = unique_screenshot_path();
-                let written = match manager::screenshot(&shot) {
-                    Ok(p) => p,
-                    Err(e) => return Ok(ToolOutput::text(format!("未能执行：{e}"))),
-                };
-                // 展示别名 latest.png：每张截图另存唯一名——同一轮多张截图时，
-                // 附件引用必须各自指向不可变文件，否则会互相覆盖。
-                let _ = std::fs::copy(&written, &latest);
-                if let Some(dir) = latest.parent() {
-                    prune_screenshots(dir, KEPT_SCREENSHOTS);
-                }
-                // 路径是给用户的位置信息（读者没视觉时读它也没用）。
-                let mut output =
-                    ToolOutput::text(format!("已截取当前画面（{}）。", latest.display()));
-                // 图交给模型：走附件通路（引用不可变的唯一文件）。
-                output.images = vec![written.to_string_lossy().into_owned()];
-                Ok(output)
-            }
             "status" => {
                 let (canonical, text) = render_status();
                 Ok(ToolOutput::json(canonical, text))
@@ -185,7 +147,7 @@ impl Tool for MaaTaskTool {
                 Ok(ToolOutput::json(canonical, text))
             }
             other => Err(ToolError::Execution(format!(
-                "未知的 action：{other}（只有 run / stop / screenshot / status）"
+                "未知的 action：{other}（只有 run / stop / status）"
             ))),
         }
     }
@@ -1218,61 +1180,6 @@ fn summarize_tasks(tasks: &[Value]) -> String {
     }
 }
 
-fn screenshot_path() -> PathBuf {
-    config::data_dir()
-        .join("maa")
-        .join("screenshots")
-        .join(SCREENSHOT_FILE)
-}
-
-/// 截图的唯一落点：`<data>/maa/screenshots/screenshot_<ms>_<pid>.png`。
-/// 附件引用指向它（不可变）；`latest.png` 只是给人看的展示别名。
-fn unique_screenshot_path() -> PathBuf {
-    match screenshot_path().parent() {
-        Some(dir) => dir.join(crate::attachments::unique_name("screenshot", "png")),
-        None => screenshot_path(),
-    }
-}
-
-/// 裁剪旧截图：只数唯一名文件，保留最新 `keep` 张，其余按最旧先删。
-///
-/// `latest.png` 与其它文件一概不动。失败不影响本次截图交付；
-/// 真发生删除时打一行日志（不静默）。
-fn prune_screenshots(dir: &std::path::Path, keep: usize) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut shots: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("screenshot_") || !name.ends_with(".png") {
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else { continue };
-        if !meta.is_file() {
-            continue;
-        }
-        shots.push((
-            meta.modified().unwrap_or(std::time::UNIX_EPOCH),
-            entry.path(),
-        ));
-    }
-    if shots.len() <= keep {
-        return;
-    }
-    // 新 → 旧（时间相同按路径名定序，保证结果确定）
-    shots.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
-    let mut removed = 0usize;
-    for (_, path) in shots.iter().skip(keep) {
-        if std::fs::remove_file(path).is_ok() {
-            removed += 1;
-        }
-    }
-    if removed > 0 {
-        crate::debug!("maa" => "screenshot_prune", "removed" => removed, "kept" => keep);
-    }
-}
-
 fn results_dir() -> PathBuf {
     crate::maa::records::results_dir()
 }
@@ -1648,78 +1555,9 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_and_results_paths_live_under_data_dir() {
+    fn results_path_lives_under_data_dir() {
         let base = config::data_dir();
-        assert!(screenshot_path().starts_with(&base));
         assert!(results_dir().starts_with(&base));
-        assert!(screenshot_path().to_string_lossy().ends_with("latest.png"));
-    }
-
-    /// 裁剪旧截图：保留最新 N 张，`latest.png` 与其它文件不动。
-    #[test]
-    fn prune_screenshots_keeps_newest_and_latest_alias() {
-        let dir = std::env::temp_dir().join(format!("prts-shots-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("latest.png"), b"alias").unwrap();
-        std::fs::write(dir.join("unrelated.txt"), b"keep").unwrap();
-        for i in 0..5u32 {
-            std::fs::write(dir.join(format!("screenshot_{i}_1.png")), b"x").unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        prune_screenshots(&dir, 2);
-
-        let mut left: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        left.sort();
-        assert_eq!(
-            left,
-            vec![
-                "latest.png".to_string(),
-                "screenshot_3_1.png".to_string(),
-                "screenshot_4_1.png".to_string(),
-                "unrelated.txt".to_string(),
-            ],
-            "只裁旧截图，别名与非截图文件不动"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// 真机验证：截图 action（需已启动模拟器；会操作模拟器）。
-    /// 验的是：真能截出 PNG、返回值带图、以及物化后交给模型的那份有多大。
-    #[test]
-    #[ignore = "真机验证：截图（需已启动模拟器）"]
-    fn screenshot_round_trip() {
-        crate::maa::manager::set_settings(crate::maa::settings::MaaSettings {
-            server: crate::maa::settings::Server::Bilibili,
-            ..Default::default()
-        });
-        let ctx = ToolContext::new();
-        let out = MaaTaskTool
-            .execute(&ctx, r#"{"action":"screenshot"}"#)
-            .expect("截图");
-        println!("summary = {}", out.summary);
-        println!("images  = {:?}", out.images);
-
-        let path = out.images.first().expect("应当带回图片路径");
-        let bytes = std::fs::read(path).expect("图片应当存在");
-        println!("PNG 字节 = {}，头 = {:?}", bytes.len(), &bytes[..8]);
-        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "应当是 PNG");
-
-        // 交给模型的那一份：走 attachments 物化（含缩边与压缩）。
-        let parts = crate::attachments::materialize_images(&[path.clone()]);
-        println!(
-            "物化：{} 份，mime = {}，base64 字符数 = {}",
-            parts.len(),
-            parts[0].mime_type,
-            parts[0].data.len()
-        );
-
-        crate::maa::manager::shutdown();
     }
 
     /// 真机验证：刷关的识别产出（Fight 1-7 ×1）+ 等待路径。
