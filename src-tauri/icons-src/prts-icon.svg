@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img">
   <title>PRTS Terminal 图标</title>
-  <desc>圆角方底，菱形带灰白边框与青色 PRTS 字样；整体沿右下平移的阴影，左上一条与菱形边平行的内高光</desc>
+  <desc>圆角方底，放大的菱形带灰白边框与青色 PRTS 字样；整体沿右下平移的阴影，左上与菱形边平行的内高光</desc>
   <defs>
     <clipPath id="dia">
-      <path d="M512 128 L848 512 L512 896 L176 512 Z"/>
+      <path d="M512 92 L932 512 L512 932 L92 512 Z"/>
     </clipPath>
   </defs>
   <rect width="1024" height="1024" rx="96" fill="#26282a"/>
-  <path d="M552 168 L888 552 L552 936 L216 552 Z" fill="rgba(0,0,0,0.5)"/>
-  <path d="M512 128 L848 512 L512 896 L176 512 Z" fill="#1c1f22" stroke="#c8cdd0" stroke-width="40"/>
+  <path d="M548 128 L968 548 L548 968 L128 548 Z" fill="rgba(0,0,0,0.5)"/>
+  <path d="M512 92 L932 512 L512 932 L92 512 Z" fill="#1c1f22" stroke="#c8cdd0" stroke-width="48"/>
   <g clip-path="url(#dia)">
-    <path d="M176 512 L512 128" transform="translate(22.6 19.8)" fill="none" stroke="rgba(200,205,208,0.22)" stroke-width="20"/>
+    <path d="M92 512 L512 92" transform="translate(25 25)" fill="none" stroke="rgba(200,205,208,0.24)" stroke-width="24"/>
   </g>
-  <text x="512" y="560" text-anchor="middle" fill="#18d1ff" font-family="'Microsoft YaHei', system-ui, sans-serif" font-size="144" font-weight="500" letter-spacing="8">PRTS</text>
+  <text x="512" y="574" text-anchor="middle" fill="#18d1ff" font-family="'Microsoft YaHei', system-ui, sans-serif" font-size="176" font-weight="600" letter-spacing="6">PRTS</text>
 </svg>
