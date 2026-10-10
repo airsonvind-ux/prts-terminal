@@ -44,7 +44,8 @@
     "resources": {
       "resources/arknights.db": "./",
       "src/knowledge/": "resources/knowledge/",
-      "src/skills/": "resources/skills/"
+      "src/skills/": "resources/skills/",
+      "../LICENSE": "./LICENSE"
     },
     "externalBin": [
       "binaries/prts-maa-bridge"

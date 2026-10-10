@@ -1,8 +1,9 @@
 [package]
 name = "prts-terminal"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "PRTS Terminal：面向明日方舟的专用 Agent 终端助手（桌面应用）"
+authors = ["AirsonVind"]
+license = "Apache-2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
