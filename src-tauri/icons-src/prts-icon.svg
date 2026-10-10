@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img">
+  <title>PRTS Terminal 图标</title>
+  <desc>圆角方底，菱形带灰白边框与青色 PRTS 字样，右下阴影，左上高光</desc>
+  <rect width="1024" height="1024" rx="96" fill="#26282a"/>
+  <path d="M552 168 L888 552 L552 936 L216 552 Z" fill="rgba(0,0,0,0.5)"/>
+  <path d="M512 128 L848 512 L512 896 L176 512 Z" fill="#1c1f22" stroke="#c8cdd0" stroke-width="40"/>
+  <path d="M224 480 L512 192" stroke="rgba(200,205,208,0.20)" stroke-width="32" fill="none"/>
+  <text x="512" y="560" text-anchor="middle" fill="#18d1ff" font-family="'Microsoft YaHei', system-ui, sans-serif" font-size="144" font-weight="500" letter-spacing="8">PRTS</text>
+</svg>
