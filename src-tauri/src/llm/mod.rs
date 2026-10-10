@@ -21,6 +21,8 @@ pub mod anthropic;
 pub mod openai_responses;
 pub mod thinking;
 pub mod sse;
+// 协议异常清洗（匿名工具调用）：对照 Hanako 的 stream-guard，见模块头。
+pub mod protocol_guard;
 
 // ═══════════════════════════════════════════════════════
 // 统一 HTTP 客户端

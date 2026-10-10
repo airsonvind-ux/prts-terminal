@@ -1045,26 +1045,68 @@ async fn call_llm_and_stream(
     // 阶段（工具执行之前）发出，需在此解析展示切片（Tool::display）。
     let tools_for_closure = Arc::clone(tools);
     let tool_ctx_for_closure = Arc::clone(tool_ctx);
+    // 协议清洗状态：闭包与收尾都要用，故共享（匿名工具调用拦在此处）。
+    let guard = Arc::new(std::sync::Mutex::new(
+        crate::llm::protocol_guard::ProtocolGuard::new(),
+    ));
+    let guard_for_closure = Arc::clone(&guard);
+    // 收尾回写要用的一套句柄（上面那套会被闭包 move 走，这里留一份）。
+    let session_id_tail = session_id.to_string();
+    let phase_state_tail = Arc::clone(&phase_state);
+    let sink_tail = sink.clone();
+    let tools_tail = Arc::clone(tools);
+    let tool_ctx_tail = Arc::clone(tool_ctx);
 
     let on_event = Box::new(move |event: StreamEvent| {
         stream_started_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
-        handle_stream_event(
-            &session_id_owned,
-            event,
-            &phase_state_clone,
-            &sink_for_closure,
-            &tools_for_closure,
-            &tool_ctx_for_closure,
-        );
+        let passed = match guard_for_closure.lock() {
+            Ok(mut guard) => guard.push(event),
+            // 锁中毒（持锁 panic）按"原样放行"处理：清洗是加分项，不能因为锁坏了吞事件。
+            Err(_) => vec![event],
+        };
+        for event in passed {
+            handle_stream_event(
+                &session_id_owned,
+                event,
+                &phase_state_clone,
+                &sink_for_closure,
+                &tools_for_closure,
+                &tool_ctx_for_closure,
+            );
+        }
     });
 
     // ── 调用 LLM ──
-    let result = llm.chat_stream(config, messages, tool_defs, on_event).await?;
+    let outcome = llm.chat_stream(config, messages, tool_defs, on_event).await;
 
+    // 收尾：把匿名调用缓冲住的正文尽力回写出去。成功与失败都要发——用户已经看到的
+    // 部分不能因为一次协议异常就被吞掉。
+    let tail = match guard.lock() {
+        Ok(mut guard) => guard.finish(),
+        Err(_) => Vec::new(),
+    };
+    for event in tail {
+        handle_stream_event(
+            &session_id_tail,
+            event,
+            &phase_state_tail,
+            &sink_tail,
+            &tools_tail,
+            &tool_ctx_tail,
+        );
+    }
+
+    let mut result = outcome?;
+    if let Ok(mut guard) = guard.lock() {
+        guard.sanitize_result(&mut result);
+    }
     Ok(result)
 }
 
 /// 单个 StreamEvent 的处理逻辑（双写：IPC 事件 + session log）。
+///
+/// 进来之前已经过 `llm::protocol_guard`：匿名工具调用已被拦下，它回写出的正文
+/// 会以 `TextDelta` 的形式到这里。
 ///
 /// 从 call_llm_and_stream 提取为独立函数，便于阅读和测试。
 ///
