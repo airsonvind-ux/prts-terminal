@@ -112,6 +112,7 @@ export function GuideHost() {
     overlay === null ? "chat" : overlay === "settings" ? "settings" : null;
   const activeKey = useGuideStore((s) => pickActiveGuideKey(s.queue, surface));
   const advance = useGuideStore((s) => s.advance);
+  const skip = useGuideStore((s) => s.skip);
   const exit = useGuideStore((s) => s.exit);
   const tourKeys = useGuideStore((s) => s.tourKeys);
   const item = activeKey !== null ? GUIDE_ITEMS[activeKey] : undefined;
@@ -141,22 +142,22 @@ export function GuideHost() {
     }
     const faceEl = document.querySelector<HTMLElement>(`[data-guide="${FACE_ANCHOR}"]`);
     if (!faceEl) {
-      advance(activeKey);
+      skip(activeKey);
       return;
     }
     const key = item.form === "focus" ? item.anchor : NOTICE_ANCHOR;
     if (!key) {
-      advance(activeKey);
+      skip(activeKey);
       return;
     }
     const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
     if (!el || !localBox(el, faceEl)) {
-      advance(activeKey);
+      skip(activeKey);
       return;
     }
     const apply = () => {
       if (!el.isConnected || !faceEl.isConnected) {
-        advance(activeKey);
+        skip(activeKey);
         return;
       }
       setBox(localBox(el, faceEl));
@@ -174,7 +175,7 @@ export function GuideHost() {
       ro.disconnect();
       window.removeEventListener("resize", apply);
     };
-  }, [activeKey, item, advance, measureCard]);
+  }, [activeKey, item, skip, measureCard]);
 
   // 每次渲染后校准卡片尺寸（在 paint 前完成，摆位不会闪）
   useLayoutEffect(() => {

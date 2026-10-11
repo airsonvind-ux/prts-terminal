@@ -161,12 +161,16 @@ export function SettingsPanel() {
   // 引导键集是否已从后端拉到（未拉到不弹——宁可不弹，也不误弹）
   const guideHydrated = useGuideStore((s) => s.hydrated);
 
-  // 引导：进入某页且该页说明没看过 → 出通知卡（每页一次；切页换掉旧的那张）
+  // 引导：进入某页且该页说明没看过 → 出通知卡（每页一次；切页换掉旧的那张）。
+  // **必须等面板就绪**（settings 到位、容器 `data-guide="settings-panel"` 已渲染）：
+  // 面板还在"加载中"时入队，锚点不存在 → 会被兜底当成"看不到"跳掉，
+  // 于是默认页（应用）的引导一闪不出（2026-10-11 实测）。
+  const panelReady = settings !== null;
   useEffect(() => {
-    if (!guideHydrated) return;
+    if (!guideHydrated || !panelReady) return;
     const key = SETTINGS_TAB_GUIDE[activeTab];
     if (key) useGuideStore.getState().enqueueNotice(key);
-  }, [activeTab, guideHydrated]);
+  }, [activeTab, guideHydrated, panelReady]);
 
   // ── 待审批：不留面板 ──
   // 审批确认卡在消息流里，被遮罩盖住就点不到——这正是原先“处理中一律不能进设置”

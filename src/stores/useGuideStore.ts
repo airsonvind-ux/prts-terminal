@@ -34,6 +34,13 @@ interface GuideState {
   enqueueNotice: (key: string) => void;
   /** `key` 看完：记 seen + 从队列移除（只有它，别的项照旧等着） */
   advance: (key: string) => void;
+  /**
+   * `key` 暂时看不到（锚点没量到）：只出队，**不记 seen**。
+   * 与 advance 分开是有原因的：量不到常常是环境短暂没就绪（元素还没渲染、
+   * 尺寸还是 0），把它当成"看过"就永久烧掉了（2026-10-11 实测：设置面板
+   * 还在"加载中"时入队，锚点不存在 → 应用页引导一闪不出却被标记看过）。
+   */
+  skip: (key: string) => void;
   /** 退出：`key` 记 seen，并把同一轮导览的其余项一并作废（跳过 = 这轮不看了） */
   exit: (key: string) => void;
 }
@@ -83,6 +90,13 @@ export const useGuideStore = create<GuideState>((set, get) => ({
     const queue = get().queue;
     if (!queue.includes(key)) return;
     markSeen(key);
+    const rest = queue.filter((k) => k !== key);
+    set({ queue: rest, tourKeys: rest.length === 0 ? null : get().tourKeys });
+  },
+
+  skip: (key) => {
+    const queue = get().queue;
+    if (!queue.includes(key)) return;
     const rest = queue.filter((k) => k !== key);
     set({ queue: rest, tourKeys: rest.length === 0 ? null : get().tourKeys });
   },

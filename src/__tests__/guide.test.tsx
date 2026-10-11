@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { GuideHost } from "../components/guide/GuideHost";
+import { SettingsPanel } from "../components/settings/SettingsPanel";
 import { GUIDE_ITEMS, WELCOME_TOUR } from "../components/guide/guideContent";
 import { useGuideStore } from "../stores/useGuideStore";
 import { useUIStore } from "../stores/useUIStore";
@@ -179,8 +180,49 @@ describe("useGuideStore：通知卡不串页", () => {
   });
 });
 
+describe("SettingsPanel + GuideHost：面板挂载在默认页", () => {
+  it("应用页（默认页）的通知也要出卡", async () => {
+    // jsdom 无布局引擎：给所有元素一个非零矩形，让面板可量（真环境它本来就有尺寸）
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return {
+        left: 0,
+        top: 0,
+        width: 288,
+        height: 264,
+        right: 288,
+        bottom: 264,
+      } as DOMRect;
+    };
+    try {
+      mountFace();
+      resetStore();
+      useUIStore.setState({ overlay: "settings", settingsInitialTab: "app" });
+
+      const el = document.createElement("div");
+      document.body.appendChild(el);
+      const root = createRoot(el);
+      await act(async () => {
+        root.render(
+          <>
+            <SettingsPanel />
+            <GuideHost />
+          </>
+        );
+        await Promise.resolve();
+      });
+
+      const hostEl = document.querySelector("[data-guide-host]");
+      expect(hostEl?.textContent).toContain(GUIDE_ITEMS["settings.app"].body);
+      act(() => root.unmount());
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = real;
+    }
+  });
+});
+
 describe("GuideHost：兜底、局部坐标与 modal", () => {
-  it("锚点不存在 → 整步跳过，队列清空且不留半张卡", () => {
+  it("锚点不存在 → 整步跳过，且不记「看过」（下次还能出）", () => {
     mountFace();
     resetStore();
     useGuideStore.getState().enqueue(["first.conv-title", "first.context-ring"]);
@@ -189,6 +231,8 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
     expect(useGuideStore.getState().queue).toEqual([]);
     expect(host()).toBeNull();
+    // 量不到只是"这次看不到"，不能当成"看过"——否则一次环境没就绪就永久烧掉
+    expect(useGuideStore.getState().seen.size).toBe(0);
     unmount();
   });
 
