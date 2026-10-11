@@ -309,6 +309,15 @@ impl Notices {
         self.sync_value_dim(DimKey::Model, label);
     }
 
+    /// 工作空间变化（set_settings 检测到 workspace 变化时调用）：
+    /// 等价于对 workspace 维度的值同步。
+    ///
+    /// **必须调用**：对话前缀冻结，环境变化只能靠 reminder 通知模型——不在这里
+    /// 同步，模型就会拿着旧工作目录做事，且新对话（值维度全量）会拿到旧值。
+    pub fn note_workspace_change(&mut self, workspace: &str) {
+        self.sync_value_dim(DimKey::Workspace, workspace);
+    }
+
     /// 记录记忆事件（成长写入 / 提炼 / 压缩 / 整层清除）：push 一条并裁到容量上限。
     pub fn note_memory_change(&mut self, title: &str, detail: &str) {
         let seq = self.alloc_seq();
@@ -719,6 +728,27 @@ mod tests {
         assert_eq!(n.dims.model.value, "new/model-v2");
         assert_eq!(n.dims.model.stamp, 1);
         assert_eq!(n.dims.model.note, "new/model-v2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_workspace_change_allocates_seq_and_is_idempotent() {
+        // 工作目录热生效的告知面：改了就必须占一个序号（否则进行中的对话收不到
+        // 提醒、新对话会拿到旧值）；同值不耗序号。
+        let dir = unique_temp_dir("wschange");
+        let mut n = Notices::load(&dir);
+        n.sync_environment_snapshots("/wsA", "m", "/kb"); // seed
+        n.note_workspace_change("/wsB");
+        assert_eq!(n.seq(), 1);
+        assert_eq!(n.dims.workspace.value, "/wsB");
+        assert_eq!(n.dims.workspace.stamp, 1);
+        assert_eq!(n.dims.workspace.note, "/wsB");
+        // 其余维度不受影响
+        assert_eq!(n.dims.model.stamp, 0);
+        assert_eq!(n.dims.knowledge.stamp, 0);
+        // 同值幂等
+        n.note_workspace_change("/wsB");
+        assert_eq!(n.seq(), 1, "同值不应再耗序号");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -476,6 +476,12 @@ pub async fn set_settings(
                 );
             }
         }
+        // 台账同步（提醒模型环境变了）：对话前缀冻结，环境变化只能靠 reminder
+        // 通知；少了这一步，模型会拿着旧工作目录做事，新对话还会拿到旧值。
+        {
+            let mut l = ledger.lock().map_err(|e| format!("台账锁获取失败: {e}"))?;
+            l.note_workspace_change(&resolved.to_string_lossy());
+        }
         root.set(resolved);
     }
     if changes.maa_changed {
