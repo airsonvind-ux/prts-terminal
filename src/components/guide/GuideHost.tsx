@@ -385,7 +385,7 @@ export function GuideHost() {
         {item.lead && <div className={styles.lead}>{item.lead}</div>}
         <div className={styles.body}>{item.body}</div>
         {item.note && <div className={styles.note}>注：{item.note}</div>}
-        <div className={styles.actions}>
+        <div className={`${styles.actions} ${showSkip ? "" : styles.actionsCenter}`}>
           {showSkip && (
             <button
               type="button"

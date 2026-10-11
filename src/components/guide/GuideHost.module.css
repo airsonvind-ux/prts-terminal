@@ -132,6 +132,12 @@
   margin-top: 12px;
 }
 
+/* 只有一个按钮（欢迎卡、通知卡）：居中——右侧孤零零挂着不像主操作。
+   成对按钮（聚焦式的「跳过」+「下一步」）仍右对齐。 */
+.actionsCenter {
+  justify-content: center;
+}
+
 .ghost,
 .primary {
   font-family: var(--font-ui);
