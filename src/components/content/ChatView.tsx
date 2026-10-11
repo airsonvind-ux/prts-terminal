@@ -18,7 +18,6 @@ import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
 import { useGuideStore } from "../../stores/useGuideStore";
-import { WELCOME_TOUR } from "../guide/guideContent";
 import { Toolbar } from "./Toolbar";
 import { MessageList } from "./MessageList";
 import { BootSequence } from "./BootSequence";
@@ -292,13 +291,14 @@ export function ChatView({ onDragHandle }: Props) {
   const showWelcome = activeId === null && !restoring;
 
   // ── 引导（说明层）触发 ──
-  // ① 欢迎页三步：欢迎页真的渲染 + 启动演出已撤 + 没有别的面板开着 + 键集已拉到。
+  // ① 欢迎卡：欢迎页真的渲染 + 启动演出已完全撤下 + 没有别的面板开着 + 键集已拉到。
   //    「由表面真的出现过决定」，不看装完第几次启动。
+  //    三步导览不再自动触发，由这张卡上的「开始」启动（Air 2026-10-11）。
   const guideHydrated = useGuideStore((s) => s.hydrated);
   const enqueueGuide = useGuideStore((s) => s.enqueue);
   useEffect(() => {
     if (!guideHydrated || !showWelcome || bootVisible || overlay !== null) return;
-    enqueueGuide(WELCOME_TOUR);
+    enqueueGuide(["welcome.intro"]);
   }, [guideHydrated, showWelcome, bootVisible, overlay, enqueueGuide]);
 
   // ② 首次出现型（对话标题 / 上下文进度环）：元素真的在画面上，且本轮没在生成

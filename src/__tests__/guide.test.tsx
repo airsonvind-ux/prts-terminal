@@ -377,7 +377,46 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("引导延后出现：先给页面留出渲染时间", () => {
+  it("欢迎卡：「开始」推上三步导览，「跳过」不推", () => {
+    mountFace();
+    // 三步的锚点得在位（不在位会被兜底跳过——那是正确行为，不是本例要测的）
+    for (const key of ["new-chat", "settings", "input"]) {
+      mountAnchor(key, { left: 10, top: 20, width: 100, height: 20 });
+    }
+    resetStore();
+    useGuideStore.getState().enqueue(["welcome.intro"]);
+    const a = mountHost();
+
+    const card = host()?.lastElementChild as HTMLElement;
+    const start = Array.from(card.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("开始")
+    ) as HTMLButtonElement;
+    expect(start.textContent).toContain("开始");
+    act(() => {
+      start.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    // 卡自己记成看过并出队，三步推上
+    expect(useGuideStore.getState().queue).toEqual(WELCOME_TOUR);
+    expect(useGuideStore.getState().seen.has("welcome.intro")).toBe(true);
+    a.unmount();
+
+    // 跳过：只把卡消掉，不推三步
+    resetStore();
+    useGuideStore.getState().enqueue(["welcome.intro"]);
+    const b = mountHost();
+    const card2 = host()?.lastElementChild as HTMLElement;
+    const skip = Array.from(card2.querySelectorAll("button")).find((el) =>
+      el.textContent?.includes("跳过")
+    ) as HTMLButtonElement;
+    act(() => {
+      skip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useGuideStore.getState().queue).toEqual([]);
+    expect(useGuideStore.getState().seen.has("welcome.intro")).toBe(true);
+    b.unmount();
+  });
+
+  it("引导延后出现：先给页面留出渲染时间", async () => {
     vi.useFakeTimers();
     try {
       mountFace();
@@ -388,8 +427,9 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
       // 到点前：已排好位（元素在、尺寸在），只是不可见
       expect(host()?.getAttribute("data-guide-hidden")).toBe("1");
-      act(() => {
+      await act(async () => {
         vi.advanceTimersByTime(500);
+        await Promise.resolve();
       });
       expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
       unmount();

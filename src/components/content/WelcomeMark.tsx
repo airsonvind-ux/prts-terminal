@@ -17,7 +17,10 @@ interface Props {
 
 export function WelcomeMark({ entering = false }: Props) {
   return (
-    <div className={`${styles.mark} ${entering ? styles.entering : ""}`}>
+    <div
+      className={`${styles.mark} ${entering ? styles.entering : ""}`}
+      data-guide="welcome-mark"
+    >
       <div className={styles.logo}>PRTS</div>
       <div className={styles.underline} />
       <div className={styles.tagline}>明日方舟AI辅助终端</div>

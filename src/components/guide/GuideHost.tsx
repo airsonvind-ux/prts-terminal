@@ -37,14 +37,36 @@ interface Box {
 /** 会话焦点卡宽度（正面宽 400，268 留出余量） */
 const FOCUS_CARD_W = 268;
 
-/**
- * 引导出现前的延迟。
+/** 引导卡出现前的延迟。
  *
  * 点进一页时先让页面渲染出来、眼睛落下去，再出引导——否则引导会比内容还快，
  * 用户还没看清页内有什么就被盖上了（Air 2026-10-11 实测）。
  * 位置在延迟期间就量好，所以到点出现时不会闪、也不跳。
  */
 const GUIDE_DELAY_MS = 400;
+
+/** waitFor 的兜底上限：动画再长也不能把引导卡死在这里。 */
+const ANIM_HOLD_MAX_MS = 2000;
+
+/**
+ * 等某元素的入场动画播完（含子树）。
+ *
+ * 用于"欢迎页动画演完再出卡"：欢迎字标的入场是 320–720ms 延迟 + 320–520ms 过渡
+ * （合计约 1 秒），只靠固定延迟会盖在动画上。取不到元素 / 环境无动画 API /
+ * 当前没有进行中的动画 → 立刻返回，不额外等。
+ */
+async function animationsDone(selector: string): Promise<void> {
+  const el = document.querySelector<HTMLElement>(`[data-guide="${selector}"]`);
+  if (!el || typeof el.getAnimations !== "function") return;
+  const anims = el.getAnimations({ subtree: true });
+  if (anims.length === 0) return;
+  await Promise.race([
+    Promise.all(anims.map((a) => a.finished.catch(() => undefined))),
+    new Promise<void>((r) => {
+      window.setTimeout(r, ANIM_HOLD_MAX_MS);
+    }),
+  ]);
+}
 
 /** 通知卡与子页内容区边缘的间距 */
 const NOTICE_INSET = 8;
@@ -115,6 +137,7 @@ export function GuideHost() {
   const activeKey = useGuideStore((s) => pickActiveGuideKey(s.queue, surface));
   const advance = useGuideStore((s) => s.advance);
   const skip = useGuideStore((s) => s.skip);
+  const enqueue = useGuideStore((s) => s.enqueue);
   const exit = useGuideStore((s) => s.exit);
   const tourKeys = useGuideStore((s) => s.tourKeys);
   const item = activeKey !== null ? GUIDE_ITEMS[activeKey] : undefined;
@@ -126,6 +149,7 @@ export function GuideHost() {
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
 
   // 延后出现：量好位置先不显示（visibility: hidden 仍然参与布局），到点再露。
+  // 若该步声明了 waitFor，还要等那个元素的入场动画播完——否则遮挡物会比画面先到。
   const [shown, setShown] = useState(false);
   useEffect(() => {
     if (activeKey === null) {
@@ -133,9 +157,18 @@ export function GuideHost() {
       return;
     }
     setShown(false);
-    const t = window.setTimeout(() => setShown(true), GUIDE_DELAY_MS);
-    return () => window.clearTimeout(t);
-  }, [activeKey]);
+    let alive = true;
+    const base = new Promise<void>((r) => {
+      window.setTimeout(r, GUIDE_DELAY_MS);
+    });
+    const wait = item?.waitFor ? animationsDone(item.waitFor) : Promise.resolve();
+    void Promise.all([base, wait]).then(() => {
+      if (alive) setShown(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [activeKey, item]);
 
   /** 重量卡片尺寸（换步 / 缩放都会变）：值没变就不 setState，避免自激。 */
   const measureCard = useCallback(() => {
@@ -159,7 +192,8 @@ export function GuideHost() {
       skip(activeKey);
       return;
     }
-    const key = item.form === "focus" ? item.anchor : NOTICE_ANCHOR;
+    // 锚点：优先用该项自己声明的（欢迎卡锚在整面），设置页通知则缺省挂内容区
+    const key = item.anchor ?? (item.form === "focus" ? undefined : NOTICE_ANCHOR);
     if (!key) {
       skip(activeKey);
       return;
@@ -216,15 +250,26 @@ export function GuideHost() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [activeKey, box]);
 
-  // 遮罩不消费引导：只有卡片上的按钮与 Esc 能关掉它。
-  // 曾经"点遮罩 = 下一步"（对齐覆盖层的"点遮罩关闭面板"），但语义相反：
-  // 面板那次点击的意图是"关"，引导这次很可能是"我想去点别处"（比如左导航），
-  // 结果把没读完的引导消耗掉、还永久记成看过（2026-10-11 Air 实测）。
+  // 点遮罩不消费：只有卡片上的按钮与 Esc 能关掉它。
+  // 曾经"点遮罩 = 下一步"（对齐覆盖层的"点遮罩关闭面板"），但引导这次点击的意图
+  // 很可能是"我想去点别处"，结果把没读完的引导消耗掉、还永久记成看过（Air 实测）。
+
+  /** 主按钮：推进一步；若该步声明了 startKeys（欢迎卡 → 三步），顺带把它们入队。 */
+  const handlePrimary = useCallback(() => {
+    if (activeKey === null) return;
+    const start = GUIDE_ITEMS[activeKey]?.startKeys;
+    advance(activeKey);
+    if (start && start.length > 0) enqueue(start);
+  }, [activeKey, advance, enqueue]);
 
   if (!item || !box) return null;
 
   const focus = item.form === "focus";
   const pos = focus && card && face ? place(box, card, face) : null;
+  // 欢迎卡（带 startKeys）不用「知道了」——它是教程入口：「开始」/「跳过」
+  const starts = item.startKeys && item.startKeys.length > 0 ? item.startKeys : null;
+  const primaryLabel = starts ? "开始" : focus ? "下一步" : "知道了";
+  const showSkip = focus || starts !== null;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
   // 通知卡：在子页内容区里**双向居中**。压暗目标已经换成内容区本身（导航与页标题
@@ -311,7 +356,7 @@ export function GuideHost() {
         <div className={styles.body}>{item.body}</div>
         {item.note && <div className={styles.note}>注：{item.note}</div>}
         <div className={styles.actions}>
-          {focus && (
+          {showSkip && (
             <button
               type="button"
               className={styles.ghost}
@@ -320,12 +365,8 @@ export function GuideHost() {
               跳过
             </button>
           )}
-          <button
-            type="button"
-            className={styles.primary}
-            onClick={() => activeKey !== null && advance(activeKey)}
-          >
-            {focus ? "下一步" : "知道了"}
+          <button type="button" className={styles.primary} onClick={handlePrimary}>
+            {primaryLabel}
           </button>
         </div>
       </div>

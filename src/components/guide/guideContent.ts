@@ -38,6 +38,14 @@ export interface GuideItem {
   body: string;
   /** 必要例外（如"当前没有对话，点了不会有变化"），单独一行小字 */
   note?: string;
+  /**
+   * 出现前要等的入场动画（元素的 data-guide 值）。
+   * 用于"欢迎页动画演完再出卡"——否则遮挡物会比画面还早（Air 2026-10-11）。
+   * 取不到元素 / 无动画 API / 已演完 → 不额外等。
+   */
+  waitFor?: string;
+  /** 主按钮除推进一步外，还要开始的后续导览（欢迎卡 → 欢迎页三步） */
+  startKeys?: string[];
 }
 
 /**
@@ -59,6 +67,17 @@ export const NOTICE_ANCHOR = "settings-body";
 export const FACE_ANCHOR = "face";
 
 export const GUIDE_ITEMS: Record<string, GuideItem> = {
+  // ── 欢迎卡（首启第一步：无锚点居中卡，等欢迎字标演完再出） ──
+  // 它只告知"会陆续出现说明"并充当教程入口；用户点「开始」才走下面三步。
+  "welcome.intro": {
+    form: "notice",
+    surface: "chat",
+    anchor: FACE_ANCHOR,
+    waitFor: "welcome-mark",
+    body: "欢迎使用 PRTS。首次使用时，界面各处会出现说明信息。",
+    startKeys: ["welcome.new-chat", "welcome.settings", "welcome.input"],
+  },
+
   // ── 欢迎页聚焦（3 步，无收尾） ──
   "welcome.new-chat": {
     form: "focus",
@@ -147,7 +166,9 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   },
 };
 
-/** 欢迎页导览（顺序即队列顺序）。 */
+/**
+ * 欢迎页导览（顺序即队列顺序）。由「welcome.intro」那个欢迎卡启动，不再自动触发。
+ */
 export const WELCOME_TOUR: string[] = [
   "welcome.new-chat",
   "welcome.settings",
