@@ -1,0 +1,14 @@
+# 构建配置（Windows MSVC x64）
+#
+# 为什么需要这一行：tauri build 会设 STATIC_VCRUNTIME=true，让 tauri-build 给
+# 链接加上"静态 VC 运行时"的参数；而 libsqlite3-sys 只在目标带 crt-static 时
+# 才把随包的 sqlite3.c 按静态运行时编译。两边不一致时，sqlite3.o 里的
+# __imp_memchr / __imp_strchr / __imp_strrchr 找不到实现，链接以 LNK2019 失败
+# （2026-10-10 定位到根因；2026-08-15 那次排查只移除 cdylib，未解决这一层）。
+#
+# 打开 crt-static 后，C 代码与链接参数统一走静态运行时，产物也不再依赖
+# vcruntime140.dll，与 Tauri 的取向一致。
+#
+# 只作用于 Windows MSVC x64；其它平台不受影响。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

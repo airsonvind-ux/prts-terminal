@@ -13,9 +13,11 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "prts_terminal_lib"
-# cdylib 已移除：桌面构建（--bins）不需要它（移动端产物），
-# 且带 tauri/custom-protocol feature 时其链接在 rustc 1.95 MSVC 下
-# 会因 sqlite3.o 的 __imp_strchr/strrchr/memchr 无法解析而失败（2026-08-15 打包排查）。
+# cdylib 已移除：桌面构建（--bins）不需要它（移动端产物）。
+# 2026-08-15 打包排查曾把 sqlite3.o 的 __imp_strchr/strrchr/memchr 链接失败归因于
+# cdylib；2026-10-10 定位到真正原因：tauri build 会设 STATIC_VCRUNTIME=true，
+# tauri-build 随即要求静态 VC 运行时，而随包的 sqlite3.c 默认按动态运行时编译，
+# 两边不一致才导致符号找不到。修法见 src-tauri/.cargo/config.toml（统一 crt-static）。
 crate-type = ["staticlib", "rlib"]
 
 [build-dependencies]
