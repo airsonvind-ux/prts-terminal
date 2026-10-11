@@ -294,10 +294,11 @@ export function GuideHost() {
 
   const focus = item.form === "focus";
   const pos = focus && card && face ? place(box, card, face) : null;
-  // 欢迎卡（带 startKeys）不用「知道了」——它是教程入口：「开始」/「跳过」
+  // 欢迎卡（带 startKeys）：它是教程入口，只有一个按钮「开始探索」。
+  // 不再给「跳过」——后续每一步自己就带跳过，这里再放一个只会让人问"跳过什么"（Air 2026-10-11）。
   const starts = item.startKeys && item.startKeys.length > 0 ? item.startKeys : null;
-  const primaryLabel = starts ? "开始" : focus ? "下一步" : "知道了";
-  const showSkip = focus || starts !== null;
+  const primaryLabel = starts ? "开始探索" : focus ? "下一步" : "知道了";
+  const showSkip = focus;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
   // 通知卡：在子页内容区里**双向居中**。压暗目标已经换成内容区本身（导航与页标题

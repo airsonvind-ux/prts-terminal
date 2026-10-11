@@ -377,7 +377,7 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("欢迎卡：「开始」推上三步导览，「跳过」不推", () => {
+  it("欢迎卡：只有一个「开始探索」，点了推上三步导览", () => {
     mountFace();
     // 三步的锚点得在位（不在位会被兜底跳过——那是正确行为，不是本例要测的）
     for (const key of ["new-chat", "settings", "input"]) {
@@ -388,32 +388,22 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     const a = mountHost();
 
     const card = host()?.lastElementChild as HTMLElement;
-    const start = Array.from(card.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("开始")
-    ) as HTMLButtonElement;
-    expect(start.textContent).toContain("开始");
+    const labels = Array.from(card.querySelectorAll("button")).map(
+      (b) => b.textContent
+    );
+    expect(labels).toEqual(["开始探索"]);
+    // 不给「跳过」：后续每一步自己有跳过，这里再放一个只会让人问"跳过什么"
+    expect(labels.join()).not.toContain("跳过");
+
     act(() => {
-      start.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      (card.querySelector("button") as HTMLButtonElement).dispatchEvent(
+        new MouseEvent("click", { bubbles: true })
+      );
     });
     // 卡自己记成看过并出队，三步推上
     expect(useGuideStore.getState().queue).toEqual(WELCOME_TOUR);
     expect(useGuideStore.getState().seen.has("welcome.intro")).toBe(true);
     a.unmount();
-
-    // 跳过：只把卡消掉，不推三步
-    resetStore();
-    useGuideStore.getState().enqueue(["welcome.intro"]);
-    const b = mountHost();
-    const card2 = host()?.lastElementChild as HTMLElement;
-    const skip = Array.from(card2.querySelectorAll("button")).find((el) =>
-      el.textContent?.includes("跳过")
-    ) as HTMLButtonElement;
-    act(() => {
-      skip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(useGuideStore.getState().queue).toEqual([]);
-    expect(useGuideStore.getState().seen.has("welcome.intro")).toBe(true);
-    b.unmount();
   });
 
   it("换步不重新等待：不会消失一下再回来（不闪）", async () => {
