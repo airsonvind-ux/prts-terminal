@@ -34,8 +34,17 @@ interface Box {
   height: number;
 }
 
-/** 局部坐标参照系之外的会话焦点卡宽度（正面宽 400，268 留出余量） */
+/** 会话焦点卡宽度（正面宽 400，268 留出余量） */
 const FOCUS_CARD_W = 268;
+
+/**
+ * 引导出现前的延迟。
+ *
+ * 点进一页时先让页面渲染出来、眼睛落下去，再出引导——否则引导会比内容还快，
+ * 用户还没看清页内有什么就被盖上了（Air 2026-10-11 实测）。
+ * 位置在延迟期间就量好，所以到点出现时不会闪、也不跳。
+ */
+const GUIDE_DELAY_MS = 400;
 
 /** 通知卡与子页内容区边缘的间距 */
 const NOTICE_INSET = 8;
@@ -115,6 +124,18 @@ export function GuideHost() {
   const [box, setBox] = useState<Box | null>(null);
   const [face, setFace] = useState<{ w: number; h: number } | null>(null);
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
+
+  // 延后出现：量好位置先不显示（visibility: hidden 仍然参与布局），到点再露。
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (activeKey === null) {
+      setShown(false);
+      return;
+    }
+    setShown(false);
+    const t = window.setTimeout(() => setShown(true), GUIDE_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [activeKey]);
 
   /** 重量卡片尺寸（换步 / 缩放都会变）：值没变就不 setState，避免自激。 */
   const measureCard = useCallback(() => {
@@ -227,6 +248,7 @@ export function GuideHost() {
       ref={rootRef}
       className={styles.root}
       data-guide-host=""
+      data-guide-hidden={shown ? undefined : "1"}
     >
       {focus ? (
         <div
@@ -252,7 +274,7 @@ export function GuideHost() {
 
       <div
         ref={cardRef}
-        className={`${styles.card} ${card ? styles.cardIn : ""}`}
+        className={`${styles.card} ${shown && card ? styles.cardIn : ""}`}
         onClick={(e) => e.stopPropagation()}
         style={
           focus

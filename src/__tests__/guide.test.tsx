@@ -377,6 +377,27 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
+  it("引导延后出现：先给页面留出渲染时间", () => {
+    vi.useFakeTimers();
+    try {
+      mountFace();
+      mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
+      resetStore();
+      useGuideStore.getState().enqueue(["first.conv-title"]);
+      const { unmount } = mountHost();
+
+      // 到点前：已排好位（元素在、尺寸在），只是不可见
+      expect(host()?.getAttribute("data-guide-hidden")).toBe("1");
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("别的表面的项不挤掉当前表面的项（模型页通知曾被吞掉）", () => {
     mountFace();
     mountAnchor("settings-body", { left: 64, top: 78, width: 212, height: 150 });

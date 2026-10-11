@@ -19,6 +19,11 @@
   cursor: default;
 }
 
+/* 延迟期间：已经排好位（仍参与布局，卡片尺寸也量得到），只是还看不见 */
+.root[data-guide-hidden] {
+  visibility: hidden;
+}
+
 /* 洞恒等于锚点；四周由超大 spread 阴影压暗（阴影被正面裁掉）。
  *
  * 指认聚焦点**只用一种手段**：2px accent 描边。不加底色、不加光晕——两种语言
