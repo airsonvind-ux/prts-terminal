@@ -24,11 +24,20 @@ Set-Location $root
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:logFile = Join-Path $root "build-log-$stamp.txt"
+# 单一写入通道：控制台与日志文件各写一次，且日志只由本流写。
+# 曾经用 Add-Content 与 Tee-Object 同时写同一文件，结果报“正由另一进程使用”。
+$script:logStream = [System.IO.StreamWriter]::new($script:logFile, $true, [System.Text.Encoding]::UTF8)
 
 function Say([string]$msg) {
     $line = '[{0}] {1}' -f (Get-Date -Format 'HH:mm:ss'), $msg
     Write-Host $line
-    Add-Content -LiteralPath $script:logFile -Value $line
+    $script:logStream.WriteLine($line)
+    $script:logStream.Flush()
+}
+
+function WriteLog([string]$text) {
+    $script:logStream.WriteLine($text)
+    $script:logStream.Flush()
 }
 
 function SizeOf([string]$p) {
@@ -87,7 +96,7 @@ if ($Clean) {
 if ($Jobs -gt 0) { $env:CARGO_BUILD_JOBS = "$Jobs"; Say ('      并行编译数限制为 {0}' -f $Jobs) }
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-& npm run tauri build 2>&1 | Tee-Object -FilePath $script:logFile -Append | ForEach-Object { Write-Host $_ }
+& npm run tauri build 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
 $code = $LASTEXITCODE
 $sw.Stop()
 
