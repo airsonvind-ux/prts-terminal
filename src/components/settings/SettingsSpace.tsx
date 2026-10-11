@@ -6,8 +6,8 @@
 // 工作空间节：路径**只读显示**（显示**解析后**的生效路径；用默认工作区时附
 // 「默认」标记）+ 「选择目录」按钮 → 系统目录选择器（choose_workspace_directory）
 // → 选定即存；非默认时另有「恢复默认」→ 写空串 = 回到默认工作区（后端
-// `config::default_workspace_path`——空值不是「无工作目录」）。hint 明示修改后
-// 重启生效（后端装配期消费一次，无热切换）。
+// `config::default_workspace_path`——空值不是「无工作目录」）。改动**即时生效**
+// （后端工作根是共享句柄，见 `crate::workspace`），故 hint 不再提「重启生效」。
 // 「在资源管理器中打开」：目标固定为工作区根（后端 open_workspace_in_explorer，
 // 目录不能走 open_path——那里只放行文件）。
 // 「目录结构」：工作区树（按需逐层加载）+ 按名搜索（WorkspaceTree）。
@@ -98,9 +98,7 @@ export function SettingsSpace({
             </button>
           )}
         </div>
-        <p className={styles.wsHint}>
-          文件与命令操作的工作根目录，修改后重启生效
-        </p>
+        <p className={styles.wsHint}>文件与命令操作的工作根目录</p>
       </SettingsSection>
 
       <SettingsSection title="目录结构">

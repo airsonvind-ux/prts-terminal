@@ -46,7 +46,7 @@ fn fmt_bytes(n: usize) -> String {
 /// summary 展示路径：工作区内 → 相对路径（`/` 分隔，与 grep/list_dir 输出
 /// 同口径）；strip 失败（理论不可达，防御）回退绝对路径。
 fn display_path(policy: &Policy, abs: &Path) -> String {
-    match abs.strip_prefix(&policy.workspace_root) {
+    match abs.strip_prefix(policy.workspace_root().canonical()) {
         Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
         Err(_) => abs.to_string_lossy().to_string(),
     }

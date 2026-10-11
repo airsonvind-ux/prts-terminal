@@ -397,7 +397,7 @@ export interface ProviderConfig {
 }
 
 export interface WorkspaceSettings {
-  /** 空串 = 未设置（装配回退默认工作区）；修改需重启生效 */
+  /** 空串 = 用默认工作区（<主目录>/PRTS-WorkSpace）；修改即时生效（后端热切换） */
   workspace_root: string;
 }
 

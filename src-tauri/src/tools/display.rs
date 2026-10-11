@@ -200,7 +200,7 @@ pub(crate) fn file_link(policy: &Policy, raw: &str) -> DisplayLink {
             if p.is_absolute() {
                 raw.to_string()
             } else {
-                policy.workspace_root.join(raw).to_string_lossy().into_owned()
+                policy.workspace_root().canonical().join(raw).to_string_lossy().into_owned()
             }
         });
     DisplayLink::file(resolved, file_name_label(raw))

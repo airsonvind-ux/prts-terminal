@@ -18,6 +18,7 @@ use serde_json::json;
 
 use crate::db::{Filter, FilterOp};
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
+use crate::workspace::WorkspaceRoot;
 
 // ═══════════════════════════════════════════════════════
 // 常量与基础数据结构
@@ -1162,17 +1163,21 @@ impl<'a> Simulator<'a> {
 // Tool trait 实现
 // ═══════════════════════════════════════════════════════
 
-/// 寻路模拟工具。`workspace_root` 为帧级 log 的落点基准：默认写入
-/// workspace_root/sim_logs/，log 参数覆盖时相对路径基于工作区解析。
+/// 寻路模拟工具。工作根为帧级 log 的落点基准（**共享句柄，每次读当前值**）：
+/// 默认写入 workspace_root/sim_logs/，log 参数覆盖时相对路径基于工作区解析。
 /// 本工具只写自己的 log 文件，不走沙箱守卫（读写判定针对 LLM 文件
 /// 能力；log 为工具内部副作用，落点已固定在工作区内）。
 pub struct SimPath {
-    workspace_root: PathBuf,
+    /// 当前工作根（共享句柄，见 crate::workspace）。
+    workspace_root: WorkspaceRoot,
 }
 
 impl SimPath {
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+    /// `workspace_root` 接受路径（单测）或共享句柄（生产装配）。
+    pub fn new(workspace_root: impl Into<WorkspaceRoot>) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+        }
     }
 }
 
@@ -1383,11 +1388,11 @@ impl Tool for SimPath {
                 if op.is_absolute() {
                     op
                 } else {
-                    self.workspace_root.join(op)
+                    self.workspace_root.current().join(op)
                 }
             }
             None => {
-                let dir = self.workspace_root.join("sim_logs");
+                let dir = self.workspace_root.current().join("sim_logs");
                 fs::create_dir_all(&dir).ok();
                 dir.join(format!("sim_{}_r{}.jsonl", level_id, route_index))
             }

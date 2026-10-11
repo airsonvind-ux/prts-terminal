@@ -35,6 +35,7 @@ mod tools;
 mod llm;
 mod commands;
 mod turn_registry;
+mod workspace;
 
 use std::sync::{Arc, Mutex};
 
@@ -52,6 +53,7 @@ use crate::skills_snapshot::SkillSnapshotStore;
 use crate::tools::ToolRegistry;
 use crate::steer_queue::SteerQueue;
 use crate::turn_registry::TurnRegistry;
+use crate::workspace::WorkspaceRoot;
 use crate::llm::anthropic::AnthropicMessagesClient;
 use crate::llm::openai_compatible::OpenAiCompatibleClient;
 use crate::llm::openai_responses::OpenAIResponsesClient;
@@ -198,11 +200,14 @@ pub fn run() {
     // ── 工作目录（文件工具的工作根：read_file/list_dir 的相对路径基准）──
     // 来源 = settings.workspace.workspace_root（空串 = 回退默认工作区：
     // `<主目录>/PRTS-WorkSpace`，见 config::default_workspace_path）。
-    // 修改需重启生效（装配期消费一次，无热切换）。
+    // **改设置即热生效**：工作根只存一份（下面的共享句柄），策略与工具持有
+    // 句柄而非快照；唯一写入点是 set_settings（在 busy 闸之内，故不会在
+    // 对话处理中更换）。见 crate::workspace。
     let workspace_root = {
         let st = settings_store.lock().unwrap();
         st.workspace_root()
     };
+    let workspace_root_handle = WorkspaceRoot::new(workspace_root.clone());
     // 默认工作区在启动时确保存在（它是用户可见的产物落点，应当总是可用）；
     // 用户自选路径**不**在此创建——目录消失应当显式暴露，而不是被静默重建。
     // 失败不阻断启动（工具侧自会以明确错误暴露），仅终端留痕。
@@ -270,11 +275,11 @@ pub fn run() {
     let ledger = Arc::new(Mutex::new(Notices::load(&config::data_dir())));
 
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
-    // M1 批 2：以 workspace 根构造沙箱策略注入注册（read_file/sim_path
-    // 经策略持有守卫与工作区基准；workspace_root 区块批 3 接 config）
+    // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
+    // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
     let tool_registry = {
         let mut reg = ToolRegistry::new();
-        let policy = Arc::new(Policy::new(workspace_root.clone()));
+        let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
         // 内置工具在此统一注册；每个工具注册时校验 JSON Schema，
         // 非法 schema 在此暴露（拒绝注册）
         tools::register_builtin(
@@ -479,6 +484,7 @@ pub fn run() {
         .manage(turn_registry)
         .manage(steer_queue)
         .manage(settings_store)
+        .manage(workspace_root_handle)
         // .manage(cache_stores)
         // .manage(last_unloads)
         .manage(Arc::clone(&boot_facts))

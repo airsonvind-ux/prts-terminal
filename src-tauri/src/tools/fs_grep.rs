@@ -318,7 +318,7 @@ impl ScanState {
 
     /// 收集一条命中（行截断 + 展示预算 + limit 计数）。
     fn push_match(&mut self, abs: &Path, line_no: usize, line_text: &str) {
-        let display = display_path(&self.policy.workspace_root, abs);
+        let display = display_path(&self.policy.workspace_root().canonical(), abs);
         let mut text = line_text.to_string();
         if text.chars().count() > MAX_LINE_CHARS {
             text = text.chars().take(MAX_LINE_CHARS).collect();
@@ -529,7 +529,7 @@ impl Tool for GrepTool {
 
         // ── 3. 目标解析：省略 → 工作区根；给出 → resolve_read（BLOCKED 拒）──
         let (target, single_file) = match v.get("path") {
-            None | Some(serde_json::Value::Null) => (self.policy.workspace_root.clone(), false),
+            None | Some(serde_json::Value::Null) => (self.policy.workspace_root().canonical(), false),
             Some(p) => {
                 let raw = p
                     .as_str()

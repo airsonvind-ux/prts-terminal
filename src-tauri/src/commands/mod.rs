@@ -415,7 +415,8 @@ pub fn reveal_api_key(
 /// api_key 三态：缺席/掩码保留现值、空串清除、其他明文写入）。
 ///
 /// 同步职责：patch 合并进 SettingsStore（持久层 + 读取源）后，按变化摘要
-/// 同步运行 State（llm_config / exec_settings），notices 记 Model 变化，
+/// 同步运行 State（llm_config / exec_settings / **workspace 共享句柄**，
+/// 工作目录热生效见 crate::workspace），notices 记 Model 变化，
 /// 最后落盘（写后重读校验；失败 Err 上抛 → 前端可见——内存已同步，
 /// 下次变更兜底重写）。
 ///
@@ -431,6 +432,7 @@ pub async fn set_settings(
     exec_settings: State<'_, Arc<Mutex<crate::exec_settings::ExecutionSettings>>>,
     maa_settings: State<'_, Arc<Mutex<crate::maa::settings::MaaSettings>>>,
     ledger: State<'_, Arc<Mutex<Notices>>>,
+    root: State<'_, crate::workspace::WorkspaceRoot>,
     patch: SettingsPatch,
 ) -> Result<(), String> {
     guard_config_write(&turn_registry)?;
@@ -459,6 +461,22 @@ pub async fn set_settings(
             .lock()
             .map_err(|e| format!("执行模式配置锁获取失败: {e}"))?;
         *es = st.settings.exec;
+    }
+    if changes.workspace_changed {
+        // 热生效：把新工作根推给共享句柄——策略、路径守卫、执行工具、仿真
+        // 工具随之跟随，无需重启（见 crate::workspace）。新根若解析为默认
+        // 路径，顺手确保它存在（用户可能删过）；用户自选路径**不**重建
+        // ——目录消失应当显式暴露，而不是被静默重建。
+        let resolved = st.workspace_root();
+        if resolved == crate::config::default_workspace_path() {
+            if let Err(e) = crate::config::ensure_default_workspace() {
+                eprintln!(
+                    "[settings] 默认工作区创建失败（{}）：{e}",
+                    resolved.display()
+                );
+            }
+        }
+        root.set(resolved);
     }
     if changes.maa_changed {
         let mut ms = maa_settings

@@ -5,8 +5,10 @@
 //!   日志、数据库运行副本全在其中；普通用户与其工具都不需要碰它），
 //!   以及尚未搬入数据根的数据库文件 arknights.db（搬入后此条可删）
 //! - READ_ONLY（可读不可写）：知识库目录、技能运行根（data_dir()/skills）
-//! - WRITABLE（可写）：工作空间 workspace_root
-//! - protected（写保护特例）：工作区 .git（可读不可写，防 LLM 破坏仓库）
+//! - WRITABLE（可写）：当前工作根 workspace_root（共享句柄，改设置即跟随；
+//!   见 [`crate::workspace`]）
+//! - protected（写保护特例）：当前工作根下的 `.git`（可读不可写，防 LLM
+//!   破坏仓库；按当前工作根实时派生）
 //!
 //! 判定约定：`check_read` / `check_write` 接收 **canonicalize 之后的路径**，
 //! 边界检查必须发生在 canonicalize 之后（path_guard.rs 保证）。
@@ -21,6 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::config;
 use crate::knowledge::index::knowledge_dir;
 use crate::skills_index::skills_dir;
+use crate::workspace::{canonicalize_opt, WorkspaceRoot};
 
 /// 访问分类标签（四级的判别枚举）。
 ///
@@ -39,23 +42,18 @@ pub enum AccessKind {
     Protected,
 }
 
-/// 沙箱策略：workspace 根 + 三条路径清单 + 两级判定函数。
+/// 沙箱策略：workspace 根 + 两条路径清单 + 两级判定函数。
+///
+/// 工作根是**共享句柄**而非快照（见 [`crate::workspace`]）：设置页改路径后
+/// 判定立即跟随，无需重启。
 #[derive(Debug, Clone)]
 pub struct Policy {
-    /// 工作空间根（WRITABLE 区）；已尝试 canonicalize（存在时取 canonical）。
-    pub workspace_root: PathBuf,
+    /// 当前工作根（WRITABLE 区）：共享句柄（判定用其 canonical 形态）。
+    workspace_root: WorkspaceRoot,
     /// BLOCKED：连读都不行（当前均为**文件**路径）
     pub blocked: Vec<PathBuf>,
     /// READ_ONLY：可读不可写（**目录**路径，前缀语义）
     pub read_only: Vec<PathBuf>,
-    /// protected：写保护特例（**目录**路径，前缀语义）
-    pub protected: Vec<PathBuf>,
-}
-
-/// canonicalize 尝试：存在则取 canonical（与守卫传入路径同基准比较）；
-/// 不存在（新工作区尚无 .git、台账未落盘等）保留原样。
-fn canonicalize_opt(p: PathBuf) -> PathBuf {
-    p.canonicalize().unwrap_or(p)
 }
 
 impl Policy {
@@ -66,9 +64,13 @@ impl Policy {
     ///   不允许绕过工具直读数据库）
     /// - READ_ONLY = knowledge_dir() + skills_dir()（知识库 + 技能运行根
     ///   data_dir()/skills——内置同步副本与用户技能同住其中）
-    /// - protected = workspace_root/.git
-    pub fn new(workspace_root: PathBuf) -> Self {
-        let ws = canonicalize_opt(workspace_root);
+    /// - protected = 当前工作根下的 `.git`（见 [`Self::is_protected`]：实时派生
+    ///   ——工作根可变，快照会过期；用户把工作区指向一个仓库时必须立刻受保护）
+    ///
+    /// `workspace_root` 接受路径或已有句柄：传路径 = 建**独立**句柄（单测 /
+    /// 独立使用）；传句柄 = 与设置共享同一份值（生产装配经 lib.rs 注入）。
+    pub fn new(workspace_root: impl Into<WorkspaceRoot>) -> Self {
+        let ws = workspace_root.into();
         // 数据根整根拦截：此项按组件级前缀匹配，覆盖全部子树，
         // 因此模型**读不到**数据根内的任何文件（含 MAA 识别明细）。
         let blocked = vec![
@@ -77,13 +79,16 @@ impl Policy {
             canonicalize_opt(config::db_seed_path()),
         ];
         let read_only = vec![canonicalize_opt(knowledge_dir()), canonicalize_opt(skills_dir())];
-        let protected = vec![canonicalize_opt(ws.join(".git"))];
         Self {
             workspace_root: ws,
             blocked,
             read_only,
-            protected,
         }
+    }
+
+    /// 当前工作根的共享句柄（工具构造时注入；与设置同源，改设置即跟随）。
+    pub fn workspace_root(&self) -> WorkspaceRoot {
+        self.workspace_root.clone()
     }
 
     /// canonical 路径是否命中任一名单条目（组件级前缀比较，
@@ -117,12 +122,12 @@ impl Policy {
         self.is_in_workspace(canonical)
             && !Self::matches_any(&self.blocked, canonical)
             && !Self::matches_any(&self.read_only, canonical)
-            && !Self::matches_any(&self.protected, canonical)
+            && !self.is_protected(canonical)
     }
 
-    /// 是否在工作区内（== 或前缀；根自身含）。
+    /// 是否在工作区内（== 或前缀；根自身含）。按**当前**工作根判定。
     pub fn is_in_workspace(&self, p: &Path) -> bool {
-        p.starts_with(&self.workspace_root)
+        p.starts_with(self.workspace_root.canonical())
     }
 
     /// 是否命中 BLOCKED 名单。
@@ -135,9 +140,9 @@ impl Policy {
         Self::matches_any(&self.read_only, p)
     }
 
-    /// 是否命中 protected 名单。
+    /// 是否命中写保护（当前工作根下的 `.git`，按当前根实时派生）。
     pub fn is_protected(&self, p: &Path) -> bool {
-        Self::matches_any(&self.protected, p)
+        p.starts_with(canonicalize_opt(self.workspace_root.canonical().join(".git")))
     }
 }
 
@@ -328,6 +333,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    // ── 工作根热更新（共享句柄）──
+
+    #[test]
+    fn workspace_root_follows_live_update() {
+        // 改设置后判定必须立即跟随（工作根是句柄不是快照）：新根立刻可写、
+        // 旧根立刻不可写、`.git` 保护随之迁移。
+        let ws_a = ws_fixture("live-a");
+        let ws_b = ws_fixture("live-b");
+        let policy = Policy::new(ws_a.clone());
+        let a = ws_a.canonicalize().unwrap();
+        let b = ws_b.canonicalize().unwrap();
+
+        assert!(policy.is_in_workspace(&a.join("x.txt")), "初始根应可写");
+        assert!(
+            !policy.is_in_workspace(&b.join("x.txt")),
+            "换根前新根不在工作区"
+        );
+
+        policy.workspace_root().set(ws_b.clone());
+
+        assert!(policy.is_in_workspace(&b.join("x.txt")), "换根后新根应立即生效");
+        assert!(policy.check_write(&b.join("new.txt")));
+        assert!(!policy.is_in_workspace(&a.join("x.txt")), "换根后旧根应失效");
+        assert!(!policy.check_write(&a.join("new.txt")));
+        // `.git` 保护随根迁移（若按构造时快照实现，新根的 .git 会漏保护）
+        assert!(policy.is_protected(&b.join(".git").join("config")));
+        assert!(!policy.is_protected(&a.join(".git").join("config")));
+
+        let _ = std::fs::remove_dir_all(&ws_a);
+        let _ = std::fs::remove_dir_all(&ws_b);
+    }
+
     // ── 名单内容形态 ──
 
     #[test]
@@ -343,9 +380,15 @@ mod tests {
         let sk = skills_dir();
         let sk_c = sk.canonicalize().unwrap_or(sk);
         assert!(policy.read_only.iter().any(|b| b == &sk_c));
-        // protected 为 workspace/.git
-        let git = ws.canonicalize().unwrap().join(".git");
-        assert_eq!(policy.protected, vec![git.canonicalize().unwrap_or(git)]);
+        // protected 由当前工作根派生（工作根可变，故不是列表快照）
+        let canon_ws = ws.canonicalize().unwrap();
+        let git = canon_ws.join(".git");
+        assert!(policy.is_protected(&git), ".git 自身应写保护");
+        assert!(policy.is_protected(&git.join("config")), ".git 子路径应写保护");
+        assert!(
+            !policy.is_protected(&canon_ws.join("sub")),
+            "非 .git 不写保护"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 }

@@ -311,7 +311,7 @@ impl Tool for ListDirTool {
 
         // ── 1. 路径解析：缺省 → 工作区根；否则守卫 resolve_read ──
         let resolved = match raw {
-            None => self.policy.workspace_root.clone(),
+            None => self.policy.workspace_root().canonical(),
             Some(raw) => path_guard::resolve_read(&self.policy, raw).map_err(|e| match e {
                 path_guard::PathGuardError::Io(_) => {
                     ToolError::Execution(format!("目录不存在：{raw}"))

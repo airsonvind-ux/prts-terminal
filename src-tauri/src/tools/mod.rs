@@ -572,7 +572,7 @@ pub fn register_builtin(
 ) -> Result<(), String> {
     // echo 为测试辅助 dummy（不注册生产，2026-08-31；代码保留供测试）
     reg.register(Box::new(SearchEntities))?;
-    reg.register(Box::new(SimPath::new(policy.workspace_root.clone())))?;
+    reg.register(Box::new(SimPath::new(policy.workspace_root())))?;
     reg.register(Box::new(QueryEnemy))?;
     reg.register(Box::new(QueryLevel))?;
     reg.register(Box::new(QueryOperator))?;
@@ -601,7 +601,7 @@ pub fn register_builtin(
     reg.register(Box::new(GrepTool::new(Arc::clone(&policy))))?;
     // 命令执行（M3-A）：通用 shell 命令，执行内核 + 危险度分类 + 审批预检
     // （审批在 orchestrator 预检通道消费，execute 为纯执行路径）
-    reg.register(Box::new(RunCommandTool::new(policy.workspace_root.clone())))?;
+    reg.register(Box::new(RunCommandTool::new(policy.workspace_root())))?;
     // 网络域（M5）：web_search（免费匿名 anysearch_free）/ web_fetch（正文
     // 提取 + SSRF 逐跳防护）只读查询类工具。preflight 非 run_command 一律
     // ToolVerdict::Run 直放（零审批改动）；超时/体积/协议白名单自约束在

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::exec::runner::{self, Outcome, RunOptions, RunOutput, ShellKind};
+use crate::workspace::WorkspaceRoot;
 
 use super::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
@@ -35,17 +36,22 @@ const MAX_COMMAND_CHARS: usize = 512;
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 pub struct RunCommandTool {
-    /// 工作空间根：cwd 默认值 + 输出落盘目录基准（workspace_root/.prts-exec-output）。
-    workspace_root: PathBuf,
+    /// 当前工作根（共享句柄）：cwd 默认值 + 输出落盘目录基准
+    /// （workspace_root/.prts-exec-output）+ 受限启动的 ACL 放行根。
+    /// 每次执行读当前值——设置页改路径即跟随（见 crate::workspace）。
+    workspace_root: WorkspaceRoot,
 }
 
 impl RunCommandTool {
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self { workspace_root }
+    /// `workspace_root` 接受路径（单测）或共享句柄（生产装配）。
+    pub fn new(workspace_root: impl Into<WorkspaceRoot>) -> Self {
+        Self {
+            workspace_root: workspace_root.into(),
+        }
     }
 
     fn output_dir(&self) -> PathBuf {
-        self.workspace_root.join(".prts-exec-output")
+        self.workspace_root.current().join(".prts-exec-output")
     }
 }
 
@@ -136,7 +142,7 @@ impl Tool for RunCommandTool {
                 let resolved = if p.is_absolute() {
                     p
                 } else {
-                    self.workspace_root.join(p)
+                    self.workspace_root.current().join(p)
                 };
                 if !resolved.is_dir() {
                     return Err(ToolError::Parse(format!(
@@ -146,7 +152,7 @@ impl Tool for RunCommandTool {
                 }
                 resolved
             }
-            None => self.workspace_root.clone(),
+            None => self.workspace_root.current(),
         };
 
         let shell = match value.get("shell") {
@@ -191,12 +197,12 @@ impl Tool for RunCommandTool {
         // M3-B：ctx.abort 注入 RunOptions.cancel（runner 轮询 kill 的取消源；
         // 直调/测试场景 ctx.abort = None → 无取消，行为不变）。
         // M4：workspace_root 随 spec 下传（受限启动的 ACL 放行根 + TEMP/缓存
-        // 重定向基准；与工具构造时注入的 policy.workspace_root 同源）。
+        // 重定向基准；与工具持有的共享句柄同源——同一次执行内取同一个值）。
         let spec = runner::CommandSpec {
             command,
             cwd,
             shell,
-            workspace_root: self.workspace_root.clone(),
+            workspace_root: self.workspace_root.current(),
             full_permission,
         };
         let timeout_secs = timeout.as_secs();

@@ -163,7 +163,9 @@ impl LlmSection {
     }
 }
 
-/// workspace 段。workspace_root 空串 = 未设置（装配回退默认工作区）。
+/// workspace 段。workspace_root 空串 = 用默认工作区
+/// （`<主目录>/PRTS-WorkSpace`，见 `crate::config::default_workspace_path`；
+/// 空值不是「无工作目录」，故不存在空态）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
     #[serde(default)]
@@ -280,7 +282,7 @@ impl ExecPatch {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspacePatch {
     /// Some(v) 直接写入（**含空串 = 回默认工作区**）；缺席 = 不更新。
-    /// 修改**重启生效**（装配期消费一次，无热切换）。
+    /// 修改**即时生效**：命令层写后即更新工作根共享句柄（见 `crate::workspace`）。
     pub workspace_root: Option<String>,
 }
 
@@ -303,6 +305,8 @@ pub struct PatchChanges {
     pub exec_changed: bool,
     /// maa 段有实际变化。
     pub maa_changed: bool,
+    /// workspace 段有实际变化（命令层据此更新工作根共享句柄——热生效）。
+    pub workspace_changed: bool,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -636,8 +640,12 @@ impl SettingsStore {
         }
 
         if let Some(p) = &patch.workspace {
+            let before = self.settings.workspace.workspace_root.clone();
             if let Some(v) = &p.workspace_root {
                 self.settings.workspace.workspace_root = v.trim().to_string();
+            }
+            if before != self.settings.workspace.workspace_root {
+                changes.workspace_changed = true;
             }
         }
 

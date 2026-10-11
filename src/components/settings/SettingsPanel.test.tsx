@@ -350,7 +350,9 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
     expect(container!.textContent).toContain("工作空间");
     expect(container!.textContent).toContain("F:/ws");
     expect(container!.textContent).not.toContain("未设置");
-    expect(container!.textContent).toContain("修改后重启生效");
+    // 改动即时生效（后端热切换）→ 不得再出现「重启生效」的旧说法
+    expect(container!.textContent).toContain("工作根目录");
+    expect(container!.textContent).not.toContain("重启生效");
     // 目录结构节：树容器 + 搜索框在位
     expect(container!.querySelector("[data-workspace-tree]")).toBeTruthy();
     expect(
@@ -560,7 +562,7 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     // 不把内部机制（目录冻结）写成用户约束
     expect(container!.textContent).not.toContain("新对话");
     // 技能页不再承载工作空间内容（拆分后职责单一）
-    expect(container!.textContent).not.toContain("修改后重启生效");
+    expect(container!.textContent).not.toContain("工作根目录");
   });
 
   it("技能行点击 → open_path 打开源 md + 成功可见反馈（info toast）", async () => {

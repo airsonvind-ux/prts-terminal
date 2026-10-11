@@ -59,13 +59,14 @@ impl std::error::Error for PathGuardError {}
 /// 读路径解析：绝对路径直接用 / 相对路径 join workspace_root →
 /// canonicalize（失败即"不存在"）→ BLOCKED 检查 → 放行。
 ///
-/// workspace_root 从 policy 取（不重复传参）。返回值已 canonicalize。
+/// 工作根从 policy 取**当前值**（改设置即跟随；不重复传参）。返回值已
+/// canonicalize。
 pub fn resolve_read(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardError> {
     let raw_path = Path::new(raw);
     let candidate = if raw_path.is_absolute() {
         raw_path.to_path_buf()
     } else {
-        policy.workspace_root.join(raw)
+        policy.workspace_root().canonical().join(raw)
     };
     let canonical = candidate
         .canonicalize()
@@ -118,7 +119,7 @@ pub fn resolve_write(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErr
     let candidate = if raw_path.is_absolute() {
         raw_path.to_path_buf()
     } else {
-        policy.workspace_root.join(raw)
+        policy.workspace_root().canonical().join(raw)
     };
     let parent = candidate.parent().ok_or_else(|| {
         PathGuardError::Io(format!("无法解析路径：{raw}"))
@@ -139,7 +140,7 @@ pub fn resolve_write(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErr
 
 /// 写路径解析（父目录自动创建版，write_file 全量写入用）：
 /// 目标不存在、父目录不存在都允许——自 candidate 沿父链上溯，找最近
-/// 存在的目录祖先 A（workspace_root 必存在）；A canonicalize 后的真实路径
+/// 存在的目录祖先 A（当前工作根必存在）；A canonicalize 后的真实路径
 /// 为基准，目标 = A_canon.join(缺失段)（缺失段不含 `.`/`..`——其存在性已
 /// 由上溯消解）；父链中段遇普通文件（如 `ws/a.txt/b.txt`）视为不可解析。
 ///
@@ -151,7 +152,7 @@ pub fn resolve_write_create(policy: &Policy, raw: &str) -> Result<PathBuf, PathG
     let candidate = if raw_path.is_absolute() {
         raw_path.to_path_buf()
     } else {
-        policy.workspace_root.join(raw)
+        policy.workspace_root().canonical().join(raw)
     };
 
     // ── 1. 上溯找最近存在的目录祖先 A；沿途不存在组件（与「目标是既有
