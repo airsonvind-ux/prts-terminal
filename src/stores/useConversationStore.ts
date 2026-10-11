@@ -145,6 +145,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     const conv: Conversation = {
       id,
       title,
+      // 占位标题（首条消息截断）——真标题由 conversation/title 事件置位
+      titleGenerated: false,
       turns: [],
       createdAt: Date.now(),
       modelName,
@@ -275,7 +277,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   setConversationTitle: (id, title) => {
     set((state) => ({
       conversations: state.conversations.map((c) =>
-        c.id === id ? { ...c, title } : c
+        c.id === id ? { ...c, title, titleGenerated: true } : c
       ),
     }));
   },

@@ -111,6 +111,11 @@ describe("useAgentEvents · conversation/title", () => {
     await flush();
 
     expect(titleOf(id)).toBe("源石虫数值");
+    // 真标题落地标记（引导的"对话标题"那条靠它把门：占位标题不算数）
+    expect(
+      useConversationStore.getState().conversations.find((c) => c.id === id)
+        ?.titleGenerated
+    ).toBe(true);
     const patches = titlePatchCalls();
     expect(patches).toHaveLength(1);
     expect(patches[0]).toEqual({

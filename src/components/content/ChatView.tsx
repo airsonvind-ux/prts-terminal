@@ -301,13 +301,17 @@ export function ChatView({ onDragHandle }: Props) {
     enqueueGuide(["welcome.intro"]);
   }, [guideHydrated, showWelcome, bootVisible, overlay, enqueueGuide]);
 
-  // ② 首次出现型（对话标题 / 上下文进度环）：元素真的在画面上，且本轮没在生成
-  //    ——生成中才出现的（新对话的标题占位）要等这一轮结束
+  // ② 首次出现型（对话标题 / 上下文进度环）：元素真的在画面上，且本轮没在生成。
+  //    还要等**真标题**落地：createConversation 时 title 就是"首条消息截断"的占位
+  //    标题，若那一刻就出，会先框住占位标题、等真标题到了再框一次——用户看到
+  //    闪一下（Air 2026-10-11 实测）。titleGenerated 由 conversation/title 事件置位。
   const convTitle = activeConv?.title;
+  const titleReady =
+    activeConv !== undefined && activeConv.titleGenerated !== false;
   useEffect(() => {
     if (!guideHydrated || restoring || bootVisible || !chromeVisible) return;
     if (generating || aborting) return;
-    if (!convTitle) return; // 标题还没落（后台模型生成中）
+    if (!convTitle || !titleReady) return;
     enqueueGuide(["first.conv-title", "first.context-ring"]);
   }, [
     guideHydrated,
@@ -317,6 +321,7 @@ export function ChatView({ onDragHandle }: Props) {
     generating,
     aborting,
     convTitle,
+    titleReady,
     enqueueGuide,
   ]);
 
