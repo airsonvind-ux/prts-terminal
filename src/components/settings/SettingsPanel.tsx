@@ -27,6 +27,8 @@ import { SettingsMemory } from "./SettingsMemory";
 import { SettingsUsage } from "./SettingsUsage";
 import type { MaaStatus } from "../../types";
 import { useUIStore } from "../../stores/useUIStore";
+import { useGuideStore } from "../../stores/useGuideStore";
+import { SETTINGS_TAB_GUIDE } from "../guide/guideContent";
 import {
   hasPendingApproval,
   isProcessingBusy,
@@ -156,6 +158,15 @@ export function SettingsPanel() {
   );
   // busy 订阅（M3-B 全局锁口径）：驱动漏斗守卫 + 模型页控件禁用
   const settingsBusy = useProcessingStore(isProcessingBusy);
+  // 引导键集是否已从后端拉到（未拉到不弹——宁可不弹，也不误弹）
+  const guideHydrated = useGuideStore((s) => s.hydrated);
+
+  // 引导：进入某页且该页说明没看过 → 出通知卡（每页一次，去重在 store）
+  useEffect(() => {
+    if (!guideHydrated) return;
+    const key = SETTINGS_TAB_GUIDE[activeTab];
+    if (key) useGuideStore.getState().enqueue([key]);
+  }, [activeTab, guideHydrated]);
 
   // ── 待审批：不留面板 ──
   // 审批确认卡在消息流里，被遮罩盖住就点不到——这正是原先“处理中一律不能进设置”
@@ -454,7 +465,7 @@ export function SettingsPanel() {
   const activeLabel = TABS.find((t) => t.key === activeTab)?.label ?? "";
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} data-guide="settings-panel">
       {/* ── 左侧导航（9 项，全 2 字名；侧栏不扩张） ── */}
       <nav className={styles.sidebar}>
         <div className={styles.sidebarTitle}>设置</div>

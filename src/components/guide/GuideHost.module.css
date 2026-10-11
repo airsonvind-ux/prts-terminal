@@ -1,0 +1,117 @@
+/* src/components/guide/GuideHost.module.css
+ * 说明层（应用内引导）· portal 到 body 的 fixed 层
+ *
+ * z-index 2000：在设置 / 历史面板（10）与进度环悬停卡（1001）之上，
+ * 在 Toast（9999）之下。
+ *
+ * 宿主 pointer-events:none —— 挖洞高亮的锚点仍可点，界面不被挡住；
+ * 只有卡片自己收事件。
+ */
+
+.root {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  pointer-events: none;
+  font-family: var(--font-ui);
+}
+
+/* ── 聚焦式：洞恒等于锚点，四周由超大 spread 阴影压暗（缩放自动跟随） ── */
+
+.hole {
+  position: fixed;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 9999px rgba(5, 7, 9, 0.64);
+  pointer-events: none;
+}
+
+/* ── 通知式：压暗的目标就是设置面板本身 ── */
+
+.dim {
+  position: fixed;
+  border-radius: var(--radius-md);
+  background: rgba(5, 7, 9, 0.64);
+  pointer-events: none;
+}
+
+/* ── 说明卡（两种形态共用） ── */
+
+.card {
+  position: fixed;
+  width: 268px;
+  box-sizing: border-box;
+  padding: 12px 14px 10px;
+  background: var(--depth-3);
+  border: 1px solid rgba(74, 171, 234, 0.4);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: auto;
+  transition: opacity 150ms ease;
+}
+
+.cardIn {
+  opacity: 1;
+}
+
+.title {
+  font-size: var(--text-md);
+  color: var(--text-1);
+}
+
+.body {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.note {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--text-3);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ghost,
+.primary {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-3);
+}
+
+.ghost:hover {
+  color: var(--text-2);
+  border-color: var(--depth-4);
+}
+
+.primary {
+  background: rgba(74, 171, 234, 0.14);
+  border: 1px solid rgba(74, 171, 234, 0.45);
+  color: var(--accent);
+}
+
+.primary:hover {
+  background: rgba(74, 171, 234, 0.22);
+}

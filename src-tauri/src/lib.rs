@@ -519,6 +519,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::agent_process,
             commands::get_settings,
+            commands::get_guide_seen,
+            commands::mark_guide_seen,
             commands::set_settings,
             commands::reveal_api_key,
             commands::get_app_meta,

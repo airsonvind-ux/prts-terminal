@@ -57,6 +57,7 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
     <div className={styles.bar} onMouseDown={onDragHandle} onContextMenu={(e) => e.preventDefault()}>
       <span
         className={`${styles.title} ${isHistoryOpen ? styles.titleActive : ""}`}
+        data-guide="conv-title"
         onClick={
           showTitle && displayTitle
             ? () => toggleOverlay("history")
@@ -69,6 +70,7 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
       <div className={styles.actions}>
         <button
           className={styles.btn}
+          data-guide="new-chat"
           style={{ "--btn-expand-ratio": "0.283" } as React.CSSProperties}
           onClick={newChat}
           title="新对话"
@@ -78,6 +80,7 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
         </button>
         <button
           className={btn("settings")}
+          data-guide="settings"
           style={{ "--btn-expand-ratio": "0.217" } as React.CSSProperties}
           onClick={() => toggleOverlay("settings")}
           title="设置"

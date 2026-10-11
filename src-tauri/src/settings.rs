@@ -62,6 +62,10 @@ pub struct Settings {
     pub workspace: WorkspaceSettings,
     #[serde(default)]
     pub window: WindowSettings,
+    /// 界面态（非配置）：引导「已看过」键集等。与配置同文件不同段——它的写入
+    /// 不受 set_settings 的 busy 闸约束（那道闸管的是配置），走独立命令。
+    #[serde(default)]
+    pub ui: UiSection,
 }
 
 impl Default for Settings {
@@ -73,8 +77,25 @@ impl Default for Settings {
             maa: MaaSettings::default(),
             workspace: WorkspaceSettings::default(),
             window: WindowSettings::default(),
+            ui: UiSection::default(),
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════
+// ui 段（界面态）
+// ═══════════════════════════════════════════════════════
+
+/// 界面态：与「配置」分开——它记录的是「界面见过什么」，不是用户的选择。
+///
+/// 为什么不并进配置：`set_settings` 有 busy 闸（对话处理中拒绝一切配置写入），
+/// 而「看过没」必须在任何时候都能落盘（设置页通知可能正好赶上处理中）。
+/// 故单独两个命令 `get_guide_seen` / `mark_guide_seen` 直接读写本段。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UiSection {
+    /// 已看过的引导项 key（欢迎页 3 + 设置页 9 + 首次出现型 2，见台账引导文案）。
+    #[serde(default)]
+    pub guide_seen: Vec<String>,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -530,6 +551,23 @@ impl SettingsStore {
         &self.data_dir
     }
 
+    /// 引导「已看过」键集（快照拷贝）。
+    pub fn guide_seen(&self) -> Vec<String> {
+        self.settings.ui.guide_seen.clone()
+    }
+
+    /// 记一个引导项为「已看过」并落盘。幂等：已存在则直接返回（不重复写盘）。
+    ///
+    /// **不走 set_settings 的 busy 闸**：界面态不是配置，且它必须在对话处理中
+    /// 也能落盘（设置页通知随时可能触发）。只读降级由 `save` 自己拒绝。
+    pub fn mark_guide_seen(&mut self, key: &str) -> Result<(), String> {
+        if self.settings.ui.guide_seen.iter().any(|k| k == key) {
+            return Ok(());
+        }
+        self.settings.ui.guide_seen.push(key.to_string());
+        self.save()
+    }
+
     /// 把 patch 合并进内存 settings（mask 解析在此）。返回变化摘要。
     /// 不落盘、不触发 readonly 判定——调用方（命令层）先查 is_readonly。
     pub fn apply_patch(&mut self, patch: &SettingsPatch) -> PatchChanges {
@@ -765,6 +803,44 @@ mod tests {
         assert_eq!(loaded.settings.llm.thinking_level.as_deref(), Some("high"));
         assert_eq!(loaded.settings.exec.mode, crate::exec_settings::ExecutionMode::Auto);
         assert!(!loaded.settings.window.always_on_top);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn guide_seen_roundtrips_and_is_idempotent() {
+        let dir = unique_temp_dir("guide");
+        let mut s = SettingsStore::load(&dir);
+        assert!(s.guide_seen().is_empty());
+
+        s.mark_guide_seen("welcome.new-chat").unwrap();
+        s.mark_guide_seen("welcome.new-chat").unwrap(); // 幂等：不重复登记
+        s.mark_guide_seen("settings.space").unwrap();
+        assert_eq!(
+            s.guide_seen(),
+            vec!["welcome.new-chat".to_string(), "settings.space".to_string()]
+        );
+
+        // 落回盘上：界面态随 settings.json 存活（重装不清数据时引导不重放）
+        let reloaded = SettingsStore::load(&dir);
+        assert_eq!(reloaded.source(), Source::File);
+        assert_eq!(reloaded.guide_seen(), s.guide_seen());
+        // 与配置互不干扰：ui 写入不动 llm
+        assert_eq!(reloaded.settings.llm, LlmSection::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ui_section_defaults_when_absent() {
+        // 旧文件无 ui 段 → serde default 补空（不升 schema 版本，不炸）
+        let dir = unique_temp_dir("ui-absent");
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            r#"{ "schema_version": 2, "exec": { "mode": "auto" } }"#,
+        )
+        .unwrap();
+        let s = SettingsStore::load(&dir);
+        assert_eq!(s.source(), Source::File);
+        assert!(s.guide_seen().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

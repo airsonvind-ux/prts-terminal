@@ -128,6 +128,8 @@ const __defaultInvokeImpl = (cmd: string) => {
   if (cmd === "list_workspace_dir") return Promise.resolve([]);
   if (cmd === "search_workspace_files") return Promise.resolve([]);
   if (cmd === "open_workspace_in_explorer") return Promise.resolve(undefined);
+  // 引导（说明层）：默认没有看过任何一项（mark_guide_seen 写命令 resolve undefined）
+  if (cmd === "get_guide_seen") return Promise.resolve([]);
   return Promise.resolve(undefined);
 };
 
@@ -140,3 +142,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 (globalThis as Record<string, unknown>).__invokeMock = __invokeMock;
 // 默认路由实现（供测试 beforeEach 恢复——mockImplementation 覆盖后需还原）
 (globalThis as Record<string, unknown>).__defaultInvokeImpl = __defaultInvokeImpl;
+
+// ── ResizeObserver polyfill ──
+//
+// jsdom 没有它，而引导说明层（GuideHost）要观察锚点与根随尺寸重算。
+// 这里只做登记（不自动触发）：测试需要重算时手动调 `__trigger()`。
+class ResizeObserverMock {
+  static instances: ResizeObserverMock[] = [];
+  private cb: ResizeObserverCallback;
+
+  constructor(cb: ResizeObserverCallback) {
+    this.cb = cb;
+    ResizeObserverMock.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  /** 测试用：手动触发一次回调 */
+  __trigger(): void {
+    this.cb([], this as unknown as ResizeObserver);
+  }
+}
+
+(globalThis as Record<string, unknown>).ResizeObserver = ResizeObserverMock;

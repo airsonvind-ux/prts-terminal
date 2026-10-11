@@ -394,6 +394,29 @@ pub fn get_settings(
     Ok(out)
 }
 
+/// 引导「已看过」键集（界面态，只读；不设闸）。见 `settings::UiSection`。
+#[tauri::command]
+pub fn get_guide_seen(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+) -> Result<Vec<String>, String> {
+    let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+    Ok(s.guide_seen())
+}
+
+/// 记一个引导项为「已看过」（界面态写入）。
+///
+/// **不受 set_settings 的 busy 闸约束**（Air 2026-10-11 定案）：界面态不是配置，
+/// 且它必须在对话处理中也能落盘——设置页通知随时会触发。落点仍是 settings.json
+/// 的 `ui` 段，tmp+rename 原子替换 + 写后重读校验由 `SettingsStore::save` 保证。
+#[tauri::command]
+pub fn mark_guide_seen(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+    key: String,
+) -> Result<(), String> {
+    let mut s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+    s.mark_guide_seen(&key)
+}
+
 /// 显式读取某供应商 api_key 明文（瞬态查看用）。provider 缺省 = 当前
 /// active 供应商。前端展示后即弃，不落持久明文态。
 #[tauri::command]

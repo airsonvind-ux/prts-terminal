@@ -117,6 +117,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
 
   const modelInfo = getModelInfo();
   const modelName = modelInfo?.name;
+  const modelThinking = modelInfo?.thinking;
   const contextWindow = modelInfo?.contextLength ?? 0;
 
   // 水位口径（模块 D 修正）：input 侧。output 是成本信息非水位。
@@ -188,6 +189,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
     <>
       <div
         ref={setRingEl}
+        data-guide="context-ring"
         className={`${styles.ringWrapper} ${shown ? styles.visible : ""}`}
         onMouseEnter={handleRingEnter}
         onMouseLeave={handleRingLeave}
@@ -267,6 +269,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
             {modelName && (
               <button className={styles.modelName} onClick={handleModelClick}>
                 {modelName}
+                {modelThinking ? ` · ${modelThinking}` : ""}
               </button>
             )}
             {compacting ? (

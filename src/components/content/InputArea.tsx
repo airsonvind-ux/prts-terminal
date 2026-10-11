@@ -262,7 +262,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
   }, [sendRipple]);
 
   return (
-    <div className={styles.wrapper}>
+    <div className={styles.wrapper} data-guide="input">
       <textarea
         ref={textareaRef}
         className={`${styles.textarea}${multiline ? ` ${styles.multiline}` : ""}`}

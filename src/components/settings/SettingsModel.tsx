@@ -25,8 +25,9 @@ import type {
   ProviderInfo,
   ProviderPatch,
 } from "../../types";
-import { setModelInfo } from "../../stores/useProcessingStore";
+import { setModelInfo, setModelThinking } from "../../stores/useProcessingStore";
 import { showToast } from "../../stores/useToastStore";
+import { resolveThinking, thinkingLabel, THINKING_LABELS } from "../../thinking";
 import { SectionWarning } from "./ui/SettingsSection";
 import { MASKED_SECRET } from "./SettingsPanel";
 import styles from "./SettingsProvider.module.css";
@@ -38,13 +39,7 @@ const API_TYPES: { value: ApiType; label: string }[] = [
   { value: "openai-responses", label: "OpenAI Responses" },
 ];
 
-const THINKING_LABELS: Record<string, string> = {
-  off: "关闭",
-  low: "低",
-  medium: "中",
-  high: "高",
-  max: "极致",
-};
+// 推理档位标签与派生规则已收到 `src/thinking.ts`（单一来源：模型页 + 悬停卡共用）
 
 // 密码显隐图标（通行 eye / eye-off 描边 SVG）
 const ICON_EYE = (
@@ -62,8 +57,7 @@ const ICON_EYE_OFF = (
   </svg>
 );
 
-const INFERRED_LEVELS = ["off", "medium", "high"];
-const INFERRED_DEFAULT = "medium";
+// 推理档位标签与派生规则已收到 `src/thinking.ts`（单一来源：模型页 + 悬停卡共用）
 
 type VerifyStatus = "idle" | "loading" | "success" | "error";
 type ModelListStatus = "idle" | "loading" | "loaded" | "empty" | "error";
@@ -225,23 +219,16 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     [modelList, llm.model]
   );
 
-  // ── 思考强度派生 ──
-  const thinkingLevels = useMemo(() => {
-    if (!selectedModelInfo || !selectedModelInfo.supportsReasoning) return null;
-    const declared = selectedModelInfo.thinkingLevels;
-    return declared && declared.length > 0 ? declared : INFERRED_LEVELS;
-  }, [selectedModelInfo]);
+  // ── 思考强度派生（口径见 src/thinking.ts，与后端 thinking.rs 同源） ──
+  const thinking = useMemo(
+    () => resolveThinking(llm.thinking_level, selectedModelInfo),
+    [llm.thinking_level, selectedModelInfo]
+  );
 
-  const modelDefaultLevel = useMemo(() => {
-    if (!selectedModelInfo || !selectedModelInfo.supportsReasoning) return null;
-    return selectedModelInfo.defaultThinkingLevel ?? INFERRED_DEFAULT;
-  }, [selectedModelInfo]);
-
-  const effectiveThinkingLevel = useMemo(() => {
-    if (!thinkingLevels) return null;
-    const stored = llm.thinking_level ?? "";
-    return thinkingLevels.includes(stored) ? stored : modelDefaultLevel!;
-  }, [thinkingLevels, llm.thinking_level, modelDefaultLevel]);
+  // 悬停卡要的「生效思考档」：模型 / 档位一变就同步（缓存里存的是算好的快照）
+  useEffect(() => {
+    setModelThinking(thinkingLabel(llm.thinking_level, selectedModelInfo));
+  }, [llm.thinking_level, selectedModelInfo]);
 
   // ── 供应商切换（只 patch active_provider；各家配置分区保留） ──
   const handleProviderChange = (newProvider: string) => {
@@ -559,25 +546,31 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
           onSelect={(id) => {
             onPatch(home({ model: id }), "模型");
             const m = modelList.find((mi) => mi.id === id);
-            if (m) setModelInfo({ name: m.displayName, contextLength: m.contextLength });
+            if (m) {
+              setModelInfo({
+                name: m.displayName,
+                contextLength: m.contextLength,
+                thinking: thinkingLabel(llm.thinking_level, m),
+              });
+            }
           }}
           onFetch={fetchModels}
         />
       </div>
 
       {/* ── 思考强度（段顶层 thinking_level） ── */}
-      {thinkingLevels && effectiveThinkingLevel && (
+      {thinking && (
         <div className={styles.field}>
           <span className={styles.label}>思考强度</span>
           <Select
             ariaLabel="思考强度"
-            value={effectiveThinkingLevel}
+            value={thinking.effective}
             disabled={busy}
             onChange={(v) => onPatch({ thinking_level: v }, "思考强度")}
-            options={thinkingLevels.map((lvl) => ({
+            options={thinking.levels.map((lvl) => ({
               value: lvl,
               label: `${THINKING_LABELS[lvl] ?? lvl}${
-                lvl === modelDefaultLevel ? "（默认）" : ""
+                lvl === thinking.defaultLevel ? "（默认）" : ""
               }`,
             }))}
           />

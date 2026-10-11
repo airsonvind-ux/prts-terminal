@@ -17,6 +17,8 @@ import { useUIState } from "../../hooks/useUIState";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
+import { useGuideStore } from "../../stores/useGuideStore";
+import { WELCOME_TOUR } from "../guide/guideContent";
 import { Toolbar } from "./Toolbar";
 import { MessageList } from "./MessageList";
 import { BootSequence } from "./BootSequence";
@@ -70,6 +72,8 @@ export function ChatView({ onDragHandle }: Props) {
   const uiState = useUIState();
   // 启动会话恢复中（Phase 4）：期间抑制欢迎界面判定 + 禁发（防竞态）
   const restoring = useUIStore((s) => s.restoring);
+  // 覆盖层面板（设置 / 历史）：开着时欢迎页导览不弹——锚点会被盖住
+  const overlay = useUIStore((s) => s.overlay);
   // 启动演出覆盖层（2026-09 定稿）：播完（含淡出）才撤下、露出对话
   const [bootVisible, setBootVisible] = useState(true);
   const handleBootDone = useCallback(() => setBootVisible(false), []);
@@ -286,6 +290,35 @@ export function ChatView({ onDragHandle }: Props) {
   // 当前没有对话（草稿态：启动后未选、或点了新对话）→ 欢迎界面；
   // restoring 期间抑制（防恢复完成前闪欢迎界面）
   const showWelcome = activeId === null && !restoring;
+
+  // ── 引导（说明层）触发 ──
+  // ① 欢迎页三步：欢迎页真的渲染 + 启动演出已撤 + 没有别的面板开着 + 键集已拉到。
+  //    「由表面真的出现过决定」，不看装完第几次启动。
+  const guideHydrated = useGuideStore((s) => s.hydrated);
+  const enqueueGuide = useGuideStore((s) => s.enqueue);
+  useEffect(() => {
+    if (!guideHydrated || !showWelcome || bootVisible || overlay !== null) return;
+    enqueueGuide(WELCOME_TOUR);
+  }, [guideHydrated, showWelcome, bootVisible, overlay, enqueueGuide]);
+
+  // ② 首次出现型（对话标题 / 上下文进度环）：元素真的在画面上，且本轮没在生成
+  //    ——生成中才出现的（新对话的标题占位）要等这一轮结束
+  const convTitle = activeConv?.title;
+  useEffect(() => {
+    if (!guideHydrated || restoring || bootVisible || !chromeVisible) return;
+    if (generating || aborting) return;
+    if (!convTitle) return; // 标题还没落（后台模型生成中）
+    enqueueGuide(["first.conv-title", "first.context-ring"]);
+  }, [
+    guideHydrated,
+    restoring,
+    bootVisible,
+    chromeVisible,
+    generating,
+    aborting,
+    convTitle,
+    enqueueGuide,
+  ]);
 
   return (
     <div className={styles.container}>
