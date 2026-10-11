@@ -21,6 +21,11 @@
 //! 实际形态（标量 + 行内数组 + 块列表）。解析失败返回 None（按无元数据处理，
 //! 不阻塞条目加载——索引器/加载器负责告警）。
 
+// 索引模块**刻意放在知识目录之外**：`src/knowledge/` 既是代码模块目录、又是随包
+// 分发的内容目录（`bundle.resources` 按整目录映射）。模块文件若留在里面，会被一路
+// 装进安装目录（2026-10-11 实测：安装目录多出 resources/knowledge/index.rs）。
+// 用 #[path] 保持模块路径 `knowledge::index` 不变，调用方无需改动。
+#[path = "knowledge_index.rs"]
 pub mod index;
 
 /// 条目 frontmatter 元数据。
