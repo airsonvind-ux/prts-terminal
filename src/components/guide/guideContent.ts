@@ -41,9 +41,9 @@ export interface GuideItem {
   /** 引子行：单独一行的开场话（如欢迎语），与下面 body 的解释分两行 */
   lead?: string;
   /**
-   * 出现前要等的入场动画（元素的 data-guide 值）。
-   * 用于"欢迎页动画演完再出卡"——否则遮挡物会比画面还早（Air 2026-10-11）。
-   * 取不到元素 / 无动画 API / 已演完 → 不额外等。
+   * 出现前先等这个元素（data-guide 值）**尺寸稳定**下来。
+   * 用于锚点自身会"长"的场合：对话标题逐字展开、进度环揭示时的宽度过渡、欢迎字标入场。
+   * 取不到元素 → 不额外等。（它逐字长的时候跟着量，洞会一直抽——Air 2026-10-11 实测的闪烁。）
    */
   waitFor?: string;
   /** 主按钮除推进一步外，还要开始的后续导览（欢迎卡 → 欢迎页三步） */
@@ -157,6 +157,7 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     form: "focus",
     surface: "chat",
     anchor: "conv-title",
+    waitFor: "conv-title",
     title: "对话标题",
     body: "对话标题由后台模型自动生成，点击标题后进入对话历史，可切换到不同对话、修改标题、删除对话。",
   },
@@ -164,6 +165,7 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     form: "focus",
     surface: "chat",
     anchor: "context-ring",
+    waitFor: "context-ring",
     title: "上下文进度环",
     body: "显示当前对话的上下文占用情况，悬停时显示模型信息，点它可以进行上下文压缩。",
   },

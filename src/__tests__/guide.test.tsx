@@ -417,11 +417,13 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
       useGuideStore.getState().enqueue(WELCOME_TOUR);
       const { unmount } = mountHost();
 
-      // 首步：等延迟后才现身
+      // 首步：等延迟（+ 稳定等待）后才现身
       expect(host()?.getAttribute("data-guide-hidden")).toBe("1");
       await act(async () => {
-        vi.advanceTimersByTime(300);
-        await Promise.resolve();
+        for (let i = 0; i < 8; i++) {
+          vi.advanceTimersByTime(60);
+          await Promise.resolve();
+        }
       });
       expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
 
@@ -467,8 +469,10 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
       // 到点前：已排好位（元素在、尺寸在），只是不可见
       expect(host()?.getAttribute("data-guide-hidden")).toBe("1");
       await act(async () => {
-        vi.advanceTimersByTime(500);
-        await Promise.resolve();
+        for (let i = 0; i < 8; i++) {
+          vi.advanceTimersByTime(60);
+          await Promise.resolve();
+        }
       });
       expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
       unmount();

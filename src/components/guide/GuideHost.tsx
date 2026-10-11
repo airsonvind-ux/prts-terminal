@@ -46,27 +46,36 @@ const GUIDE_DELAY_MS = 200;
  */
 const GUIDE_TAIL_FLOOR_MS = 120;
 
-/** waitFor 的兜底上限：动画再长也不能把引导卡死在这里。 */
-const ANIM_HOLD_MAX_MS = 2000;
+/** waitFor 取样间隔 / 稳定判定 / 上限（按取样次数计时，不读 performance.now，假定时器下也确定） */
+const SETTLE_SAMPLE_MS = 60;
+const SETTLE_QUIET_SAMPLES = 2;
+const SETTLE_MAX_SAMPLES = 30;
 
 /**
- * 等某元素的入场动画播完（含子树）。
+ * 等这个元素在**尺寸上稳定**下来（连续若干次取样一致），最多取 SETTLE_MAX_SAMPLES 次。
  *
- * 用于"欢迎页动画演完再出卡"：欢迎字标的入场是 320–720ms 延迟 + 320–520ms 过渡
- * （合计约 1 秒），只靠固定延迟会盖在动画上。取不到元素 / 环境无动画 API /
- * 当前没有进行中的动画 → 立刻返回，不额外等。
+ * 用途：锚点自身会"长"的场合——对话标题逐字展开（JS 定时器，动画 API 看不见）、
+ * 进度环揭示时的宽度过渡、欢迎字标的入场。等它静止，再落引导。
+ * 取不到元素 → 立即返回（不额外等）。
  */
-async function animationsDone(selector: string): Promise<void> {
-  const el = document.querySelector<HTMLElement>(`[data-guide="${selector}"]`);
-  if (!el || typeof el.getAnimations !== "function") return;
-  const anims = el.getAnimations({ subtree: true });
-  if (anims.length === 0) return;
-  await Promise.race([
-    Promise.all(anims.map((a) => a.finished.catch(() => undefined))),
-    new Promise<void>((r) => {
-      window.setTimeout(r, ANIM_HOLD_MAX_MS);
-    }),
-  ]);
+async function anchorSettled(key: string): Promise<void> {
+  let last = "";
+  let same = 0;
+  for (let i = 0; i < SETTLE_MAX_SAMPLES; i++) {
+    const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
+    const r = el?.getBoundingClientRect();
+    const sig = r ? `${Math.round(r.width)}x${Math.round(r.height)}` : "";
+    if (sig === last) {
+      same += 1;
+      if (same >= SETTLE_QUIET_SAMPLES) return;
+    } else {
+      same = 0;
+      last = sig;
+    }
+    await new Promise<void>((r2) => {
+      window.setTimeout(r2, SETTLE_SAMPLE_MS);
+    });
+  }
 }
 
 /** 通知卡与子页内容区边缘的间距 */
@@ -172,7 +181,7 @@ export function GuideHost() {
     const base = new Promise<void>((r) => {
       window.setTimeout(r, floor);
     });
-    const wait = item?.waitFor ? animationsDone(item.waitFor) : Promise.resolve();
+    const wait = item?.waitFor ? anchorSettled(item.waitFor) : Promise.resolve();
     void Promise.all([base, wait]).then(() => {
       if (!alive) return;
       shownSurfaceRef.current = item?.surface ?? null;
