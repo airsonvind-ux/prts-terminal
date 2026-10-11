@@ -52,30 +52,41 @@ const SETTLE_QUIET_SAMPLES = 2;
 const SETTLE_MAX_SAMPLES = 30;
 
 /**
- * 等这个元素在**尺寸上稳定**下来（连续若干次取样一致），最多取 SETTLE_MAX_SAMPLES 次。
+ * 等这个元素**有尺寸且尺寸稳定**（连续若干次取样一致），最多 SETTLE_MAX_SAMPLES 次。
  *
- * 用途：锚点自身会"长"的场合——对话标题逐字展开（JS 定时器，动画 API 看不见）、
- * 进度环揭示时的宽度过渡、欢迎字标的入场。等它静止，再落引导。
- * 取不到元素 → 立即返回（不额外等）。
+ * 返回 false = 一直没能量到尺寸（始终为 0）→ 调用方跳过整步。
+ *
+ * 为什么必须要求非零：标题的逐字展开**从空串开始**（宽度 0），那一刻量不到；
+ * 若把"量不到"当成"没有锚点"而跳过，整条引导会凭空消失
+ * （2026-10-11 实测：标题引导直接被跳过、跳到了进度环）。等它长出来再落位。
+ * 元素不存在时返回 true——那种情况由入口检查负责跳过。
  */
-async function anchorSettled(key: string): Promise<void> {
+async function anchorSettled(key: string): Promise<boolean> {
+  if (!document.querySelector(`[data-guide="${key}"]`)) return true;
   let last = "";
   let same = 0;
   for (let i = 0; i < SETTLE_MAX_SAMPLES; i++) {
-    const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
-    const r = el?.getBoundingClientRect();
-    const sig = r ? `${Math.round(r.width)}x${Math.round(r.height)}` : "";
-    if (sig === last) {
+    const r = document
+      .querySelector<HTMLElement>(`[data-guide="${key}"]`)
+      ?.getBoundingClientRect();
+    const w = Math.round(r?.width ?? 0);
+    const h = Math.round(r?.height ?? 0);
+    const sig = `${w}x${h}`;
+    if (w > 0 && h > 0 && sig === last) {
       same += 1;
-      if (same >= SETTLE_QUIET_SAMPLES) return;
+      if (same >= SETTLE_QUIET_SAMPLES) return true;
     } else {
       same = 0;
       last = sig;
     }
-    await new Promise<void>((r2) => {
-      window.setTimeout(r2, SETTLE_SAMPLE_MS);
+    await new Promise<void>((res) => {
+      window.setTimeout(res, SETTLE_SAMPLE_MS);
     });
   }
+  const last_ = document
+    .querySelector<HTMLElement>(`[data-guide="${key}"]`)
+    ?.getBoundingClientRect();
+  return (last_?.width ?? 0) > 0 && (last_?.height ?? 0) > 0;
 }
 
 /** 通知卡与子页内容区边缘的间距 */
@@ -181,9 +192,20 @@ export function GuideHost() {
     const base = new Promise<void>((r) => {
       window.setTimeout(r, floor);
     });
-    const wait = item?.waitFor ? anchorSettled(item.waitFor) : Promise.resolve();
-    void Promise.all([base, wait]).then(() => {
+    const wait = item
+      ? anchorSettled(
+          item.waitFor ??
+            (item.form === "focus" ? item.anchor : NOTICE_ANCHOR) ??
+            ""
+        )
+      : Promise.resolve(true);
+    void Promise.all([base, wait]).then(([, ready]) => {
       if (!alive) return;
+      // 等满上限仍然量不到尺寸 → 整步跳过（有界，不会挂着不动）
+      if (ready === false) {
+        skip(activeKey);
+        return;
+      }
       shownSurfaceRef.current = item?.surface ?? null;
       setShown(true);
     });
@@ -236,7 +258,9 @@ export function GuideHost() {
       return;
     }
     const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
-    if (!el || !localBox(el, faceEl)) {
+    // **不存在**才在入口跳过。存在但还没尺寸（如标题刚开始逐字）不在这里判死刑——
+    // 交给稳定等待，那边会等它长出来（2026-10-11 实测：混为一谈会把整条引导跳过）。
+    if (!el) {
       skip(activeKey);
       return;
     }

@@ -441,6 +441,53 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     }
   });
 
+  it("锚点存在但一时没尺寸（标题还在逐字）：等它长出来，不判死刑跳过", async () => {
+    vi.useFakeTimers();
+    try {
+      mountFace();
+      const title = mountAnchor("conv-title", {
+        left: 10,
+        top: 20,
+        width: 0,
+        height: 0,
+      });
+      resetStore();
+      useGuideStore.getState().enqueue(["first.conv-title"]);
+      const { unmount } = mountHost();
+
+      await act(async () => {
+        for (let i = 0; i < 3; i++) {
+          vi.advanceTimersByTime(60);
+          await Promise.resolve();
+        }
+      });
+      // 还没长出来：不跳过、也不显示（连层都不挂）
+      expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
+      expect(host()).toBeNull();
+
+      // 标题长出来了
+      stubRect(title, { left: 10, top: 20, width: 120, height: 20 });
+      const RO = (
+        globalThis as unknown as {
+          ResizeObserver: { instances: { __trigger(): void }[] };
+        }
+      ).ResizeObserver;
+      act(() => {
+        for (const inst of RO.instances) inst.__trigger();
+      });
+      await act(async () => {
+        for (let i = 0; i < 8; i++) {
+          vi.advanceTimersByTime(60);
+          await Promise.resolve();
+        }
+      });
+      expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("等待期间用户已动手 → 这次不弹，也不写看过", () => {
     mountFace();
     mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
