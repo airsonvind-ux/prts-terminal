@@ -34,7 +34,7 @@
 use std::sync::OnceLock;
 
 use crate::llm::ChatMessage;
-use super::prompt::SYSTEM_PROMPT;
+use super::prompt::{SYSTEM_PROMPT, UI_PROMPT};
 
 /// 每条消息的模板开销（特殊标记如 `<｜User｜>`、`<｜Assistant｜>` 等）。
 /// DeepSeek chat template 中每条消息前后各插入约 2 个特殊 token。
@@ -54,6 +54,8 @@ const TOKEN_PER_CJK: f64 = 0.6;
 ///
 /// 同层多个 section 可用相邻整数值细化顺序（如 Base 层人格 0，同层后续内容 10、20）。
 pub const ORDER_BASE: i32 = 0;
+/// Base 层同层后续内容（界面认知；人格 0 之后、Catalog 之前）。
+pub const ORDER_UI: i32 = 10;
 /// Catalog 层区间（Skill 目录）
 pub const ORDER_CATALOG: i32 = 100;
 /// 记忆区区间（Phase 4 任务二 · 批 1）：置于 Catalog 之后（system 尾部，
@@ -122,7 +124,7 @@ pub struct PromptRegistry {
 }
 
 impl PromptRegistry {
-    /// 内置注册表：当前 Base 层单段（角色人格）。
+    /// 内置注册表：Base 层两段（角色人格 + 界面认知）。
     pub fn builtin() -> Self {
         let mut reg = Self::default();
         // Base 0：角色人格（prts.md）
@@ -132,6 +134,10 @@ impl PromptRegistry {
             SYSTEM_PROMPT,
         ))
         .expect("builtin section 注册冲突");
+        // Base 10：界面认知（ui.md）——人格之后、Catalog 之前。
+        // 讲主界面三区的位置与用途，以及随包《使用说明》的位置。
+        reg.register_section(PromptSection::new("prts.ui", ORDER_UI, UI_PROMPT))
+            .expect("builtin section 注册冲突");
         reg
     }
 
@@ -305,7 +311,7 @@ impl ActiveContext {
 // 公开接口
 // ═══════════════════════════════════════════════════════
 
-/// 装配 system prompt：Base（人格 prts.md）→ Catalog（Skill 目录）。
+/// 装配 system prompt：Base（人格 prts.md + 界面 ui.md）→ Catalog（Skill 目录）。
 ///
 /// `skill_catalog` 为**对话冻结的目录文本**（`SkillIndex::catalog_text` 的
 /// 快照原文，由命令层经 `SkillSnapshotStore` 取；空串显示（无））——目录随
@@ -520,10 +526,12 @@ mod tests {
     // ── 注册制组装 ──
 
     #[test]
-    fn builtin_assembles_persona() {
-        // 内置注册表当前仅含 persona 单段，装配结果即 SYSTEM_PROMPT 原文
+    fn builtin_assembles_persona_then_ui() {
+        // 内置注册表 = Base 层两段：人格（prts.md）+ 界面认知（ui.md）。
+        // 人格在前且逐字保留，界面段紧随其后（装配以空行相隔）。
         let assembled = PromptRegistry::builtin().assemble();
-        assert_eq!(assembled, SYSTEM_PROMPT);
+        assert!(assembled.starts_with(SYSTEM_PROMPT));
+        assert_eq!(assembled, format!("{}\n\n{}", SYSTEM_PROMPT, UI_PROMPT));
     }
 
     #[test]
@@ -550,6 +558,23 @@ mod tests {
         reg.register_section(PromptSection::new("a", 0, "A段")).unwrap();
         reg.register_section(PromptSection::new("b", 100, "B段")).unwrap();
         assert_eq!(reg.assemble(), "A段\n\nB段\n\nC段");
+    }
+
+    #[test]
+    fn builtin_has_ui_section_between_persona_and_catalog() {
+        let reg = PromptRegistry::builtin();
+        let ui = reg
+            .sections
+            .iter()
+            .find(|s| s.name == "prts.ui")
+            .expect("界面认知段应已注册");
+        // 落在 Base 层、Catalog 之前——即“人格之后”
+        assert_eq!(ui.order, ORDER_UI);
+        assert!(ORDER_BASE < ui.order && ui.order < ORDER_CATALOG);
+        // 装配后人格在前、界面段在后（Catalog 由 build_system_prompt 追加）
+        let assembled = reg.assemble();
+        assert!(assembled.contains("## 界面"));
+        assert!(assembled.ends_with(UI_PROMPT));
     }
 
     #[test]
