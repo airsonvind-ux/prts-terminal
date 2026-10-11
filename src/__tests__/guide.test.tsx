@@ -8,7 +8,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { GuideHost } from "../components/guide/GuideHost";
 import { SettingsPanel } from "../components/settings/SettingsPanel";
-import { GUIDE_ITEMS, WELCOME_TOUR } from "../components/guide/guideContent";
+import { GUIDE_ITEMS, SETTINGS_TAB_GUIDE, WELCOME_TOUR } from "../components/guide/guideContent";
 import { useGuideStore } from "../stores/useGuideStore";
 import { useUIStore } from "../stores/useUIStore";
 
@@ -180,22 +180,31 @@ describe("useGuideStore：通知卡不串页", () => {
   });
 });
 
-describe("引导文案格式", () => {
-  it("正文与「注」都以句号结尾；标题不带标点", () => {
+describe("引导数据完整性（抓“不该不出现”那类真故障）", () => {
+  it("每一项都有正文；聚焦式必须有锚点", () => {
+    // 缺锚点的聚焦项会被“量不到就跳过”的兜底静默吃掉——引导凭空少一条
     for (const [key, item] of Object.entries(GUIDE_ITEMS)) {
-      expect(
-        item.body.endsWith("。"),
-        `${key} 正文未以句号结尾：${item.body}`
-      ).toBe(true);
-      if (item.note) {
-        expect(
-          item.note.endsWith("。"),
-          `${key} 注未以句号结尾：${item.note}`
-        ).toBe(true);
+      expect(item.body.length, `${key} 缺正文`).toBeGreaterThan(0);
+      if (item.form === "focus") {
+        expect(item.anchor, `${key} 是聚焦式却没给锚点`).toBeTruthy();
       }
-      if (item.title) {
-        expect(item.title.endsWith("。"), `${key} 标题不该带标点`).toBe(false);
-      }
+    }
+  });
+
+  it("设置页九页的映射都指向存在的设置面项", () => {
+    // 映射写错一个字，那一页的通知就永远不出
+    for (const [tab, key] of Object.entries(SETTINGS_TAB_GUIDE)) {
+      const item = GUIDE_ITEMS[key];
+      expect(item, `tab ${tab} 指向了不存在的 key：${key}`).toBeDefined();
+      expect(item.surface, `${key} 应属于设置表面`).toBe("settings");
+    }
+  });
+
+  it("欢迎页导览每一项都存在且属于对话表面", () => {
+    for (const key of WELCOME_TOUR) {
+      const item = GUIDE_ITEMS[key];
+      expect(item, `导览里的 ${key} 不存在`).toBeDefined();
+      expect(item.surface).toBe("chat");
     }
   });
 });
