@@ -107,6 +107,16 @@
   color: var(--text-2);
 }
 
+/* 引子行（如欢迎语）：单独一行，压过正文一档 */
+.lead {
+  font-size: var(--text-md);
+  color: var(--text-1);
+}
+
+.lead + .body {
+  margin-top: 4px;
+}
+
 .note {
   margin-top: 8px;
   font-size: 11px;

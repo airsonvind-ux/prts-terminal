@@ -38,6 +38,8 @@ export interface GuideItem {
   body: string;
   /** 必要例外（如"当前没有对话，点了不会有变化"），单独一行小字 */
   note?: string;
+  /** 引子行：单独一行的开场话（如欢迎语），与下面 body 的解释分两行 */
+  lead?: string;
   /**
    * 出现前要等的入场动画（元素的 data-guide 值）。
    * 用于"欢迎页动画演完再出卡"——否则遮挡物会比画面还早（Air 2026-10-11）。
@@ -74,7 +76,8 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     surface: "chat",
     anchor: FACE_ANCHOR,
     waitFor: "welcome-mark",
-    body: "欢迎使用 PRTS。首次使用时，界面各处会出现说明信息。",
+    lead: "欢迎使用 PRTS。",
+    body: "接下来会依次出现几处界面说明，跟着走一遍就好。",
     startKeys: ["welcome.new-chat", "welcome.settings", "welcome.input"],
   },
 

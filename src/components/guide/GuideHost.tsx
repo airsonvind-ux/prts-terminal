@@ -152,10 +152,18 @@ export function GuideHost() {
   // 延后出现：量好位置先不显示（visibility: hidden 仍然参与布局），到点再露。
   // 带 waitFor 的（欢迎卡）：等那个元素的入场动画演完即可，只给一个 120ms 落点——
   // 动画本身就是过渡式等待，再叠加固定延迟就会显得"动画完了还不出"。
+  // **同一个表面上的换步不重新等**：否则每点一次「下一步」整层都会消失一下再
+  // 回来，用户看到的是闪一下（Air 2026-10-11）。
   const [shown, setShown] = useState(false);
+  const shownSurfaceRef = useRef<GuideSurface | null>(null);
   useEffect(() => {
     if (activeKey === null) {
       setShown(false);
+      shownSurfaceRef.current = null;
+      return;
+    }
+    if (shownSurfaceRef.current !== null && shownSurfaceRef.current === item?.surface) {
+      setShown(true);
       return;
     }
     setShown(false);
@@ -166,7 +174,9 @@ export function GuideHost() {
     });
     const wait = item?.waitFor ? animationsDone(item.waitFor) : Promise.resolve();
     void Promise.all([base, wait]).then(() => {
-      if (alive) setShown(true);
+      if (!alive) return;
+      shownSurfaceRef.current = item?.surface ?? null;
+      setShown(true);
     });
     return () => {
       alive = false;
@@ -371,6 +381,7 @@ export function GuideHost() {
             )}
           </div>
         )}
+        {item.lead && <div className={styles.lead}>{item.lead}</div>}
         <div className={styles.body}>{item.body}</div>
         {item.note && <div className={styles.note}>注：{item.note}</div>}
         <div className={styles.actions}>

@@ -416,6 +416,39 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     b.unmount();
   });
 
+  it("换步不重新等待：不会消失一下再回来（不闪）", async () => {
+    vi.useFakeTimers();
+    try {
+      mountFace();
+      for (const key of ["new-chat", "settings", "input"]) {
+        mountAnchor(key, { left: 10, top: 20, width: 100, height: 20 });
+      }
+      resetStore();
+      useGuideStore.getState().enqueue(WELCOME_TOUR);
+      const { unmount } = mountHost();
+
+      // 首步：等延迟后才现身
+      expect(host()?.getAttribute("data-guide-hidden")).toBe("1");
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+        await Promise.resolve();
+      });
+      expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
+
+      // 「下一步」：直接用下一步接上，不再进 hidden
+      act(() => {
+        useGuideStore.getState().advance("welcome.new-chat");
+      });
+      expect(
+        document.querySelector("[data-guide-dots]")?.getAttribute("data-guide-dots")
+      ).toBe("2");
+      expect(host()?.getAttribute("data-guide-hidden")).toBeNull();
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("等待期间用户已动手 → 这次不弹，也不写看过", () => {
     mountFace();
     mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
