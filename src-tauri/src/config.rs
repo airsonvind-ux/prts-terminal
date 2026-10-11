@@ -1,7 +1,8 @@
 //! config —— 运行时路径：数据根 + 随包资源（M1 地基）
 //!
 //! 设置页扩展定稿后职责收拢：workspace 根已并入 settings.json（`settings.rs`
-//! workspace 段；空 = 回退数据根），`PRTS_WORKSPACE` env 与
+//! workspace 段；空 = 回退默认工作区，见 [`default_workspace_path`]），
+//! `PRTS_WORKSPACE` env 与
 //! `resources/config.json` 链**已废弃**（dev.ps1 不再设置）。本模块提供：
 //!
 //! - **数据根**（[`data_dir`]）：可写数据的唯一落点（settings.json /
@@ -18,7 +19,7 @@
 //!
 //! 两个来源共用同一个编译期判定：[`is_dev`]。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ═══════════════════════════════════════════════════════
 // 构建类型（唯一判定点）
@@ -81,6 +82,45 @@ fn home_dir() -> PathBuf {
         }
     }
     PathBuf::from(".")
+}
+
+// ═══════════════════════════════════════════════════════
+// 默认工作区
+// ═══════════════════════════════════════════════════════
+
+/// 默认工作区目录名（用户主目录下的可见目录）。
+///
+/// ASCII 名是有意的：该路径会成为 `run_command` 的 cwd 与受限令牌的 ACL
+/// 派生根，中文名一旦进入子进程环境与 ACL 派生就多出一类编码风险
+/// （本项目已有前车之鉴）。
+pub const DEFAULT_WORKSPACE_DIRNAME: &str = "PRTS-WorkSpace";
+
+/// 默认工作区路径：`<主目录>/PRTS-WorkSpace`。
+///
+/// **不放桌面**：OneDrive 接管桌面时会把桌面重定向到 `~/OneDrive/Desktop`，
+/// 此时 `~/Desktop` 并不存在——在那里建目录，用户在桌面上看不到（静默失败）。
+/// 主目录不参与重定向。纯路径解析，不建目录。
+///
+/// 与数据根的分工：数据根（`~/.prts`）放隐藏的运行时数据，本目录放用户可见
+/// 的产物。两者不相互包含。
+pub fn default_workspace_path() -> PathBuf {
+    home_dir().join(DEFAULT_WORKSPACE_DIRNAME)
+}
+
+/// 确保给定工作区目录存在（`mkdir -p` 语义，已存在则幂等空操作）。
+pub fn ensure_workspace_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)
+}
+
+/// 确保默认工作区存在，返回其路径。
+///
+/// 仅对默认路径使用：用户自选路径**不**重建——目录消失应当显式暴露，
+/// 而不是被静默重建（Hanako 同规则，其 `restoreDefaultWorkspaceIfMissing`
+/// 只对默认路径生效）。
+pub fn ensure_default_workspace() -> std::io::Result<PathBuf> {
+    let path = default_workspace_path();
+    ensure_workspace_dir(&path)?;
+    Ok(path)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -202,5 +242,54 @@ mod tests {
         assert_eq!(resolve_db_path(), runtime);
         assert_eq!(bundled_knowledge_dir(), kb);
         assert_eq!(bundled_skills_dir(), skills);
+    }
+
+    #[test]
+    fn default_workspace_lives_in_home_dir_not_desktop() {
+        let p = default_workspace_path();
+        assert_eq!(
+            p.file_name().unwrap().to_string_lossy(),
+            DEFAULT_WORKSPACE_DIRNAME,
+            "末级目录名必须是默认工作区名"
+        );
+        assert!(p.starts_with(home_dir()), "默认工作区必须在主目录下");
+        // 不落在桌面：OneDrive 重定向会让 ~/Desktop 指向不存在的路径
+        assert!(
+            !p.to_string_lossy().contains("Desktop"),
+            "默认工作区不得依赖桌面：{}",
+            p.display()
+        );
+        // 与数据根分离（隐藏数据 vs 可见产物）
+        assert_ne!(p, data_dir(), "默认工作区与数据根不得重合");
+        assert!(!p.starts_with(data_dir()), "默认工作区不得落在数据根内");
+    }
+
+    #[test]
+    fn default_workspace_path_is_idempotent() {
+        // 纯路径解析：重复解析结果一致（不随“谁存在”改变，不建目录）
+        let a = default_workspace_path();
+        let b = default_workspace_path();
+        assert_eq!(a, b);
+        assert!(!a.to_string_lossy().is_empty());
+    }
+
+    #[test]
+    fn ensure_workspace_dir_is_idempotent() {
+        // 用临时目录验证创建语义（不在真实主目录里建东西）
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "prts-ws-ensure-{}-{nanos}",
+            std::process::id()
+        ));
+        let nested = dir.join("a").join("b");
+        assert!(!nested.exists());
+        ensure_workspace_dir(&nested).unwrap();
+        assert!(nested.is_dir(), "应递归创建多级目录");
+        // 幂等：再调一次不报错
+        ensure_workspace_dir(&nested).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

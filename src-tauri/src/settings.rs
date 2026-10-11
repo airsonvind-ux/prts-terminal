@@ -163,7 +163,7 @@ impl LlmSection {
     }
 }
 
-/// workspace 段。workspace_root 空串 = 未设置（装配回退 data_dir）。
+/// workspace 段。workspace_root 空串 = 未设置（装配回退默认工作区）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
     #[serde(default)]
@@ -279,7 +279,7 @@ impl ExecPatch {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WorkspacePatch {
-    /// Some(v) 直接写入（含空串 = 回 data_dir 默认）；缺席 = 不更新。
+    /// Some(v) 直接写入（**含空串 = 回默认工作区**）；缺席 = 不更新。
     /// 修改**重启生效**（装配期消费一次，无热切换）。
     pub workspace_root: Option<String>,
 }
@@ -507,11 +507,15 @@ impl SettingsStore {
     }
 
     /// 生效 workspace 根：settings.workspace.workspace_root 非空 → 它；
-    /// 空 = 未设置 → data_dir（原 config.rs 回退语义）。
+    /// 空 = 未设置 → 默认工作区（`<主目录>/PRTS-WorkSpace`，见
+    /// [`crate::config::default_workspace_path`]）。
+    ///
+    /// 空值不是「无工作目录」：默认值即回退目标，因此不存在空态。
+    /// 「清除」设置 = 写空串 = 回到默认。
     pub fn workspace_root(&self) -> PathBuf {
         let v = self.settings.workspace.workspace_root.trim();
         if v.is_empty() {
-            self.data_dir.clone()
+            crate::config::default_workspace_path()
         } else {
             PathBuf::from(v)
         }
@@ -978,15 +982,29 @@ mod tests {
     }
 
     #[test]
-    fn workspace_root_falls_back_to_data_dir_when_empty() {
+    fn workspace_root_falls_back_to_default_workspace_when_empty() {
         let dir = unique_temp_dir("ws");
         let s = SettingsStore::load(&dir);
-        assert_eq!(s.workspace_root(), dir.clone(), "空 = data_dir 回退");
+        assert_eq!(
+            s.workspace_root(),
+            crate::config::default_workspace_path(),
+            "空 = 默认工作区回退"
+        );
+        assert_ne!(s.workspace_root(), dir.clone(), "空值不再回退数据根（旧语义已撤）");
+
+        // 显式值优先
         let mut s2 = SettingsStore::load(&dir);
         let patch: SettingsPatch =
             serde_json::from_str(r#"{ "workspace": { "workspace_root": "F:/custom" } }"#).unwrap();
         s2.apply_patch(&patch);
         assert_eq!(s2.workspace_root(), std::path::PathBuf::from("F:/custom"));
+
+        // 清除（写空串）= 回到默认，而不是「无工作目录」
+        let clear: SettingsPatch =
+            serde_json::from_str(r#"{ "workspace": { "workspace_root": "" } }"#).unwrap();
+        s2.apply_patch(&clear);
+        assert_eq!(s2.workspace_root(), crate::config::default_workspace_path());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

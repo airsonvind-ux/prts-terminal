@@ -76,6 +76,18 @@
 
 .wsActions {
   display: flex;
+  gap: 8px;
+}
+
+/* 「默认」标记：跟在路径后，弱化处理（不是状态告警，只是来源说明） */
+.wsBadge {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-3);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
 .wsHint {

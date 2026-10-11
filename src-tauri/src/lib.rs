@@ -196,14 +196,29 @@ pub fn run() {
     let settings_store = Arc::new(Mutex::new(SettingsStore::load(&config::data_dir())));
 
     // ── 工作目录（文件工具的工作根：read_file/list_dir 的相对路径基准）──
-    // 来源 = settings.workspace.workspace_root（空串 = 回退 data_dir）；
+    // 来源 = settings.workspace.workspace_root（空串 = 回退默认工作区：
+    // `<主目录>/PRTS-WorkSpace`，见 config::default_workspace_path）。
     // 修改需重启生效（装配期消费一次，无热切换）。
     let workspace_root = {
         let st = settings_store.lock().unwrap();
-        let root = st.workspace_root();
-        std::fs::create_dir_all(&root).expect("无法创建工作目录");
-        root
+        st.workspace_root()
     };
+    // 默认工作区在启动时确保存在（它是用户可见的产物落点，应当总是可用）；
+    // 用户自选路径**不**在此创建——目录消失应当显式暴露，而不是被静默重建。
+    // 失败不阻断启动（工具侧自会以明确错误暴露），仅终端留痕。
+    if workspace_root == config::default_workspace_path() {
+        if let Err(e) = config::ensure_default_workspace() {
+            eprintln!(
+                "[lib] 默认工作区创建失败（{}）：{e}",
+                workspace_root.display()
+            );
+        }
+    } else if !workspace_root.is_dir() {
+        eprintln!(
+            "[lib] 工作目录不存在（{}）：不自动重建，请检查设置",
+            workspace_root.display()
+        );
+    }
 
     // ── 知识库索引（read_knowledge 的查询底表；加载失败降级为空索引）──
     // 启动自检要报的是“索引到底建起来没有”，故结果（条目数 / 失败原因）留住。

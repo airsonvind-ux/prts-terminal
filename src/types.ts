@@ -397,7 +397,7 @@ export interface ProviderConfig {
 }
 
 export interface WorkspaceSettings {
-  /** 空串 = 未设置（装配回退 data_dir）；修改需重启生效 */
+  /** 空串 = 未设置（装配回退默认工作区）；修改需重启生效 */
   workspace_root: string;
 }
 

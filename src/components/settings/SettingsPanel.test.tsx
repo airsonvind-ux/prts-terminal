@@ -364,11 +364,62 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
     expect((listCalls[0][1] as { path: string }).path).toBe("F:/ws");
   });
 
-  it("未设置时路径显示「未设置」（任务 B）", async () => {
+  it("未设置时显示解析后的默认路径 + 「默认」标记（不再是「未设置」）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "get_app_meta")
+        return Promise.resolve({
+          version: "0.1.0",
+          data_dir: "C:/fake/data",
+          workspace_root: "C:/fake/workspace",
+          db_path: "C:/fake/db",
+          knowledge_dir: "C:/fake/kb",
+          skills_dir: "C:/fake/skills",
+        });
+      if (cmd === "list_workspace_dir") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
     renderPanel();
     await flush();
     clickTab("space");
-    expect(container!.textContent).toContain("未设置");
+    // 设置值为空 → 显示 appMeta 的解析路径（默认工作区），并标「默认」
+    expect(container!.textContent).toContain("C:/fake/workspace");
+    expect(container!.textContent).toContain("默认");
+    expect(container!.textContent).not.toContain("未设置");
+    // 默认态不出现「恢复默认」
+    expect(
+      Array.from(container!.querySelectorAll("button")).some(
+        (b) => b.textContent === "恢复默认"
+      )
+    ).toBe(false);
+  });
+
+  it("非默认时出现「恢复默认」：点击写空串 patch（回到默认）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") {
+        const s = defaultSettings();
+        s.workspace.workspace_root = "F:/ws";
+        return Promise.resolve(s);
+      }
+      if (cmd === "list_workspace_dir") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("space");
+
+    const reset = Array.from(container!.querySelectorAll("button")).find(
+      (b) => b.textContent === "恢复默认"
+    );
+    expect(reset).toBeTruthy();
+    act(() => {
+      reset!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    const calls = setSettingsCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].patch).toEqual({ workspace: { workspace_root: "" } });
   });
 
   it("选择目录：按钮 → choose_workspace_directory → 选定即存 patch", async () => {

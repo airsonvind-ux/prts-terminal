@@ -307,6 +307,18 @@ export function SettingsPanel() {
     }
   }, [updateSettings]);
 
+  /** 空间页「恢复默认」：busy 守卫 → 写空串（= 回到默认工作区） */
+  const handleResetWorkspace = useCallback(() => {
+    if (isProcessingBusy(useProcessingStore.getState())) {
+      showToast("对话处理中不能修改路径", {
+        kind: "warning",
+        dedupeKey: "settings-busy-路径",
+      });
+      return;
+    }
+    updateSettings({ workspace: { workspace_root: "" } }, "路径");
+  }, [updateSettings]);
+
   /** 扩展页「测试连接」：状态留在本层——子页切走会卸载，留在子页就丢了。
    *  计数而不是布尔：并发保护回「正在连接中」的那次没接手连接，
    *  不能在 finally 里把真正在跑的那次的「进行中」抹掉。 */
@@ -476,9 +488,13 @@ export function SettingsPanel() {
           )}
           {activeTab === "space" && (
             <SettingsSpace
-              workspaceRoot={settings.workspace.workspace_root}
+              workspaceRoot={
+                settings.workspace.workspace_root || appMeta?.workspace_root || ""
+              }
+              isDefault={!settings.workspace.workspace_root}
               busy={settingsBusy}
               onChooseWorkspace={handleChooseWorkspace}
+              onResetWorkspace={handleResetWorkspace}
             />
           )}
           {activeTab === "skills" && (
