@@ -11,6 +11,8 @@
 // - 思考档 → thinking_level（段顶层全局）
 //
 // mask 契约：get_settings 逐家掩码；👁 reveal_api_key 带 provider 参数。
+// **明文只在 👁 期间存在**：本页与面板态一律持掩码（写入后由 Panel 归一为掩码，
+// 见 mergeSettings），故「已配 key」= api_key === MASKED_SECRET。
 // headers / max_tokens 内部参数不暴露 UI（settings.json 手动写入保留）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -376,6 +378,17 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
         : llm.api_key;
 
   const fieldDisabled = busy || !llm.provider || customDraft;
+  // 👁 可用性：有密钥即可查看（面板态一律持掩码）；**编辑中不可查看**——
+  // 否则"显示旧值"会盖住正在输入的新值，失焦还会把它吞掉。
+  const canReveal = !busy && !keyEdited && llm.api_key !== "";
+  const keyToggleTitle =
+    revealedKey !== null
+      ? "隐藏"
+      : llm.api_key === ""
+        ? "暂无密钥"
+        : keyEdited
+          ? "编辑中不可查看"
+          : "显示";
 
   return (
     <div className={styles.container}>
@@ -483,11 +496,10 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
               if (revealedKey !== null) e.preventDefault();
             }}
             placeholder="sk-..."
-            onFocus={() => {
-              if (revealedKey === null && !keyEdited) {
-                setKeyEdited(true);
-                setKeyDraft("");
-              }
+            onFocus={(e) => {
+              // 聚焦**不清空**，只全选（首键即替换）：否则"点一下内容就没了"
+              // 看起来像把密钥删了。keyEdited 只由真实输入置位。
+              if (revealedKey === null) e.currentTarget.select();
             }}
             onChange={(e) => {
               if (revealedKey !== null) return;
@@ -499,25 +511,21 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
                 setRevealedKey(null);
                 return;
               }
+              // 只有真正编辑过才上送：判据是「动过」而非「与现值不同」——
+              // 掩码态下把内容清空是「清除密钥」这一明确意图，必须能上送
+              // （与现值比较时空串会被误判为"未改"，永远清不掉）。
               if (!keyEdited) return;
               const next = keyDraft;
-              const base = llmRef.current.api_key === MASKED_SECRET ? "" : llmRef.current.api_key;
               setKeyEdited(false);
-              commitOnBlur(home({ api_key: next }), "API Key", next !== base);
+              onPatch(home({ api_key: next }), "API Key");
             }}
           />
           <button
             className={`${styles.keyToggle} ${revealedKey !== null ? styles.keyToggleActive : ""}`}
             type="button"
-            disabled={busy || llm.api_key !== MASKED_SECRET}
+            disabled={!canReveal}
             onClick={() => void toggleReveal()}
-            title={
-              revealedKey !== null
-                ? "隐藏"
-                : llm.api_key === MASKED_SECRET
-                  ? "显示"
-                  : "暂无密钥"
-            }
+            title={keyToggleTitle}
           >
             {revealing
               ? "…"

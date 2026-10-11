@@ -98,7 +98,9 @@ function mergeLlm(prev: LlmConfig, p: LlmPatch): LlmConfig {
     if (pp) {
       if (pp.api_type !== undefined) next.api_type = pp.api_type;
       if (pp.model !== undefined) next.model = pp.model;
-      if (pp.api_key !== undefined) next.api_key = pp.api_key;
+      // 与 Panel mergeSettings 同口径：明文写入在本地归一为掩码
+      if (pp.api_key !== undefined)
+        next.api_key = pp.api_key === "" ? "" : "********";
       if (pp.base_url !== undefined)
         next.base_url = pp.base_url === "" ? null : pp.base_url;
     }
@@ -195,6 +197,8 @@ describe("SettingsModel · API Key mask 契约", () => {
     // 未编辑：聚焦直接失焦 → 无 api_key patch（防误清）
     act(() => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
     await flush();
+    // 聚焦不得清空已填内容（2026-10-11 实测 bug：一点就没了，像把密钥删了）
+    expect(keyInput().value).toBe("********");
     blur(input);
     await flush();
     expect(onPatch).not.toHaveBeenCalled();
@@ -228,6 +232,41 @@ describe("SettingsModel · API Key mask 契约", () => {
     expect(keyInput().value).toBe("********");
     expect(keyInput().type).toBe("password");
     expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it("👁 可用性：已配 key（掩码）可用；编辑中不可用", async () => {
+    renderModel(maskedLlm());
+    await flush();
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='显示']");
+    expect(toggle?.disabled).toBe(false);
+
+    // 编辑中不可查看（否则"显示旧值"会盖住正在输入的新值，失焦还会把它吞掉）
+    typeInto(keyInput(), "sk-x");
+    await flush();
+    const editing = container!.querySelector<HTMLButtonElement>(
+      "button[title='编辑中不可查看']"
+    );
+    expect(editing?.disabled).toBe(true);
+  });
+
+  it("👁 未配 key 时禁用（title 表达原因）", async () => {
+    renderModel(maskedLlm({ api_key: "" }));
+    await flush();
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='暂无密钥']");
+    expect(toggle?.disabled).toBe(true);
+  });
+
+  it("保存后回掩码：输入 key 失焦 → 显示掩码且 👁 恢复可用（面板归一）", async () => {
+    renderHarness(maskedLlm({ api_key: "" }));
+    await flush();
+    typeInto(keyInput(), "sk-new");
+    await flush();
+    blur(keyInput());
+    await flush();
+    // 明文不常驻面板态 → 回掩码；👁 因"有密钥"而可用
+    expect(keyInput().value).toBe("********");
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='显示']");
+    expect(toggle?.disabled).toBe(false);
   });
 });
 

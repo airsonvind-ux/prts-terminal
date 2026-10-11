@@ -818,16 +818,23 @@ describe("mergeSettings · 纯函数", () => {
     expect(cleared.llm.providers.deepseek.model).toBe("m1"); // 未触及
   });
 
-  it("api_key 掩码占位不覆盖该家现值；他家不受影响", () => {
+  it("api_key：明文写入在本地归一为掩码；掩码占位不覆盖；空串清除", () => {
+    // 面板态持掩码（明文只在 👁 期间存在）——否则明文常驻，且 👁 会因
+    // "api_key !== 掩码" 被判为无可查看而禁用（2026-10-11 实测 bug）。
     const seeded = mergeSettings(base, {
-      llm: {
-        providers: { deepseek: { api_key: "sk-real" } },
-      },
+      llm: { providers: { deepseek: { api_key: "sk-real" } } },
     });
+    expect(seeded.llm.providers.deepseek.api_key).toBe(MASKED_SECRET);
+    // 掩码占位不覆盖（per-field 语义不变）
     const masked = mergeSettings(seeded, {
       llm: { providers: { deepseek: { api_key: MASKED_SECRET } } },
     });
-    expect(masked.llm.providers.deepseek.api_key).toBe("sk-real");
+    expect(masked.llm.providers.deepseek.api_key).toBe(MASKED_SECRET);
+    // 空串 = 清除（不写回掩码）
+    const cleared = mergeSettings(seeded, {
+      llm: { providers: { deepseek: { api_key: "" } } },
+    });
+    expect(cleared.llm.providers.deepseek.api_key).toBe("");
   });
 
   it("window / workspace 段合并", () => {
@@ -853,12 +860,12 @@ describe("mergeSettings · 纯函数", () => {
       llm: { active_provider: "openai" },
     });
     expect(switched.llm.active_provider).toBe("openai");
-    // 目标家回填可用（Panel 视角）
+    // 目标家回填可用（Panel 视角）；key 在面板态一律是掩码
     expect(switched.llm.providers.openai.model).toBe("gpt-5");
-    expect(switched.llm.providers.openai.api_key).toBe("sk-oa");
+    expect(switched.llm.providers.openai.api_key).toBe(MASKED_SECRET);
     // deepseek 完整保留
     expect(switched.llm.providers.deepseek.model).toBe("deepseek-v4-flash");
-    expect(switched.llm.providers.deepseek.api_key).toBe("sk-ds");
+    expect(switched.llm.providers.deepseek.api_key).toBe(MASKED_SECRET);
   });
 
   it("家字段 patch 懒建新家条目", () => {
@@ -868,7 +875,7 @@ describe("mergeSettings · 纯函数", () => {
         providers: { kimi: { api_key: "sk-kimi", model: "kimi-k2.7-code" } },
       },
     });
-    expect(next.llm.providers.kimi.api_key).toBe("sk-kimi");
+    expect(next.llm.providers.kimi.api_key).toBe(MASKED_SECRET);
     expect(next.llm.providers.kimi.api_type).toBe("openai-completions");
   });
 });
