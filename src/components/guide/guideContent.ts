@@ -77,19 +77,19 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     anchor: "input",
     title: "输入区",
     body: "输入内容并发送以创建第一个对话。",
-    note: "对话生成中可以点击中止按钮进行中止，也可以再发送一段内容进行插话",
+    note: "对话生成中可以点击中止按钮进行中止，也可以再发送一段内容进行插话。",
   },
 
   // ── 设置页通知（九页，每页一段；进入该页触发，每页一次） ──
   "settings.app": {
     form: "notice",
     surface: "settings",
-    body: "提供窗口置顶切换、关闭PRTS功能",
+    body: "提供窗口置顶切换、关闭PRTS功能。",
   },
   "settings.model": {
     form: "notice",
     surface: "settings",
-    body: "选择你的供应商及其模型，并配置API Key",
+    body: "选择你的供应商及其模型，并配置API Key。",
   },
   "settings.safety": {
     form: "notice",
@@ -99,22 +99,22 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   "settings.space": {
     form: "notice",
     surface: "settings",
-    body: "PRTS当前的工作目录，修改后下一轮对话即生效",
+    body: "PRTS当前的工作目录，修改后下一轮对话即生效。",
   },
   "settings.skills": {
     form: "notice",
     surface: "settings",
-    body: "SKILL管理页，查看并管理PRTS的现有技能",
+    body: "SKILL管理页，查看并管理PRTS的现有技能。",
   },
   "settings.memory": {
     form: "notice",
     surface: "settings",
-    body: "PRTS记下的信息，成长型记忆由PRTS自己管理，经历型记忆由系统自动生成",
+    body: "PRTS记下的信息，成长型记忆由PRTS自己管理，经历型记忆由系统自动生成。",
   },
   "settings.usage": {
     form: "notice",
     surface: "settings",
-    body: "查看你的token消耗量，可切换到不同的对话用量",
+    body: "查看你的token消耗量，可切换到不同的对话用量。",
   },
   "settings.extension": {
     form: "notice",
@@ -124,7 +124,7 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   "settings.about": {
     form: "notice",
     surface: "settings",
-    body: "PRTS应用的基本信息与更新管理",
+    body: "PRTS应用的基本信息与更新管理。",
   },
 
   // ── 首次出现型（元素真的出现，且本轮生成已结束、界面空闲） ──
@@ -133,14 +133,14 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     surface: "chat",
     anchor: "conv-title",
     title: "对话标题",
-    body: "对话标题由后台模型自动生成，点击标题后进入对话历史，可切换到不同对话、修改标题、删除对话",
+    body: "对话标题由后台模型自动生成，点击标题后进入对话历史，可切换到不同对话、修改标题、删除对话。",
   },
   "first.context-ring": {
     form: "focus",
     surface: "chat",
     anchor: "context-ring",
     title: "上下文进度环",
-    body: "显示当前对话的上下文占用情况，悬停时显示模型信息，点它可以进行上下文压缩",
+    body: "显示当前对话的上下文占用情况，悬停时显示模型信息，点它可以进行上下文压缩。",
   },
 };
 

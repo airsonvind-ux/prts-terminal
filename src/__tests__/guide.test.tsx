@@ -180,6 +180,26 @@ describe("useGuideStore：通知卡不串页", () => {
   });
 });
 
+describe("引导文案格式", () => {
+  it("正文与「注」都以句号结尾；标题不带标点", () => {
+    for (const [key, item] of Object.entries(GUIDE_ITEMS)) {
+      expect(
+        item.body.endsWith("。"),
+        `${key} 正文未以句号结尾：${item.body}`
+      ).toBe(true);
+      if (item.note) {
+        expect(
+          item.note.endsWith("。"),
+          `${key} 注未以句号结尾：${item.note}`
+        ).toBe(true);
+      }
+      if (item.title) {
+        expect(item.title.endsWith("。"), `${key} 标题不该带标点`).toBe(false);
+      }
+    }
+  });
+});
+
 describe("SettingsPanel + GuideHost：面板挂载在默认页", () => {
   it("应用页（默认页）的通知也要出卡", async () => {
     // jsdom 无布局引擎：给所有元素一个非零矩形，让面板可量（真环境它本来就有尺寸）
