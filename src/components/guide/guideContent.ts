@@ -76,8 +76,8 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
     surface: "chat",
     anchor: FACE_ANCHOR,
     waitFor: "welcome-mark",
-    lead: "欢迎使用 PRTS。",
-    body: "接下来会依次出现几处界面说明，跟着走一遍就好。",
+    lead: "欢迎使用PRTS。",
+    body: "你可以随意探索PRTS的各个部分。首次使用时，界面各处都会有功能说明。",
     startKeys: ["welcome.new-chat", "welcome.settings", "welcome.input"],
   },
 
