@@ -6,7 +6,7 @@
       <path d="M512 92 L932 512 L512 932 L92 512 Z"/>
     </clipPath>
   </defs>
-  <rect width="1024" height="1024" rx="96" fill="#26282a"/>
+  <rect width="1024" height="1024" rx="184" fill="#26282a"/>
   <path d="M548 128 L968 548 L548 968 L128 548 Z" fill="rgba(0,0,0,0.5)"/>
   <path d="M512 92 L932 512 L512 932 L92 512 Z" fill="#1c1f22" stroke="#c8cdd0" stroke-width="48"/>
   <g clip-path="url(#dia)">
