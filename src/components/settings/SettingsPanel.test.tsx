@@ -297,11 +297,11 @@ describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
       if (cmd === "get_app_meta")
         return Promise.resolve({
           version: "0.1.0",
-          data_dir: "C:/fake/data",
-          workspace_root: "C:/fake/ws",
-          db_path: "C:/fake/db",
-          knowledge_dir: "C:/fake/kb",
-          skills_dir: "C:/fake/skills",
+          dataDir: "C:/fake/data",
+          workspaceRoot: "C:/fake/ws",
+          dbPath: "C:/fake/db",
+          knowledgeDir: "C:/fake/kb",
+          skillsDir: "C:/fake/skills",
         });
       if (cmd === "set_always_on_top") return Promise.reject("窗口操作失败");
       return Promise.resolve(undefined);
@@ -370,11 +370,11 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
       if (cmd === "get_app_meta")
         return Promise.resolve({
           version: "0.1.0",
-          data_dir: "C:/fake/data",
-          workspace_root: "C:/fake/workspace",
-          db_path: "C:/fake/db",
-          knowledge_dir: "C:/fake/kb",
-          skills_dir: "C:/fake/skills",
+          dataDir: "C:/fake/data",
+          workspaceRoot: "C:/fake/workspace",
+          dbPath: "C:/fake/db",
+          knowledgeDir: "C:/fake/kb",
+          skillsDir: "C:/fake/skills",
         });
       if (cmd === "list_workspace_dir") return Promise.resolve([]);
       return Promise.resolve(undefined);

@@ -94,11 +94,11 @@ const __defaultInvokeImpl = (cmd: string) => {
   if (cmd === "get_app_meta") {
     return Promise.resolve({
       version: "0.1.0",
-      data_dir: "C:/fake/data",
-      workspace_root: "C:/fake/workspace",
-      db_path: "C:/fake/db",
-      knowledge_dir: "C:/fake/kb",
-      skills_dir: "C:/fake/skills",
+      dataDir: "C:/fake/data",
+      workspaceRoot: "C:/fake/workspace",
+      dbPath: "C:/fake/db",
+      knowledgeDir: "C:/fake/kb",
+      skillsDir: "C:/fake/skills",
     });
   }
   if (cmd === "list_skills") return Promise.resolve([]);

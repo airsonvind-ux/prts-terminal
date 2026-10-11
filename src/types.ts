@@ -480,14 +480,18 @@ export interface BootStatus {
   memory: BootComponent;
 }
 
-/** get_app_meta 载荷（关于页 + 空间页共用只读信息） */
+/** get_app_meta 载荷（关于页 + 空间页共用只读信息）。
+ *
+ *  命名与 Settings 侧不同：后端 AppMeta 标了 `rename_all = camelCase`（命令 DTO
+ *  惯例），而 Settings / WorkspaceSettings 等持久化结构是 snake_case（文件格式）。
+ *  两者不要互相照抄——照抄会静默取到 undefined。 */
 export interface AppMeta {
   version: string;
-  data_dir: string;
-  workspace_root: string;
-  db_path: string;
-  knowledge_dir: string;
-  skills_dir: string;
+  dataDir: string;
+  workspaceRoot: string;
+  dbPath: string;
+  knowledgeDir: string;
+  skillsDir: string;
 }
 
 /** list_skills / open_path 载荷（技能页技能清单；来源 skills md frontmatter）

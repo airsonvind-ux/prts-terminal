@@ -489,7 +489,7 @@ export function SettingsPanel() {
           {activeTab === "space" && (
             <SettingsSpace
               workspaceRoot={
-                settings.workspace.workspace_root || appMeta?.workspace_root || ""
+                settings.workspace.workspace_root || appMeta?.workspaceRoot || ""
               }
               isDefault={!settings.workspace.workspace_root}
               busy={settingsBusy}
