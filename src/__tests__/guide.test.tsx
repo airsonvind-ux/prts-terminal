@@ -416,6 +416,22 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     b.unmount();
   });
 
+  it("等待期间用户已动手 → 这次不弹，也不写看过", () => {
+    mountFace();
+    mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
+    resetStore();
+    useGuideStore.getState().enqueue(["first.conv-title"]);
+    const { unmount } = mountHost();
+
+    // 到点前用户点了别处（或聚焦了输入）
+    act(() => {
+      document.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    });
+    expect(useGuideStore.getState().queue).toEqual([]);
+    expect(useGuideStore.getState().seen.size).toBe(0);
+    unmount();
+  });
+
   it("引导延后出现：先给页面留出渲染时间", async () => {
     vi.useFakeTimers();
     try {

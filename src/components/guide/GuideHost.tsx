@@ -37,13 +37,14 @@ interface Box {
 /** 会话焦点卡宽度（正面宽 400，268 留出余量） */
 const FOCUS_CARD_W = 268;
 
-/** 引导卡出现前的延迟。
- *
- * 点进一页时先让页面渲染出来、眼睛落下去，再出引导——否则引导会比内容还快，
- * 用户还没看清页内有什么就被盖上了（Air 2026-10-11 实测）。
- * 位置在延迟期间就量好，所以到点出现时不会闪、也不跳。
+/** 引导卡出现前的延迟（无动画可等的场合）：一帧两帧就够，别让页面内容被盖。 */
+const GUIDE_DELAY_MS = 200;
+
+/**
+ * 带 waitFor 时的最低停顿：等动画本身已经是一段过渡式等待，只需给它一个落点，
+ * 不再叠加固定延迟（Air 2026-10-11：衔接应当快，动画的收尾已经平缓）。
  */
-const GUIDE_DELAY_MS = 400;
+const GUIDE_TAIL_FLOOR_MS = 120;
 
 /** waitFor 的兜底上限：动画再长也不能把引导卡死在这里。 */
 const ANIM_HOLD_MAX_MS = 2000;
@@ -149,7 +150,8 @@ export function GuideHost() {
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
 
   // 延后出现：量好位置先不显示（visibility: hidden 仍然参与布局），到点再露。
-  // 若该步声明了 waitFor，还要等那个元素的入场动画播完——否则遮挡物会比画面先到。
+  // 带 waitFor 的（欢迎卡）：等那个元素的入场动画演完即可，只给一个 120ms 落点——
+  // 动画本身就是过渡式等待，再叠加固定延迟就会显得"动画完了还不出"。
   const [shown, setShown] = useState(false);
   useEffect(() => {
     if (activeKey === null) {
@@ -158,8 +160,9 @@ export function GuideHost() {
     }
     setShown(false);
     let alive = true;
+    const floor = item?.waitFor ? GUIDE_TAIL_FLOOR_MS : GUIDE_DELAY_MS;
     const base = new Promise<void>((r) => {
-      window.setTimeout(r, GUIDE_DELAY_MS);
+      window.setTimeout(r, floor);
     });
     const wait = item?.waitFor ? animationsDone(item.waitFor) : Promise.resolve();
     void Promise.all([base, wait]).then(() => {
@@ -169,6 +172,21 @@ export function GuideHost() {
       alive = false;
     };
   }, [activeKey, item]);
+
+  // 等的那会儿用户已经动手了（点了设置 / 聚焦输入）→ 这次不弹。
+  // 引导不该在用户已经开头做事时盖上来；这一项**保持未看过**，等它那个表面下次
+  // 再出现时再出（skip 不写 seen）。只认 pointerdown / focusin：那才是"动手"，
+  // 键盘敲击可能只是路过（且 Esc 另有退场通道）。
+  useEffect(() => {
+    if (activeKey === null || shown) return;
+    const onEngage = () => skip(activeKey);
+    document.addEventListener("pointerdown", onEngage, true);
+    document.addEventListener("focusin", onEngage, true);
+    return () => {
+      document.removeEventListener("pointerdown", onEngage, true);
+      document.removeEventListener("focusin", onEngage, true);
+    };
+  }, [activeKey, shown, skip]);
 
   /** 重量卡片尺寸（换步 / 缩放都会变）：值没变就不 setState，避免自激。 */
   const measureCard = useCallback(() => {
