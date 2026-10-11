@@ -37,6 +37,16 @@ interface Box {
 /** 局部坐标参照系之外的会话焦点卡宽度（正面宽 400，268 留出余量） */
 const FOCUS_CARD_W = 268;
 
+/**
+ * 设置页左侧导航宽（`SettingsPanel.module.css` 的 `.sidebar`）。
+ * 通知卡靠内容区一侧（右对齐）摆，不盖导航——用户才看得出"这条在解释本页"，
+ * 也才认得出左边九个入口还在。
+ */
+const SETTINGS_NAV_W = 52;
+
+/** 通知卡与面板边缘的间距 */
+const NOTICE_INSET = 8;
+
 /** 把元素在正面内的局部矩形算出来（正面的 padding box 为原点）。 */
 function localBox(el: HTMLElement, face: HTMLElement): Box | null {
   const w = el.offsetWidth;
@@ -171,15 +181,12 @@ export function GuideHost() {
     measureCard();
   });
 
-  // 用户一动键盘即退（卡片内按键除外——那是在点自己的按钮）
+  // 只有 Esc 退场：曾用"任意键即退"，但用户随手一按就把没读完的引导关掉、还被永久
+  // 记成看过（2026-10-11 Air 实测）。Esc 是标准 dismiss 键，不会误触。
   useEffect(() => {
     if (activeKey === null) return;
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && typeof t.closest === "function" && t.closest("[data-guide-host]")) {
-        return;
-      }
-      exit(activeKey);
+      if (e.key === "Escape") exit(activeKey);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -194,10 +201,10 @@ export function GuideHost() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [activeKey, box]);
 
-  // 点遮罩 = 推进（与项目里"点遮罩关闭面板"同一习惯）
-  const handleBackdrop = useCallback(() => {
-    if (activeKey !== null) advance(activeKey);
-  }, [activeKey, advance]);
+  // 遮罩不消费引导：只有卡片上的按钮与 Esc 能关掉它。
+  // 曾经"点遮罩 = 下一步"（对齐覆盖层的"点遮罩关闭面板"），但语义相反：
+  // 面板那次点击的意图是"关"，引导这次很可能是"我想去点别处"（比如左导航），
+  // 结果把没读完的引导消耗掉、还永久记成看过（2026-10-11 Air 实测）。
 
   if (!item || !box) return null;
 
@@ -205,16 +212,20 @@ export function GuideHost() {
   const pos = focus && card && face ? place(box, card, face) : null;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
-  // 通知卡：宽度按被压暗的面板成比例。面板本身只有 0.72×正面宽（≈288px），
-  // 写死一个接近它的绝对宽度会把整页盖住（2026-10-11 Air 实测），故取 80% 并设上下限。
-  const noticeW = Math.round(Math.max(140, Math.min(250, box.width * 0.8)));
+  // 通知卡：贴内容区（右对齐），不盖左侧导航；宽度按"面板宽 − 导航 − 两侧间距"算。
+  // 面板本身只有 0.72×正面宽（≈288px），写死一个接近它的绝对宽度会把整页盖住
+  // （2026-10-11 Air 实测）。
+  const noticeLeft = SETTINGS_NAV_W + NOTICE_INSET;
+  const noticeW = Math.max(
+    120,
+    Math.min(240, box.width - noticeLeft - NOTICE_INSET)
+  );
 
   return (
     <div
       ref={rootRef}
       className={styles.root}
       data-guide-host=""
-      onClick={handleBackdrop}
     >
       {focus ? (
         <div
@@ -251,10 +262,9 @@ export function GuideHost() {
                 visibility: pos ? "visible" : "hidden",
               }
             : {
-                left: box.left + box.width / 2,
-                top: box.top + 10,
+                left: box.left + noticeLeft,
+                top: box.top + NOTICE_INSET,
                 width: noticeW,
-                transform: "translateX(-50%)",
               }
         }
       >

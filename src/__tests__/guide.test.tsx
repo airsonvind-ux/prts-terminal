@@ -223,7 +223,7 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("modal：点遮罩推进；点卡片本体不动", () => {
+  it("modal：点遮罩不消费（避免误消），按钮才推进", () => {
     mountFace();
     mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
 
@@ -231,14 +231,26 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     useGuideStore.getState().enqueue(["first.conv-title"]);
     const { unmount } = mountHost();
 
+    // 点遮罩（想点别处）：不能把引导吃掉
+    act(() => {
+      host()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
+    expect(useGuideStore.getState().seen.has("first.conv-title")).toBe(false);
+
+    // 点卡片本体：也不动
     const card = host()?.lastElementChild as HTMLElement;
     act(() => {
       card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
 
+    // 点「下一步」：才推进
+    const next = Array.from(card.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("下一步")
+    ) as HTMLButtonElement;
     act(() => {
-      host()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      next.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(useGuideStore.getState().queue).toEqual([]);
     unmount();
@@ -317,7 +329,7 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("通知卡按面板宽成比例，不盖满整页", () => {
+  it("通知卡贴内容区右对齐：不盖左侧导航，也不盖满整页", () => {
     mountFace();
     mountAnchor("settings-panel", { left: 50, top: 50, width: 288, height: 264 });
 
@@ -329,9 +341,32 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
     const { unmount } = mountHost();
     const card = host()?.lastElementChild as HTMLElement;
-    // 288 × 0.8 = 230 → 比面板窄，两侧留出余量
-    expect(card.style.width).toBe("230px");
-    expect(card.style.top).toBe("60px"); // 挂面板顶部（50 + 10），不是正中
+    // 宽度 = 288 − 52（导航） − 8 − 8 = 220
+    expect(card.style.width).toBe("220px");
+    // 局部左边界 60 → 面板 left 50 + 60 = 110：从导航右缘起，盖不住那 52px
+    expect(card.style.left).toBe("110px");
+    expect(card.style.top).toBe("58px"); // 挂内容区顶部，不是正中
+    unmount();
+  });
+
+  it("键盘：只有 Esc 退场，寻常按键不误消", () => {
+    mountFace();
+    mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
+
+    resetStore();
+    useGuideStore.getState().enqueue(["first.conv-title"]);
+    const { unmount } = mountHost();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a" }));
+    });
+    expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(useGuideStore.getState().queue).toEqual([]);
+    expect(useGuideStore.getState().seen.has("first.conv-title")).toBe(true);
     unmount();
   });
 
