@@ -72,15 +72,6 @@ impl GateVerdict {
         }
     }
 
-    fn ask_external(reason: &'static str) -> Self {
-        Self {
-            decision: GateDecision::Ask,
-            reason,
-            rule_id: None,
-            touched_external: true,
-        }
-    }
-
     fn blocked(crit_rule: &'static str) -> Self {
         Self {
             decision: GateDecision::Blocked,

@@ -477,7 +477,14 @@ enum AnthropicSseEvent {
     ContentBlockStart { index: usize, block_type: String, block_data: Value },
     ContentBlockDelta { index: usize, delta: Value },
     ContentBlockStop { index: usize },
-    MessageDelta { stop_reason: Option<String>, output_tokens: u32 },
+    MessageDelta {
+        /// SSE 的 stop_reason（end_turn / tool_use 等）。**当前只解析、无人读取**
+        /// （消费点形如 `stop_reason: _`）；保留以便将来判结束原因，
+        /// 测试也据此断言解析正确。
+        #[allow(dead_code)]
+        stop_reason: Option<String>,
+        output_tokens: u32,
+    },
     MessageStop,
     Ping,
 }

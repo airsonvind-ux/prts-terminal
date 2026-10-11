@@ -92,6 +92,7 @@ pub fn clean_title(raw: &str) -> Option<String> {
 /// 生成标题（默认 15s 超时）。
 ///
 /// 失败（无文本 / 超时 / 报错）→ None。
+#[allow(dead_code)] // 当前仅测试引用：生产走 generate_title_full
 pub async fn generate_title(
     llm: &dyn LlmClient,
     config: &LlmConfig,
@@ -104,6 +105,7 @@ pub async fn generate_title(
 }
 
 /// 生成标题（可指定超时；测试用）。
+#[allow(dead_code)] // 当前仅测试引用：生产走 generate_title_full
 pub async fn generate_title_with_timeout(
     llm: &dyn LlmClient,
     config: &LlmConfig,

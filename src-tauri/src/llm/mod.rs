@@ -15,6 +15,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(test)]
 pub mod mock;
 pub mod openai_compatible;
 pub mod anthropic;
@@ -466,6 +467,9 @@ pub struct ToolDefFunction {
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
     pub text: Option<String>,
+    /// 本次调用请求的工具调用（生产路径经事件通道消费；
+    /// 本字段当前仅测试读取）。
+    #[allow(dead_code)]
     pub tool_calls: Option<Vec<ToolCall>>,
     /// 本次调用的 token 用量（provider 未提供 / Mock → None）
     pub usage: Option<TokenUsage>,
@@ -1024,11 +1028,6 @@ impl ModelRegistry {
     /// 获取指定供应商的 base_url。
     pub fn get_base_url(&self, provider: &str) -> Option<&str> {
         self.providers.get(provider).map(|pe| pe.base_url.as_str())
-    }
-
-    /// 获取指定供应商的 ApiType。
-    pub fn get_api_type(&self, provider: &str) -> Option<ApiType> {
-        self.providers.get(provider).map(|pe| pe.api_type)
     }
 
     /// 获取指定模型的能力信息（供 list_models 匹配远端 ID）。

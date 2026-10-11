@@ -84,6 +84,7 @@ impl AgentEvent {
     }
 
     /// 构造会话标题更新事件（`conversation/title`）。
+    #[allow(dead_code)] // 当前仅测试引用（2 参旧构造器；生产走 conversation_title_with_usage）
     pub fn conversation_title(conversation_id: &str, title: &str) -> Self {
         AgentEvent::ConversationTitle {
             conversation_id: conversation_id.to_string(),

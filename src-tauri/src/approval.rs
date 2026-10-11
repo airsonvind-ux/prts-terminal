@@ -194,7 +194,7 @@ mod tests {
     #[tokio::test]
     async fn re_register_replaces_old_entry() {
         let reg = ApprovalRegistry::new();
-        let mut old_rx = reg.register("s1", "call_1");
+        let old_rx = reg.register("s1", "call_1");
         let new_rx = reg.register("s1", "call_1");
         // 旧 receiver 被替换 → Canceled
         assert!(old_rx.await.is_err());

@@ -319,6 +319,7 @@ impl ActiveContext {
 /// 静态两层，逐字节可复现：system 是请求前缀的最开头，任何动态注入（skill
 /// 正文、缓存条目）都会逐字节改变前缀、破坏 DeepSeek 前缀缓存命中；
 /// 动态内容一律以消息形态进历史（激活 skill = 工具结果消息）。
+#[allow(dead_code)] // 仅测试与文档引用：生产走 assemble_system_prompt_with_memory
 pub fn assemble_system_prompt(skill_catalog: &str) -> String {
     assemble_system_prompt_with_memory(skill_catalog, "")
 }

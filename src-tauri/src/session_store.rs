@@ -969,6 +969,7 @@ fn now_ms() -> u64 {
 ///
 /// 单遍读取路径（[`SessionStore::get_coalesced`]）不再经过本函数——它把解析
 /// 产物直接喂给 [`merge_chunks_in_events`]（同一合并核心，输出逐字节一致）。
+#[allow(dead_code)] // 当前仅测试引用（单遍读取路径走 merge_chunks_in_events）
 pub(crate) fn coalesce_chunks_line(line: &str) -> Option<String> {
     let events: Vec<serde_json::Value> = serde_json::from_str(line).ok()?;
     merge_chunks_in_events(events)

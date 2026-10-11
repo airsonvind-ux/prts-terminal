@@ -2736,7 +2736,7 @@ mod tests {
         assert!(p.is_absolute() && p.starts_with(&root));
         assert!(p.extension().and_then(|e| e.to_str()) == Some("md"));
         // 按 name 排序（SkillIndex.names 语义）
-        let mut names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+        let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         assert_eq!(names, sorted, "清单应按 name 排序");

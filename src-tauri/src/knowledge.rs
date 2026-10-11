@@ -173,6 +173,7 @@ pub(crate) fn section_names(content: &str) -> Vec<String> {
 
 /// 统计正文中的 `## ` 节标题数（0 = 无分节）。
 /// 目录清单（list_knowledge）据此标注条目长短，LLM 决定是否先读大纲。
+#[allow(dead_code)] // 当前仅测试引用
 pub(crate) fn count_sections(content: &str) -> usize {
     section_names(content).len()
 }

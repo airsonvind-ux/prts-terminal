@@ -13,10 +13,10 @@
 //! 上下文，那是烧 token。
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+#[cfg(test)]
 use crate::config;
 use crate::maa::manager;
 use crate::maa::records;
@@ -1180,10 +1180,6 @@ fn summarize_tasks(tasks: &[Value]) -> String {
     }
 }
 
-fn results_dir() -> PathBuf {
-    crate::maa::records::results_dir()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1557,7 +1553,7 @@ mod tests {
     #[test]
     fn results_path_lives_under_data_dir() {
         let base = config::data_dir();
-        assert!(results_dir().starts_with(&base));
+        assert!(records::results_dir().starts_with(&base));
     }
 
     /// 真机验证：刷关的识别产出（Fight 1-7 ×1）+ 等待路径。

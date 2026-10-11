@@ -9,7 +9,7 @@
 //!   Talent, TalentAlt, TalentCondition, ComputedStats
 //! - 辅助函数：parse_json, split_digits, parse_chinese_or_digit,
 //!   find_bounding_keyframes, collect_attr_names
-//! - 格式化函数：format_raw_phases, format_stats, format_skill_expanded,
+//! - 格式化函数：format_stats, format_skill_expanded,
 //!   format_talents, level_label, pick_talent_alt
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use serde::Deserialize;
 // 常量
 // ═══════════════════════════════════════════════════════
 
-/// 属性输出固定顺序（与 format_stats / format_raw_phases 共享）。
+/// 属性输出固定顺序（与 format_stats 共享）。
 pub(crate) const ATTR_ORDER: &[&str] = &[
     "生命上限", "攻击", "防御", "法术抗性",
     "部署费用", "阻挡数", "再部署时间", "攻击间隔",
@@ -215,57 +215,6 @@ pub(crate) fn collect_attr_names(keyframes: &[Keyframe]) -> Vec<String> {
 // ═══════════════════════════════════════════════════════
 // 格式化函数
 // ═══════════════════════════════════════════════════════
-
-/// 格式化精英化阶段的完整原始数据。
-pub(crate) fn format_raw_phases(phases: &[ElitePhase], out: &mut String) {
-    out.push_str("\n── 精英化阶段（完整数据）──\n");
-
-    let attrs = collect_attr_names(
-        &phases.iter().flat_map(|p| p.keyframes.iter().cloned()).collect::<Vec<_>>()
-    );
-
-    for (i, phase) in phases.iter().enumerate() {
-        let phase_label = if i == 0 {
-            "精0".to_string()
-        } else if i == 1 {
-            "精1".to_string()
-        } else {
-            format!("精{i}")
-        };
-        let range = phase.range_id.as_deref().unwrap_or("无");
-        out.push_str(&format!(
-            "\n{phase_label}（范围: {range}） 最高等级: {}\n",
-            phase.max_level
-        ));
-
-        let kf_indices: Vec<usize> = {
-            let n = phase.keyframes.len();
-            if n <= 2 {
-                (0..n).collect()
-            } else {
-                vec![0, n - 1]
-            }
-        };
-
-        for &idx in &kf_indices {
-            if let Some(kf) = phase.keyframes.get(idx) {
-                let kf_attrs: Vec<String> = attrs
-                    .iter()
-                    .filter_map(|attr| {
-                        kf.attrs.get(attr.as_str()).map(|v| {
-                            if *attr == "攻击间隔" || *attr == "法术抗性" {
-                                format!("{} {}", attr, v)
-                            } else {
-                                format!("{} {:.0}", attr, v)
-                            }
-                        })
-                    })
-                    .collect();
-                out.push_str(&format!("  {}级 — {}\n", kf.level, kf_attrs.join(", ")));
-            }
-        }
-    }
-}
 
 /// 格式化属性数值（含信赖/潜能/模组拆分）。
 pub(crate) fn format_stats(stats: &ComputedStats, out: &mut String) {
