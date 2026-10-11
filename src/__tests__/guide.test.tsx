@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // src/__tests__/guide.test.tsx
-// 引导说明层 · 键集去重（看过不再出）+ 兜底（量不到锚点整步跳过）+ 渲染与推进
+// 引导说明层 · 键集去重（看过不再出）+ 兜底（量不到锚点整步跳过）+ modal 推进
+//            + 局部坐标（洞相对正面定位，不取窗口）+ 步骤点 + 通知卡不串页
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
@@ -12,13 +13,18 @@ import { useGuideStore } from "../stores/useGuideStore";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
 
-type InvokeMock = ReturnType<typeof vi.fn> & {
-  mock: { calls: unknown[][] };
-};
+type InvokeMock = ReturnType<typeof vi.fn> & { mock: { calls: unknown[][] } };
 const g = globalThis as unknown as {
   __invokeMock: InvokeMock;
   __defaultInvokeImpl: (cmd: string) => unknown;
 };
+
+interface R {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
 
 /** 重置 store（默认已 hydrated、无已看过项）。 */
 function resetStore(seen: string[] = [], hydrated = true): void {
@@ -30,15 +36,10 @@ function resetStore(seen: string[] = [], hydrated = true): void {
   });
 }
 
-/** 给锚点一个非零矩形（jsdom 一律返回 0，会被判成"量不到"）。 */
+/** 给元素一个非零矩形（jsdom 一律返回 0，会被判成"量不到"）。 */
 function stubRect(
   el: HTMLElement,
-  r: { left: number; top: number; width: number; height: number } = {
-    left: 10,
-    top: 20,
-    width: 100,
-    height: 20,
-  }
+  r: R = { left: 10, top: 20, width: 100, height: 20 }
 ): void {
   el.getBoundingClientRect = () =>
     ({
@@ -46,6 +47,24 @@ function stubRect(
       right: r.left + r.width,
       bottom: r.top + r.height,
     }) as DOMRect;
+}
+
+/** 摆一个"应用表面"（外壳正面）：说明层的局部坐标以它为原点。 */
+function mountFace(r: R = { left: 0, top: 0, width: 400, height: 300 }): HTMLElement {
+  const face = document.createElement("div");
+  face.setAttribute("data-guide", "face");
+  stubRect(face, r);
+  document.body.appendChild(face);
+  return face;
+}
+
+/** 摆一个锚点。 */
+function mountAnchor(key: string, r: R): HTMLElement {
+  const el = document.createElement("div");
+  el.setAttribute("data-guide", key);
+  stubRect(el, r);
+  document.body.appendChild(el);
+  return el;
 }
 
 function mountHost(): { root: Root; unmount: () => void } {
@@ -56,6 +75,10 @@ function mountHost(): { root: Root; unmount: () => void } {
     root.render(<GuideHost />);
   });
   return { root, unmount: () => act(() => root.unmount()) };
+}
+
+function host(): HTMLElement | null {
+  return document.querySelector("[data-guide-host]");
 }
 
 beforeEach(() => {
@@ -133,87 +156,111 @@ describe("useGuideStore：见过什么、展示什么", () => {
   });
 });
 
-describe("GuideHost：兜底与渲染", () => {
+describe("useGuideStore：通知卡不串页", () => {
+  it("切页时旧通知被换掉，不留上一页的文案", () => {
+    resetStore();
+    useGuideStore.getState().enqueueNotice("settings.space");
+    useGuideStore.getState().enqueueNotice("settings.usage");
+    expect(useGuideStore.getState().queue).toEqual(["settings.usage"]);
+  });
+
+  it("已看过的页不再排；不越过正在走的欢迎页导览", () => {
+    resetStore();
+    useGuideStore.getState().enqueue(WELCOME_TOUR);
+    useGuideStore.getState().enqueueNotice("settings.app");
+    expect(useGuideStore.getState().queue[0]).toBe("welcome.new-chat");
+    expect(useGuideStore.getState().queue).toContain("settings.app");
+
+    resetStore(["settings.model"]);
+    useGuideStore.getState().enqueueNotice("settings.model");
+    expect(useGuideStore.getState().queue).toEqual([]);
+  });
+});
+
+describe("GuideHost：兜底、局部坐标与 modal", () => {
   it("锚点不存在 → 整步跳过，队列清空且不留半张卡", () => {
+    mountFace();
     resetStore();
     useGuideStore.getState().enqueue(["first.conv-title", "first.context-ring"]);
 
     const { unmount } = mountHost();
 
     expect(useGuideStore.getState().queue).toEqual([]);
-    expect(document.querySelector("[data-guide-host]")).toBeNull();
+    expect(host()).toBeNull();
     unmount();
   });
 
   it("锚点存在 → 挖洞 + 卡片，文案取自 guideContent", () => {
-    const anchor = document.createElement("div");
-    anchor.setAttribute("data-guide", "conv-title");
-    stubRect(anchor);
-    document.body.appendChild(anchor);
+    mountFace();
+    mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
 
     resetStore();
     useGuideStore.getState().enqueue(["first.conv-title"]);
 
     const { unmount } = mountHost();
-    const host = document.querySelector("[data-guide-host]");
-    expect(host).not.toBeNull();
-    expect(host?.textContent).toContain(GUIDE_ITEMS["first.conv-title"].title);
-    expect(host?.textContent).toContain(GUIDE_ITEMS["first.conv-title"].body);
+    expect(host()?.textContent).toContain(GUIDE_ITEMS["first.conv-title"].title);
+    expect(host()?.textContent).toContain(GUIDE_ITEMS["first.conv-title"].body);
     // 未看完 → 仍在队列里（点了「下一步」才记 seen）
     expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
     unmount();
   });
 
-  it("通知式：锚点是设置面板，压暗 + 「知道了」", () => {
-    const panel = document.createElement("div");
-    panel.setAttribute("data-guide", "settings-panel");
-    stubRect(panel);
-    document.body.appendChild(panel);
-
-    resetStore();
-    useGuideStore.getState().enqueue(["settings.space"]);
-
-    const { unmount } = mountHost();
-    const host = document.querySelector("[data-guide-host]");
-    expect(host?.textContent).toContain(GUIDE_ITEMS["settings.space"].body);
-    expect(host?.textContent).toContain("知道了");
-    // 通知式不给「跳过」（只有一张卡，点「知道了」即完）
-    expect(host?.textContent).not.toContain("跳过");
-    unmount();
-  });
-
-  it("压暗边界取外壳正面，不取整窗口；洞坐标相对边界", () => {
-    const face = document.createElement("div");
-    face.setAttribute("data-guide", "face");
-    stubRect(face, { left: 0, top: 0, width: 400, height: 300 });
-    document.body.appendChild(face);
-    const anchor = document.createElement("div");
-    anchor.setAttribute("data-guide", "conv-title");
-    stubRect(anchor, { left: 10, top: 20, width: 100, height: 20 });
-    document.body.appendChild(anchor);
+  it("洞用正面内的局部坐标（不是窗口坐标）", () => {
+    // 正面本身偏移 (40,30)；锚点在 (60,70) → 局部应为 (20,40)
+    mountFace({ left: 40, top: 30, width: 400, height: 300 });
+    mountAnchor("conv-title", { left: 60, top: 70, width: 100, height: 20 });
 
     resetStore();
     useGuideStore.getState().enqueue(["first.conv-title"]);
     const { unmount } = mountHost();
 
-    const clip = document.querySelector(
-      "[data-guide-host] > div"
-    ) as HTMLElement | null;
-    expect(clip?.style.width).toBe("400px");
-    expect(clip?.style.height).toBe("300px");
-    const hole = clip?.querySelector("div") as HTMLElement;
-    expect(hole.style.left).toBe("10px");
-    expect(hole.style.top).toBe("20px");
+    const hole = host()?.firstElementChild as HTMLElement;
+    expect(hole.style.left).toBe("20px");
+    expect(hole.style.top).toBe("40px");
+    expect(hole.style.width).toBe("100px");
+    unmount();
+  });
+
+  it("modal：点遮罩推进；点卡片本体不动", () => {
+    mountFace();
+    mountAnchor("conv-title", { left: 10, top: 20, width: 100, height: 20 });
+
+    resetStore();
+    useGuideStore.getState().enqueue(["first.conv-title"]);
+    const { unmount } = mountHost();
+
+    const card = host()?.lastElementChild as HTMLElement;
+    act(() => {
+      card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useGuideStore.getState().queue).toEqual(["first.conv-title"]);
+
+    act(() => {
+      host()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(useGuideStore.getState().queue).toEqual([]);
+    unmount();
+  });
+
+  it("通知式：压暗设置面板，只有「知道了」", () => {
+    mountFace();
+    mountAnchor("settings-panel", { left: 50, top: 50, width: 200, height: 150 });
+
+    resetStore();
+    useGuideStore.getState().enqueueNotice("settings.space");
+
+    const { unmount } = mountHost();
+    expect(host()?.textContent).toContain(GUIDE_ITEMS["settings.space"].body);
+    expect(host()?.textContent).toContain("知道了");
+    // 通知式不给「跳过」（只有一张卡，点「知道了」即完）
+    expect(host()?.textContent).not.toContain("跳过");
     unmount();
   });
 
   it("多步导览出 ●○○ 步骤点，当前步高亮", () => {
-    // 三步锚点都摆上（否则下一步量不到会被跳掉）
+    mountFace();
     for (const key of ["new-chat", "settings", "input"]) {
-      const el = document.createElement("div");
-      el.setAttribute("data-guide", key);
-      stubRect(el);
-      document.body.appendChild(el);
+      mountAnchor(key, { left: 10, top: 20, width: 100, height: 20 });
     }
 
     resetStore();
@@ -238,26 +285,5 @@ describe("GuideHost：兜底与渲染", () => {
     });
     expect(document.querySelector("[data-guide-dots]")).toBeNull();
     unmount();
-  });
-});
-
-describe("useGuideStore：通知卡不串页", () => {
-  it("切页时旧通知被换掉，不留上一页的文案", () => {
-    resetStore();
-    useGuideStore.getState().enqueueNotice("settings.space");
-    useGuideStore.getState().enqueueNotice("settings.usage");
-    expect(useGuideStore.getState().queue).toEqual(["settings.usage"]);
-  });
-
-  it("已看过的页不再排；不越过正在走的欢迎页导览", () => {
-    resetStore();
-    useGuideStore.getState().enqueue(WELCOME_TOUR);
-    useGuideStore.getState().enqueueNotice("settings.app");
-    expect(useGuideStore.getState().queue[0]).toBe("welcome.new-chat");
-    expect(useGuideStore.getState().queue).toContain("settings.app");
-
-    resetStore(["settings.model"]);
-    useGuideStore.getState().enqueueNotice("settings.model");
-    expect(useGuideStore.getState().queue).toEqual([]);
   });
 });

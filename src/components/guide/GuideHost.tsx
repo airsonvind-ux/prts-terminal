@@ -1,63 +1,86 @@
 // src/components/guide/GuideHost.tsx
 // 说明层宿主（应用内引导）· 一套机制、两种形态
 //
-// 聚焦式：在**外壳正面**这一层里给锚点套超大 spread 阴影"挖洞"（洞恒等于锚点，
-//   缩放自动跟随），气泡贴锚点摆；通知式：压暗面板 + 居中说明卡。
+// 与项目里的覆盖层（设置 / 历史）同一套做法：**挂在正面内部**（`.frontFace`，
+// position:absolute）。这样压暗天然被正面的 overflow 与坐标体系管住，不会铺到
+// 窗口的透明区；洞与卡片的坐标用布局值（offset*），立方体做情绪动作
+// （WAAPI translateY / rotate）时两者仍严格对齐。
 //
-// 压暗边界是"应用表面"（`.frontFace`），不是窗口：窗口比正面大（左面 / 底面 /
-//   翅膀占位，其余是透明区），照窗口矩形压暗会把窗外那片空气也抹黑。
+// 交互是 modal（与遮罩一致）：引导期间挡住后面的界面，点遮罩 = 下一步 / 知道了，
+// 卡片内点击不冒泡，滚轮不外泄。**挡住交互是为了正确性**——锚点不会在引导脚下
+// 跑掉，也就不会出现"文案指着别处""气泡浮在被盖住的面板上"这类怪状态。
+// 同时留两个随时退出的出口：卡片上的「跳过」、以及用户一动键盘。
 //
 // 兜底是硬约束：每步进入量一次锚点，ResizeObserver 挂锚点 / 正面 / 根随尺寸重算；
-//   **量不到就整步跳过**（不猜位置、不留半张气泡）。用户一动键盘即退。
-//
-// portal 到 body：外壳是 3D 变换的，position:fixed 在变换祖先里会失基准并被裁
-// （与 ToastHost / 右键菜单同一原因）。
-//
-// 宿主本身 pointer-events:none —— 被高亮的锚点仍然可点，界面不被挡住。
+// **量不到就整步跳过**（不猜位置、不留半张气泡）。
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FACE_ANCHOR, GUIDE_ITEMS, NOTICE_ANCHOR } from "./guideContent";
 import { useActiveGuideKey, useGuideStore } from "../../stores/useGuideStore";
-import { useUIStore } from "../../stores/useUIStore";
 import styles from "./GuideHost.module.css";
 
-interface Rect {
+interface Box {
   left: number;
   top: number;
   width: number;
   height: number;
 }
 
-function rectOf(r: DOMRect): Rect {
-  return { left: r.left, top: r.top, width: r.width, height: r.height };
-}
-
-/** 量一个锚点（data-guide 值）。元素不存在或尺寸为 0 → null（调用方整步跳过）。 */
-function measure(key: string): Rect | null {
-  const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
-  if (!el) return null;
+/** 把元素在正面内的局部矩形算出来（正面的 padding box 为原点）。 */
+function localBox(el: HTMLElement, face: HTMLElement): Box | null {
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  if (w > 0 && h > 0) {
+    // 首选布局值：offset* 不受外壳变换影响，立方体做情绪动作时仍严格对齐
+    let left = 0;
+    let top = 0;
+    let node: HTMLElement | null = el;
+    while (node && node !== face) {
+      left += node.offsetLeft;
+      top += node.offsetTop;
+      node = node.offsetParent as HTMLElement | null;
+    }
+    if (node === face) return { left, top, width: w, height: h };
+  }
+  // 退化：视觉矩形相减（jsdom 等无布局引擎的场合走这条）
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
-  return rectOf(r);
+  const f = face.getBoundingClientRect();
+  return {
+    left: r.left - f.left,
+    top: r.top - f.top,
+    width: r.width,
+    height: r.height,
+  };
 }
 
-/** 气泡摆位：优先锚点下方，放不下翻到上方；水平居中并夹在视口内。 */
-function place(rect: Rect, w: number, h: number): { left: number; top: number } {
+/** 正面的局部尺寸（夹取卡片用）。 */
+function faceBox(face: HTMLElement): { w: number; h: number } {
+  if (face.offsetWidth > 0 && face.offsetHeight > 0) {
+    return { w: face.offsetWidth, h: face.offsetHeight };
+  }
+  const r = face.getBoundingClientRect();
+  return { w: r.width, h: r.height };
+}
+
+/** 气泡摆位：优先锚点下方，放不下翻到上方；水平居中并夹在正面内。 */
+function place(
+  anchor: Box,
+  card: { w: number; h: number },
+  face: { w: number; h: number }
+): { left: number; top: number } {
   const GAP = 10;
   const EDGE = 8;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const below = rect.top + rect.height + GAP;
-  const above = rect.top - GAP - h;
+  const below = anchor.top + anchor.height + GAP;
+  const above = anchor.top - GAP - card.h;
   const top =
-    below + h <= vh - EDGE
+    below + card.h <= face.h - EDGE
       ? below
       : above >= EDGE
         ? above
-        : Math.max(EDGE, vh - h - EDGE);
-  let left = rect.left + rect.width / 2 - w / 2;
-  left = Math.max(EDGE, Math.min(left, vw - w - EDGE));
+        : Math.max(EDGE, face.h - card.h - EDGE);
+  let left = anchor.left + anchor.width / 2 - card.w / 2;
+  left = Math.max(EDGE, Math.min(left, face.w - card.w - EDGE));
   return { left, top };
 }
 
@@ -66,19 +89,24 @@ export function GuideHost() {
   const advance = useGuideStore((s) => s.advance);
   const exit = useGuideStore((s) => s.exit);
   const tourKeys = useGuideStore((s) => s.tourKeys);
-  const overlay = useUIStore((s) => s.overlay);
   const item = activeKey !== null ? GUIDE_ITEMS[activeKey] : undefined;
 
-  const [rect, setRect] = useState<Rect | null>(null);
-  const [face, setFace] = useState<Rect | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<Box | null>(null);
+  const [face, setFace] = useState<{ w: number; h: number } | null>(null);
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
 
-  // 量锚点与压暗边界：每步进入量一次；随两者尺寸与视口变化重算；量不到整步跳过。
+  // 量锚点：每步进入量一次；随锚点 / 正面 / 视口尺寸变化重算；量不到整步跳过。
   useEffect(() => {
     if (!item) {
-      setRect(null);
+      setBox(null);
       setFace(null);
+      return;
+    }
+    const faceEl = document.querySelector<HTMLElement>(`[data-guide="${FACE_ANCHOR}"]`);
+    if (!faceEl) {
+      advance();
       return;
     }
     const key = item.form === "focus" ? item.anchor : NOTICE_ANCHOR;
@@ -87,34 +115,28 @@ export function GuideHost() {
       return;
     }
     const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
-    // 量不到（不存在 / 尺寸为 0）→ 整步跳过：不猜位置、不留半张气泡
-    if (!el || !measure(key)) {
+    if (!el || !localBox(el, faceEl)) {
       advance();
       return;
     }
-    const faceEl = document.querySelector<HTMLElement>(`[data-guide="${FACE_ANCHOR}"]`);
     const apply = () => {
-      if (!el.isConnected) {
+      if (!el.isConnected || !faceEl.isConnected) {
         advance();
         return;
       }
-      const r = el.getBoundingClientRect();
-      setRect(r.width > 0 && r.height > 0 ? rectOf(r) : null);
-      const f =
-        faceEl && faceEl.isConnected ? faceEl.getBoundingClientRect() : null;
-      setFace(f && f.width > 0 && f.height > 0 ? rectOf(f) : null);
+      setBox(localBox(el, faceEl));
+      const f = faceBox(faceEl);
+      setFace(f.w > 0 && f.h > 0 ? f : null);
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
+    ro.observe(faceEl);
     ro.observe(document.documentElement);
-    if (faceEl) ro.observe(faceEl);
     window.addEventListener("resize", apply);
-    window.addEventListener("scroll", apply, true);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", apply);
-      window.removeEventListener("scroll", apply, true);
     };
   }, [activeKey, item, advance]);
 
@@ -123,11 +145,12 @@ export function GuideHost() {
     setCard(null);
   }, [activeKey]);
   useLayoutEffect(() => {
-    if (!rect || card) return;
+    if (!box || card) return;
     const el = cardRef.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setCard({ w: r.width, h: r.height });
+    const w = el.offsetWidth || el.getBoundingClientRect().width;
+    const h = el.offsetHeight || el.getBoundingClientRect().height;
+    if (w > 0 && h > 0) setCard({ w, h });
   });
 
   // 用户一动键盘即退（卡片内按键除外——那是在点自己的按钮）
@@ -144,53 +167,50 @@ export function GuideHost() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [item, exit]);
 
-  // 别的面板打开时，欢迎页导览退场（锚点被盖住，气泡会浮在面板上）
+  // 挡住滚轮：引导期间后面的内容不该动（动了锚点就跑了）
   useEffect(() => {
-    if (activeKey !== null && activeKey.startsWith("welcome.") && overlay !== null) {
-      exit();
-    }
-  }, [activeKey, overlay, exit]);
+    const el = rootRef.current;
+    if (!el || !item) return;
+    const onWheel = (e: WheelEvent) => e.preventDefault();
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [item, box]);
 
-  if (!item || !rect) return null;
+  // 点遮罩 = 推进（与项目里"点遮罩关闭面板"同一习惯）
+  const handleBackdrop = useCallback(() => advance(), [advance]);
+
+  if (!item || !box) return null;
 
   const focus = item.form === "focus";
-  const pos = focus && card ? place(rect, card.w, card.h) : null;
-  // 压暗只作用于外壳正面；量不到正面（异常）退化为整窗口，不至于什么都不压暗
-  const clip =
-    face ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const pos = focus && card && face ? place(box, card, face) : null;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
 
-  return createPortal(
-    <div className={styles.root} data-guide-host="">
+  return (
+    <div
+      ref={rootRef}
+      className={styles.root}
+      data-guide-host=""
+      onClick={handleBackdrop}
+    >
       {focus ? (
         <div
-          className={`${styles.clip} ${face ? "" : styles.clipFull}`}
+          className={styles.hole}
           style={{
-            left: clip.left,
-            top: clip.top,
-            width: clip.width,
-            height: clip.height,
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
           }}
-        >
-          <div
-            className={styles.hole}
-            style={{
-              left: rect.left - clip.left,
-              top: rect.top - clip.top,
-              width: rect.width,
-              height: rect.height,
-            }}
-          />
-        </div>
+        />
       ) : (
         <div
           className={styles.dim}
           style={{
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
+            left: box.left,
+            top: box.top,
+            width: box.width,
+            height: box.height,
           }}
         />
       )}
@@ -198,6 +218,7 @@ export function GuideHost() {
       <div
         ref={cardRef}
         className={`${styles.card} ${card ? styles.cardIn : ""}`}
+        onClick={(e) => e.stopPropagation()}
         style={
           focus
             ? {
@@ -206,8 +227,8 @@ export function GuideHost() {
                 visibility: pos ? "visible" : "hidden",
               }
             : {
-                left: rect.left + rect.width / 2,
-                top: rect.top + rect.height / 2,
+                left: box.left + box.width / 2,
+                top: box.top + box.height / 2,
                 transform: "translate(-50%, -50%)",
               }
         }
@@ -241,7 +262,6 @@ export function GuideHost() {
           </button>
         </div>
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }

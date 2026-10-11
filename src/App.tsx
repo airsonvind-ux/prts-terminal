@@ -96,7 +96,7 @@ export function App() {
       >
         <ChatView onDragHandle={onDragHandle} />
         <OverlayContainer />
-        {/* 引导说明层（portal 到 body；z 序在面板之上、Toast 之下） */}
+        {/* 引导说明层（挂在正面内，与设置 / 历史覆盖层同一套；z 序在面板之上） */}
         <GuideHost />
         {/* 右键菜单统一宿主（document 级兜底：全应用不再出现浏览器菜单） */}
         <ContextMenuHost />

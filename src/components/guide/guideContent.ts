@@ -27,11 +27,12 @@ export interface GuideItem {
 export const NOTICE_ANCHOR = "settings-panel";
 
 /**
- * 聚焦式的压暗边界：外壳正面（`.frontFace`）。
+ * 局部坐标的参照系：外壳正面（`.frontFace`）。
  *
- * 必须是它，不是窗口：窗口比立方体正面大（左面 / 底面 / 翅膀占位，其余是
- * 透明区），照窗口矩形压暗会把窗外那片"空气"也抹黑——看着就是整窗口一层黑。
- * 正面对内容 `overflow:hidden`，所有界面元素都在它里面，故它既够又不过。
+ * 说明层与设置 / 历史覆盖层一样挂在它内部（`position:absolute`），所以
+ * ① 压暗被它的 `overflow:hidden` 天然裁在应用表面内，不会铺到窗口的透明区
+ * （2026-10-11：按窗口铺过一版，整窗口一层黑）；
+ * ② 锚点 / 卡片坐标取它内部的局部值，随立方体情绪动作一起动，不脱节。
  */
 export const FACE_ANCHOR = "face";
 

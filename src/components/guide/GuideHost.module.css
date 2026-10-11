@@ -1,59 +1,46 @@
 /* src/components/guide/GuideHost.module.css
- * 说明层（应用内引导）· portal 到 body 的 fixed 层
+ * 说明层（应用内引导）
  *
- * z-index 2000：在设置 / 历史面板（10）与进度环悬停卡（1001）之上，
- * 在 Toast（9999）之下。
+ * 与设置 / 历史覆盖层同一套：**挂在正面内部**（.frontFace 是 position:relative，
+ * overflow:hidden）。压暗天然被正面管住，不会铺到窗口的透明区；坐标用局部值
+ * （left/top 相对正面），随立方体的情绪动作一起动，不脱节。
  *
- * 宿主 pointer-events:none —— 挖洞高亮的锚点仍可点，界面不被挡住；
- * 只有卡片自己收事件。
+ * z-index 2000：在覆盖层（10）与缩放热区（11）之上 —— 引导期间挡住后面的界面。
+ * 遮罩色与 OverlayContainer.module.css 的 .backdrop 同值。
  *
- * 压暗边界 = 外壳正面（.clip），不是窗口：窗口比正面大，窗外是透明区，
- * 照窗口压暗会把那片"空气"也抹黑（2026-10-11 实测：整窗口一层黑）。
+ * modal：.root 收事件（点遮罩 = 推进），卡片内 stopPropagation。
  */
 
 .root {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 2000;
-  pointer-events: none;
   font-family: var(--font-ui);
+  cursor: default;
 }
 
-/* ── 聚焦式：压暗边界（外壳正面），洞在里面，超出的阴影被裁掉 ── */
+/* ── 聚焦式：洞恒等于锚点，四周由超大 spread 阴影压暗（阴影被正面裁掉） ── */
 
-.clip {
-  position: fixed;
-  overflow: hidden;
-  border-radius: var(--radius-md);
-  pointer-events: none;
-}
-
-/* 量不到正面时的退化形态：整窗口、无圆角 */
-.clipFull {
-  border-radius: 0;
-}
-
-/* 洞恒等于锚点；阴影只朝外铺，洞内透出真实界面 */
 .hole {
   position: absolute;
   border-radius: var(--radius-md);
-  box-shadow: 0 0 0 9999px rgba(5, 7, 9, 0.58);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
 
 /* ── 通知式：压暗的目标就是设置面板本身 ── */
 
 .dim {
-  position: fixed;
+  position: absolute;
   border-radius: var(--radius-md);
-  background: rgba(5, 7, 9, 0.58);
+  background: rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
 
 /* ── 说明卡（两种形态共用） ── */
 
 .card {
-  position: fixed;
+  position: absolute;
   width: 268px;
   box-sizing: border-box;
   padding: 12px 14px 10px;
@@ -62,7 +49,6 @@
   border-radius: var(--radius-md);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
   opacity: 0;
-  pointer-events: auto;
   transition: opacity 150ms ease;
 }
 
