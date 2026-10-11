@@ -496,12 +496,14 @@ export interface AppMeta {
   dbPath: string;
   knowledgeDir: string;
   skillsDir: string;
+  /** 《使用说明》文档路径（随包资源；关于页入口用）。 */
+  userGuidePath: string;
 }
 
 /** list_skills / open_path 载荷（技能页技能清单；来源 skills md frontmatter）
  *  字段与 Rust SkillEntry `#[serde(rename_all = "camelCase")]` 对齐：
  *  后端序列化为 filePath/name/description。filePath 由后端供给（源 md 绝对
- *  路径，前端不拼接硬编码）；open_path 仅放行资源目录（技能/知识库）内路径。 */
+ *  路径，前端不拼接硬编码）；open_path 只要求绝对路径且目标存在，不设白名单。 */
 export interface SkillEntry {
   name: string;
   description: string;

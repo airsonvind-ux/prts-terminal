@@ -45,6 +45,7 @@
       "resources/arknights.db": "./",
       "src/knowledge/": "resources/knowledge/",
       "src/skills/": "resources/skills/",
+      "src/docs/": "resources/docs/",
       "../LICENSE": "./LICENSE"
     },
     "externalBin": [

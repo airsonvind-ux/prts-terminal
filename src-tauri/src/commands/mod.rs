@@ -656,6 +656,8 @@ pub struct AppMeta {
     pub db_path: String,
     pub knowledge_dir: String,
     pub skills_dir: String,
+    /// 《使用说明》文档路径（随包资源）。
+    pub user_guide_path: String,
 }
 
 #[tauri::command]
@@ -674,6 +676,10 @@ pub fn get_app_meta(
             .to_string_lossy()
             .into_owned(),
         skills_dir: crate::skills_index::skills_dir()
+            .to_string_lossy()
+            .into_owned(),
+        user_guide_path: crate::config::bundled_docs_dir()
+            .join("使用说明.md")
             .to_string_lossy()
             .into_owned(),
     })

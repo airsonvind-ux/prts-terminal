@@ -17,3 +17,22 @@
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* 使用说明入口（系统默认应用打开，不做应用内阅读） */
+.guideLink {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.guideLink:disabled {
+  color: var(--text-3);
+  cursor: default;
+  text-decoration: none;
+}
