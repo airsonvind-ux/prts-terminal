@@ -300,9 +300,9 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("通知式：压暗设置面板，只有「知道了」", () => {
+  it("通知式：压暗子页内容区，只有「知道了」", () => {
     mountFace();
-    mountAnchor("settings-panel", { left: 50, top: 50, width: 200, height: 150 });
+    mountAnchor("settings-body", { left: 64, top: 78, width: 212, height: 150 });
 
     resetStore();
     useUIStore.setState({ overlay: "settings" });
@@ -350,7 +350,7 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
   it("别的表面的项不挤掉当前表面的项（模型页通知曾被吞掉）", () => {
     mountFace();
-    mountAnchor("settings-panel", { left: 50, top: 50, width: 288, height: 264 });
+    mountAnchor("settings-body", { left: 64, top: 78, width: 212, height: 150 });
     mountAnchor("context-ring", { left: 10, top: 20, width: 20, height: 20 });
 
     resetStore();
@@ -373,9 +373,9 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     unmount();
   });
 
-  it("通知卡贴内容区右对齐：不盖左侧导航，也不盖满整页", () => {
+  it("通知卡在子页内容区里双向居中（导航与页标题露在暗色外）", () => {
     mountFace();
-    mountAnchor("settings-panel", { left: 50, top: 50, width: 288, height: 264 });
+    mountAnchor("settings-body", { left: 64, top: 78, width: 212, height: 150 });
 
     resetStore();
     useUIStore.setState({ overlay: "settings" });
@@ -385,11 +385,13 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
     const { unmount } = mountHost();
     const card = host()?.lastElementChild as HTMLElement;
-    // 宽度 = 288 − 52（导航） − 8 − 8 = 220
-    expect(card.style.width).toBe("220px");
-    // 局部左边界 60 → 面板 left 50 + 60 = 110：从导航右缘起，盖不住那 52px
-    expect(card.style.left).toBe("110px");
-    expect(card.style.top).toBe("58px"); // 挂内容区顶部，不是正中
+    // 宽度 = 内容区宽 212 − 8×2 = 196（上限 300 不再卡成靠左的小块）
+    expect(card.style.width).toBe("196px");
+    // 水平居中于内容区：64 + 212/2 = 170
+    expect(card.style.left).toBe("170px");
+    expect(card.style.transform).toContain("translateX");
+    // 纵向：卡片尺寸量不到时从内容区顶部起（jsdom 无布局），不跳出去
+    expect(card.style.top).toBe("86px");
     unmount();
   });
 

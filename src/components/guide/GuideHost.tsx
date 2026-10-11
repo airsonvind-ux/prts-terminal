@@ -37,14 +37,7 @@ interface Box {
 /** 局部坐标参照系之外的会话焦点卡宽度（正面宽 400，268 留出余量） */
 const FOCUS_CARD_W = 268;
 
-/**
- * 设置页左侧导航宽（`SettingsPanel.module.css` 的 `.sidebar`）。
- * 通知卡靠内容区一侧（右对齐）摆，不盖导航——用户才看得出"这条在解释本页"，
- * 也才认得出左边九个入口还在。
- */
-const SETTINGS_NAV_W = 52;
-
-/** 通知卡与面板边缘的间距 */
+/** 通知卡与子页内容区边缘的间距 */
 const NOTICE_INSET = 8;
 
 /** 把元素在正面内的局部矩形算出来（正面的 padding box 为原点）。 */
@@ -213,14 +206,21 @@ export function GuideHost() {
   const pos = focus && card && face ? place(box, card, face) : null;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
-  // 通知卡：贴内容区（右对齐），不盖左侧导航；宽度按"面板宽 − 导航 − 两侧间距"算。
-  // 面板本身只有 0.72×正面宽（≈288px），写死一个接近它的绝对宽度会把整页盖住
-  // （2026-10-11 Air 实测）。
-  const noticeLeft = SETTINGS_NAV_W + NOTICE_INSET;
-  const noticeW = Math.max(
-    120,
-    Math.min(240, box.width - noticeLeft - NOTICE_INSET)
+  // 通知卡：在子页内容区里**双向居中**。压暗目标已经换成内容区本身（导航与页标题
+  // 都在暗色之外），卡就不再需要绕面板边缘做算术。宽度上限也别再卡成接近内容区的
+  // 固定值——面板随窗口放大时卡得跟着居中，否则会变成靠左的一小块（Air 实测）。
+  const noticeW = Math.round(
+    Math.max(140, Math.min(300, box.width - NOTICE_INSET * 2))
   );
+  const noticeTop = card
+    ? Math.min(
+        Math.max(
+          box.top + (box.height - card.h) / 2,
+          box.top + NOTICE_INSET
+        ),
+        box.top + box.height - card.h - NOTICE_INSET
+      )
+    : box.top + NOTICE_INSET;
 
   return (
     <div
@@ -263,9 +263,10 @@ export function GuideHost() {
                 visibility: pos ? "visible" : "hidden",
               }
             : {
-                left: box.left + noticeLeft,
-                top: box.top + NOTICE_INSET,
+                left: box.left + box.width / 2,
+                top: noticeTop,
                 width: noticeW,
+                transform: "translateX(-50%)",
               }
         }
       >

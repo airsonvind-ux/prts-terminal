@@ -37,8 +37,13 @@ export interface GuideItem {
   note?: string;
 }
 
-/** 通知式的压暗目标（设置面板根）。 */
-export const NOTICE_ANCHOR = "settings-panel";
+/**
+ * 通知式的压暗目标：**子页内容区**（`.contentBody`），不是整个面板。
+ *
+ * 取内容区而不是面板，是为了让左侧九个入口与页标题都露在暗色外——
+ * 用户得看得见"我在哪一页"，这张卡才知道自己在解释什么（Air 2026-10-11）。
+ */
+export const NOTICE_ANCHOR = "settings-body";
 
 /**
  * 局部坐标的参照系：外壳正面（`.frontFace`）。

@@ -469,7 +469,7 @@ export function SettingsPanel() {
   const activeLabel = TABS.find((t) => t.key === activeTab)?.label ?? "";
 
   return (
-    <div className={styles.container} data-guide="settings-panel">
+    <div className={styles.container}>
       {/* ── 左侧导航（9 项，全 2 字名；侧栏不扩张） ── */}
       <nav className={styles.sidebar}>
         <div className={styles.sidebarTitle}>设置</div>
@@ -490,7 +490,7 @@ export function SettingsPanel() {
       {/* ── 右侧内容（active-only：仅当前页渲染） ── */}
       <div className={styles.content}>
         <div className={styles.contentTitle}>{activeLabel}</div>
-        <div className={styles.contentBody}>
+        <div className={styles.contentBody} data-guide="settings-body">
           {activeTab === "model" && (
             <SettingsModel
               llm={activeLlmConfig!}
