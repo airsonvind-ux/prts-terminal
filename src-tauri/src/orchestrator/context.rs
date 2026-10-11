@@ -526,12 +526,14 @@ mod tests {
     // ── 注册制组装 ──
 
     #[test]
-    fn builtin_assembles_persona_then_ui() {
-        // 内置注册表 = Base 层两段：人格（prts.md）+ 界面认知（ui.md）。
-        // 人格在前且逐字保留，界面段紧随其后（装配以空行相隔）。
-        let assembled = PromptRegistry::builtin().assemble();
-        assert!(assembled.starts_with(SYSTEM_PROMPT));
-        assert_eq!(assembled, format!("{}\n\n{}", SYSTEM_PROMPT, UI_PROMPT));
+    fn base_prompt_orders_persona_before_ui_before_catalog() {
+        // 承诺：模型看到的先后 = 人格 → 界面认知 → Skill 目录。
+        // （不守"注册表里恰好几段"这类形态快照——加节 / 重排 order 时它只会白响。）
+        let prompt = assemble_system_prompt("");
+        let persona = prompt.find(SYSTEM_PROMPT).expect("人格段应在");
+        let ui = prompt.find(UI_PROMPT).expect("界面段应在");
+        let catalog = prompt.find("## Skill 目录").expect("目录段应在");
+        assert!(persona < ui && ui < catalog, "顺序应为 人格 → 界面 → 目录");
     }
 
     #[test]
@@ -558,23 +560,6 @@ mod tests {
         reg.register_section(PromptSection::new("a", 0, "A段")).unwrap();
         reg.register_section(PromptSection::new("b", 100, "B段")).unwrap();
         assert_eq!(reg.assemble(), "A段\n\nB段\n\nC段");
-    }
-
-    #[test]
-    fn builtin_has_ui_section_between_persona_and_catalog() {
-        let reg = PromptRegistry::builtin();
-        let ui = reg
-            .sections
-            .iter()
-            .find(|s| s.name == "prts.ui")
-            .expect("界面认知段应已注册");
-        // 落在 Base 层、Catalog 之前——即“人格之后”
-        assert_eq!(ui.order, ORDER_UI);
-        assert!(ORDER_BASE < ui.order && ui.order < ORDER_CATALOG);
-        // 装配后人格在前、界面段在后（Catalog 由 build_system_prompt 追加）
-        let assembled = reg.assemble();
-        assert!(assembled.contains("## 界面"));
-        assert!(assembled.ends_with(UI_PROMPT));
     }
 
     #[test]
