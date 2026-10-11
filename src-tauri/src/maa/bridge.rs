@@ -251,6 +251,13 @@ impl Bridge {
         user_dir: &Path,
         port: u16,
     ) -> Result<Self, BridgeError> {
+        // cwd 必须先存在：Windows 下给子进程一个不存在的 current_dir，spawn 直接报
+        // ERROR_DIRECTORY(267)，而错误文案指向「启动桥失败」，极易被误判成桥本身有问题
+        // （跟模拟器、跟 MaaCore 都无关）。这个目录平时只有写任务结果时才顺带建出来，
+        // 所以新装 / 清过数据根的用户会在「测试连接」这一步就被挡住（2026-10-11 实测）。
+        std::fs::create_dir_all(user_dir).map_err(|e| {
+            BridgeError::Start(format!("建桥工作目录失败（{}）：{e}", user_dir.display()))
+        })?;
         let mut command = Command::new(exe);
         // 工作目录定在 user_dir：MaaCore 有一部分调试产出是**按相对路径**写的
         // （如战场识别存图 `debug/map/`，见 BattleHelper::save_map），不跟着它自己的
