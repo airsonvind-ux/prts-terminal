@@ -69,6 +69,8 @@
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "./windows/nsis-images/header.bmp",
+        "sidebarImage": "./windows/nsis-images/sidebar.bmp",
         "customLanguageFiles": {
           "SimpChinese": "./windows/SimpChinese.nsh"
         },

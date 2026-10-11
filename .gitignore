@@ -39,3 +39,6 @@ __pycache__/
 
 # 构建日志（build.ps1 产物，2026-10-11）
 build-log-*.txt
+
+# 安装器图片的预览副本（仅用于查看，2026-10-11）
+src-tauri/windows/nsis-images/_preview/
