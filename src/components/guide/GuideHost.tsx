@@ -3,20 +3,28 @@
 //
 // 与项目里的覆盖层（设置 / 历史）同一套做法：**挂在正面内部**（`.frontFace`，
 // position:absolute）。这样压暗天然被正面的 overflow 与坐标体系管住，不会铺到
-// 窗口的透明区；洞与卡片的坐标用布局值（offset*），立方体做情绪动作
-// （WAAPI translateY / rotate）时两者仍严格对齐。
+// 窗口的透明区；洞与卡片的坐标用局部值（offset*），立方体做情绪动作
+// （WAAPI translateY / rotate）时仍严格对齐。
 //
 // 交互是 modal（与遮罩一致）：引导期间挡住后面的界面，点遮罩 = 下一步 / 知道了，
 // 卡片内点击不冒泡，滚轮不外泄。**挡住交互是为了正确性**——锚点不会在引导脚下
-// 跑掉，也就不会出现"文案指着别处""气泡浮在被盖住的面板上"这类怪状态。
-// 同时留两个随时退出的出口：卡片上的「跳过」、以及用户一动键盘。
+// 跑掉。同时留两个随时退出的出口：卡片上的「跳过」、以及用户一动键盘。
+//
+// 展示哪一项由**当前表面**决定（对话 / 设置面板），不是一律看队首——队列里
+// 属于别的表面的项原地等着，等它那个表面回来再出。
 //
 // 兜底是硬约束：每步进入量一次锚点，ResizeObserver 挂锚点 / 正面 / 根随尺寸重算；
 // **量不到就整步跳过**（不猜位置、不留半张气泡）。
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FACE_ANCHOR, GUIDE_ITEMS, NOTICE_ANCHOR } from "./guideContent";
-import { useActiveGuideKey, useGuideStore } from "../../stores/useGuideStore";
+import {
+  FACE_ANCHOR,
+  GUIDE_ITEMS,
+  NOTICE_ANCHOR,
+  type GuideSurface,
+} from "./guideContent";
+import { pickActiveGuideKey, useGuideStore } from "../../stores/useGuideStore";
+import { useUIStore } from "../../stores/useUIStore";
 import styles from "./GuideHost.module.css";
 
 interface Box {
@@ -25,6 +33,9 @@ interface Box {
   width: number;
   height: number;
 }
+
+/** 局部坐标参照系之外的会话焦点卡宽度（正面宽 400，268 留出余量） */
+const FOCUS_CARD_W = 268;
 
 /** 把元素在正面内的局部矩形算出来（正面的 padding box 为原点）。 */
 function localBox(el: HTMLElement, face: HTMLElement): Box | null {
@@ -85,7 +96,11 @@ function place(
 }
 
 export function GuideHost() {
-  const activeKey = useActiveGuideKey();
+  const overlay = useUIStore((s) => s.overlay);
+  // 当前表面：对话界面 / 设置面板。历史等其它面板：不展示任何引导。
+  const surface: GuideSurface | null =
+    overlay === null ? "chat" : overlay === "settings" ? "settings" : null;
+  const activeKey = useGuideStore((s) => pickActiveGuideKey(s.queue, surface));
   const advance = useGuideStore((s) => s.advance);
   const exit = useGuideStore((s) => s.exit);
   const tourKeys = useGuideStore((s) => s.tourKeys);
@@ -97,36 +112,47 @@ export function GuideHost() {
   const [face, setFace] = useState<{ w: number; h: number } | null>(null);
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
 
+  /** 重量卡片尺寸（换步 / 缩放都会变）：值没变就不 setState，避免自激。 */
+  const measureCard = useCallback(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const w = el.offsetWidth || el.getBoundingClientRect().width;
+    const h = el.offsetHeight || el.getBoundingClientRect().height;
+    if (w <= 0 || h <= 0) return;
+    setCard((c) => (c && c.w === w && c.h === h ? c : { w, h }));
+  }, []);
+
   // 量锚点：每步进入量一次；随锚点 / 正面 / 视口尺寸变化重算；量不到整步跳过。
   useEffect(() => {
-    if (!item) {
+    if (!item || activeKey === null) {
       setBox(null);
       setFace(null);
       return;
     }
     const faceEl = document.querySelector<HTMLElement>(`[data-guide="${FACE_ANCHOR}"]`);
     if (!faceEl) {
-      advance();
+      advance(activeKey);
       return;
     }
     const key = item.form === "focus" ? item.anchor : NOTICE_ANCHOR;
     if (!key) {
-      advance();
+      advance(activeKey);
       return;
     }
     const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
     if (!el || !localBox(el, faceEl)) {
-      advance();
+      advance(activeKey);
       return;
     }
     const apply = () => {
       if (!el.isConnected || !faceEl.isConnected) {
-        advance();
+        advance(activeKey);
         return;
       }
       setBox(localBox(el, faceEl));
       const f = faceBox(faceEl);
       setFace(f.w > 0 && f.h > 0 ? f : null);
+      measureCard();
     };
     apply();
     const ro = new ResizeObserver(apply);
@@ -138,46 +164,40 @@ export function GuideHost() {
       ro.disconnect();
       window.removeEventListener("resize", apply);
     };
-  }, [activeKey, item, advance]);
+  }, [activeKey, item, advance, measureCard]);
 
-  // 换步重置卡片尺寸；尺寸一到就记下来（摆位要它）
+  // 每次渲染后校准卡片尺寸（在 paint 前完成，摆位不会闪）
   useLayoutEffect(() => {
-    setCard(null);
-  }, [activeKey]);
-  useLayoutEffect(() => {
-    if (!box || card) return;
-    const el = cardRef.current;
-    if (!el) return;
-    const w = el.offsetWidth || el.getBoundingClientRect().width;
-    const h = el.offsetHeight || el.getBoundingClientRect().height;
-    if (w > 0 && h > 0) setCard({ w, h });
+    measureCard();
   });
 
   // 用户一动键盘即退（卡片内按键除外——那是在点自己的按钮）
   useEffect(() => {
-    if (!item) return;
+    if (activeKey === null) return;
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && typeof t.closest === "function" && t.closest("[data-guide-host]")) {
         return;
       }
-      exit();
+      exit(activeKey);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [item, exit]);
+  }, [activeKey, exit]);
 
   // 挡住滚轮：引导期间后面的内容不该动（动了锚点就跑了）
   useEffect(() => {
     const el = rootRef.current;
-    if (!el || !item) return;
+    if (!el || activeKey === null) return;
     const onWheel = (e: WheelEvent) => e.preventDefault();
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [item, box]);
+  }, [activeKey, box]);
 
   // 点遮罩 = 推进（与项目里"点遮罩关闭面板"同一习惯）
-  const handleBackdrop = useCallback(() => advance(), [advance]);
+  const handleBackdrop = useCallback(() => {
+    if (activeKey !== null) advance(activeKey);
+  }, [activeKey, advance]);
 
   if (!item || !box) return null;
 
@@ -185,6 +205,9 @@ export function GuideHost() {
   const pos = focus && card && face ? place(box, card, face) : null;
   const dotIndex =
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
+  // 通知卡：宽度按被压暗的面板成比例。面板本身只有 0.72×正面宽（≈288px），
+  // 写死一个接近它的绝对宽度会把整页盖住（2026-10-11 Air 实测），故取 80% 并设上下限。
+  const noticeW = Math.round(Math.max(140, Math.min(250, box.width * 0.8)));
 
   return (
     <div
@@ -224,12 +247,14 @@ export function GuideHost() {
             ? {
                 left: pos?.left ?? 0,
                 top: pos?.top ?? 0,
+                width: FOCUS_CARD_W,
                 visibility: pos ? "visible" : "hidden",
               }
             : {
                 left: box.left + box.width / 2,
-                top: box.top + box.height / 2,
-                transform: "translate(-50%, -50%)",
+                top: box.top + 10,
+                width: noticeW,
+                transform: "translateX(-50%)",
               }
         }
       >
@@ -253,11 +278,19 @@ export function GuideHost() {
         {item.note && <div className={styles.note}>注：{item.note}</div>}
         <div className={styles.actions}>
           {focus && (
-            <button type="button" className={styles.ghost} onClick={exit}>
+            <button
+              type="button"
+              className={styles.ghost}
+              onClick={() => activeKey !== null && exit(activeKey)}
+            >
               跳过
             </button>
           )}
-          <button type="button" className={styles.primary} onClick={advance}>
+          <button
+            type="button"
+            className={styles.primary}
+            onClick={() => activeKey !== null && advance(activeKey)}
+          >
             {focus ? "下一步" : "知道了"}
           </button>
         </div>

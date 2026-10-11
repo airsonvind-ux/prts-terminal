@@ -1,22 +1,25 @@
 // src/stores/useGuideStore.ts
-// 引导（应用内说明层）状态 · 只有两件事：见过什么、现在展示什么
+// 引导（应用内说明层）状态 · 只有两件事：见过什么、还有哪些待展示
 //
 // 「看过没」持久化在 settings.json 的 `ui.guide_seen`（界面态，不走配置写闸
 // ——见 `settings::UiSection`），前端启动拉一次，之后只往后端追加。
 //
 // 触发原则（台账）：由「表面真的出现过」决定，不由「装完第几次启动」决定。
-// 故本 store 不做任何"第几次启动"的判断，只做去重与排队。
+//
+// 队列是"待展示集合"，不是"播放列表"：每一项归属于一个表面（对话 / 设置面板），
+// **只有在它那个表面上才展示**。故"当前展示哪一项"由 `pickActive` 按当前表面挑，
+// 不是一律看队首——否则对话里的待展示项会把设置页的通知堵在队尾（2026-10-11 实测）。
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { GUIDE_ITEMS } from "../components/guide/guideContent";
+import { GUIDE_ITEMS, type GuideSurface } from "../components/guide/guideContent";
 
 interface GuideState {
   /** 键集是否已从后端拉到。未拉到一律不展示——宁可不弹，也不误弹。 */
   hydrated: boolean;
   /** 已看过的键集 */
   seen: Set<string>;
-  /** 待展示队列（队首 = 当前展示项）。空 = 没在展示。 */
+  /** 待展示队列（无序播放；展示哪一项由表面决定） */
   queue: string[];
   /** 本轮导览的完整键序（>1 项才记，用于气泡里的 ●○○）；单张卡为 null */
   tourKeys: string[] | null;
@@ -26,13 +29,13 @@ interface GuideState {
   enqueue: (keys: string[]) => void;
   /**
    * 排一张设置页通知卡：**同一时刻只留一张**——把队里旧的设置页项换成当前这页，
-   * 否则切页后会把上一页的文案举在眼前。不越过正在走的欢迎页导览。
+   * 否则切页后会把上一页的文案举在眼前。
    */
   enqueueNotice: (key: string) => void;
-  /** 当前项看完：记 seen + 前进 */
-  advance: () => void;
-  /** 退出本轮导览（跳过 / 用户动了键盘）：当前项记 seen，其余作废 */
-  exit: () => void;
+  /** `key` 看完：记 seen + 从队列移除（只有它，别的项照旧等着） */
+  advance: (key: string) => void;
+  /** 退出：`key` 记 seen，并把同一轮导览的其余项一并作废（跳过 = 这轮不看了） */
+  exit: (key: string) => void;
 }
 
 export const useGuideStore = create<GuideState>((set, get) => ({
@@ -60,7 +63,7 @@ export const useGuideStore = create<GuideState>((set, get) => ({
     }
     if (add.length === 0) return;
     set({
-      queue: [...get().queue, ...add],
+      queue: [...queue, ...add],
       // 成组入队（欢迎页三步）= 一轮导览，记下完整键序供 ●○○ 用
       tourKeys: keys.length > 1 ? [...keys] : get().tourKeys,
     });
@@ -70,24 +73,29 @@ export const useGuideStore = create<GuideState>((set, get) => ({
     const { hydrated, seen, queue } = get();
     if (!hydrated) return;
     if (GUIDE_ITEMS[key] === undefined || seen.has(key)) return;
-    // 先走完非设置页项（欢迎页导览 / 首次出现型），再把当前这页的通知挂上；
-    // 队里若有旧的设置页通知，直接换掉——通知必须对应眼前这一页。
-    const rest = queue.filter((k) => !k.startsWith("settings."));
+    // 队里若有旧的设置页通知，直接换掉——通知必须对应眼前这一页
+    const rest = queue.filter((k) => GUIDE_ITEMS[k]?.surface !== "settings");
     if (queue.length === 1 && queue[0] === key) return;
     set({ queue: [...rest, key] });
   },
 
-  advance: () => {
-    const [cur, ...rest] = get().queue;
-    if (cur === undefined) return;
-    markSeen(cur);
+  advance: (key) => {
+    const queue = get().queue;
+    if (!queue.includes(key)) return;
+    markSeen(key);
+    const rest = queue.filter((k) => k !== key);
     set({ queue: rest, tourKeys: rest.length === 0 ? null : get().tourKeys });
   },
 
-  exit: () => {
-    const [cur] = get().queue;
-    if (cur !== undefined) markSeen(cur);
-    set({ queue: [], tourKeys: null });
+  exit: (key) => {
+    const { queue, tourKeys } = get();
+    if (!queue.includes(key)) return;
+    markSeen(key);
+    // 跳过 = 这轮不看了：同一轮导览（tourKeys 成员）一并作废，别项照旧等着
+    const drop = new Set<string>([key]);
+    if (tourKeys?.includes(key)) for (const k of tourKeys) drop.add(k);
+    const rest = queue.filter((k) => !drop.has(k));
+    set({ queue: rest, tourKeys: rest.length === 0 ? null : get().tourKeys });
   },
 }));
 
@@ -100,7 +108,19 @@ function markSeen(key: string): void {
   });
 }
 
-/** 当前展示项 key（null = 没在展示）。 */
-export function useActiveGuideKey(): string | null {
-  return useGuideStore((s) => (s.queue.length > 0 ? s.queue[0] : null));
+/**
+ * 当前该展示哪一项：队列里第一个**属于当前表面**的项。
+ *
+ * 不属于当前表面的项原地等着（不丢弃、不记 seen），等它那个表面回来再出。
+ * 这修掉了"设置面板里高亮背后的对话标题"与"通知被对话项堵在队尾"两个毛病。
+ */
+export function pickActiveGuideKey(
+  queue: string[],
+  surface: GuideSurface | null
+): string | null {
+  if (surface === null) return null;
+  for (const k of queue) {
+    if (GUIDE_ITEMS[k]?.surface === surface) return k;
+  }
+  return null;
 }

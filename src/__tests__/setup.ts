@@ -157,7 +157,12 @@ class ResizeObserverMock {
   }
   observe(): void {}
   unobserve(): void {}
-  disconnect(): void {}
+  /** 断开：同时从登记表里摘掉（测试 `__trigger()` 只打活着的那些） */
+  disconnect(): void {
+    ResizeObserverMock.instances = ResizeObserverMock.instances.filter(
+      (i) => i !== this
+    );
+  }
   /** 测试用：手动触发一次回调 */
   __trigger(): void {
     this.cb([], this as unknown as ResizeObserver);

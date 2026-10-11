@@ -9,11 +9,25 @@
 export type GuideForm =
   /** 聚焦式：挖洞高亮锚点 + 贴锚点气泡 */
   | "focus"
-  /** 通知式：压暗面板 + 居中说明卡 */
+  /** 通知式：压暗面板 + 说明卡 */
   | "notice";
+
+/**
+ * 归属表面：决定"什么时候才该展示它"。
+ *
+ * 锚点长在哪个表面，就只能在那个表面上展示——否则会出现"设置面板开着，
+ * 却在高亮背后的对话标题"，或"对话里的待展示项把设置页的通知堵在队尾"
+ * （2026-10-11 实测：模型页通知被吞掉，就是后者）。
+ */
+export type GuideSurface =
+  /** 对话界面（欢迎页 / 对话区 / 输入区） */
+  | "chat"
+  /** 设置面板 */
+  | "settings";
 
 export interface GuideItem {
   form: GuideForm;
+  surface: GuideSurface;
   /** 聚焦式：锚点的 data-guide 值（量不到 → 整步跳过）。通知式固定挂设置面板 */
   anchor?: string;
   /** 标题（通知式留空：背后压暗的就是那一页，标题重复） */
@@ -40,18 +54,21 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   // ── 欢迎页聚焦（3 步，无收尾） ──
   "welcome.new-chat": {
     form: "focus",
+    surface: "chat",
     anchor: "new-chat",
     title: "新建对话",
     body: "创建一个新的对话。",
   },
   "welcome.settings": {
     form: "focus",
+    surface: "chat",
     anchor: "settings",
     title: "设置",
     body: "对PRTS系统设置进行修改。",
   },
   "welcome.input": {
     form: "focus",
+    surface: "chat",
     anchor: "input",
     title: "输入区",
     body: "输入内容并发送以创建第一个对话。",
@@ -59,49 +76,63 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   },
 
   // ── 设置页通知（九页，每页一段；进入该页触发，每页一次） ──
-  "settings.app": { form: "notice", body: "提供窗口置顶切换、关闭PRTS功能" },
+  "settings.app": {
+    form: "notice",
+    surface: "settings",
+    body: "提供窗口置顶切换、关闭PRTS功能",
+  },
   "settings.model": {
     form: "notice",
+    surface: "settings",
     body: "选择你的供应商及其模型，并配置API Key",
   },
   "settings.safety": {
     form: "notice",
+    surface: "settings",
     body: "命令执行前要不要问你，在这里定。",
   },
   "settings.space": {
     form: "notice",
+    surface: "settings",
     body: "PRTS当前的工作目录，修改后下一轮对话即生效",
   },
   "settings.skills": {
     form: "notice",
+    surface: "settings",
     body: "SKILL管理页，查看并管理PRTS的现有技能",
   },
   "settings.memory": {
     form: "notice",
+    surface: "settings",
     body: "PRTS记下的信息，成长型记忆由PRTS自己管理，经历型记忆由系统自动生成",
   },
   "settings.usage": {
     form: "notice",
+    surface: "settings",
     body: "查看你的token消耗量，可切换到不同的对话用量",
   },
   "settings.extension": {
     form: "notice",
+    surface: "settings",
     body: "MAA 的连接设置在这里。没装 MAA 可以忽略这一页。",
   },
   "settings.about": {
     form: "notice",
+    surface: "settings",
     body: "PRTS应用的基本信息与更新管理",
   },
 
   // ── 首次出现型（元素真的出现，且本轮生成已结束、界面空闲） ──
   "first.conv-title": {
     form: "focus",
+    surface: "chat",
     anchor: "conv-title",
     title: "对话标题",
     body: "对话标题由后台模型自动生成，点击标题后进入对话历史，可切换到不同对话、修改标题、删除对话",
   },
   "first.context-ring": {
     form: "focus",
+    surface: "chat",
     anchor: "context-ring",
     title: "上下文进度环",
     body: "显示当前对话的上下文占用情况，悬停时显示模型信息，点它可以进行上下文压缩",

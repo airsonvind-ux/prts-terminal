@@ -9,6 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { GuideHost } from "../components/guide/GuideHost";
 import { GUIDE_ITEMS, WELCOME_TOUR } from "../components/guide/guideContent";
 import { useGuideStore } from "../stores/useGuideStore";
+import { useUIStore } from "../stores/useUIStore";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -84,6 +85,7 @@ function host(): HTMLElement | null {
 beforeEach(() => {
   g.__invokeMock.mockReset();
   g.__invokeMock.mockImplementation(g.__defaultInvokeImpl);
+  useUIStore.setState({ overlay: null });
   resetStore();
   document.body.innerHTML = "";
 });
@@ -124,7 +126,7 @@ describe("useGuideStore：见过什么、展示什么", () => {
     useGuideStore.getState().enqueue(["settings.app", "settings.app"]);
     expect(useGuideStore.getState().queue).toEqual(["settings.app"]);
 
-    useGuideStore.getState().advance(); // 记 seen + 前进
+    useGuideStore.getState().advance("settings.app"); // 记 seen + 出队
     useGuideStore.getState().enqueue(["settings.app"]);
 
     expect(useGuideStore.getState().queue).toEqual([]);
@@ -134,7 +136,7 @@ describe("useGuideStore：见过什么、展示什么", () => {
   it("advance 会把「看过」落盘（mark_guide_seen）", () => {
     resetStore();
     useGuideStore.getState().enqueue(["settings.model"]);
-    useGuideStore.getState().advance();
+    useGuideStore.getState().advance("settings.model");
 
     const calls = g.__invokeMock.mock.calls.filter(
       (c) => c[0] === "mark_guide_seen"
@@ -146,7 +148,7 @@ describe("useGuideStore：见过什么、展示什么", () => {
   it("exit 只记当前项，其余作废（下次到那个表面再出）", () => {
     resetStore();
     useGuideStore.getState().enqueue(WELCOME_TOUR);
-    useGuideStore.getState().exit();
+    useGuideStore.getState().exit("welcome.new-chat");
 
     const s = useGuideStore.getState();
     expect(s.queue).toEqual([]);
@@ -247,7 +249,10 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     mountAnchor("settings-panel", { left: 50, top: 50, width: 200, height: 150 });
 
     resetStore();
-    useGuideStore.getState().enqueueNotice("settings.space");
+    useUIStore.setState({ overlay: "settings" });
+    act(() => {
+      useGuideStore.getState().enqueueNotice("settings.space");
+    });
 
     const { unmount } = mountHost();
     expect(host()?.textContent).toContain(GUIDE_ITEMS["settings.space"].body);
@@ -272,7 +277,7 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
     expect(dots?.querySelectorAll("span")).toHaveLength(WELCOME_TOUR.length);
 
     act(() => {
-      useGuideStore.getState().advance();
+      useGuideStore.getState().advance("welcome.new-chat");
     });
     expect(
       document.querySelector("[data-guide-dots]")?.getAttribute("data-guide-dots")
@@ -280,10 +285,84 @@ describe("GuideHost：兜底、局部坐标与 modal", () => {
 
     // 单张卡（通知 / 首次出现型）不给步骤点
     act(() => {
-      useGuideStore.getState().exit();
+      useGuideStore.getState().exit("welcome.settings");
       useGuideStore.getState().enqueue(["first.conv-title"]);
     });
     expect(document.querySelector("[data-guide-dots]")).toBeNull();
+    unmount();
+  });
+
+  it("别的表面的项不挤掉当前表面的项（模型页通知曾被吞掉）", () => {
+    mountFace();
+    mountAnchor("settings-panel", { left: 50, top: 50, width: 288, height: 264 });
+    mountAnchor("context-ring", { left: 10, top: 20, width: 20, height: 20 });
+
+    resetStore();
+    // 对话表面的项先排队（比如刚冒出来的进度环）
+    useGuideStore.getState().enqueue(["first.context-ring"]);
+    // 进入设置面板 → 模型页通知入队
+    useUIStore.setState({ overlay: "settings" });
+    act(() => {
+      useGuideStore.getState().enqueueNotice("settings.model");
+    });
+
+    const { unmount } = mountHost();
+    expect(host()?.textContent).toContain(GUIDE_ITEMS["settings.model"].body);
+    expect(host()?.textContent).not.toContain(
+      GUIDE_ITEMS["first.context-ring"].body
+    );
+    // 对话项原地等着：没被吞、也没记 seen
+    expect(useGuideStore.getState().queue).toContain("first.context-ring");
+    expect(useGuideStore.getState().seen.has("first.context-ring")).toBe(false);
+    unmount();
+  });
+
+  it("通知卡按面板宽成比例，不盖满整页", () => {
+    mountFace();
+    mountAnchor("settings-panel", { left: 50, top: 50, width: 288, height: 264 });
+
+    resetStore();
+    useUIStore.setState({ overlay: "settings" });
+    act(() => {
+      useGuideStore.getState().enqueueNotice("settings.usage");
+    });
+
+    const { unmount } = mountHost();
+    const card = host()?.lastElementChild as HTMLElement;
+    // 288 × 0.8 = 230 → 比面板窄，两侧留出余量
+    expect(card.style.width).toBe("230px");
+    expect(card.style.top).toBe("60px"); // 挂面板顶部（50 + 10），不是正中
+    unmount();
+  });
+
+  it("缩放后重量锚点：洞跟着走", () => {
+    mountFace({ left: 0, top: 0, width: 400, height: 300 });
+    const anchor = mountAnchor("conv-title", {
+      left: 10,
+      top: 20,
+      width: 100,
+      height: 20,
+    });
+
+    resetStore();
+    useGuideStore.getState().enqueue(["first.conv-title"]);
+    const { unmount } = mountHost();
+    expect((host()?.firstElementChild as HTMLElement).style.left).toBe("10px");
+
+    // 模拟缩放：锚点挪了，观察器回调重算
+    stubRect(anchor, { left: 40, top: 60, width: 120, height: 20 });
+    const RO = (
+      globalThis as unknown as {
+        ResizeObserver: { instances: { __trigger(): void }[] };
+      }
+    ).ResizeObserver;
+    act(() => {
+      for (const inst of RO.instances) inst.__trigger();
+    });
+
+    const hole = host()?.firstElementChild as HTMLElement;
+    expect(hole.style.left).toBe("40px");
+    expect(hole.style.width).toBe("120px");
     unmount();
   });
 });
