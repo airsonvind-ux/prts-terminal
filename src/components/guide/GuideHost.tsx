@@ -1,10 +1,13 @@
 // src/components/guide/GuideHost.tsx
 // 说明层宿主（应用内引导）· 一套机制、两种形态
 //
-// 聚焦式：给锚点套一圈超大 spread 阴影来"挖洞"（洞恒等于锚点，缩放自动跟随），
-//   气泡贴锚点摆；通知式：压暗面板 + 居中说明卡。
+// 聚焦式：在**外壳正面**这一层里给锚点套超大 spread 阴影"挖洞"（洞恒等于锚点，
+//   缩放自动跟随），气泡贴锚点摆；通知式：压暗面板 + 居中说明卡。
 //
-// 兜底是硬约束：每步进入量一次锚点，ResizeObserver 挂锚点与根随尺寸重算；
+// 压暗边界是"应用表面"（`.frontFace`），不是窗口：窗口比正面大（左面 / 底面 /
+//   翅膀占位，其余是透明区），照窗口矩形压暗会把窗外那片空气也抹黑。
+//
+// 兜底是硬约束：每步进入量一次锚点，ResizeObserver 挂锚点 / 正面 / 根随尺寸重算；
 //   **量不到就整步跳过**（不猜位置、不留半张气泡）。用户一动键盘即退。
 //
 // portal 到 body：外壳是 3D 变换的，position:fixed 在变换祖先里会失基准并被裁
@@ -14,7 +17,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { GUIDE_ITEMS, NOTICE_ANCHOR } from "./guideContent";
+import { FACE_ANCHOR, GUIDE_ITEMS, NOTICE_ANCHOR } from "./guideContent";
 import { useActiveGuideKey, useGuideStore } from "../../stores/useGuideStore";
 import { useUIStore } from "../../stores/useUIStore";
 import styles from "./GuideHost.module.css";
@@ -26,13 +29,17 @@ interface Rect {
   height: number;
 }
 
+function rectOf(r: DOMRect): Rect {
+  return { left: r.left, top: r.top, width: r.width, height: r.height };
+}
+
 /** 量一个锚点（data-guide 值）。元素不存在或尺寸为 0 → null（调用方整步跳过）。 */
 function measure(key: string): Rect | null {
   const el = document.querySelector<HTMLElement>(`[data-guide="${key}"]`);
   if (!el) return null;
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return null;
-  return { left: r.left, top: r.top, width: r.width, height: r.height };
+  return rectOf(r);
 }
 
 /** 气泡摆位：优先锚点下方，放不下翻到上方；水平居中并夹在视口内。 */
@@ -58,17 +65,20 @@ export function GuideHost() {
   const activeKey = useActiveGuideKey();
   const advance = useGuideStore((s) => s.advance);
   const exit = useGuideStore((s) => s.exit);
+  const tourKeys = useGuideStore((s) => s.tourKeys);
   const overlay = useUIStore((s) => s.overlay);
   const item = activeKey !== null ? GUIDE_ITEMS[activeKey] : undefined;
 
   const [rect, setRect] = useState<Rect | null>(null);
+  const [face, setFace] = useState<Rect | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const [card, setCard] = useState<{ w: number; h: number } | null>(null);
 
-  // 量锚点：每步进入量一次；随锚点尺寸与视口变化重算；量不到整步跳过。
+  // 量锚点与压暗边界：每步进入量一次；随两者尺寸与视口变化重算；量不到整步跳过。
   useEffect(() => {
     if (!item) {
       setRect(null);
+      setFace(null);
       return;
     }
     const key = item.form === "focus" ? item.anchor : NOTICE_ANCHOR;
@@ -82,22 +92,23 @@ export function GuideHost() {
       advance();
       return;
     }
+    const faceEl = document.querySelector<HTMLElement>(`[data-guide="${FACE_ANCHOR}"]`);
     const apply = () => {
       if (!el.isConnected) {
         advance();
         return;
       }
       const r = el.getBoundingClientRect();
-      setRect(
-        r.width > 0 && r.height > 0
-          ? { left: r.left, top: r.top, width: r.width, height: r.height }
-          : null
-      );
+      setRect(r.width > 0 && r.height > 0 ? rectOf(r) : null);
+      const f =
+        faceEl && faceEl.isConnected ? faceEl.getBoundingClientRect() : null;
+      setFace(f && f.width > 0 && f.height > 0 ? rectOf(f) : null);
     };
     apply();
     const ro = new ResizeObserver(apply);
     ro.observe(el);
     ro.observe(document.documentElement);
+    if (faceEl) ro.observe(faceEl);
     window.addEventListener("resize", apply);
     window.addEventListener("scroll", apply, true);
     return () => {
@@ -144,19 +155,34 @@ export function GuideHost() {
 
   const focus = item.form === "focus";
   const pos = focus && card ? place(rect, card.w, card.h) : null;
+  // 压暗只作用于外壳正面；量不到正面（异常）退化为整窗口，不至于什么都不压暗
+  const clip =
+    face ?? { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  const dotIndex =
+    tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
 
   return createPortal(
     <div className={styles.root} data-guide-host="">
       {focus ? (
         <div
-          className={styles.hole}
+          className={`${styles.clip} ${face ? "" : styles.clipFull}`}
           style={{
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
+            left: clip.left,
+            top: clip.top,
+            width: clip.width,
+            height: clip.height,
           }}
-        />
+        >
+          <div
+            className={styles.hole}
+            style={{
+              left: rect.left - clip.left,
+              top: rect.top - clip.top,
+              width: rect.width,
+              height: rect.height,
+            }}
+          />
+        </div>
       ) : (
         <div
           className={styles.dim}
@@ -186,7 +212,22 @@ export function GuideHost() {
               }
         }
       >
-        {item.title && <div className={styles.title}>{item.title}</div>}
+        {(item.title || dotIndex >= 0) && (
+          <div className={styles.head}>
+            {item.title && <span className={styles.title}>{item.title}</span>}
+            {dotIndex >= 0 && tourKeys && (
+              <span
+                className={styles.dots}
+                data-guide-dots={dotIndex + 1}
+                aria-label={`第 ${dotIndex + 1} 步，共 ${tourKeys.length} 步`}
+              >
+                {tourKeys.map((k, i) => (
+                  <span key={k} className={i === dotIndex ? styles.dotOn : styles.dot} />
+                ))}
+              </span>
+            )}
+          </div>
+        )}
         <div className={styles.body}>{item.body}</div>
         {item.note && <div className={styles.note}>注：{item.note}</div>}
         <div className={styles.actions}>

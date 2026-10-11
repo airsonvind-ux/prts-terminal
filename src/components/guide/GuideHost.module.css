@@ -6,6 +6,9 @@
  *
  * 宿主 pointer-events:none —— 挖洞高亮的锚点仍可点，界面不被挡住；
  * 只有卡片自己收事件。
+ *
+ * 压暗边界 = 外壳正面（.clip），不是窗口：窗口比正面大，窗外是透明区，
+ * 照窗口压暗会把那片"空气"也抹黑（2026-10-11 实测：整窗口一层黑）。
  */
 
 .root {
@@ -16,12 +19,25 @@
   font-family: var(--font-ui);
 }
 
-/* ── 聚焦式：洞恒等于锚点，四周由超大 spread 阴影压暗（缩放自动跟随） ── */
+/* ── 聚焦式：压暗边界（外壳正面），洞在里面，超出的阴影被裁掉 ── */
 
-.hole {
+.clip {
   position: fixed;
+  overflow: hidden;
   border-radius: var(--radius-md);
-  box-shadow: 0 0 0 9999px rgba(5, 7, 9, 0.64);
+  pointer-events: none;
+}
+
+/* 量不到正面时的退化形态：整窗口、无圆角 */
+.clipFull {
+  border-radius: 0;
+}
+
+/* 洞恒等于锚点；阴影只朝外铺，洞内透出真实界面 */
+.hole {
+  position: absolute;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 9999px rgba(5, 7, 9, 0.58);
   pointer-events: none;
 }
 
@@ -30,7 +46,7 @@
 .dim {
   position: fixed;
   border-radius: var(--radius-md);
-  background: rgba(5, 7, 9, 0.64);
+  background: rgba(5, 7, 9, 0.58);
   pointer-events: none;
 }
 
@@ -54,9 +70,37 @@
   opacity: 1;
 }
 
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .title {
   font-size: var(--text-md);
   color: var(--text-1);
+}
+
+/* ── 步骤点 ●○○（只在一轮多步导览里出现） ── */
+
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.dot,
+.dotOn {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.dotOn {
+  background: var(--accent);
 }
 
 .body {

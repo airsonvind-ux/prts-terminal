@@ -145,7 +145,7 @@ export function DroneShellScene({
           ))}
         </svg>
         {/* 正面：立方体主面，无边框 */}
-        <div className={styles.frontFace}>
+        <div className={styles.frontFace} data-guide="face">
           {/* ── 缩放热区（无视觉标记，仅光标暗示；方向语义见 resizeGeometry.ts）──
               边缘 6px / 角 12×12；缘在前、角在后（角覆盖边缘交叉区） */}
           <div className={styles.resizeRight} onMouseDown={(e) => onResizeHandle?.(e, "right")} />

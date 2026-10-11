@@ -161,11 +161,11 @@ export function SettingsPanel() {
   // 引导键集是否已从后端拉到（未拉到不弹——宁可不弹，也不误弹）
   const guideHydrated = useGuideStore((s) => s.hydrated);
 
-  // 引导：进入某页且该页说明没看过 → 出通知卡（每页一次，去重在 store）
+  // 引导：进入某页且该页说明没看过 → 出通知卡（每页一次；切页换掉旧的那张）
   useEffect(() => {
     if (!guideHydrated) return;
     const key = SETTINGS_TAB_GUIDE[activeTab];
-    if (key) useGuideStore.getState().enqueue([key]);
+    if (key) useGuideStore.getState().enqueueNotice(key);
   }, [activeTab, guideHydrated]);
 
   // ── 待审批：不留面板 ──

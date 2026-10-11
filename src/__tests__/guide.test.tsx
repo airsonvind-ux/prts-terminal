@@ -22,19 +22,29 @@ const g = globalThis as unknown as {
 
 /** 重置 store（默认已 hydrated、无已看过项）。 */
 function resetStore(seen: string[] = [], hydrated = true): void {
-  useGuideStore.setState({ hydrated, seen: new Set(seen), queue: [] });
+  useGuideStore.setState({
+    hydrated,
+    seen: new Set(seen),
+    queue: [],
+    tourKeys: null,
+  });
 }
 
 /** 给锚点一个非零矩形（jsdom 一律返回 0，会被判成"量不到"）。 */
-function stubRect(el: HTMLElement): void {
+function stubRect(
+  el: HTMLElement,
+  r: { left: number; top: number; width: number; height: number } = {
+    left: 10,
+    top: 20,
+    width: 100,
+    height: 20,
+  }
+): void {
   el.getBoundingClientRect = () =>
     ({
-      left: 10,
-      top: 20,
-      width: 100,
-      height: 20,
-      right: 110,
-      bottom: 40,
+      ...r,
+      right: r.left + r.width,
+      bottom: r.top + r.height,
     }) as DOMRect;
 }
 
@@ -170,5 +180,84 @@ describe("GuideHost：兜底与渲染", () => {
     // 通知式不给「跳过」（只有一张卡，点「知道了」即完）
     expect(host?.textContent).not.toContain("跳过");
     unmount();
+  });
+
+  it("压暗边界取外壳正面，不取整窗口；洞坐标相对边界", () => {
+    const face = document.createElement("div");
+    face.setAttribute("data-guide", "face");
+    stubRect(face, { left: 0, top: 0, width: 400, height: 300 });
+    document.body.appendChild(face);
+    const anchor = document.createElement("div");
+    anchor.setAttribute("data-guide", "conv-title");
+    stubRect(anchor, { left: 10, top: 20, width: 100, height: 20 });
+    document.body.appendChild(anchor);
+
+    resetStore();
+    useGuideStore.getState().enqueue(["first.conv-title"]);
+    const { unmount } = mountHost();
+
+    const clip = document.querySelector(
+      "[data-guide-host] > div"
+    ) as HTMLElement | null;
+    expect(clip?.style.width).toBe("400px");
+    expect(clip?.style.height).toBe("300px");
+    const hole = clip?.querySelector("div") as HTMLElement;
+    expect(hole.style.left).toBe("10px");
+    expect(hole.style.top).toBe("20px");
+    unmount();
+  });
+
+  it("多步导览出 ●○○ 步骤点，当前步高亮", () => {
+    // 三步锚点都摆上（否则下一步量不到会被跳掉）
+    for (const key of ["new-chat", "settings", "input"]) {
+      const el = document.createElement("div");
+      el.setAttribute("data-guide", key);
+      stubRect(el);
+      document.body.appendChild(el);
+    }
+
+    resetStore();
+    useGuideStore.getState().enqueue(WELCOME_TOUR);
+    const { unmount } = mountHost();
+
+    const dots = document.querySelector("[data-guide-dots]");
+    expect(dots?.getAttribute("data-guide-dots")).toBe("1");
+    expect(dots?.querySelectorAll("span")).toHaveLength(WELCOME_TOUR.length);
+
+    act(() => {
+      useGuideStore.getState().advance();
+    });
+    expect(
+      document.querySelector("[data-guide-dots]")?.getAttribute("data-guide-dots")
+    ).toBe("2");
+
+    // 单张卡（通知 / 首次出现型）不给步骤点
+    act(() => {
+      useGuideStore.getState().exit();
+      useGuideStore.getState().enqueue(["first.conv-title"]);
+    });
+    expect(document.querySelector("[data-guide-dots]")).toBeNull();
+    unmount();
+  });
+});
+
+describe("useGuideStore：通知卡不串页", () => {
+  it("切页时旧通知被换掉，不留上一页的文案", () => {
+    resetStore();
+    useGuideStore.getState().enqueueNotice("settings.space");
+    useGuideStore.getState().enqueueNotice("settings.usage");
+    expect(useGuideStore.getState().queue).toEqual(["settings.usage"]);
+  });
+
+  it("已看过的页不再排；不越过正在走的欢迎页导览", () => {
+    resetStore();
+    useGuideStore.getState().enqueue(WELCOME_TOUR);
+    useGuideStore.getState().enqueueNotice("settings.app");
+    expect(useGuideStore.getState().queue[0]).toBe("welcome.new-chat");
+    expect(useGuideStore.getState().queue).toContain("settings.app");
+
+    resetStore(["settings.model"]);
+    useGuideStore.getState().enqueueNotice("settings.model");
+    expect(useGuideStore.getState().queue).toEqual([]);
   });
 });

@@ -26,6 +26,15 @@ export interface GuideItem {
 /** 通知式的压暗目标（设置面板根）。 */
 export const NOTICE_ANCHOR = "settings-panel";
 
+/**
+ * 聚焦式的压暗边界：外壳正面（`.frontFace`）。
+ *
+ * 必须是它，不是窗口：窗口比立方体正面大（左面 / 底面 / 翅膀占位，其余是
+ * 透明区），照窗口矩形压暗会把窗外那片"空气"也抹黑——看着就是整窗口一层黑。
+ * 正面对内容 `overflow:hidden`，所有界面元素都在它里面，故它既够又不过。
+ */
+export const FACE_ANCHOR = "face";
+
 export const GUIDE_ITEMS: Record<string, GuideItem> = {
   // ── 欢迎页聚焦（3 步，无收尾） ──
   "welcome.new-chat": {
