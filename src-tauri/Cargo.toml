@@ -14,11 +14,15 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "prts_terminal_lib"
 # cdylib 已移除：桌面构建（--bins）不需要它（移动端产物）。
+# staticlib 同样移除（2026-10-11）：它会把所有依赖的目标码打进一个静态库，
+# 每构建一次产出约 340 MB（debug）/ 约 120 MB（release）的文件，而桌面构建
+# 用不上它——实测 debug 侧因此堆积了 42 份、共 14.28 GB。
+#
 # 2026-08-15 打包排查曾把 sqlite3.o 的 __imp_strchr/strrchr/memchr 链接失败归因于
 # cdylib；2026-10-10 定位到真正原因：tauri build 会设 STATIC_VCRUNTIME=true，
 # tauri-build 随即要求静态 VC 运行时，而随包的 sqlite3.c 默认按动态运行时编译，
 # 两边不一致才导致符号找不到。修法见 src-tauri/.cargo/config.toml（统一 crt-static）。
-crate-type = ["staticlib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -81,4 +85,10 @@ tauri-plugin-prevent-default = "5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# 体积控制（2026-10-11）：
+# - 依赖不带调试符号：我们基本不会调试进依赖内部，自己代码仍保留完整信息。
+#   这一项消掉的是体积大头（每个依赖的符号往往是其代码的数倍）。
+[profile.dev.package."*"]
+debug = false
 
