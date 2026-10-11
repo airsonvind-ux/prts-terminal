@@ -15,11 +15,12 @@
 
 !include LogicLib.nsh
 
-; ── 卸载确认页文案 ──
-; NSIS 自带的中文确认文字写的是"以及所有它的设置"，与本项目"卸载不动用户数据"
-; 的事实相反，会误导用户，故覆盖。MUI_UNTEXT_* 必须在对应页面宏之前定义。
-!define MUI_UNTEXT_CONFIRM_TITLE "卸载 PRTS Terminal"
-!define MUI_UNTEXT_CONFIRM_TEXT "确定要卸载 PRTS Terminal 吗？$\r$\n$\r$\n程序本体将被移除，你的对话与设置会保留。"
+; ── 卸载确认页正文 ──
+; MUI2 取这段文字的方式是 UninstallText "${MUI_UNCONFIRMPAGE_TEXT_TOP}"（见
+; Contrib/Modern UI 2/Pages/UninstallConfirm.nsh），必须在页面宏之前定义。
+; 注意：MUI_UNTEXT_CONFIRM_* 是 MUI 的 **LangString**，用 !define 覆盖不了——
+; 2026-10-11 实测：那样写完全不生效（同一位置的勾选框走语言档，改了就生效）。
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "确定要卸载 PRTS Terminal 吗？$\r$\n程序本体将被移除，你的对话与设置会保留。"
 
 ; ── 1. 覆盖安装前清理自有安装树 ──
 ; 只在已存在安装时执行（首次安装没有可清理的东西）。只碰安装目录里自己拥有的路径：
