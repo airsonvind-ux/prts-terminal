@@ -298,7 +298,7 @@ describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
         return Promise.resolve({
           version: "0.1.0",
           dataDir: "C:/fake/data",
-          workspaceRoot: "C:/fake/ws",
+          defaultWorkspaceRoot: "C:/fake/ws",
           dbPath: "C:/fake/db",
           knowledgeDir: "C:/fake/kb",
           skillsDir: "C:/fake/skills",
@@ -371,7 +371,7 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
         return Promise.resolve({
           version: "0.1.0",
           dataDir: "C:/fake/data",
-          workspaceRoot: "C:/fake/workspace",
+          defaultWorkspaceRoot: "C:/fake/workspace",
           dbPath: "C:/fake/db",
           knowledgeDir: "C:/fake/kb",
           skillsDir: "C:/fake/skills",
@@ -420,6 +420,45 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
     const calls = setSettingsCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0].patch).toEqual({ workspace: { workspace_root: "" } });
+  });
+
+  it("恢复默认后路径行显示默认路径（不是改前的旧值）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") {
+        const s = defaultSettings();
+        s.workspace.workspace_root = "F:/ws";
+        return Promise.resolve(s);
+      }
+      if (cmd === "get_app_meta")
+        return Promise.resolve({
+          version: "0.1.0",
+          dataDir: "C:/fake/data",
+          defaultWorkspaceRoot: "C:/fake/default-workspace",
+          dbPath: "C:/fake/db",
+          knowledgeDir: "C:/fake/kb",
+          skillsDir: "C:/fake/skills",
+        });
+      if (cmd === "list_workspace_dir") return Promise.resolve([]);
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("space");
+    expect(container!.textContent).toContain("F:/ws");
+
+    const reset = Array.from(container!.querySelectorAll("button")).find(
+      (b) => b.textContent === "恢复默认"
+    )!;
+    act(() => {
+      reset.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+
+    // 关键回归：显示默认路径，而不是改前的 F:/ws
+    // （appMeta 是启动快照，绝不能拿它当动态值用）
+    expect(container!.textContent).toContain("C:/fake/default-workspace");
+    expect(container!.textContent).not.toContain("F:/ws");
+    expect(container!.textContent).toContain("默认");
   });
 
   it("选择目录：按钮 → choose_workspace_directory → 选定即存 patch", async () => {

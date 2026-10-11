@@ -484,11 +484,15 @@ export interface BootStatus {
  *
  *  命名与 Settings 侧不同：后端 AppMeta 标了 `rename_all = camelCase`（命令 DTO
  *  惯例），而 Settings / WorkspaceSettings 等持久化结构是 snake_case（文件格式）。
- *  两者不要互相照抄——照抄会静默取到 undefined。 */
+ *  两者不要互相照抄——照抄会静默取到 undefined。
+ *
+ *  内容都是**静态事实**（面板挂载时拉一次的快照）。当前生效工作区是派生值，
+ *  不在这里：它由设置值决定，前端自算（设置非空则用它，否则用 defaultWorkspaceRoot）。 */
 export interface AppMeta {
   version: string;
   dataDir: string;
-  workspaceRoot: string;
+  /** 默认工作区路径（主目录下的 PRTS-WorkSpace）：恒定，与设置无关。 */
+  defaultWorkspaceRoot: string;
   dbPath: string;
   knowledgeDir: string;
   skillsDir: string;

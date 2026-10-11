@@ -95,7 +95,7 @@ const __defaultInvokeImpl = (cmd: string) => {
     return Promise.resolve({
       version: "0.1.0",
       dataDir: "C:/fake/data",
-      workspaceRoot: "C:/fake/workspace",
+      defaultWorkspaceRoot: "C:/fake/workspace",
       dbPath: "C:/fake/db",
       knowledgeDir: "C:/fake/kb",
       skillsDir: "C:/fake/skills",

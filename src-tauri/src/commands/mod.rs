@@ -593,13 +593,19 @@ pub fn get_boot_status(
     })
 }
 
-/// 应用只读元信息（关于页 + 空间页共用）：版本 + 当前生效路径。
+/// 应用只读元信息（关于页 + 空间页共用）：版本 + **静态**路径。
+///
+/// 这里的路径必须都是静态事实（数据根 / 默认工作区 / 种子库 / 随包资源）——
+/// 它们是面板挂载时拉一次的快照。**不得放随设置变化的派生值**（如「当前生效
+/// 工作区」）：那会变成启动时的旧值，改设置后前端读到过期路径（2026-10-11 实测踩到）。
+/// 当前生效工作区由前端自算：设置值非空则用它，否则用默认工作区。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppMeta {
     pub version: &'static str,
     pub data_dir: String,
-    pub workspace_root: String,
+    /// 默认工作区路径（`<主目录>/PRTS-WorkSpace`）：恒定的，与设置无关。
+    pub default_workspace_root: String,
     pub db_path: String,
     pub knowledge_dir: String,
     pub skills_dir: String,
@@ -613,7 +619,9 @@ pub fn get_app_meta(
     Ok(AppMeta {
         version: env!("CARGO_PKG_VERSION"),
         data_dir: st.data_dir().to_string_lossy().into_owned(),
-        workspace_root: st.workspace_root().to_string_lossy().into_owned(),
+        default_workspace_root: crate::config::default_workspace_path()
+            .to_string_lossy()
+            .into_owned(),
         db_path: crate::config::resolve_db_path().to_string_lossy().into_owned(),
         knowledge_dir: crate::knowledge::index::knowledge_dir()
             .to_string_lossy()
