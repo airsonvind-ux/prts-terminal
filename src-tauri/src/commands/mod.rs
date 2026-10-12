@@ -862,6 +862,17 @@ pub fn is_openable_target(p: &std::path::Path) -> bool {
 
 /// 用系统默认应用打开一个文件（tauri-plugin-opener）。
 /// 入参 = 工具卡片/设置页给出的文件绝对路径；校验存在后放行（无白名单）。
+/// 读取随包 LICENSE 全文（关于页“许可证”块展开时调用）。
+///
+/// 薄命令：按解析出的路径读文本，不改写、不缓存。正文永远来自随包文件——
+/// 不在前端硬编码（Hanako 的“许可证全文”其实是硬编码的短声明，此处避开）。
+#[tauri::command]
+pub fn read_license() -> Result<String, String> {
+    let path = crate::config::license_path();
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取许可证文件失败（{}）：{e}", path.display()))
+}
+
 /// 失败 Err 上抛（前端 FileLink 弹可见 toast——点击必有可见结果契约）。
 #[tauri::command]
 pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {
@@ -2773,6 +2784,18 @@ pub fn open_workspace_in_explorer(
 mod tests {
     use super::*;
     use crate::llm::ApiType;
+
+    #[test]
+    fn read_license_returns_full_text_in_dev() {
+        // 开发构建下应能读到仓库根的 LICENSE 全文（不是简短声明）
+        let text = read_license().expect("开发构建的 LICENSE 应可读");
+        assert!(text.contains("Apache License"), "应是 Apache 许可证");
+        assert!(
+            text.len() > 5000,
+            "应是全文而非简短声明，实际 {} 字节",
+            text.len()
+        );
+    }
 
     fn exp_entry(id: &str, ts: u64, title: &str) -> crate::memory::schema::ExperienceEntry {
         crate::memory::schema::ExperienceEntry {

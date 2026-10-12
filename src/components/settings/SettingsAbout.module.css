@@ -36,3 +36,58 @@
   cursor: default;
   text-decoration: none;
 }
+
+/* 许可证全文：末尾可展开块（默认折叠） */
+.licenseBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.licenseToggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.licenseToggle:hover {
+  color: var(--text-1);
+}
+
+.licenseArrow {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.licenseText {
+  max-height: 220px;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-4);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.licenseError {
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.licenseLoading {
+  font-size: 11px;
+  color: var(--text-3);
+}

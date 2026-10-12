@@ -181,6 +181,20 @@ pub fn bundled_docs_dir() -> PathBuf {
     }
 }
 
+/// 许可证文件（随包资源；关于页展示全文用）。
+///
+/// 开发构建 = 仓库根 `LICENSE`（`resource_root()` 指向 `src-tauri/`，故上跳一级）；
+/// 发布构建 = 程序目录下 `LICENSE`（`bundle.resources` 里 `"../LICENSE": "./LICENSE"`）。
+/// 与 bundled_docs_dir 同款 dev/release 双解析；**不做存在性探测**：
+/// 缺失由读取命令报错暴露。
+pub fn license_path() -> PathBuf {
+    if is_dev() {
+        resource_root().join("..").join("LICENSE")
+    } else {
+        resource_root().join("LICENSE")
+    }
+}
+
 // ═══════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════
@@ -205,6 +219,19 @@ mod tests {
         assert!(!text.contains("com.tauri-app"), "不得再用 identifier 当目录名");
         assert!(!text.contains("prts-workspace"), "旧兜底目录名不得复现");
         assert!(!text.contains("AppData"), "数据根不再落在 AppData");
+    }
+
+    #[test]
+    fn license_path_targets_bundled_license() {
+        assert_eq!(
+            license_path().file_name().unwrap().to_string_lossy(),
+            "LICENSE"
+        );
+        #[cfg(debug_assertions)]
+        assert!(
+            license_path().starts_with(resource_root().parent().unwrap()),
+            "开发构建的 LICENSE 应取仓库根那份"
+        );
     }
 
     #[test]

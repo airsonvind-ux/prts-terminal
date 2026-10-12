@@ -593,6 +593,7 @@ pub fn run() {
             commands::install_skill,
             commands::remove_skill,
             commands::open_path,
+            commands::read_license,
             commands::open_url,
             commands::set_always_on_top,
             commands::choose_workspace_directory,
