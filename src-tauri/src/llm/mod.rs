@@ -72,8 +72,10 @@ pub struct LlmConfig {
     /// 模型名。设置页不暴露（留待模型列表功能以选择器形式提供），前端不传时默认空
     #[serde(default)]
     pub model: String,
-    /// API Key。明文存 settings.json（data_dir ACL 隔离）；IPC 侧 get_settings
-    /// 掩码下发、set_settings 三态解析（serde default：缺字段容忍）
+    /// API Key。**持久层不留值**：settings.json 上一律写空，钥值由
+    /// crate::credentials 加密落盘（DPAPI，绑当前用户与本机），运行时经
+    /// LlmSection::resolve_active_with 取；本字段仅作内存载体（历史明文迁移读取用）。
+    /// IPC 侧 get_settings 掩码下发、set_settings 三态解析。
     #[serde(default)]
     pub api_key: String,
     /// API 地址。None 时使用 provider 默认地址

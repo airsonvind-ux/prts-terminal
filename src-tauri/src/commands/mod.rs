@@ -383,12 +383,20 @@ pub async fn pick_adb_file(app: AppHandle) -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn get_settings(
     store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
 ) -> Result<crate::settings::Settings, String> {
     let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+    let creds = credentials
+        .lock()
+        .map_err(|e| format!("凭据锁获取失败: {e}"))?;
     let mut out = s.settings.clone();
-    for pc in out.llm.providers.values_mut() {
-        if !pc.api_key.is_empty() {
+    // 掩码按"凭据层里有没有这家钥值"判定：settings 侧一律是空串
+    // （钥值已搬到加密存储，见 crate::credentials）。
+    for (name, pc) in out.llm.providers.iter_mut() {
+        if creds.has(&crate::credentials::provider_key_ref(name)) {
             pc.api_key = crate::settings::MASKED_SECRET.to_string();
+        } else {
+            pc.api_key.clear();
         }
     }
     Ok(out)
@@ -422,20 +430,25 @@ pub fn mark_guide_seen(
 #[tauri::command]
 pub fn reveal_api_key(
     store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     provider: Option<String>,
 ) -> Result<String, String> {
-    let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
-    let name = provider.unwrap_or_else(|| s.settings.llm.active_provider.clone());
-    Ok(s.settings
-        .llm
-        .providers
-        .get(&name)
-        .map(|pc| pc.api_key.clone())
-        .unwrap_or_default())
+    let name = {
+        let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+        provider.unwrap_or_else(|| s.settings.llm.active_provider.clone())
+    };
+    let creds = credentials
+        .lock()
+        .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+    Ok(creds
+        .get(&crate::credentials::provider_key_ref(&name))
+        .unwrap_or_default()
+        .to_string())
 }
 
 /// 局部 patch 写设置（per-field：字段缺席 = 不更新；显式 null = 清除回默认；
-/// api_key 三态：缺席/掩码保留现值、空串清除、其他明文写入）。
+/// api_key 三态：缺席/掩码保留现值、空串清除、其他明文写入——但明文不进
+/// settings，落凭据层（crate::credentials），settings 侧只留"配没配"）。
 ///
 /// 同步职责：patch 合并进 SettingsStore（持久层 + 读取源）后，按变化摘要
 /// 同步运行 State（llm_config / exec_settings / **workspace 共享句柄**，
@@ -443,14 +456,15 @@ pub fn reveal_api_key(
 /// 最后落盘（写后重读校验；失败 Err 上抛 → 前端可见——内存已同步，
 /// 下次变更兜底重写）。
 ///
-/// M3-B busy 闸前置（锁序固定：store → config → exec_settings → maa_settings
-/// → ledger，无任何路径反向嵌套）。只读降级（高版本文件）拒绝写。
+/// M3-B busy 闸前置（锁序固定：store → credentials → config → exec_settings
+/// → maa_settings → ledger，无任何路径反向嵌套）。只读降级（高版本文件）拒绝写。
 /// `async` 只为不占主线程：它会把 MAA 设置推给管理器，而管理器锁在连接期间
 /// 是被占着的——同步命令会把这份等待摊到 UI 上（连接测试中改设置会卡住）。
 #[tauri::command]
 pub async fn set_settings(
     turn_registry: State<'_, Arc<TurnRegistry>>,
     store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
     exec_settings: State<'_, Arc<Mutex<crate::exec_settings::ExecutionSettings>>>,
     maa_settings: State<'_, Arc<Mutex<crate::maa::settings::MaaSettings>>>,
@@ -474,10 +488,51 @@ pub async fn set_settings(
         return Err("MAA 正在执行任务，暂不能修改连接设置；等它跑完，或先中止它".to_string());
     }
     let changes = st.apply_patch(&patch);
+    // 密钥操作：先落凭据层（可回滚），再存 settings（不可回滚）。锁序固定
+    // store → credentials（无反向路径）。
+    if !changes.key_ops.is_empty() {
+        let mut creds = credentials
+            .lock()
+            .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+        // 操作前快照：set/save 任一步失败都能回滚到原状。
+        let undo: Vec<(String, Option<String>)> = changes
+            .key_ops
+            .iter()
+            .map(|op| {
+                let r = crate::credentials::provider_key_ref(&op.provider);
+                let prev = creds.get(&r).map(|s| s.to_string());
+                (r, prev)
+            })
+            .collect();
+        let applied = (|| -> Result<(), String> {
+            for op in &changes.key_ops {
+                creds.set(
+                    &crate::credentials::provider_key_ref(&op.provider),
+                    &op.plaintext,
+                )?;
+            }
+            creds.save()
+        })();
+        if let Err(e) = applied {
+            for (r, prev) in &undo {
+                let _ = creds.set(r, prev.as_deref().unwrap_or(""));
+            }
+            let _ = creds.save();
+            return Err(format!("密钥保存失败：{e}"));
+        }
+    }
     if changes.llm_changed {
         let mut c = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
-        // active 供应商 resolve 成请求用 LlmConfig（provider = active 名）
-        *c = st.settings.llm.resolve_active();
+        // active 供应商 resolve 成请求用 LlmConfig（provider = active 名）；
+        // 钥值从凭据层取（settings 侧不留明文）。
+        let creds = credentials
+            .lock()
+            .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+        *c = st.settings.llm.resolve_active_with(|p| {
+            creds
+                .get(&crate::credentials::provider_key_ref(p))
+                .map(|s| s.to_string())
+        });
     }
     if changes.exec_changed {
         let mut es = exec_settings

@@ -9,6 +9,7 @@ mod approval;
 mod attachments;
 mod cache;
 mod config;
+mod credentials;
 mod db;
 mod db_seed;
 mod machine;
@@ -48,6 +49,7 @@ use crate::knowledge::index::{knowledge_dir, KnowledgeIndex};
 use crate::memory::{MemoryStore, SnapshotStore};
 use crate::llm::{ClientRegistry, ModelRegistry};
 use crate::policy::Policy;
+use crate::credentials::CredentialsStore;
 use crate::settings::SettingsStore;
 use crate::skills_snapshot::SkillSnapshotStore;
 use crate::tools::ToolRegistry;
@@ -195,7 +197,56 @@ pub fn run() {
     // 装配语义：文件存在用文件；文件缺失用默认值（不落盘，首次 set_settings
     // 成功保存时才建文件）；**env 完全不参与配置装配**（PRTS_LLM_* /
     // PRTS_WORKSPACE 已废弃）。
-    let settings_store = Arc::new(Mutex::new(SettingsStore::load(&config::data_dir())));
+    // ── 凭据层（密钥加密落盘；2026-10-11 DPAPI 批）──
+    // 钥值不再随 settings.json 落盘：本层内存持明文，盘上持 DPAPI 密文
+    // （与"当前用户 + 本机"绑定）。见 crate::credentials。
+    let mut credentials_store = CredentialsStore::load(&config::data_dir());
+    if let Some(note) = credentials_store.load_note.clone() {
+        eprintln!("[credentials] {note}");
+    }
+
+    let mut settings_store = SettingsStore::load(&config::data_dir());
+    // 一次性迁移：settings 里残留的明文 api_key → 加密入册 → 清空 → 落盘；
+    // 顺带清掉可能残留明文副本的 settings.json.bak。任一步失败都保留原状
+    // （明文仍在 settings 里，功能不受影响），只告警不阻断启动。
+    let legacy_keys: Vec<(String, String)> = settings_store
+        .settings
+        .llm
+        .providers
+        .iter()
+        .filter(|(_, pc)| !pc.api_key.is_empty() && pc.api_key != crate::settings::MASKED_SECRET)
+        .map(|(name, pc)| (name.clone(), pc.api_key.clone()))
+        .collect();
+    if !legacy_keys.is_empty() {
+        let entries: Vec<(String, String)> = legacy_keys
+            .iter()
+            .map(|(name, plain)| (crate::credentials::provider_key_ref(name), plain.clone()))
+            .collect();
+        match credentials_store
+            .merge_and_save(entries.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        {
+            Ok(()) => {
+                for (name, _) in &legacy_keys {
+                    if let Some(pc) = settings_store.settings.llm.providers.get_mut(name) {
+                        pc.api_key = String::new();
+                    }
+                }
+                if let Err(e) = settings_store.save() {
+                    eprintln!("[credentials] 迁移后清理 settings 明文失败：{e}");
+                }
+                let bak = config::data_dir().join(crate::settings::SETTINGS_BAK);
+                if bak.exists() {
+                    let _ = std::fs::remove_file(&bak);
+                }
+                eprintln!("[credentials] 已迁移 {} 家密钥至加密存储", legacy_keys.len());
+            }
+            Err(e) => {
+                eprintln!("[credentials] 密钥迁移失败，维持明文现状：{e}");
+            }
+        }
+    }
+    let settings_store = Arc::new(Mutex::new(settings_store));
+    let credentials_store = Arc::new(Mutex::new(credentials_store));
 
     // ── 工作目录（文件工具的工作根：read_file/list_dir 的相对路径基准）──
     // 来源 = settings.workspace.workspace_root（空串 = 回退默认工作区：
@@ -332,7 +383,13 @@ pub fn run() {
     // （provider = active 名；文件缺失 → 默认空配置）。
     let llm_config = {
         let st = settings_store.lock().unwrap();
-        Arc::new(Mutex::new(st.settings.llm.resolve_active()))
+        // 钥值从凭据层取（settings 侧不留明文）。锁序：settings → credentials。
+        let creds = credentials_store.lock().unwrap();
+        Arc::new(Mutex::new(st.settings.llm.resolve_active_with(|p| {
+            creds
+                .get(&crate::credentials::provider_key_ref(p))
+                .map(|s| s.to_string())
+        })))
     };
 
     // ── 内置技能同步（运行根 = data_dir()/skills；源为准；用户条目只增不删，内置退役清理）──
@@ -484,6 +541,7 @@ pub fn run() {
         .manage(turn_registry)
         .manage(steer_queue)
         .manage(settings_store)
+        .manage(credentials_store)
         .manage(workspace_root_handle)
         // .manage(cache_stores)
         // .manage(last_unloads)

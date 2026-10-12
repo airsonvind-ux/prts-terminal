@@ -31,7 +31,7 @@ use crate::maa::settings::MaaSettings;
 /// settings.json 文件名（data_dir 下）。
 pub const SETTINGS_FILE: &str = "settings.json";
 const SETTINGS_TMP: &str = "settings.json.tmp";
-const SETTINGS_BAK: &str = "settings.json.bak";
+pub const SETTINGS_BAK: &str = "settings.json.bak";
 
 /// 当前 schema 版本。**v2 = llm 段供应商分区**（v1 单份结构在 load 嗅探迁移）；
 /// 新增普通字段走 Option/serde default 不升版；结构性破坏才升版 → 旧程序读
@@ -136,6 +136,9 @@ pub struct ProviderConfig {
     pub api_type: ApiType,
     #[serde(default)]
     pub model: String,
+    /// API Key。**持久层不留值**：settings.json 上一律写空，钥值由
+    /// crate::credentials 加密落盘（DPAPI，绑当前用户与本机），运行时经
+    /// LlmSection::resolve_active_with 取；本字段仅作内存载体（历史明文迁移读取用）。
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
@@ -167,6 +170,21 @@ impl LlmSection {
     /// 由 active 供应商 resolve 出请求用 LlmConfig（下游零改动：适配器/
     /// orchestrator/thinking 照旧消费）。active 无条目/空 → LlmConfig::default()
     /// （未配置态）。thinking_level 取段顶层全局值。
+    /// 同 [`LlmSection::resolve_active`]，但密钥由外部查（凭据层）提供。
+    ///
+    /// 持久层已经不留明文（见 crate::credentials），运行时值必须从凭据层取。
+    /// 这层薄包装让"取钥"只有一个出口，适配器与 orchestrator 零改动。
+    pub fn resolve_active_with<F>(&self, lookup: F) -> LlmConfig
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let mut cfg = self.resolve_active();
+        if !cfg.provider.is_empty() {
+            cfg.api_key = lookup(&cfg.provider).unwrap_or_default();
+        }
+        cfg
+    }
+
     pub fn resolve_active(&self) -> LlmConfig {
         let Some(pc) = self.providers.get(&self.active_provider) else {
             return LlmConfig::default();
@@ -316,7 +334,19 @@ pub struct WindowPatch {
 // patch 应用结果（命令层消费）
 // ═══════════════════════════════════════════════════════
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// patch 携带的密钥操作（命令层落凭据层用）。
+///
+/// **明文一律不进 settings 持久层**：这里只承接"要写什么"，钥值本身由
+/// crate::credentials 加密落盘（DPAPI）。空串 = 清除该家密钥。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyOp {
+    /// 供应商名（providers 表的键）。
+    pub provider: String,
+    /// 明文；空串 = 清除。
+    pub plaintext: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PatchChanges {
     /// llm.provider / llm.model 任一变化（notices Model 维度触发点）。
     pub model_changed: bool,
@@ -328,6 +358,8 @@ pub struct PatchChanges {
     pub maa_changed: bool,
     /// workspace 段有实际变化（命令层据此更新工作根共享句柄——热生效）。
     pub workspace_changed: bool,
+    /// llm 段携带的密钥变更（命令层据此写凭据层；settings 侧不留值）。
+    pub key_ops: Vec<KeyOp>,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -603,8 +635,15 @@ impl SettingsStore {
                         None => {}
                         // 掩码占位 → 保留该家现值（不上送明文）
                         Some(v) if v == MASKED_SECRET => {}
-                        // 空串清除 / 明文写入
-                        Some(v) => entry.api_key = v.clone(),
+                        // 空串 = 清除；其他 = 明文。**明文一律不进 settings**：
+                        // 记一条密钥操作交命令层落凭据层（见 crate::credentials）。
+                        Some(v) => {
+                            entry.api_key = String::new();
+                            changes.key_ops.push(KeyOp {
+                                provider: name.clone(),
+                                plaintext: v.clone(),
+                            });
+                        }
                     }
                     if let Some(v) = &pp.base_url {
                         entry.base_url = if v.is_empty() { None } else { Some(v.clone()) };
@@ -707,6 +746,11 @@ impl SettingsStore {
         // 写前确保版本归一（load 时 normalize 过的低版本文件首次保存即升级）
         let mut for_write = self.settings.clone();
         for_write.schema_version = SCHEMA_VERSION;
+        // 密钥永不随设置落盘（结构性保证，不依赖调用方自觉）：
+        // 明文归 crate::credentials 管，这里一律写空。
+        for pc in for_write.llm.providers.values_mut() {
+            pc.api_key.clear();
+        }
         let json = serde_json::to_string_pretty(&for_write)
             .map_err(|e| format!("settings 序列化失败: {e}"))?;
 
@@ -790,16 +834,34 @@ mod tests {
         assert!(changes.llm_changed);
         assert!(changes.model_changed);
         assert!(changes.exec_changed);
+        // 密钥不进 settings：apply_patch 只记密钥操作，钥值由凭据层承接。
+        assert_eq!(
+            changes.key_ops,
+            vec![KeyOp {
+                provider: "deepseek".to_string(),
+                plaintext: "sk-test".to_string(),
+            }]
+        );
         s.save().unwrap();
         assert!(dir.join(SETTINGS_FILE).exists());
+
+        // 结构性保证：明文绝不落到 settings.json 上
+        let raw = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
+        assert!(!raw.contains("sk-test"), "settings.json 不应出现明文密钥");
 
         let loaded = SettingsStore::load(&dir);
         assert_eq!(loaded.source(), Source::File);
         assert_eq!(loaded.settings.llm.active_provider, "deepseek");
         let pc = loaded.settings.llm.providers.get("deepseek").unwrap();
         assert_eq!(pc.model, "deepseek-chat");
-        assert_eq!(pc.api_key, "sk-test");
+        assert_eq!(pc.api_key, "", "settings 侧只留空值");
         assert_eq!(pc.base_url, None);
+        // 运行时值经凭据层取（此处以桩 lookup 模拟凭据层）
+        let resolved = loaded
+            .settings
+            .llm
+            .resolve_active_with(|p| (p == "deepseek").then(|| "sk-test".to_string()));
+        assert_eq!(resolved.api_key, "sk-test");
         assert_eq!(loaded.settings.llm.thinking_level.as_deref(), Some("high"));
         assert_eq!(loaded.settings.exec.mode, crate::exec_settings::ExecutionMode::Auto);
         assert!(!loaded.settings.window.always_on_top);
@@ -902,10 +964,13 @@ mod tests {
             r#"{ "llm": { "active_provider": "kimi", "providers": { "kimi": { "api_key": "sk-kimi", "model": "kimi-k2.7-code" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&patch);
+        let changes = s.apply_patch(&patch);
         let kimi = s.settings.llm.providers.get("kimi").expect("懒建条目");
-        assert_eq!(kimi.api_key, "sk-kimi");
         assert_eq!(kimi.model, "kimi-k2.7-code");
+        assert_eq!(kimi.api_key, "", "密钥不进 settings 持久层");
+        assert_eq!(changes.key_ops.len(), 1);
+        assert_eq!(changes.key_ops[0].provider, "kimi");
+        assert_eq!(changes.key_ops[0].plaintext, "sk-kimi");
         assert_eq!(kimi.api_type, ApiType::OpenAiCompletions, "缺省字段走 default");
         assert_eq!(s.settings.llm.active_provider, "kimi");
         let patch2: SettingsPatch = serde_json::from_str(
@@ -920,38 +985,44 @@ mod tests {
 
     #[test]
     fn api_key_three_state_per_provider() {
+        // 三态语义现落在"密钥操作"层：缺席/掩码不产生操作、空串 = 清除、
+        // 其他 = 明文。settings 字段本身恒空——钥值归凭据层（crate::credentials）。
         let dir = unique_temp_dir("key3");
         let mut s = SettingsStore::load(&dir);
         let seed: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "api_key": "sk-original" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&seed);
+        let c = s.apply_patch(&seed);
+        assert_eq!(c.key_ops.len(), 1);
+        assert_eq!(c.key_ops[0].plaintext, "sk-original");
+        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "");
 
         let masked: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "api_key": "********" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&masked);
-        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "sk-original");
+        let c = s.apply_patch(&masked);
+        assert!(c.key_ops.is_empty(), "掩码占位不产生密钥操作（保留该家现值）");
         let absent: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "model": "m2" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&absent);
-        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "sk-original");
+        let c = s.apply_patch(&absent);
+        assert!(c.key_ops.is_empty(), "字段缺席不产生密钥操作");
         let clear: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "api_key": "" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&clear);
-        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "");
+        let c = s.apply_patch(&clear);
+        assert_eq!(c.key_ops.len(), 1);
+        assert_eq!(c.key_ops[0].plaintext, "", "空串 = 清除");
         let fresh: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "api_key": "sk-new" } } } }"#,
         )
         .unwrap();
-        s.apply_patch(&fresh);
-        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "sk-new");
+        let c = s.apply_patch(&fresh);
+        assert_eq!(c.key_ops[0].plaintext, "sk-new");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -971,23 +1042,31 @@ mod tests {
             }"#,
         )
         .unwrap();
-        s.apply_patch(&seed);
+        let changes = s.apply_patch(&seed);
+        assert_eq!(changes.key_ops.len(), 2, "两家密钥各一条操作");
 
         let switch: SettingsPatch =
             serde_json::from_str(r#"{ "llm": { "active_provider": "openai" } }"#).unwrap();
         s.apply_patch(&switch);
-        let c = s.settings.llm.resolve_active();
+        // 切家后：运行态取该家的钥值（以柱 lookup 模拟凭据层）
+        let lookup = |p: &str| match p {
+            "deepseek" => Some("sk-ds".to_string()),
+            "openai" => Some("sk-oa".to_string()),
+            _ => None,
+        };
+        let c = s.settings.llm.resolve_active_with(lookup);
         assert_eq!(c.provider, "openai");
         assert_eq!(c.model, "gpt-5");
         assert_eq!(c.api_key, "sk-oa");
+        // 另一家的配置（model）原样保留；密钥本就不在 settings 里
         let ds = s.settings.llm.providers.get("deepseek").unwrap();
-        assert_eq!(ds.api_key, "sk-ds");
         assert_eq!(ds.model, "deepseek-v4-flash");
+        assert_eq!(ds.api_key, "");
 
         let back: SettingsPatch =
             serde_json::from_str(r#"{ "llm": { "active_provider": "deepseek" } }"#).unwrap();
         s.apply_patch(&back);
-        let c2 = s.settings.llm.resolve_active();
+        let c2 = s.settings.llm.resolve_active_with(lookup);
         assert_eq!(c2.model, "deepseek-v4-flash");
         assert_eq!(c2.api_key, "sk-ds");
         let _ = std::fs::remove_dir_all(&dir);
