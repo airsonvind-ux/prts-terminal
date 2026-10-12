@@ -367,18 +367,17 @@ pub async fn process(
         steer_queue,
         workspace_root,
         emit,
-        String::new(), // skill_catalog（薄包装：无目录）
-        String::new(), // memory_block（薄包装：无记忆）
+        context::assemble_system_prompt_with_memory("", ""), // 无目录 / 无记忆
+        tools.list_defs(),
     )
     .await
 }
 
-/// 同 [`process`]，附加**对话冻结的目录文本与记忆区文本**（由命令层经
-/// `SkillSnapshotStore` / `SnapshotStore` 取）。
+/// 同 [`process`]，但**前缀由命令层解析后传入**（`prefix_snapshot.rs`）。
 ///
-/// 两者为空串时与旧行为逐字节一致（无目录 / 无记忆态）。目录与记忆区在整个
-/// turn 内不变（快照已冻结），故每 step 重写 `messages[0]` 的内容恒定，
-/// `push_header` 去重不误判（前缀缓存不破）。
+/// `system_prompt` 为对话冻结的完整前缀全（人格 + 界面 + 目录 + 记忆区），
+/// `tool_defs` 与之同源（同一快照）。冻结后整个对话逐字节不变，故每 step
+/// 重写 `messages[0]` 的内容恒定，`push_header` 去重不误判（前缀缓存不破）。
 #[allow(clippy::too_many_arguments)]
 pub async fn process_with_memory(
     session_id: &str,
@@ -394,8 +393,8 @@ pub async fn process_with_memory(
     steer_queue: &SteerQueue,
     workspace_root: PathBuf,
     emit: impl Fn(IpcEvent) + Send + Sync + 'static,
-    skill_catalog: String,
-    memory_block: String,
+    system_prompt: String,
+    tool_defs: Vec<crate::llm::ToolDef>,
 ) -> Result<(), OrchestratorError> {
     // ── 0. 按 ApiType 选择适配器 ──
     let llm = registry
@@ -420,7 +419,6 @@ pub async fn process_with_memory(
     // M1 修复（Reminder 投递机制）：历史完全由前端决定（含块 user 消息由
     // 前端拼装后随请求到达并归档冻结），后端零注入——seed 只做原样播种。
     let log = Arc::new(Mutex::new(SessionLog::new()));
-    let tool_defs = tools.list_defs();
     // Skill 目录索引：turn 级快照（每 turn 入口重建——Skill 生命周期绑定
     // 本轮对话：轮内激活、轮末随 ActiveContext 自动卸载，跨轮按需重新激活）。
     // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
@@ -440,21 +438,12 @@ pub async fn process_with_memory(
         let mut log = log.lock().unwrap();
         log.append(SessionEvent::turn_start(session_id));
         log.seed_from_history(session_id, history);
-        log.push_header(
-            session_id,
-            &context::assemble_system_prompt_with_memory(&skill_catalog, &memory_block),
-            &tool_defs,
-        );
+        log.push_header(session_id, &system_prompt, &tool_defs);
     }
 
     // ── 3. 派生 LLM 历史（替代 convert_history）→ 组装初始上下文 ──
     let derived = log.lock().unwrap().derive_messages(policy);
-    let mut messages = context::build_context_with_memory(
-        &derived,
-        tool_defs.len(),
-        &skill_catalog,
-        &memory_block,
-    );
+    let mut messages = context::build_context_with_system(&derived, system_prompt.clone());
 
     // ── 3.5 模型视觉能力 ──
     // 图像物化**不在这里做**：它必须发生在每次 LLM 请求前（见 dispatch 循环的
@@ -487,8 +476,7 @@ pub async fn process_with_memory(
         abort,
         steer_queue,
         &workspace_root,
-        &skill_catalog,
-        &memory_block,
+        &system_prompt,
         supports_vision,
     )
     .await;
@@ -591,14 +579,13 @@ async fn dispatch_turn(
         abort,
         steer_queue,
         workspace_root,
-        "", // skill_catalog（薄包装：无目录）
-        "", // memory_block（薄包装：无记忆）
+        &context::assemble_system_prompt_with_memory("", ""), // 无目录 / 无记忆
         false, // supports_vision（薄包装：无模型注册表，不物化）
     )
     .await
 }
 
-/// 同 [`dispatch_turn`]，附加冻结目录文本与记忆区文本（空串 = 无目录 / 无记忆态）。
+/// 同 [`dispatch_turn`]，前缀由调用方传入（已冻结的完整 system 全文）。
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_turn_with_memory(
     session_id: &str,
@@ -616,8 +603,7 @@ async fn dispatch_turn_with_memory(
     abort: &AbortSignal,
     steer_queue: &SteerQueue,
     workspace_root: &Path,
-    skill_catalog: &str,
-    memory_block: &str,
+    system_prompt: &str,
     supports_vision: bool,
 ) -> Result<TurnOutcome, OrchestratorError> {
     // tool_ctx 构造：有 db 用 with_db（生产路径），无 db 用 new（Mock 场景）。
@@ -659,10 +645,10 @@ async fn dispatch_turn_with_memory(
             }
         }
 
-        // system prompt 静态（2026-08）：人格 + Skill 目录，轮内不变；
+        // 前缀由命令层冻结后传入（批 5）：整个对话内逐字节不变；
         // 仍按 step 重写 messages[0] 保持不变量（首条恒为 system），
         // push_header 去重后不追加（prompt 无变化）
-        let system = context::assemble_system_prompt_with_memory(skill_catalog, memory_block);
+        let system = system_prompt.to_string();
         messages[0] = ChatMessage::system(system.clone());
         sink.push_header(session_id, &system, tool_defs);
 

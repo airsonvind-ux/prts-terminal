@@ -18,6 +18,7 @@ use crate::llm::{default_base_url, ApiType, ClientRegistry, LlmConfig, ModelInfo
 use crate::memory::schema::{PROFILE_NAME, REVISION_SEALED, SOURCE_USER};
 use crate::memory::{MemoryStore, SnapshotStore};
 use crate::skills_snapshot::SkillSnapshotStore;
+use crate::prefix_snapshot::PrefixSnapshotStore;
 use crate::orchestrator;
 use crate::settings::{SettingsPatch, SettingsStore};
 use crate::session_store::{
@@ -110,6 +111,7 @@ pub async fn agent_process(
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
+    prefix_snapshot_store: State<'_, Arc<Mutex<PrefixSnapshotStore>>>,
 ) -> Result<(), String> {
     // ── Clone Arc：从 State 引用中获得可移入 async 上下文的独立所有权 ──
     let tools = Arc::clone(&tools);
@@ -122,6 +124,7 @@ pub async fn agent_process(
     let memory_store = Arc::clone(&memory_store);
     let snapshot_store = Arc::clone(&snapshot_store);
     let skills_snapshot_store = Arc::clone(&skills_snapshot_store);
+    let prefix_snapshot_store = Arc::clone(&prefix_snapshot_store);
     // 缓存 State 已注释（2026-08：缓存系统停用，待升级为记忆系统）
 
     // ── 包装 emit 回调：AppHandle.emit → 闭包 ──
@@ -202,6 +205,24 @@ pub async fn agent_process(
         snaps.get_or_freeze(conversation_key, live.as_deref())
     };
 
+    // ── 完整前缀冻结快照（批 5）：system 全文 + 工具定义 ──
+    // 对话创建即冻结，此后一律照用（跨重启、跨应用升级逐字节不变）；
+    // 刷新点＝新对话 ＋ 压缩（见 refresh_frozen_snapshots）。
+    // 人格/界面段是编译期常量、工具面来自注册表，两者随版本变——冻结住
+    // 创建时的那份，旧对话前缀才不会因升级而破。
+    let (system_prompt, tool_defs) = {
+        let live_system = crate::orchestrator::context::assemble_system_prompt_with_memory(
+            &skill_catalog,
+            &memory_block,
+        );
+        let live_tools = tools.list_defs();
+        let mut snaps = prefix_snapshot_store
+            .lock()
+            .map_err(|e| format!("前缀快照存储锁获取失败: {e}"))?;
+        let snap = snaps.get_or_freeze(conversation_key, &live_system, &live_tools);
+        (snap.system, snap.tool_defs)
+    };
+
     // ── 插话保留领取（2026-09-25）：同对话上一轮中止/错误留下的未交付
     // 插话并入本轮队列，dispatch 首个 step 请求前领取注入（轮次边界领取，
     // 对齐 DSH「turn 边界领取 next-step」）。无 conversation 归属跳过。
@@ -224,8 +245,8 @@ pub async fn agent_process(
         steer_queue.as_ref(),
         workspace_root,
         emit,
-        skill_catalog,
-        memory_block,
+        system_prompt,
+        tool_defs,
     )
     .await;
 
@@ -1362,6 +1383,7 @@ pub async fn compact_conversation(
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
+    prefix_snapshot_store: State<'_, Arc<Mutex<PrefixSnapshotStore>>>,
     tools: State<'_, Arc<ToolRegistry>>,
 ) -> Result<CompactionOutcome, String> {
     if request.folded_history.is_empty() {
@@ -1397,7 +1419,19 @@ pub async fn compact_conversation(
             .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
         snaps.get_or_freeze(conversation_key, live.as_deref())
     };
-    let tool_defs = tools.list_defs();
+    // 完整前缀冻结快照（批 5）：压缩请求须与主请求前缀逐字节一致。
+    let (system_prompt, tool_defs) = {
+        let live_system = crate::orchestrator::context::assemble_system_prompt_with_memory(
+            &skill_catalog,
+            &memory_block,
+        );
+        let live_tools = tools.list_defs();
+        let mut snaps = prefix_snapshot_store
+            .lock()
+            .map_err(|e| format!("前缀快照存储锁获取失败: {e}"))?;
+        let snap = snaps.get_or_freeze(conversation_key, &live_system, &live_tools);
+        (snap.system, snap.tool_defs)
+    };
     let cfg = config
         .lock()
         .map_err(|e| format!("配置锁获取失败: {e}"))?
@@ -1416,8 +1450,7 @@ pub async fn compact_conversation(
         &cfg,
         request.folded_history,
         window,
-        &skill_catalog,
-        &memory_block,
+        &system_prompt,
         &tool_defs,
         &abort,
     )
@@ -1430,12 +1463,15 @@ pub async fn compact_conversation(
             .map(|idx| idx.catalog_text())
             .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
             .ok();
+        let live_tools = tools.list_defs();
         refresh_frozen_snapshots(
             &request.conversation_id,
             live.as_deref(),
+            &live_tools,
             &memory_store,
             &snapshot_store,
             &skills_snapshot_store,
+            &prefix_snapshot_store,
         );
         CompactionOutcome {
             summary: o.summary,
@@ -1446,17 +1482,19 @@ pub async fn compact_conversation(
     })
 }
 
-/// 压缩成功后刷新两份冻结快照（批 4 · 压缩并更新）。
+/// 压缩成功后刷新三份冻结快照（批 4 / 批 5 · 压缩并更新）。
 ///
-/// 记忆区以最新记忆重组装刷新；技能目录以 `live_catalog` 刷新（调用方先读
-/// 活体，不可读传 None → 跳过）。两者均有差才写。本函数 best-effort：锁失败
-/// 仅终端留痕，不改变压缩结果（调用方照常返回成功）。
+/// 顺序有依赖：记忆区与技能目录先各自刷新，再用刷新后的两者重组装活体前缀，
+/// 刷新完整前缀快照（system 全文 + 工具面）。三者均有差才写。本函数
+/// best-effort：锁失败仅终端留痕，不改变压缩结果（调用方照常返回成功）。
 fn refresh_frozen_snapshots(
     conversation_id: &str,
     live_catalog: Option<&str>,
+    live_tools: &[crate::llm::ToolDef],
     memory_store: &Arc<Mutex<MemoryStore>>,
     snapshot_store: &Arc<Mutex<SnapshotStore>>,
     skills_snapshot_store: &Arc<Mutex<SkillSnapshotStore>>,
+    prefix_snapshot_store: &Arc<Mutex<PrefixSnapshotStore>>,
 ) {
     if let Ok(mem) = memory_store.lock() {
         match snapshot_store.lock() {
@@ -1474,15 +1512,36 @@ fn refresh_frozen_snapshots(
         }
         Err(e) => eprintln!("[commands] 技能快照刷新跳过（锁失败）：{e}"),
     }
+    // 完整前缀：目录不可读（None）时保持旧前缀不刷（无法确认新字节）。
+    let Some(catalog) = live_catalog else {
+        return;
+    };
+    let live_system = match (memory_store.lock(), snapshot_store.lock()) {
+        (Ok(mem), Ok(mut snaps)) => {
+            let block = snaps.get_or_assemble(Some(conversation_id), &mem);
+            crate::orchestrator::context::assemble_system_prompt_with_memory(catalog, &block)
+        }
+        _ => {
+            eprintln!("[commands] 前缀快照刷新跳过（记忆/记忆快照锁失败）");
+            return;
+        }
+    };
+    match prefix_snapshot_store.lock() {
+        Ok(mut snaps) => {
+            snaps.refresh(conversation_id, &live_system, live_tools);
+        }
+        Err(e) => eprintln!("[commands] 前缀快照刷新跳过（锁失败）：{e}"),
+    }
 }
 
 /// 删除会话：先删持久文件（jsonl + index 条目），再清冻结快照 sidecar
-/// （记忆区 + 技能目录两份，同生共死）。
+/// （记忆区 + 技能目录 + 完整前缀三份，同生共死）。
 #[tauri::command]
 pub fn delete_conversation(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
+    prefix_snapshot_store: State<'_, Arc<Mutex<PrefixSnapshotStore>>>,
     conversation_id: String,
 ) -> Result<(), String> {
     // 先删会话（失败上抛，不静默）；再清 sidecar（冻结快照同生共死；
@@ -1500,6 +1559,10 @@ pub fn delete_conversation(
     let mut snaps = skills_snapshot_store
         .lock()
         .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
+    snaps.remove(&conversation_id);
+    let mut snaps = prefix_snapshot_store
+        .lock()
+        .map_err(|e| format!("前缀快照存储锁获取失败: {e}"))?;
     snaps.remove(&conversation_id);
     Ok(())
 }
@@ -3190,16 +3253,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // ── 压缩后快照刷新（批 4：压缩并更新）──
+    // ── 压缩后快照刷新（批 4 / 批 5：压缩并更新）──
 
     #[test]
-    fn refresh_frozen_snapshots_refreshes_both_stores() {
+    fn refresh_frozen_snapshots_refreshes_all_stores() {
         let data = space_root("snap-refresh");
         let sessions = data.join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
         let memory = Arc::new(Mutex::new(MemoryStore::load(&data).unwrap()));
         let snapshots = Arc::new(Mutex::new(SnapshotStore::new(&sessions)));
         let skills = Arc::new(Mutex::new(SkillSnapshotStore::new(&sessions)));
+        let prefix = Arc::new(Mutex::new(PrefixSnapshotStore::new(&sessions)));
 
         // 冻结初始态：记忆为空块、技能目录 A
         {
@@ -3207,6 +3271,10 @@ mod tests {
             snapshots.lock().unwrap().get_or_assemble(Some("c1"), &mem);
         }
         skills.lock().unwrap().get_or_freeze(Some("c1"), Some("目录 A"));
+        prefix
+            .lock()
+            .unwrap()
+            .get_or_freeze(Some("c1"), "系统 A", &[]);
 
         // 产生差异：记忆写入 + 技能目录 B
         {
@@ -3214,7 +3282,7 @@ mod tests {
             mem.growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_USER)
                 .unwrap();
         }
-        refresh_frozen_snapshots("c1", Some("目录 B"), &memory, &snapshots, &skills);
+        refresh_frozen_snapshots("c1", Some("目录 B"), &[], &memory, &snapshots, &skills, &prefix);
 
         assert_eq!(
             std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),
@@ -3228,8 +3296,16 @@ mod tests {
             "记忆快照应含新写入"
         );
 
+        // 完整前缀也应刷为新目录（含新记忆）
+        let prefix_json = std::fs::read_to_string(sessions.join("c1.prefix.json")).unwrap();
+        assert!(
+            prefix_json.contains("目录 B"),
+            "前缀快照应含新目录：{prefix_json}"
+        );
+        assert!(prefix_json.contains("画像"), "前缀快照应含新记忆");
+
         // 活体不可读 → 跳过（保持旧值）
-        refresh_frozen_snapshots("c1", None, &memory, &snapshots, &skills);
+        refresh_frozen_snapshots("c1", None, &[], &memory, &snapshots, &skills, &prefix);
         assert_eq!(
             std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),
             "目录 B",

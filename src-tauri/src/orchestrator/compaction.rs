@@ -36,7 +36,7 @@ use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy
 use crate::session::SessionLog;
 use crate::turn_registry::AbortSignal;
 
-use super::context::{assemble_system_prompt_with_memory, estimate_messages};
+use super::context::estimate_messages;
 use super::{is_retryable, RetryPolicy};
 
 /// 摘要 run 输入占窗口的最大比例（超窗触发降级链）。
@@ -80,9 +80,9 @@ pub struct SummaryOutcome {
 /// * `config` — LLM 连接配置（turn 起始快照）
 /// * `folded_history` — 前端折叠区的派生态历史（含链式压缩时的旧摘要消息）
 /// * `context_window` — 当前模型 contextWindow（命令层经 model_registry 查得，同源）
-/// * `skill_catalog` — 对话冻结目录文本（与主对话同源；空串 = 无目录）
-/// * `memory_block` — 对话冻结记忆快照（与主对话同源；空串 = 无记忆态）
-/// * `tool_defs` — 主对话工具面快照（仅保请求前缀同源；模型不应调用）
+/// * `system_prompt` — 对话冻结的完整前缀全文（与主对话同源，批 5 起由命令层
+///   从 `prefix_snapshot.rs` 取；人格 + 界面 + 目录 + 记忆区）
+/// * `tool_defs` — 主对话工具面快照（同一冻结前缀；仅保请求前缀同源）
 /// * `abort` — 压缩注册项的中止信号（取消通道）
 ///
 /// 返回 Err(String)：错误文案面向用户（toast 直显）。
@@ -91,8 +91,7 @@ pub async fn run_summary(
     config: &LlmConfig,
     folded_history: Vec<FrontendMessage>,
     context_window: u32,
-    skill_catalog: &str,
-    memory_block: &str,
+    system_prompt: &str,
     tool_defs: &[ToolDef],
     abort: &AbortSignal,
 ) -> Result<SummaryOutcome, String> {
@@ -107,10 +106,11 @@ pub async fn run_summary(
     }
     let tokens_before = estimate_messages(&folded_messages) as u64;
 
-    // ── 2. system（与主对话 persona/Catalog 一致）+ 指令 ──
-    // 目录用对话冻结快照（命令层取）：压缩请求必须复用主请求真前缀的
-    // Catalog 字节——现读磁盘会在目录变化时自断 KV cache 复用。
-    let system = assemble_system_prompt_with_memory(skill_catalog, memory_block);
+    // ── 2. system（与主对话前缀逐字节一致）+ 指令 ──
+    // 前缀用对话冻结快照（命令层取）：压缩请求必须复用主请求真前缀的
+    // 全部字节（人格 / 界面 / 目录 / 记忆区）——现拼会在任一段变化时
+    // 自断 KV cache 复用。
+    let system = system_prompt.to_string();
     let instruction = ChatMessage::user(build_summary_instruction());
     let mut messages: Vec<ChatMessage> = Vec::with_capacity(2 + folded_messages.len());
     messages.push(ChatMessage::system(system));
@@ -354,6 +354,7 @@ async fn call_summary_llm(
 #[cfg(test)]
 mod tests {
     use super::*;
+use super::super::context::assemble_system_prompt_with_memory as asm_system;
     use crate::events::FrontendMessage;
     use crate::llm::mock::{MockLlmClient, MockResponse};
     use crate::llm::{LlmError, StreamResult, ToolCall, ToolCallFunction};
@@ -441,12 +442,18 @@ mod tests {
         ]
     }
 
+    /// 测试用 system 前缀：口径 = 无目录 + 无记忆态（与生产同源——
+    /// 命令层把冻结后的 system 全文传进来，这里用同一个装配函数生成）。
+    fn sys() -> String {
+        asm_system("", "")
+    }
+
     // ── 主路径 ──
 
     #[tokio::test]
     async fn run_summary_returns_llm_checkpoint_text() {
         let mock = MockLlmClient::simple_reply("## Goal\n达成");
-        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &fresh_abort())
+        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &fresh_abort())
             .await
             .unwrap();
         assert_eq!(out.summary, "## Goal\n达成");
@@ -457,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn summary_input_is_system_plus_folded_plus_instruction() {
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, "", "", &[], &fresh_abort())
+        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, &sys(), &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -487,13 +494,15 @@ mod tests {
             "查询敌人数据",
             serde_json::json!({"type": "object", "properties": {}}),
         )];
+        let catalog = "- 数值计算：计算规则\n- 行动推演：推演规则";
+        let memory = "## 记忆\n### 关于博士\n- 偏好简洁回答";
+        let system = asm_system(catalog, memory);
         let out = run_summary(
             &client,
             &cfg(),
             simple_folded(),
             65_536,
-            "- 数值计算：计算规则\n- 行动推演：推演规则",
-            "## 记忆\n### 关于博士\n- 偏好简洁回答",
+            &system,
             &tools,
             &fresh_abort(),
         )
@@ -520,7 +529,7 @@ mod tests {
         let mut folded = simple_folded();
         folded.push(fm("error", "前端错误提示不应进入折叠区派生"));
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), folded, 65_536, "", "", &[], &fresh_abort())
+        let out = run_summary(&client, &cfg(), folded, 65_536, &sys(), &[], &fresh_abort())
             .await
             .unwrap();
         assert!(!out.degraded);
@@ -535,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn empty_folded_history_errors() {
         let mock = MockLlmClient::new(vec![]);
-        let err = run_summary(&mock, &cfg(), vec![], 65_536, "", "", &[], &fresh_abort())
+        let err = run_summary(&mock, &cfg(), vec![], 65_536, &sys(), &[], &fresh_abort())
             .await
             .unwrap_err();
         assert!(err.contains("没有可压缩"), "got: {err}");
@@ -559,8 +568,7 @@ mod tests {
             &cfg(),
             vec![fm("user", "q"), m],
             10_000,
-            "",
-            "",
+            &sys(),
             &[],
             &fresh_abort(),
         )
@@ -588,7 +596,7 @@ mod tests {
         // 无预设 Mock：若误走 LLM 会返回 Err("预设不足")——degraded 必须不调
         let mock = MockLlmClient::new(vec![]);
         let long = "长文本".repeat(2_000);
-        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, "", "", &[], &fresh_abort())
+        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, &sys(), &[], &fresh_abort())
             .await
             .unwrap();
         assert!(out.degraded, "极端超窗应规则降级");
@@ -643,7 +651,7 @@ mod tests {
         }], 0);
         let abort = AbortSignal::new();
         abort.abort(); // 预置：wait_abort 立即返回
-        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &abort)
+        let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &abort)
             .await
             .unwrap_err();
         assert!(err.contains("取消"), "got: {err}");
@@ -665,7 +673,7 @@ mod tests {
         let handle = tokio::spawn({
             let abort = abort.clone();
             async move {
-                run_summary(&mock, &cfg(), simple_folded(), 65_536, "", "", &[], &abort).await
+                run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &abort).await
             }
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -690,8 +698,7 @@ mod tests {
             &cfg(),
             vec![fm("user", "q"), m],
             65_536,
-            "",
-            "",
+            &sys(),
             &[],
             &fresh_abort(),
         )

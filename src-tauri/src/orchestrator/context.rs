@@ -390,19 +390,29 @@ pub fn build_context_with_memory(
     skill_catalog: &str,
     memory_block: &str,
 ) -> Vec<ChatMessage> {
-    let mut messages = Vec::with_capacity(1 + history.len());
-
     // 系统提示词：人格 + 冻结 Skill 目录 + 记忆区（尾部）
-    messages.push(ChatMessage::system(assemble_system_prompt_with_memory(
-        skill_catalog,
-        memory_block,
-    )));
+    build_context_with_system(
+        history,
+        assemble_system_prompt_with_memory(skill_catalog, memory_block),
+    )
+}
 
+/// 以**已渲染的 system 全文**组装上下文（不重新装配）。
+///
+/// 生产路径用这条：system 来自对话冻结的完整前缀快照（`prefix_snapshot.rs`）——
+/// 人格/界面段（编译期常量）与工具定义也会随应用升级改变，故必须读存下来的
+/// 那份，不能现拼（前缀缓存硬约束）。装配口径的唯一出口仍是
+/// [`assemble_system_prompt_with_memory`]（快照首次冻结时用它渲染）。
+pub fn build_context_with_system(
+    history: &[ChatMessage],
+    system_prompt: String,
+) -> Vec<ChatMessage> {
+    let mut messages = Vec::with_capacity(1 + history.len());
+    messages.push(ChatMessage::system(system_prompt));
     // 对话历史（含本轮用户消息）
     for msg in history {
         messages.push(msg.clone());
     }
-
     messages
 }
 

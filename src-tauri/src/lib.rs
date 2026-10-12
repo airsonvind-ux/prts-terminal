@@ -32,6 +32,7 @@ mod skills;
 mod skills_index;
 mod skills_install;
 mod skills_snapshot;
+mod prefix_snapshot;
 mod tools;
 mod llm;
 mod commands;
@@ -52,6 +53,7 @@ use crate::policy::Policy;
 use crate::credentials::CredentialsStore;
 use crate::settings::SettingsStore;
 use crate::skills_snapshot::SkillSnapshotStore;
+use crate::prefix_snapshot::PrefixSnapshotStore;
 use crate::tools::ToolRegistry;
 use crate::steer_queue::SteerQueue;
 use crate::turn_registry::TurnRegistry;
@@ -357,6 +359,14 @@ pub fn run() {
         &crate::session_store::sessions_dir(&config::data_dir()),
     )));
 
+    // ── 完整前缀冻结快照（sessions/{cid}.prefix.json；批 5）──
+    // system 全文 + 工具定义。首次组装即冻结；同一对话读回原文（system 前缀
+    // 缓存硬约束），刷新点＝新对话 ＋ 压缩。冻结创建时的那份 → 应用升级后
+    // 旧对话前缀不变（人格/界面为编译期常量、工具面来自注册表，均随版本变）。
+    let prefix_snapshot_store = Arc::new(Mutex::new(PrefixSnapshotStore::new(
+        &crate::session_store::sessions_dir(&config::data_dir()),
+    )));
+
     // ── 适配器注册表 ──
     // 按 ApiType 路由到对应 LlmClient 实现。
     // 未来添加新协议适配器只需在此改一行 register。
@@ -535,6 +545,7 @@ pub fn run() {
         .manage(memory_store)
         .manage(snapshot_store)
         .manage(skills_snapshot_store)
+        .manage(prefix_snapshot_store)
         .manage(exec_settings)
         .manage(maa_settings)
         .manage(approval_registry)
@@ -570,6 +581,13 @@ pub fn run() {
                 let n = snaps.sweep_orphans();
                 if n > 0 {
                     eprintln!("[lib] 清扫孤儿技能目录快照 {n} 个");
+                }
+            }
+            // 完整前缀快照同区清扫（批 5）
+            if let Ok(snaps) = app.state::<Arc<Mutex<PrefixSnapshotStore>>>().lock() {
+                let n = snaps.sweep_orphans();
+                if n > 0 {
+                    eprintln!("[lib] 清扫孤儿前缀快照 {n} 个");
                 }
             }
             Ok(())

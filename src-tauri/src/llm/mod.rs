@@ -430,7 +430,7 @@ pub struct ToolCallFunction {
 /// parameters 字段使用 serde_json::Value（非结构化 JSON Schema），
 /// 由各个工具注册时自行构建。不在此处强制结构化的原因：
 /// JSON Schema 可嵌套、可引用 $defs，预先穷举字段会让类型僵化。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
     #[serde(rename = "type")]
     pub tool_type: String,  // 固定 "function"
@@ -450,7 +450,7 @@ impl ToolDef {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefFunction {
     pub name: String,
     pub description: String,
