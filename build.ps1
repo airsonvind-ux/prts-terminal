@@ -47,6 +47,14 @@ function SizeOf([string]$p) {
     return ('{0:N2} GB' -f ($m.Sum / 1GB))
 }
 
+# 与 SizeOf 同源，但返回数值（用于阈值判断）；不存在返回 -1。
+function SizeGB([string]$p) {
+    if (-not (Test-Path $p)) { return -1 }
+    $m = Get-ChildItem $p -Recurse -File -Force -ErrorAction SilentlyContinue |
+        Measure-Object -Property Length -Sum
+    return ($m.Sum / 1GB)
+}
+
 Write-Host ''
 Say '========================================'
 Say 'PRTS Terminal 发布构建'
@@ -112,7 +120,14 @@ if ($code -eq 0) {
     } else {
         Say '        未找到安装包（构建成功但 bundle 目录为空，请检查）'
     }
+    $targetGB = SizeGB (Join-Path $root 'src-tauri\target')
     Say ('      target 目录：' + (SizeOf (Join-Path $root 'src-tauri\target')))
+    # 陈旧产物会随“换过多少次编译输入”缓慢堆积（cargo 不主动回收旧 hash 的产物）。
+    # 超线时提示回收：cargo-sweep 只删历史产物，保留最近一次构建，下次仍是热启动。
+    if ($targetGB -gt 20) {
+        Say ('      注意：target 已超过 20 GB（{0:N2} GB）。可回收陈旧产物：' -f $targetGB)
+        Say '        cd src-tauri; cargo sweep --maxsize 8GB .'
+    }
     Say ''
     Say '完成。'
 } else {
