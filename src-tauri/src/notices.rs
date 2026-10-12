@@ -370,41 +370,10 @@ impl Notices {
         }
     }
 
-    /// 工具目录差异。
-    pub fn diff_tool_catalog(&mut self, tool_names: &[String]) {
-        self.diff_catalog(DimKey::ToolCatalog, tool_names);
-    }
-
-    /// 目录维度差异：首启只记基线（不告知、不耗序号）；有差异 → stamp=++seq、note=差异。
-    fn diff_catalog(&mut self, k: DimKey, names: &[String]) {
-        let last = baseline_from_value(&self.dim_ref(k).value);
-        let seeded = self.dim_ref(k).value.is_empty() && self.dim_ref(k).stamp == 0;
-        if seeded {
-            let mut cur = names.to_vec();
-            cur.sort();
-            cur.dedup();
-            let d = self.dim_mut(k);
-            d.value = baseline_to_value(&cur);
-            d.note.clear();
-            self.persist();
-            return;
-        }
-        let (detail, new_base) = catalog_diff(names, &last);
-        match detail {
-            Some(note) => {
-                let s = self.alloc_seq();
-                let d = self.dim_mut(k);
-                d.value = baseline_to_value(&new_base);
-                d.stamp = s;
-                d.note = note;
-                self.persist();
-            }
-            None => {
-                let d = self.dim_mut(k);
-                d.value = baseline_to_value(&new_base);
-                self.persist();
-            }
-        }
+    /// 工具目录差异（(name, desc) 对，与技能目录同构）：描述变化也能捕捉，
+    /// 应用升级带来的工具改动才说得清（只比名字会漏掉“名字未变、描述改了”）。
+    pub fn diff_tool_catalog(&mut self, tools: &[(String, String)]) {
+        self.diff_catalog_pairs(DimKey::ToolCatalog, tools);
     }
 
     // ── 只读接口 ──
@@ -448,55 +417,8 @@ pub fn model_label(provider: &str, model: &str) -> String {
     }
 }
 
-/// 目录基线（存于 dims.<catalog>.value 的 JSON 串）→ 数组；非法/空 → 空。
-fn baseline_from_value(value: &str) -> Vec<String> {
-    let v = value.trim();
-    if v.is_empty() {
-        return Vec::new();
-    }
-    serde_json::from_str::<Vec<String>>(v).unwrap_or_default()
-}
-
 fn baseline_to_value(baseline: &[String]) -> String {
     serde_json::to_string(baseline).unwrap_or_else(|_| "[]".to_string())
-}
-
-/// 计算 catalog 差异（纯函数）：返回 (变化详情, 更新后基线)。
-/// - 首启（last 为空）：不写详情，仅返回新基线
-/// - 无差异：None 详情
-/// - 有差异：Some("新增：X；移除：Y")
-fn catalog_diff(names: &[String], last: &[String]) -> (Option<String>, Vec<String>) {
-    let mut current: Vec<String> = names.to_vec();
-    current.sort();
-    current.dedup();
-
-    if last.is_empty() {
-        return (None, current);
-    }
-
-    let added: Vec<&str> = current
-        .iter()
-        .filter(|n| !last.contains(n))
-        .map(String::as_str)
-        .collect();
-    let removed: Vec<&str> = last
-        .iter()
-        .filter(|n| !current.contains(n))
-        .map(String::as_str)
-        .collect();
-
-    if added.is_empty() && removed.is_empty() {
-        return (None, current);
-    }
-
-    let mut parts = Vec::new();
-    if !added.is_empty() {
-        parts.push(format!("新增：{}", added.join("、")));
-    }
-    if !removed.is_empty() {
-        parts.push(format!("移除：{}", removed.join("、")));
-    }
-    (Some(parts.join("；")), current)
 }
 
 /// 技能基线（(name, desc) 对的 JSON）→ 数组；非法/空 → 空。
@@ -879,13 +801,20 @@ mod tests {
         let dir = unique_temp_dir("tool");
         {
             let mut n = Notices::load(&dir);
-            n.diff_tool_catalog(&["read_file".into()]);
+            n.diff_tool_catalog(&[("read_file".into(), "读取文件".into())]);
         }
         {
             let mut n = Notices::load(&dir);
-            n.diff_tool_catalog(&["read_file".into(), "write_file".into(), "sim_path".into()]);
+            n.diff_tool_catalog(&[
+                ("read_file".into(), "读取文件".into()),
+                ("write_file".into(), "写入文件".into()),
+                ("sim_path".into(), "推演路径".into()),
+            ]);
             assert_eq!(n.seq(), 1);
-            assert_eq!(n.dims.tool_catalog.note, "新增：sim_path、write_file");
+            assert_eq!(
+                n.dims.tool_catalog.note,
+                "新增：\n- sim_path：推演路径\n- write_file：写入文件"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -926,14 +855,14 @@ mod tests {
         {
             let mut n = Notices::load(&dir);
             n.sync_environment_snapshots("/ws", "deepseek/m", "/kb");
-            n.diff_tool_catalog(&["a".into()]);
-            n.diff_tool_catalog(&["a".into(), "b".into()]);
+            n.diff_tool_catalog(&[("a".into(), "甲工具".into())]);
+            n.diff_tool_catalog(&[("a".into(), "甲工具".into()), ("b".into(), "乙工具".into())]);
             n.note_memory_change("记忆", "博士新建了成长页「甲」");
         }
         let n = Notices::load(&dir);
         assert_eq!(n.seq(), 2, "tool diff(1) + event(2)");
         assert_eq!(n.dims.workspace.value, "/ws");
-        assert_eq!(n.dims.tool_catalog.note, "新增：b");
+        assert_eq!(n.dims.tool_catalog.note, "新增：\n- b：乙工具");
         assert_eq!(n.events().len(), 1);
         assert_eq!(n.events()[0].title, "记忆");
         let _ = std::fs::remove_dir_all(&dir);
@@ -986,10 +915,12 @@ mod tests {
         assert_eq!(n.dims.workspace.note, "/wsC");
         assert_eq!(n.dims.model.value, "m");
         assert_eq!(n.dims.model.stamp, 3);
-        // 目录：基线数组 + 最新条目 seq/note
-        assert_eq!(
-            baseline_from_value(&n.dims.skill_catalog.value),
-            vec!["A".to_string(), "B".to_string()]
+        // 目录：基线数组 + 最新条目 seq/note（旧格式迁移后基线仍可读）
+        assert!(
+            n.dims.skill_catalog.value.contains("\"A\"")
+                && n.dims.skill_catalog.value.contains("\"B\""),
+            "迁移后保留技能基线：{}",
+            n.dims.skill_catalog.value
         );
         assert_eq!(n.dims.skill_catalog.stamp, 0, "无 skill 条目 → stamp 0");
         assert_eq!(n.dims.tool_catalog.stamp, 7);

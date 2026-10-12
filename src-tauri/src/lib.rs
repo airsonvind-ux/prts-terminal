@@ -469,13 +469,13 @@ pub fn run() {
                 eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
             }
         }
-        // 工具目录：register_builtin 之后快照（list_defs 名字集合）
-        let tool_names: Vec<String> = tool_registry
+        // 工具目录：register_builtin 之后快照（(name, desc) 对，与技能目录同构）
+        let tool_pairs: Vec<(String, String)> = tool_registry
             .list_defs()
             .iter()
-            .map(|d| d.function.name.clone())
+            .map(|d| (d.function.name.clone(), d.function.description.clone()))
             .collect();
-        ledger.diff_tool_catalog(&tool_names);
+        ledger.diff_tool_catalog(&tool_pairs);
     }
 
     // ── 会话存储（对话持久化 · Phase 4：data_dir/sessions/{conversationId}.jsonl
