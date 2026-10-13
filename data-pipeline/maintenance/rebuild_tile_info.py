@@ -27,15 +27,16 @@ tile_info.json 结构：
 import json
 import os
 import sqlite3
+import sys
 
-# ─── 路径配置 ─────────────────────────────
+# ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
-DATA_ROOT = r"F:\Obsidian_notes\60.Dev\prts-terminal\data-source\ArknightsGameData-master\zh_CN\gamedata"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from paths import GAMEDATA as DATA_ROOT, DB_PATH, RESOURCES  # noqa: E402
+
 STAGE_TABLE = os.path.join(DATA_ROOT, "excel", "stage_table.json")
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, "..", ".."))
-DST = os.path.join(PROJECT_ROOT, "src-tauri", "resources", "tile_info.json")
-DB = os.path.join(PROJECT_ROOT, "data-pipeline", "db_builder", "arknights.db")
+DST = os.path.join(RESOURCES, "tile_info.json")
+DB = str(DB_PATH)
 
 
 # ─── 主流程 ───────────────────────────────

@@ -16,14 +16,16 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import datetime
 
-# ─── 路径配置 ─────────────────────────────
+# ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
-DATA_ROOT = r"F:\Obsidian_notes\60.Dev\prts-terminal\data-source\ArknightsGameData-master\zh_CN\gamedata"
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from paths import GAMEDATA as DATA_ROOT, DB_PATH as OUTPUT_DB  # noqa: E402
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))          # .../data-pipeline/maintenance
-DB_BUILDER_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "db_builder")
-OUTPUT_DB = os.path.join(DB_BUILDER_DIR, "arknights.db")
+DB_BUILDER_DIR = os.path.dirname(OUTPUT_DB)
 
 # ─── 枚举映射表 ───────────────────────────
 
