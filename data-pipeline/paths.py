@@ -27,7 +27,8 @@ EXCEL = GAMEDATA / "excel"
 LEVELS = GAMEDATA / "levels"
 
 RESOURCES = PROJECT_ROOT / "src-tauri" / "resources"
-DB_PATH = HERE / "db_builder" / "arknights.db"   # 数据库源（随包副本另行同步到 RESOURCES）
+# 权威副本：数据更新脚本唯一操作对象（db_builder/ 下那份为归档，不再更新）
+DB_PATH = HERE / "maintenance" / "arknights.db"
 
 # 便于脚本做"数据源是否就位"的显式检查，而不是等到 open() 才报错
 def ensure_gamedata() -> None:
