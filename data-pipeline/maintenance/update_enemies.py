@@ -44,7 +44,7 @@ from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
 
 TABLE = "enemies"
-SCRIPT_VERSION = 2
+SCRIPT_VERSION = 3
 MAX_DETAIL = 200          # 记录里明细最多留多少条（超出只计数）
 SLEEP_BETWEEN_FETCH = 0.1  # 爬取间隔，礼貌抓取
 KEEP_BACKUPS = 3           # 自动备份保留份数
@@ -70,7 +70,11 @@ except Exception:
 ENEMY_DB = paths.GAMEDATA / "levels" / "enemydata" / "enemy_database.json"
 HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
 
-# ─── 枚举映射（与 db_builder/build_enemies.py 保持一致）─────────────
+# ─── 枚举映射 ────────────────────────────────────────────────
+# IMMUNE_MAP 是「免疫字段 → 中文状态」的唯一事实来源：游戏新增异常状态时只改这里。
+# 顺序 = 游戏 attributes 里的字段顺序（追加新状态就追加在末尾，已有条目顺序不变，
+# 避免校对把历史行整列判成差异）。
+# db_builder/build_enemies.py 里那份是构建期快照，已归档、不再随游戏更新。
 
 STATUS_MAP = {"NORMAL": "普通", "ELITE": "精英", "BOSS": "领袖"}
 ATK_MAP = {"MELEE": "近战", "RANGED": "远程", "NONE": "不攻击"}
@@ -83,6 +87,7 @@ IMMUNE_MAP = {
     "levitateImmune": "浮空", "disarmedCombatImmune": "战栗",
     "fearedImmune": "恐惧", "palsyImmune": "麻痹",
     "attractImmune": "诱导",
+    "teleportImmune": "传送", "groundBoundImmune": "缚地",
 }
 
 # ─── 列分类（比较方式不同）──────────────────────────────────────
