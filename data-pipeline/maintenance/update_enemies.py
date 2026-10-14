@@ -15,6 +15,7 @@
   levels/enemydata/enemy_database.json   数值与属性
   excel/enemy_handbook_table.json        图鉴字段（能力列表 / 种类 / 伤害类型 / 关联敌人）
 游戏版本号取自数据源仓库最新提交信息（形如 [CN UPDATE] Client:2.7.81 Data:26-10-08-...）。
+通用件（源版本 / 备份 / 记录 / PRTS 抓取与哨兵 / 列比较 / 输出环境）见 update_common.py。
 
 失败语义（Air 定，2026-10-13）：
   - 网络异常 / PRTS 站点结构变化 → 中止本次更新（不改库），记录里写明原因；
@@ -30,28 +31,24 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths  # noqa: E402
+import update_common as uc  # noqa: E402
 from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
 
 TABLE = "enemies"
 SCRIPT_VERSION = 3
 MAX_DETAIL = 200          # 记录里明细最多留多少条（超出只计数）
-SLEEP_BETWEEN_FETCH = 0.1  # 爬取间隔，礼貌抓取
-KEEP_BACKUPS = 3           # 自动备份保留份数
+SLEEP_BETWEEN_FETCH = uc.SLEEP_BETWEEN_FETCH
 NO_DETAIL_RECHECK_EVERY = 5   # 每累计跳过这么多个，复核一次哨兵（站点结构还健康吗）
 NO_DETAIL_RATIO_LIMIT = 0.5   # 无结构页面占比超过这个值（且已试够 NO_DETAIL_MIN_TOTAL 个）→ 中止
 NO_DETAIL_MIN_TOTAL = 20      # 比例兜底的生效下限
-FETCH_RETRIES = 2             # 单页网络异常重试次数
+SENTINEL_MARKER = "敌人信息/levelcontent"
 
 # ID 段豁免：这些段不参与「校对」与「PRTS 爬取」，只做新增。
 # 190 段是奇象生物（活动捕捉后可在特定玩法召唤的敌人 + 捕捉关卡中出现的同名非常规敌人）：
@@ -61,11 +58,7 @@ FETCH_RETRIES = 2             # 单页网络异常重试次数
 # 用 ID 前缀判定是唯一可靠的信号（页面行为分辨不了同名实体）。
 EXCLUDE_FROM_CHECK_AND_CRAWL = ("enemy_190",)
 
-# 输出实时可见：关掉缓冲、统一 UTF-8（PowerShell 下否则进度憋到最后才吐、中文可能乱码）
-try:
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-except Exception:
-    pass
+uc.reconfigure_stdout()
 
 ENEMY_DB = paths.GAMEDATA / "levels" / "enemydata" / "enemy_database.json"
 HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
@@ -119,31 +112,6 @@ def load_source():
     with open(HANDBOOK, encoding="utf-8") as f:
         handbook = json.load(f)
     return database, handbook
-
-
-def read_source_version():
-    """从数据源仓库的最新提交信息里取游戏版本与数据时间。取不到不算失败。"""
-    info = {"提交": None, "游戏版本": None, "数据时间": None, "提交标题": None}
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(paths.DATA_SOURCE), "log", "-1", "--format=%H%n%s"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if out.returncode == 0:
-            lines = out.stdout.strip().splitlines()
-            if lines:
-                info["提交"] = lines[0][:7]
-            if len(lines) > 1:
-                info["提交标题"] = lines[1]
-                m_client = re.search(r'Client:([0-9.]+)', lines[1])
-                m_data = re.search(r'Data:([0-9A-Za-z\-]+)', lines[1])
-                if m_client:
-                    info["游戏版本"] = m_client.group(1)
-                if m_data:
-                    info["数据时间"] = m_data.group(1)
-    except Exception:
-        pass
-    return info
 
 
 # ─── 取值辅助（与 db_builder/build_enemies.py 同一套语义）─────────
@@ -290,99 +258,12 @@ def compute_rows():
 
 # ─── 比较 ────────────────────────────────────────────────────
 
-def _as_json(value):
-    if value is None:
-        return None
-    try:
-        return json.loads(value)
-    except (TypeError, ValueError):
-        return value
-
-
 def same(col, a, b):
-    """按列类型比较库内值与重算值。"""
-    if col in JSON_COLS:
-        return _as_json(a) == _as_json(b)
-    if a is None or b is None:
-        return a is None and b is None
-    if col in FLOAT_COLS:
-        try:
-            return abs(float(a) - float(b)) < 1e-9
-        except (TypeError, ValueError):
-            return str(a) == str(b)
-    if col in INT_COLS:
-        try:
-            return int(a) == int(b)
-        except (TypeError, ValueError):
-            return str(a) == str(b)
-    return str(a).strip() == str(b).strip()
+    """按列类型比较库内值与重算值（列类型集合取本表的）。"""
+    return uc.same(col, a, b, JSON_COLS, FLOAT_COLS, INT_COLS)
 
 
-# ─── PRTS 爬取（源自 build_enemies_prts.py）─────────────────────
-
-def fetch_wikitext(name, redirects=None):
-    """获取 PRTS 页面原始 wikitext，自动跟随重定向。
-
-    redirects 传入列表时，每次重定向追加 (原名, 目标名)，供调用方报告。
-    """
-    encoded = urllib.parse.quote(name)
-    url = "https://prts.wiki/w/%s?action=raw" % encoded
-    req = urllib.request.Request(url, headers={"User-Agent": "PRTS-Terminal/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        text = resp.read().decode("utf-8")
-    m = re.match(r'#(?:REDIRECT|重定向)\s*\[\[([^\]]+)\]\]', text)
-    if m:
-        target = m.group(1)
-        if redirects is not None:
-            redirects.append((name, target))
-        return fetch_wikitext(target, redirects)
-    return text
-
-
-def parse_template(text, tpl_name):
-    """从 wikitext 中提取指定模板的参数（处理嵌套 {{}}）。"""
-    results = []
-    start_tag = "{{" + tpl_name
-    pos = 0
-    while True:
-        idx = text.find(start_tag, pos)
-        if idx == -1:
-            break
-        depth, i, end = 0, idx, None
-        while i < len(text):
-            if text[i:i + 2] == "{{":
-                depth += 1
-                i += 2
-                continue
-            if text[i:i + 2] == "}}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 2
-                    break
-                i += 2
-                continue
-            i += 1
-        if end is None:
-            break
-        content = text[idx + len(start_tag):end - 2]
-        params = {}
-        parts = re.split(r'\n\|', content)
-        first = parts[0].strip()
-        if first.startswith("|"):
-            first = first[1:]
-        if "=" in first:
-            k, v = first.split("=", 1)
-            params[k.strip()] = v.strip()
-        for part in parts[1:]:
-            part = part.strip()
-            if "=" not in part:
-                continue
-            k, v = part.split("=", 1)
-            params[k.strip()] = v.strip()
-        results.append(params)
-        pos = end
-    return results
-
+# ─── PRTS 爬取（抓取 / 模板解析在 update_common）───────────────
 
 def extract_skills(params):
     """从模板参数中提取技能列表。"""
@@ -402,17 +283,6 @@ def extract_skills(params):
     return skills
 
 
-def sentinel_ok(sample_name):
-    """结构哨兵：抓一个已知页面，确认关键模板仍在。返回 (ok, 说明)。"""
-    try:
-        text = fetch_wikitext(sample_name)
-    except Exception as e:
-        return False, "哨兵页面抓取失败：%s" % e
-    if "敌人信息/levelcontent" not in text:
-        return False, "哨兵页面 %r 中未见 {{敌人信息/levelcontent}}，疑似 PRTS 结构变化" % sample_name
-    return True, "ok"
-
-
 def crawl_new(names, sample_name):
     """爬取若干敌人名。
 
@@ -427,7 +297,7 @@ def crawl_new(names, sample_name):
     if not names:
         return {}, [], [], []
 
-    ok, why = sentinel_ok(sample_name)
+    ok, why = uc.sentinel_ok(sample_name, SENTINEL_MARKER)
     if not ok:
         raise RuntimeError(why)
 
@@ -445,26 +315,14 @@ def crawl_new(names, sample_name):
             eta = (total - i) / rate if rate > 0 else 0
             print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total, elapsed, eta, name))
 
-        wikitext = None
-        last_err = None
-        for _attempt in range(FETCH_RETRIES + 1):
-            try:
-                wikitext = fetch_wikitext(name, redirects)
-                last_err = None
-                break
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    last_err = None
-                    break
-                last_err = "HTTP %d" % e.code
-            except Exception as e:
-                last_err = str(e)
-            time.sleep(1.0)
-        if wikitext is None and last_err is not None:
-            raise RuntimeError("PRTS 抓取失败（%s，重试 %d 次）：%s"
-                               % (name, FETCH_RETRIES, last_err))
+        # 抓取与重试在 update_common：404 → NoPage（算「无页面」），
+        # 网络类异常重试后仍失败会抛 RuntimeError → 整体中止
+        try:
+            wikitext = uc.fetch_wikitext(name, redirects)
+        except uc.NoPage:
+            wikitext = None
 
-        levels = parse_template(wikitext, "敌人信息/levelcontent") if wikitext else []
+        levels = uc.parse_template(wikitext, "敌人信息/levelcontent") if wikitext else []
         if not levels:
             if wikitext is None:
                 no_page.append(name)
@@ -474,7 +332,7 @@ def crawl_new(names, sample_name):
             print("      · 跳过（无详情结构）: %s" % name)
             # 每累计跳过若干，复核站点结构：哨兵通过 ⇒ 站点健康，是本批页面自身的情况
             if skipped % NO_DETAIL_RECHECK_EVERY == 0:
-                ok2, why2 = sentinel_ok(sample_name)
+                ok2, why2 = uc.sentinel_ok(sample_name, SENTINEL_MARKER)
                 if not ok2:
                     raise RuntimeError(
                         "站点结构复核失败（已跳过 %d 个）: %s" % (skipped, why2)
@@ -490,41 +348,6 @@ def crawl_new(names, sample_name):
         results[name] = levels
         time.sleep(SLEEP_BETWEEN_FETCH)
     return results, no_page, no_detail, redirects
-
-
-# ─── 更新记录 ────────────────────────────────────────────────
-
-def backup_db(db_path, keep=KEEP_BACKUPS):
-    """写库前把权威库备份到 maintenance/backups/，只保留最近 keep 份。"""
-    if not os.path.exists(db_path):
-        return None
-    bak_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
-    os.makedirs(bak_dir, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    dst = os.path.join(bak_dir, "%s.%s.bak" % (os.path.basename(db_path), stamp))
-    with open(db_path, "rb") as src, open(dst, "wb") as out:
-        while True:
-            chunk = src.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-    backups = sorted(f for f in os.listdir(bak_dir) if f.endswith(".bak"))
-    for stale in (backups[:-keep] if len(backups) > keep else []):
-        try:
-            os.remove(os.path.join(bak_dir, stale))
-        except OSError:
-            pass
-    return dst
-
-
-def write_record(record):
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "updates")
-    os.makedirs(out_dir, exist_ok=True)
-    fn = time.strftime("%Y-%m-%d-%H%M%S") + "-%s.json" % TABLE
-    path = os.path.join(out_dir, fn)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
-    return path
 
 
 # ─── 主流程 ──────────────────────────────────────────────────
@@ -544,7 +367,7 @@ def main():
     print("====== enemies 表更新 ======")
     print("数据库  : %s" % args.db)
     print("数据源  : %s" % paths.DATA_SOURCE)
-    src_ver = read_source_version()
+    src_ver = uc.read_source_version(paths.DATA_SOURCE)
     print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
           % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
 
@@ -606,7 +429,7 @@ def main():
         record["校对"]["差异列数"] = len(diffs)
         record["校对"]["计数"] = per_col
         record["校对"]["明细"] = [
-            {"键": "%s|%s" % (k[0], k[1]), "列": col, "旧": _brief(old), "新": _brief(new)}
+            {"键": "%s|%s" % (k[0], k[1]), "列": col, "旧": uc.brief(old), "新": uc.brief(new)}
             for k, col, old, new in diffs[:MAX_DETAIL]
         ]
 
@@ -665,7 +488,7 @@ def main():
                 crawl_results, no_page, no_detail, redirects = crawl_new(names, sample)
             except Exception as e:
                 record["结果"] = "中止（%s）" % e
-                path = write_record(record)
+                path = uc.write_record(TABLE, record)
                 print("\n!! 中止：%s" % e)
                 print("   未对数据库做任何修改；记录：%s" % path)
                 return 1
@@ -687,7 +510,7 @@ def main():
         if args.no_backup:
             print("  (已跳过备份)")
         else:
-            bak = backup_db(args.db)
+            bak = uc.backup_db(args.db)
             print("  备份: %s" % (bak or "（未生成）"))
         print("  写回校对差异: %d 列 | 插入新增: %d 行" % (len(diffs), len(new_keys)))
         conn.execute("BEGIN IMMEDIATE")
@@ -727,7 +550,7 @@ def main():
         except Exception as e:
             conn.execute("ROLLBACK")
             record["结果"] = "中止（写库失败：%s）" % e
-            path = write_record(record)
+            path = uc.write_record(TABLE, record)
             print("\n!! 写库失败并已回滚：%s" % e)
             print("   记录：%s" % path)
             return 1
@@ -735,7 +558,7 @@ def main():
         conn.close()
 
     record["结果"] = "成功"
-    path = write_record(record)
+    path = uc.write_record(TABLE, record)
 
     elapsed = (datetime.now() - started).total_seconds()
     print("\n====== 完成（%.1fs）======" % elapsed)
@@ -744,13 +567,6 @@ def main():
              record["爬取"]["成功"], record["爬取"]["无页面"], record["爬取"]["无详情结构"]))
     print("  更新记录: %s" % path)
     return 0
-
-
-def _brief(value, limit=120):
-    if value is None:
-        return None
-    s = str(value)
-    return s[:limit] + ("…" if len(s) > limit else "")
 
 
 if __name__ == "__main__":

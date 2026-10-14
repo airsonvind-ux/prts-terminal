@@ -16,17 +16,15 @@
 """
 
 import argparse
-import json
 import os
 import sqlite3
 import sys
-import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import paths  # noqa: E402
 from cleaning_wiki import clean_wiki, looks_dirty  # noqa: E402
-from update_enemies import backup_db  # noqa: E402
+from update_common import backup_db, write_record  # noqa: E402
 
 TABLE = "enemies"
 COLS = ("天赋文本", "技能文本")
@@ -138,7 +136,7 @@ def main():
         except Exception as e:
             conn.execute("ROLLBACK")
             record["结果"] = "中止（写库失败：%s）" % e
-            _write_record(record)
+            write_record("reclean-wiki", record)
             print("\n!! 写库失败并已回滚：%s" % e)
             return 1
 
@@ -150,22 +148,13 @@ def main():
                     after_dirty += 1
         record["清洗后残留"] = after_dirty
         record["结果"] = "成功"
-        path = _write_record(record)
+        path = write_record("reclean-wiki", record)
         print("\n====== 完成 ======")
         print("  更新列数: %d | 清洗后仍残留: %d" % (len(plan), after_dirty))
         print("  记录: %s" % path)
         return 0
     finally:
         conn.close()
-
-
-def _write_record(record):
-    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "updates")
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, time.strftime("%Y-%m-%d-%H%M%S") + "-reclean-wiki.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
-    return path
 
 
 if __name__ == "__main__":
