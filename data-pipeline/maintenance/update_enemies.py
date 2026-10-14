@@ -119,6 +119,19 @@ PAGE_MAP = {
 
 uc.reconfigure_stdout()
 
+# 三字段补齐：这些是同一实体的变体 ID，图鉴未收录其条目、但本体有 —— `能力列表` /
+# `关联敌人` / `伤害类型` 应与本体条目一致（不再为空）。只对下列 ID 生效，不做成全表规则
+# （Air 2026-10-14 定：范围就是这批）；`--recrawl-special` 会顺带补上。
+# 依据见 04-数据/特殊页面爬取映射清单.md。
+HB_FALLBACK_IDS = (
+    "enemy_1331_cbsisy_3",   # “十字路口”量产型（生息演算特殊版本）
+    "enemy_1529_dsdevr_2",   # 屠谕者，大群意志
+    "enemy_1547_blord_2",    # 杜卡雷，“君主之红”第二形态
+    "enemy_1553_lrdead_2",   # 引火的死魂灵第一形态
+    "enemy_7027_xbbtl_2",    # 晶玲兽
+    "enemy_7028_xbscp_2",    # 晶珑兽
+)
+
 ENEMY_DB = paths.GAMEDATA / "levels" / "enemydata" / "enemy_database.json"
 HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
 
@@ -209,8 +222,33 @@ def aval(ed, lv0_ed, key, default=None):
     return mv(obj, default)
 
 
-def pick_hb(hb_data, enemy_id, field, default=None):
-    return hb_data.get(enemy_id.lower(), {}).get(field, default)
+def pick_hb_entry(hb_data, enemy_id, name):
+    """该敌人的图鉴条目；HB_FALLBACK_IDS 里的变体 ID 回退到本体条目。
+
+    图鉴按敌人 ID 建条目，同一实体的变体 ID（如 enemy_7027_xbbtl_2）常常不在其中，
+    此时去掉尾部 `_N` 逐级回退。**回退候选的 name 必须与本行的名称一致**才算同一敌人：
+    例如 enemy_1542_wdslm_2 去尾缀得到 enemy_1542_wdslm，而那一条是「“变形者集群”」，
+    不是同构碎片，不能拿它的字段。
+
+    只对 HB_FALLBACK_IDS 里列出的 ID 回退（Air 定：范围就是清单点名的这批，
+    不做成全表通用规则）；其余 ID 找不到条目就返回 None，字段如实留空。
+    """
+    entry = hb_data.get(enemy_id.lower())
+    if entry is not None:
+        return entry
+    if enemy_id not in HB_FALLBACK_IDS:
+        return None
+    cur = enemy_id
+    while True:
+        m = re.search(r"_\d+$", cur)
+        if not m:
+            return None
+        cur = cur[:m.start()]
+        entry = hb_data.get(cur.lower())
+        if entry is not None:
+            if (entry.get("name") or "").strip() == (name or "").strip():
+                return entry
+            return None
 
 
 # ─── 重算全部目标行 ────────────────────────────────────────────
@@ -242,8 +280,11 @@ def compute_rows():
                 lv0_ed = v["enemyData"]
                 break
 
+        # 图鉴条目：变体 ID 回退到本体（名称需一致），见 pick_hb_entry
+        hb_entry = pick_hb_entry(hb_data, eid, name_map.get(eid.lower())) or {}
+
         # 关联敌人：同一敌人所有 level 行相同（与 build_enemies_link.py 的 UPDATE 效果一致）
-        link_ids = pick_hb(hb_data, eid, "linkEnemies", [])
+        link_ids = hb_entry.get("linkEnemies", [])
         links = json.dumps(
             [name_map.get(lid.lower()) or lid for lid in link_ids], ensure_ascii=False
         ) if link_ids else None
@@ -256,14 +297,14 @@ def compute_rows():
             desc = clean_desc(val(ed, lv0_ed, "description"))
 
             # 地位：优先游戏数据 levelType（未定义时 val 已回退 level 0），再回退图鉴
-            raw_level = val(ed, lv0_ed, "levelType") or pick_hb(hb_data, eid, "enemyLevel")
+            raw_level = val(ed, lv0_ed, "levelType") or hb_entry.get("enemyLevel")
             status = STATUS_MAP.get(raw_level, raw_level)
 
-            raw_abilities = pick_hb(hb_data, eid, "abilityList", [])
+            raw_abilities = hb_entry.get("abilityList", [])
             abilities = json.dumps(
                 [clean_desc(a.get("text")) for a in raw_abilities], ensure_ascii=False
             ) if raw_abilities else None
-            dmg_types = pick_hb(hb_data, eid, "damageType", [])
+            dmg_types = hb_entry.get("damageType", [])
             dmg_cn = json.dumps([DAMAGE_MAP.get(t, t) for t in dmg_types], ensure_ascii=False)
 
             tags = val(ed, lv0_ed, "enemyTags", [])
@@ -489,6 +530,7 @@ def recrawl_special(args):
         "爬取": {"页面": 0, "成功": 0, "无页面": 0, "无详情结构": 0,
                  "重定向": [], "无页面明细": [], "无详情明细": []},
         "写入": {"改写": 0, "一致": 0, "index缺失": [], "明细": []},
+        "补齐": {"待补行": 0, "明细": []},
         "结果": "未执行",
     }
 
@@ -497,11 +539,16 @@ def recrawl_special(args):
     conn = sqlite3.connect(args.db)
     conn.isolation_level = None
     try:
-        cur = conn.execute("SELECT 敌人ID, 级别, 名称, 天赋文本, 技能文本 FROM %s" % TABLE)
+        cur = conn.execute(
+            "SELECT 敌人ID, 级别, 名称, 天赋文本, 技能文本, 能力列表, 关联敌人, 伤害类型"
+            " FROM %s" % TABLE)
         have = {}
-        for eid, level, name, tianfu, jinneng in cur.fetchall():
+        hb_now = {}
+        for eid, level, name, tianfu, jinneng, ab, link, dmg in cur.fetchall():
             if eid in ids:
                 have[(eid, level)] = {"名称": name, "天赋文本": tianfu, "技能文本": jinneng}
+            if eid in HB_FALLBACK_IDS:
+                hb_now[(eid, level)] = {"能力列表": ab, "关联敌人": link, "伤害类型": dmg}
 
         todo = []
         pages = []
@@ -528,8 +575,28 @@ def recrawl_special(args):
             print("  ! 未命中 %d 条：" % len(record["映射"]["未命中"]))
             for s in record["映射"]["未命中"]:
                 print("      %s" % s)
-        if not pages:
-            print("\n没有可抓的页面，结束。")
+
+        # 三字段补齐：变体 ID 无图鉴条目 → 与本体条目对齐（见 HB_FALLBACK_IDS）
+        want_rows = compute_rows() if hb_now else {}
+        hb_writes = []
+        for key, old in sorted(hb_now.items()):
+            w = want_rows.get(key)
+            if w is None:
+                continue
+            three = (w["能力列表"], w["关联敌人"], w["伤害类型"])
+            if three == (old["能力列表"], old["关联敌人"], old["伤害类型"]):
+                continue
+            hb_writes.append((key[0], key[1]) + three)
+        print("  三字段待补行: %d" % len(hb_writes))
+        for eid, level, ab, link, dmg in hb_writes[:MAX_DETAIL]:
+            print("      %s|%s  能力列表=%s 关联敌人=%s 伤害类型=%s"
+                  % (eid, level, "有" if ab else "空", "有" if link else "空",
+                     "有" if dmg else "空"))
+        record["补齐"]["待补行"] = len(hb_writes)
+        record["补齐"]["明细"] = ["%s|%s" % (w[0], w[1]) for w in hb_writes[:MAX_DETAIL]]
+
+        if not pages and not hb_writes:
+            print("\n没有可抓的页面、也没有要补的行，结束。")
             return 0
 
         if args.dry_run:
@@ -537,15 +604,17 @@ def recrawl_special(args):
             record["结果"] = "干跑"
             return 0
 
-        print("\n------ 抓取 PRTS（%d 个页面）------" % len(pages))
-        try:
-            crawl_results, no_page, no_detail, redirects = crawl_new(pages, pages[0])
-        except Exception as e:
-            record["结果"] = "中止（%s）" % e
-            path = uc.write_record(TABLE + "_recrawl", record)
-            print("\n!! 中止：%s" % e)
-            print("   未对数据库做任何修改；记录：%s" % path)
-            return 1
+        crawl_results, no_page, no_detail, redirects = {}, [], [], []
+        if pages:
+            print("\n------ 抓取 PRTS（%d 个页面）------" % len(pages))
+            try:
+                crawl_results, no_page, no_detail, redirects = crawl_new(pages, pages[0])
+            except Exception as e:
+                record["结果"] = "中止（%s）" % e
+                path = uc.write_record(TABLE + "_recrawl", record)
+                print("\n!! 中止：%s" % e)
+                print("   未对数据库做任何修改；记录：%s" % path)
+                return 1
         record["爬取"]["页面"] = len(pages)
         record["爬取"]["成功"] = len(crawl_results)
         record["爬取"]["无页面"] = len(no_page)
@@ -588,7 +657,7 @@ def recrawl_special(args):
         for s in record["写入"]["index缺失"][:MAX_DETAIL]:
             print("    ! index 缺失，跳过：%s" % s)
 
-        if not writes:
+        if not writes and not hb_writes:
             print("\n没有需要改写的行，未写库。")
             record["结果"] = "成功（无改动）"
             path = uc.write_record(TABLE + "_recrawl", record)
@@ -607,6 +676,12 @@ def recrawl_special(args):
                     "UPDATE %s SET 天赋文本=?, 技能文本=? WHERE 敌人ID=? AND 级别=?" % TABLE,
                     (tianfu, jinneng, eid, level),
                 )
+            for eid, level, ab, link, dmg in hb_writes:
+                conn.execute(
+                    "UPDATE %s SET 能力列表=?, 关联敌人=?, 伤害类型=? WHERE 敌人ID=? AND 级别=?"
+                    % TABLE,
+                    (ab, link, dmg, eid, level),
+                )
             conn.execute("COMMIT")
         except Exception as e:
             conn.execute("ROLLBACK")
@@ -622,10 +697,10 @@ def recrawl_special(args):
     path = uc.write_record(TABLE + "_recrawl", record)
     elapsed = (datetime.now() - started).total_seconds()
     print("\n====== 完成（%.1fs）======" % elapsed)
-    print("  改写: %d 行 | 已一致: %d | index 缺失: %d | 无页面: %d | 无详情: %d"
+    print("  改写: %d 行 | 已一致: %d | index 缺失: %d | 无页面: %d | 无详情: %d | 三字段补: %d"
           % (record["写入"]["改写"], record["写入"]["一致"],
              len(record["写入"]["index缺失"]), record["爬取"]["无页面"],
-             record["爬取"]["无详情结构"]))
+             record["爬取"]["无详情结构"], record["补齐"]["待补行"]))
     print("  更新记录: %s" % path)
     return 0
 
