@@ -17,13 +17,25 @@
 游戏版本号取自数据源仓库最新提交信息（形如 [CN UPDATE] Client:2.7.81 Data:26-10-08-...）。
 通用件（源版本 / 备份 / 记录 / PRTS 抓取与哨兵 / 列比较 / 输出环境）见 update_common.py。
 
+特殊页面映射（PAGE_MAP）：
+  少数敌人的 PRTS 页面与库内条目不是一一对应：一个页面里装着多个形态/级别，
+  或页面名不是敌人名（带后缀、差分页、差分索引页）。默认规则「按名称取页 +
+  取 index==级别 的 levelcontent 块」对这些敌人会抓错或抓重，故在 PAGE_MAP 里为
+  这些 (敌人ID, 级别) 显式写明 (页面名, index)。逐条依据见
+  20.Projects/PRTS终端助手/04-数据/特殊页面爬取映射清单.md
+
+  取块规则：PRTS 约定 index=0 那节写全参数，之后的每节只写与它不同的参数
+  （缺的参数表示继承），所以取 index>0 的节时要与 index=0 合并。
+
 失败语义（Air 定，2026-10-13）：
   - 网络异常 / PRTS 站点结构变化 → 中止本次更新（不改库），记录里写明原因；
   - PRTS 404（页面不存在，多为新敌人尚无页面）→ 跳过并记录，不计失败。
 
 用法：
-    python update_enemies.py --dry-run   # 只报告校对差异与新增，不写库、不爬取、不写记录
-    python update_enemies.py             # 正式执行
+    python update_enemies.py --dry-run            # 只报告校对差异与新增，不写库、不爬取、不写记录
+    python update_enemies.py                      # 正式执行（校对 + 新增 + 记录）
+    python update_enemies.py --recrawl-special    # 只重抓 PAGE_MAP 里的敌人：按映射重写其 天赋文本/技能文本
+    python update_enemies.py --recrawl-special --dry-run
 """
 
 import argparse
@@ -42,7 +54,7 @@ from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
 
 TABLE = "enemies"
-SCRIPT_VERSION = 3
+SCRIPT_VERSION = 4
 MAX_DETAIL = 200          # 记录里明细最多留多少条（超出只计数）
 SLEEP_BETWEEN_FETCH = uc.SLEEP_BETWEEN_FETCH
 NO_DETAIL_RECHECK_EVERY = 5   # 每累计跳过这么多个，复核一次哨兵（站点结构还健康吗）
@@ -57,6 +69,53 @@ SENTINEL_MARKER = "敌人信息/levelcontent"
 #   ③ 描述 / 能力列表 / 天赋文本 / 技能文本 由人工维护，校对会用数据源重算覆盖它们。
 # 用 ID 前缀判定是唯一可靠的信号（页面行为分辨不了同名实体）。
 EXCLUDE_FROM_CHECK_AND_CRAWL = ("enemy_190",)
+
+# 特殊页面映射：键 (敌人ID, 级别)，值 (页面名, index)。未列出的键走默认规则
+# （页面名 = 名称，index = 级别）。要改哪一条，请连同
+# 04-数据/特殊页面爬取映射清单.md 一起改。
+PAGE_MAP = {
+    # 净浊之焰 / 焦竭之火：页面把两个不同内部 id 合并成「级别0 / 级别1」两节
+    ("enemy_1177_dufrbl", 0): ("净浊之焰", 0),
+    ("enemy_1177_dufrbl_2", 0): ("净浊之焰", 1),
+    ("enemy_1294_duchns", 0): ("焦竭之火", 0),
+    ("enemy_1294_duchns_2", 0): ("焦竭之火", 1),
+    # 熔戈者，护王余火：页面分「级别B / 级别A / 级别S」三节
+    ("enemy_8001_flmlod", 0): ("熔戈者，护王余火", 0),
+    ("enemy_8001_flmlod_2", 0): ("熔戈者，护王余火", 1),
+    ("enemy_8001_flmlod_3", 0): ("熔戈者，护王余火", 2),
+    # 结构性原理：敌方页带后缀（无后缀那页是我方召唤物，没有 levelcontent），分「Rank Ⅰ / Ⅱ / Ⅲ」
+    ("enemy_8011_mcndog", 0): ("结构性原理(敌方)", 0),
+    ("enemy_8011_mcndog_2", 0): ("结构性原理(敌方)", 1),
+    ("enemy_8011_mcndog_3", 0): ("结构性原理(敌方)", 2),
+    # 假想敌：胄 / 铳 / 管：页面多出「级别0(隐秘核心)」一节，对应 _2
+    ("enemy_9013_acstmk", 0): ("假想敌：胄", 0),
+    ("enemy_9013_acstmk_2", 0): ("假想敌：胄", 1),
+    ("enemy_9017_achunt", 0): ("假想敌：铳", 0),
+    ("enemy_9017_achunt_2", 0): ("假想敌：铳", 1),
+    ("enemy_9021_acduml", 0): ("假想敌：管", 0),
+    ("enemy_9021_acduml_2", 0): ("假想敌：管", 1),
+    # 乌萨斯战争术师：页面第二节标题就是「特殊版本」
+    ("enemy_10210_muwiz", 0): ("乌萨斯战争术师", 0),
+    ("enemy_10210_muwiz_2", 0): ("乌萨斯战争术师", 1),
+    # 落石：页面分「落石(小型) / 落石(大型)」
+    ("enemy_1343_ltrock", 0): ("落石", 0),
+    ("enemy_1343_ltrock_2", 0): ("落石", 1),
+    # 同构碎片：无后缀那页是差分索引页（无 levelcontent），真正的敌人在「同构碎片1/2/3」
+    ("enemy_1542_wdslm_2", 0): ("同构碎片1", 0),
+    ("enemy_1542_wdslm_2", 1): ("同构碎片1", 1),
+    ("enemy_1542_wdslm_3", 0): ("同构碎片2", 0),
+    ("enemy_1542_wdslm_3", 1): ("同构碎片2", 1),
+    ("enemy_1542_wdslm_4", 0): ("同构碎片3", 0),
+    ("enemy_1542_wdslm_4", 1): ("同构碎片3", 1),
+    # 某种天命：两个内部 id 各有一个同名带后缀的页面
+    ("enemy_10111_ymgpck", 0): ("“某种天命”", 0),
+    ("enemy_10111_ymgpck_2", 0): ("“某种天命”(HI02)", 0),
+    # 杜卡雷，“君主之红”：页面分「第一形态(级别0/1) / 第二形态(级别0/1)」共四节
+    ("enemy_1547_blord", 0): ("杜卡雷，“君主之红”", 0),
+    ("enemy_1547_blord", 1): ("杜卡雷，“君主之红”", 1),
+    ("enemy_1547_blord_2", 0): ("杜卡雷，“君主之红”", 2),
+    ("enemy_1547_blord_2", 1): ("杜卡雷，“君主之红”", 3),
+}
 
 uc.reconfigure_stdout()
 
@@ -283,8 +342,55 @@ def extract_skills(params):
     return skills
 
 
-def crawl_new(names, sample_name):
-    """爬取若干敌人名。
+def crawl_target(eid, level, name):
+    """该行该抓哪个页面、取页面里哪个 index 的 levelcontent 块。
+
+    默认：页面名 = 名称、index = 级别；PAGE_MAP 里列了的用它写明的。
+    """
+    hit = PAGE_MAP.get((eid, level))
+    if hit is not None:
+        return hit
+    return (name, level)
+
+
+def level_index(lv):
+    """levelcontent 块里的 index（缺失或非法一律当 0）。"""
+    try:
+        return int(str(lv.get("index", "0")).strip() or "0")
+    except (TypeError, ValueError):
+        return 0
+
+
+def pick_level(levels, index):
+    """从一页的 levelcontent 列表里取出 index 对应的块，并与 index=0 合并。
+
+    PRTS 约定 index=0 那节写全参数，之后的每节只写与它不同的参数（缺的表示继承），
+    所以要合并。该 index 不在页面上时返回 None，由调用方决定怎么处理。
+    """
+    base = None
+    for lv in levels:
+        if level_index(lv) == 0:
+            base = lv
+            break
+    for lv in levels:
+        if level_index(lv) == index:
+            merged = dict(base or {})
+            merged.update(lv)
+            return merged
+    return None
+
+
+def text_from_level(block):
+    """从一个 levelcontent 块生成 (天赋文本, 技能文本)。"""
+    skills = extract_skills(block)
+    return (
+        clean_wiki(block.get("天赋", "")) or None,
+        json.dumps(skills, ensure_ascii=False) if skills else None,
+    )
+
+
+def crawl_new(pages, sample_name):
+    """爬取若干页面。
 
     返回 (结果字典, 404 无页面列表, 有页面但无结构列表)。
     真·事故向上抛异常（触发整体中止）：哨兵失败 / 单页重试后仍网络异常 /
@@ -294,7 +400,7 @@ def crawl_new(names, sample_name):
     个别页面「有页面但无 {{敌人信息/levelcontent}}」属可预见情况——奇象生物等特殊敌人
     在 PRTS 只建了装置页、本无技能与天赋——跳过并记录，不计失败。
     """
-    if not names:
+    if not pages:
         return {}, [], [], []
 
     ok, why = uc.sentinel_ok(sample_name, SENTINEL_MARKER)
@@ -306,30 +412,30 @@ def crawl_new(names, sample_name):
     no_detail = []
     redirects = []
     skipped = 0
-    total = len(names)
+    total = len(pages)
     start = time.time()
-    for i, name in enumerate(names):
+    for i, page in enumerate(pages):
         if i % 10 == 0:
             elapsed = time.time() - start
             rate = (i / elapsed) if elapsed > 0 else 0
             eta = (total - i) / rate if rate > 0 else 0
-            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total, elapsed, eta, name))
+            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total, elapsed, eta, page))
 
         # 抓取与重试在 update_common：404 → NoPage（算「无页面」），
         # 网络类异常重试后仍失败会抛 RuntimeError → 整体中止
         try:
-            wikitext = uc.fetch_wikitext(name, redirects)
+            wikitext = uc.fetch_wikitext(page, redirects)
         except uc.NoPage:
             wikitext = None
 
         levels = uc.parse_template(wikitext, "敌人信息/levelcontent") if wikitext else []
         if not levels:
             if wikitext is None:
-                no_page.append(name)
+                no_page.append(page)
             else:
-                no_detail.append(name)
+                no_detail.append(page)
             skipped += 1
-            print("      · 跳过（无详情结构）: %s" % name)
+            print("      · 跳过（无详情结构）: %s" % page)
             # 每累计跳过若干，复核站点结构：哨兵通过 ⇒ 站点健康，是本批页面自身的情况
             if skipped % NO_DETAIL_RECHECK_EVERY == 0:
                 ok2, why2 = uc.sentinel_ok(sample_name, SENTINEL_MARKER)
@@ -345,9 +451,183 @@ def crawl_new(names, sample_name):
                 )
             time.sleep(SLEEP_BETWEEN_FETCH)
             continue
-        results[name] = levels
+        results[page] = levels
         time.sleep(SLEEP_BETWEEN_FETCH)
     return results, no_page, no_detail, redirects
+
+
+# ─── 只重抓：特殊页面映射里的那一批 ───────────────────────────
+
+def recrawl_special(args):
+    """把 PAGE_MAP 列出的敌人的 天赋文本/技能文本 重抓到页面里正确的那一节。
+
+    只写这两列（不动 `备注` 与其它列），不跑校对与新增。
+    页面 404 / 页面无 levelcontent / 映射的 index 在页面上找不到 → 该行不写，计入记录。
+    """
+    started = datetime.now()
+    print("====== enemies 表 · 特殊页面重抓 ======")
+    print("数据库  : %s" % args.db)
+    print("数据源  : %s" % paths.DATA_SOURCE)
+    src_ver = uc.read_source_version(paths.DATA_SOURCE)
+    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
+          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
+
+    record = {
+        "表": TABLE,
+        "模式": "特殊页面重抓",
+        "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "数据源": {
+            "仓库": "Kengxxiao/ArknightsGameData",
+            "提交": src_ver["提交"],
+            "提交标题": src_ver["提交标题"],
+            "游戏版本": src_ver["游戏版本"],
+            "数据时间": src_ver["数据时间"],
+        },
+        "脚本": {"文件": "update_enemies.py", "版本": SCRIPT_VERSION},
+        "数据库": os.path.basename(args.db),
+        "映射": {"键数": len(PAGE_MAP), "命中行": 0, "未命中": []},
+        "爬取": {"页面": 0, "成功": 0, "无页面": 0, "无详情结构": 0,
+                 "重定向": [], "无页面明细": [], "无详情明细": []},
+        "写入": {"改写": 0, "一致": 0, "index缺失": [], "明细": []},
+        "结果": "未执行",
+    }
+
+    print("\n------ 目标 ------")
+    ids = {eid for (eid, _lv) in PAGE_MAP}
+    conn = sqlite3.connect(args.db)
+    conn.isolation_level = None
+    try:
+        cur = conn.execute("SELECT 敌人ID, 级别, 名称, 天赋文本, 技能文本 FROM %s" % TABLE)
+        have = {}
+        for eid, level, name, tianfu, jinneng in cur.fetchall():
+            if eid in ids:
+                have[(eid, level)] = {"名称": name, "天赋文本": tianfu, "技能文本": jinneng}
+
+        todo = []
+        pages = []
+        seen = set()
+        for key in sorted(have):
+            hit = PAGE_MAP.get(key)
+            if hit is None:
+                record["映射"]["未命中"].append("%s|%s（库里有这行，映射里没有）" % key)
+                continue
+            page, index = hit
+            todo.append((key, page, index))
+            if page not in seen:
+                seen.add(page)
+                pages.append(page)
+        record["映射"]["命中行"] = len(todo)
+        for key in PAGE_MAP:
+            if key not in have:
+                record["映射"]["未命中"].append("%s|%s（映射里有，库里没有这行）" % key)
+
+        print("  映射键: %d | 库内命中行: %d | 待抓页面: %d" % (len(PAGE_MAP), len(todo), len(pages)))
+        for page in pages:
+            print("      %s" % page)
+        if record["映射"]["未命中"]:
+            print("  ! 未命中 %d 条：" % len(record["映射"]["未命中"]))
+            for s in record["映射"]["未命中"]:
+                print("      %s" % s)
+        if not pages:
+            print("\n没有可抓的页面，结束。")
+            return 0
+
+        if args.dry_run:
+            print("\n(干跑：未抓取、未写库、未写记录)")
+            record["结果"] = "干跑"
+            return 0
+
+        print("\n------ 抓取 PRTS（%d 个页面）------" % len(pages))
+        try:
+            crawl_results, no_page, no_detail, redirects = crawl_new(pages, pages[0])
+        except Exception as e:
+            record["结果"] = "中止（%s）" % e
+            path = uc.write_record(TABLE + "_recrawl", record)
+            print("\n!! 中止：%s" % e)
+            print("   未对数据库做任何修改；记录：%s" % path)
+            return 1
+        record["爬取"]["页面"] = len(pages)
+        record["爬取"]["成功"] = len(crawl_results)
+        record["爬取"]["无页面"] = len(no_page)
+        record["爬取"]["无页面明细"] = no_page[:MAX_DETAIL]
+        record["爬取"]["无详情结构"] = len(no_detail)
+        record["爬取"]["无详情明细"] = no_detail[:MAX_DETAIL]
+        record["爬取"]["重定向"] = ["%s → %s" % (a, b) for a, b in redirects[:MAX_DETAIL]]
+
+        print("\n------ 解析与对比 ------")
+        writes = []
+        for key, page, index in todo:
+            eid, level = key
+            levels = crawl_results.get(page)
+            if not levels:
+                continue
+            block = pick_level(levels, index)
+            if block is None:
+                record["写入"]["index缺失"].append(
+                    "%s|%s → %s index=%s" % (eid, level, page, index))
+                continue
+            tianfu, jinneng = text_from_level(block)
+            old = have[key]
+            if (tianfu, jinneng) == (old["天赋文本"], old["技能文本"]):
+                record["写入"]["一致"] += 1
+                continue
+            writes.append((eid, level, tianfu, jinneng, page, index))
+            record["写入"]["明细"].append({
+                "键": "%s|%s" % (eid, level), "页面": page, "index": index,
+                "天赋": ("%d 字" % len(tianfu)) if tianfu else "空",
+                "技能": ("%d 字" % len(jinneng)) if jinneng else "空",
+            })
+        record["写入"]["改写"] = len(writes)
+        print("  库里已一致: %d | 需改写: %d | index 缺失: %d"
+              % (record["写入"]["一致"], len(writes), len(record["写入"]["index缺失"])))
+        for eid, level, tianfu, jinneng, page, index in writes[:MAX_DETAIL]:
+            print("      %s|%s ← %s index=%s  天赋=%s 技能=%s"
+                  % (eid, level, page, index,
+                     ("%d字" % len(tianfu)) if tianfu else "空",
+                     ("%d字" % len(jinneng)) if jinneng else "空"))
+        for s in record["写入"]["index缺失"][:MAX_DETAIL]:
+            print("    ! index 缺失，跳过：%s" % s)
+
+        if not writes:
+            print("\n没有需要改写的行，未写库。")
+            record["结果"] = "成功（无改动）"
+            path = uc.write_record(TABLE + "_recrawl", record)
+            print("  更新记录: %s" % path)
+            return 0
+
+        print("\n------ 写库（单事务）------")
+        if args.no_backup:
+            print("  (已跳过备份)")
+        else:
+            print("  备份: %s" % (uc.backup_db(args.db) or "（未生成）"))
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for eid, level, tianfu, jinneng, _page, _index in writes:
+                conn.execute(
+                    "UPDATE %s SET 天赋文本=?, 技能文本=? WHERE 敌人ID=? AND 级别=?" % TABLE,
+                    (tianfu, jinneng, eid, level),
+                )
+            conn.execute("COMMIT")
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            record["结果"] = "中止（写库失败：%s）" % e
+            path = uc.write_record(TABLE + "_recrawl", record)
+            print("\n!! 写库失败并已回滚：%s" % e)
+            print("   记录：%s" % path)
+            return 1
+    finally:
+        conn.close()
+
+    record["结果"] = "成功"
+    path = uc.write_record(TABLE + "_recrawl", record)
+    elapsed = (datetime.now() - started).total_seconds()
+    print("\n====== 完成（%.1fs）======" % elapsed)
+    print("  改写: %d 行 | 已一致: %d | index 缺失: %d | 无页面: %d | 无详情: %d"
+          % (record["写入"]["改写"], record["写入"]["一致"],
+             len(record["写入"]["index缺失"]), record["爬取"]["无页面"],
+             record["爬取"]["无详情结构"]))
+    print("  更新记录: %s" % path)
+    return 0
 
 
 # ─── 主流程 ──────────────────────────────────────────────────
@@ -356,12 +636,17 @@ def main():
     ap = argparse.ArgumentParser(description="enemies 表更新（校对 + 新增 + 记录）")
     ap.add_argument("--dry-run", action="store_true", help="只报告，不写库、不爬取、不写记录")
     ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
+    ap.add_argument("--recrawl-special", action="store_true",
+                    help="只重抓 PAGE_MAP 里的敌人：按映射重写其 天赋文本/技能文本，不做校对与新增")
     ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
     args = ap.parse_args()
 
     paths.ensure_gamedata()
     if not os.path.exists(args.db):
         raise SystemExit("数据库不存在：%s" % args.db)
+
+    if args.recrawl_special:
+        return recrawl_special(args)
 
     started = datetime.now()
     print("====== enemies 表更新 ======")
@@ -461,32 +746,33 @@ def main():
         # ── 3. 爬取（先爬后写；失败则整体中止）──
         crawl_results, no_page, no_detail, redirects = {}, [], [], []
         if new_ids:
-            # 每个新敌人取 level 0 名称，按名称去重
-            names = []
+            # 每个新敌人按 (页面名, index) 定位：默认页面名 = 名称、index = 级别，
+            # PAGE_MAP 里列了的用映射写明的。按页面名去重（多个 ID 可能共用一页）。
+            pages = []
+            page_of = {}
             seen = set()
             skipped_excluded = 0
             for eid in new_ids:
                 if eid.startswith(EXCLUDE_FROM_CHECK_AND_CRAWL):
                     skipped_excluded += 1
                     continue
-                nm = rows[(eid, 0)]["名称"] if (eid, 0) in rows else None
-                if not nm:
-                    for k in new_keys:
-                        if k[0] == eid and rows[k]["名称"]:
-                            nm = rows[k]["名称"]
-                            break
-                if nm and nm not in seen:
-                    seen.add(nm)
-                    names.append(nm)
+                for key in new_keys:
+                    if key[0] != eid:
+                        continue
+                    page, index = crawl_target(eid, key[1], rows[key]["名称"])
+                    page_of[key] = (page, index)
+                    if page and page not in seen:
+                        seen.add(page)
+                        pages.append(page)
             record["新增"]["豁免爬取"] = skipped_excluded
-            record["爬取"]["目标敌人"] = len(names)
+            record["爬取"]["目标敌人"] = len(pages)
             if skipped_excluded:
                 print("  豁免爬取（%s 段）: %d 个敌人"
                       % (", ".join(EXCLUDE_FROM_CHECK_AND_CRAWL), skipped_excluded))
-            print("\n------ 3. 爬取 PRTS（%d 个新敌人名）------" % len(names))
-            sample = rows[(new_ids[0], 0)]["名称"] if (new_ids[0], 0) in rows else names[0]
+            print("\n------ 3. 爬取 PRTS（%d 个页面）------" % len(pages))
+            sample = pages[0] if pages else None
             try:
-                crawl_results, no_page, no_detail, redirects = crawl_new(names, sample)
+                crawl_results, no_page, no_detail, redirects = crawl_new(pages, sample)
             except Exception as e:
                 record["结果"] = "中止（%s）" % e
                 path = uc.write_record(TABLE, record)
@@ -524,23 +810,13 @@ def main():
 
             for (eid, level) in new_keys:
                 want = dict(rows[(eid, level)])
-                name = want["名称"]
-                levels = crawl_results.get(name)
+                page, index = page_of.get((eid, level), (None, None))
+                levels = crawl_results.get(page) if page else None
                 if levels:
-                    # 该 level 的爬取文本（level 索引超出时用 level 0 合并结果）
-                    picked = None
-                    for lv in levels:
-                        if int(lv.get("index", "0")) == level:
-                            picked = lv
-                            break
-                    if picked is None and levels:
-                        merged = dict(levels[0])
-                        merged.update(picked or {})
-                        picked = merged
-                    if picked is not None:
-                        skills = extract_skills(picked)
-                        want["技能文本"] = json.dumps(skills, ensure_ascii=False) if skills else None
-                        want["天赋文本"] = clean_wiki(picked.get("天赋", "")) or None
+                    # 取映射指定的那一节；该 index 不在页面上时退回 index 0
+                    block = pick_level(levels, index) or pick_level(levels, 0)
+                    if block is not None:
+                        want["天赋文本"], want["技能文本"] = text_from_level(block)
 
                 conn.execute(
                     "INSERT OR IGNORE INTO %s (%s) VALUES (%s)"
