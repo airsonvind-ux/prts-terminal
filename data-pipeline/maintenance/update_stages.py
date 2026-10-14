@@ -16,9 +16,16 @@ PRTS 终端 — stages 表更新脚本（维护用）
 情况（如 act21side_01_m），不可能逐一校对，也不应改动原始信息。
 
 敌人名口径（Air 2026-10-13）：`敌人列表` 里的名字用 `enemy_handbook_table.json`（玩家在
-游戏内图鉴能读到的名字）；图鉴里没有的，退回 `enemies` 表的名字，再退回原始 ID。
-每项形如 `{名称, 敌人ID, 级别, 覆写属性?}`——名称用于展示与自足查询，敌人ID 用于精确关联
-（同名敌人有 66 组，按名字查会撞）。
+游戏内图鉴能读到的名字）；图鉴里没有的，退回 `enemies` 表的名字，再退回覆写里的名称，
+都没有就留空。每项形如 `{名称, 敌人ID, 级别, 覆写属性?, 天赋覆写?, 技能覆写?}`——名称用于
+展示与自足查询，敌人ID 用于精确关联（同名敌人有 66 组，按名字查会撞）。
+
+覆写属性的取舍（Air 2026-10-14）：
+  - 只留 `enemies` 表里有同名列的属性，PRTS 拿到的每个键都能回表；
+  - 再与「该敌人在表里的常规值」比，相同的不记（游戏会把整套字段都标成 m_defined=true，
+    它标的是“显式给了值”，不是“值变了”）；
+  - `天赋覆写` / `技能覆写` 没有对应列，但 PRTS 要配合关卡信息与天赋/技能描述判断改动，
+    所以与 `覆写属性` 平级保留。
 
 特殊来源（不在 stage_table.json 里，均无 stageId 的危机合约不在此列）：
   - 集成战略   excel/roguelike_topic_table.json
@@ -46,9 +53,11 @@ import paths  # noqa: E402
 import update_common as uc  # noqa: E402
 from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
+# 枚举与免疫映射的唯一事实来源在 update_enemies（游戏新增异常状态时只改那里）
+from update_enemies import ATK_MAP, IMMUNE_MAP, MOTION_MAP, STATUS_MAP  # noqa: E402
 
 TABLE = "stages"
-SCRIPT_VERSION = 1
+SCRIPT_VERSION = 2
 MAX_DETAIL = 200
 
 # 不参与校对：PRTS 爬取列 + 人工校正列
@@ -71,19 +80,23 @@ STAGE_TYPE_MAP = {
     "SPECIAL_STORY": "特殊故事",
 }
 
-# 覆写属性：属性字段 → 中文（含 list 类字段，build_stages.py 曾漏掉后由 refine 补上）
-ATTR_CN = {
-    "name": "名称", "description": "描述", "prefabKey": "模型",
-    "applyWay": "攻击方式", "motion": "行动方式", "enemyTags": "种类标签",
-    "lifePointReduce": "目标价值", "levelType": "地位", "rangeRadius": "攻击半径",
-    "numOfExtraDrops": "额外掉落数", "viewRadius": "视野半径",
-    "notCountInTotal": "不计入总数",
+# 覆写属性：游戏原始字段 → enemies 表的列名（键必须与表列一致，PRTS 才能回表）。
+# 两个例外：`numOfExtraDrops` / `viewRadius` 与斗蝉蝉模式相关，我们没做解析，
+# 表里本身就是英文列名，所以原样保留英文。没有对应列的字段（prefabKey、enemyTags、
+# spRecoveryPerSec 等）一律不列在这里，也就不会被记进覆写属性。
+# 映射口径以 update_enemies.py 的建表取值为准。
+ATTR_COL = {
+    "name": "名称", "description": "描述", "levelType": "地位",
+    "applyWay": "攻击方式", "motion": "行动方式",
+    "rangeRadius": "攻击半径", "lifePointReduce": "目标价值",
+    "notCountInTotal": "不计入敌人总数",
+    "numOfExtraDrops": "numOfExtraDrops", "viewRadius": "viewRadius",
     "maxHp": "最大生命值", "atk": "攻击力", "def": "防御力",
     "magicResistance": "法术抗性", "moveSpeed": "移动速度",
     "attackSpeed": "攻击速度", "baseAttackTime": "攻击间隔",
-    "hpRecoveryPerSec": "生命自回速度", "spRecoveryPerSec": "SP自回速度",
-    "massLevel": "重量", "tauntLevel": "基础嘲讽等级",
-    "epDamageResistance": "元素抗性", "epResistance": "损伤抗性",
+    "hpRecoveryPerSec": "生命自回速度", "massLevel": "重量",
+    "tauntLevel": "基础嘲讽等级",
+    "epResistance": "损伤抗性", "epDamageResistance": "元素抗性",
     "stunImmune": "晕眩抗性", "silenceImmune": "沉默抗性",
     "sleepImmune": "沉睡抗性", "frozenImmune": "冻结抗性",
     "levitateImmune": "浮空抗性", "disarmedCombatImmune": "缴械抗性",
@@ -92,6 +105,15 @@ ATTR_CN = {
     "groundBoundImmune": "缚地抗性",
     "talentBlackboard": "天赋覆写", "skills": "技能覆写",
 }
+
+# ─── 覆写属性的取舍 ──────────────────────────────────────────
+# 各单项抗性 → enemies 表 `异常抗性` 列表里的名字（口径同 IMMUNE_MAP）。
+# 这组键是 `异常抗性` 列的元素，不是列名本身（Air 2026-10-14 定）。
+IMMUNE_CN = {ATTR_COL[raw]: cn for raw, cn in IMMUNE_MAP.items() if raw in ATTR_COL}
+# 覆写里是游戏原始枚举，enemies 表存的是中文
+ENUM_CN = {"攻击方式": ATK_MAP, "行动方式": MOTION_MAP, "地位": STATUS_MAP}
+# 与 `覆写属性` 平级：没有对应列，但 PRTS 要配合关卡信息与天赋/技能描述判断改动
+SIBLING_KEYS = ("天赋覆写", "技能覆写")
 
 # PRTS 页面名规则（沿 build_stages_prts_v2.py）
 URL_RULES = {
@@ -116,7 +138,6 @@ uc.reconfigure_stdout()
 
 STAGE_TABLE = paths.GAMEDATA / "excel" / "stage_table.json"
 ENEMY_HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
-ENEMY_DB = paths.GAMEDATA / "levels" / "enemydata" / "enemy_database.json"
 LEVELS_ROOT = paths.GAMEDATA / "levels"
 
 
@@ -125,6 +146,15 @@ LEVELS_ROOT = paths.GAMEDATA / "levels"
 def load_json(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def handbook_names():
+    """图鉴 ID → 图鉴名（清洗后）。"""
+    handbook = load_json(ENEMY_HANDBOOK)
+    out = {}
+    for eid, v in handbook.get("enemyData", {}).items():
+        out[eid] = (clean_desc(v.get("name")) or "").strip() or None
+    return out
 
 
 def build_level_index():
@@ -144,10 +174,9 @@ def build_level_index():
 class LevelCache:
     """按需加载 level JSON，只留下战斗列所需的字段并缓存（旧脚本一次性全读进内存）。"""
 
-    def __init__(self, index, resolve_name, enemy_base=None):
+    def __init__(self, index, enemy_index):
         self.index = index
-        self.resolve = resolve_name
-        self.enemy_base = enemy_base
+        self.enemy_index = enemy_index
         self.cache = {}
 
     def combat(self, lid):
@@ -167,7 +196,7 @@ class LevelCache:
                     opts.get("initialCost"),
                     opts.get("maxCost"),
                     opts.get("maxLifePoint"),
-                    build_enemy_list(lv.get("enemyDbRefs"), self.resolve, self.enemy_base),
+                    build_enemy_list(lv.get("enemyDbRefs"), self.enemy_index),
                 )
         return self.cache[lid]
 
@@ -189,75 +218,174 @@ def clean_unlock_condition(raw):
 
 
 def extract_overrides(od):
-    """递归取 overwrittenData 中 m_defined=true 的叶节点，键名转中文；list 字段整段保留。"""
+    """取 overwrittenData 的覆写字段，键名转中文。
+
+    只走两层：顶层字段 + `attributes` 子字段。旧版遇到没有 m_defined 的 dict 就继续递归，
+    并把递归结果里的子键平铺到顶层，于是 `0数量` / `1级别` / `damageHitratePhysical`
+    这类嵌套碎片被漏成了顶层键；现在没有 m_defined 的 dict 一律不再下钻。
+    """
     result = {}
     if not isinstance(od, dict):
         return result
-    if "m_defined" in od:
-        if od["m_defined"]:
-            return {"__leaf__": od.get("m_value")}
-        return {}
+
+    def leaf(node):
+        """dict 按 m_defined 取叶值；list 整段保留；其余丢弃。"""
+        if isinstance(node, dict):
+            if node.get("m_defined") is True:
+                return True, node.get("m_value")
+            return False, None
+        if isinstance(node, list) and node:
+            return True, node
+        return False, None
+
     for key, val in od.items():
-        if isinstance(val, dict):
-            sub = extract_overrides(val)
-            cn = ATTR_CN.get(key, key)
-            if "__leaf__" in sub:
-                result[cn] = sub["__leaf__"]
-            else:
-                for sk, sv in sub.items():
-                    if sk != "__leaf__":
-                        result[sk] = sv
-        elif isinstance(val, list) and len(val) > 0:
-            result[ATTR_CN.get(key, key)] = val
+        if key == "attributes" and isinstance(val, dict):
+            for ak, av in val.items():
+                ok, v = leaf(av)
+                if ok:
+                    result[ATTR_COL.get(ak, ak)] = v
+            continue
+        ok, v = leaf(val)
+        if ok:
+            result[ATTR_COL.get(key, key)] = v
     return result
 
 
-def build_enemy_list(refs, resolve_name, enemy_base=None):
+def build_enemy_list(refs, index):
+    """`敌人列表`：名称用于展示，敌人ID 用于回表，覆写属性只留真差异。"""
     if not refs:
         return "[]"
     out = []
     for ref in refs:
         eid = ref.get("id")
         level = ref.get("level", 0)
-        item = {"名称": resolve_name(eid), "敌人ID": eid, "级别": level}
         ov = extract_overrides(ref.get("overwrittenData"))
-        if ov:
-            if enemy_base is not None:
-                ov = _differs(enemy_base.overrides(eid, level), ov)
-            if ov:
-                item["覆写属性"] = ov
+        tid, base = index.lookup(eid, level, ov.get("名称"))
+        item = {
+            "名称": index.display_name(eid, tid, ov),
+            "敌人ID": tid or eid,
+            "级别": level,
+        }
+        attrs = filter_overrides(ov, base, index.cols)
+        if attrs:
+            item["覆写属性"] = attrs
+        for k in SIBLING_KEYS:
+            if k in ov:
+                item[k] = ov[k]
         out.append(item)
     return json.dumps(out, ensure_ascii=False)
 
 
-class EnemyBase:
-    """基准敌人数据：用来判断某关的覆写是不是真的不同于常规值。
+def _norm_attr(key, val):
+    """把覆写值归一成 enemies 表的取值口径（文本清洗、枚举转中文）。"""
+    if key in ("名称", "描述") and isinstance(val, str):
+        return clean_desc(val) or ""
+    if key in ENUM_CN and isinstance(val, str):
+        return ENUM_CN[key].get(val, val)
+    return val
 
-    游戏数据的 `overwrittenData` 会把整套字段都标成 m_defined=true，其中大部分与常规
-    值完全相同（它标的是“显式给了值”，不是“值变了”），全记下来会让覆写属性形同虚设。
-    所以只保留与基准不同的字段；取不到基准就原样保留。
+
+def _same_attr(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) == bool(b)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return abs(float(a) - float(b)) < 1e-9
+    return uc.values_equal(a, b)
+
+
+def _parse_json_list(raw):
+    if not raw:
+        return []
+    try:
+        v = json.loads(raw)
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def filter_overrides(ov, base, cols):
+    """只留 enemies 表里存在的属性列，且值与该敌人常规值不同的那些。
+
+    base 为 None（关卡内联敌人，表里没有正身）时白名单内的全留：它们本来就是定义。
+    """
+    out = {}
+    for key, val in ov.items():
+        if key in SIBLING_KEYS:
+            continue
+        if key in IMMUNE_CN:
+            cur = (base or {}).get("异常抗性") or []
+            want = bool(val)
+            if base is not None and want == (IMMUNE_CN[key] in cur):
+                continue          # 与表里一致 → 不记
+            out[key] = want
+            continue
+        col = key                 # 键已按 ATTR_COL 归一成 enemies 表的列名
+        if col not in cols:
+            continue              # 表里没有这一列 → 不留（PRTS 无法回表）
+        val = _norm_attr(key, val)
+        if base is not None and _same_attr(val, base.get(col)):
+            continue              # 与常规值相同 → 不记
+        out[key] = val
+    return out
+
+
+def _strip_chain(eid):
+    """逐段去尾的候选 ID（`enemy_a_b_c` → `enemy_a_b` → `enemy_a`）。"""
+    parts = (eid or "").split("_")
+    out = []
+    while len(parts) > 2:
+        parts = parts[:-1]
+        out.append("_".join(parts))
+    return out
+
+
+class EnemyIndex:
+    """enemies 表快照：提供名称、常规值基准，以及 ID 归属判断。
+
+    `enemyDbRefs[].id` 分两种情况：
+      - 原样就在 enemies 表里（含级别变体与独立敌人）→ 直接用，绝不去尾；
+      - 原样不在（关卡内联敌人，或表内 ID 加了后缀的变体）→ 逐段去尾找候选，
+        候选在表里、且名称与覆写里的名称一致，才算同一个敌人；否则算关卡内联。
+
+    去尾只能放在“原样查不到”之后：表里 691 个 ID 去尾会落到另一个真实存在的敌人上
+    （enemy_1007_slime_2 是源石虫·α，不是源石虫），盲目去尾会把基准换成另一个敌人。
     """
 
-    def __init__(self, path):
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        self.by_key = {}
-        for e in data.get("enemies", []):
-            for v in e.get("Value", []):
-                self.by_key[(e.get("Key"), v.get("level"))] = v.get("enemyData")
+    def __init__(self, conn, hb_names):
+        self.cols = [d[1] for d in conn.execute("PRAGMA table_info(enemies)")]
+        self.hb_names = hb_names
+        self.rows = {}
+        self.name_by_id = {}
+        for r in conn.execute("SELECT * FROM enemies"):
+            d = dict(zip(self.cols, r))
+            if d["敌人ID"] not in self.name_by_id:
+                self.name_by_id[d["敌人ID"]] = d.get("名称")
+            d["异常抗性"] = _parse_json_list(d.get("异常抗性"))
+            self.rows[(d["敌人ID"], d["级别"])] = d
 
-    def overrides(self, eid, level):
-        """该敌人该级别的基准取值（同一套中文键）；取不到返回 None。"""
-        ed = self.by_key.get((eid, level))
-        return extract_overrides(ed) if ed is not None else None
+    def lookup(self, eid, level, want_name):
+        """→ (表内 ID 或 None, 常规值基准行 或 None)。"""
+        if eid in self.name_by_id:
+            return eid, self._row(eid, level)
+        for cand in _strip_chain(eid):
+            if cand in self.name_by_id:
+                if (want_name or "").strip() and self.name_by_id[cand] == want_name:
+                    return cand, self._row(cand, level)
+                return None, None
+        return None, None
 
+    def _row(self, eid, level):
+        return self.rows.get((eid, level)) or self.rows.get((eid, 0))
 
-def _differs(base, ov):
-    """只留与基准不同的字段；base 为 None（取不到基准）时原样保留。"""
-    if base is None:
-        return ov
-    return {k: v for k, v in ov.items()
-            if k not in base or not uc.values_equal(base[k], v)}
+    def display_name(self, eid, tid, ov):
+        """图鉴名 → 敌人表名 → 覆写里的名称 → 空。"""
+        for k in (eid, tid):
+            if k and self.hb_names.get(k):
+                return self.hb_names[k]
+        for k in (eid, tid):
+            if k and self.name_by_id.get(k):
+                return self.name_by_id[k]
+        return _norm_attr("名称", ov.get("名称")) if ov.get("名称") else ""
 
 
 # ─── 重算全部目标行 ───────────────────────────────────────────
@@ -268,17 +396,7 @@ def compute_rows(conn):
     rows: {关卡ID: {列名: 值}}
     no_level_keys: 源里找不到 level 文件的键（这些行的战斗列不参与校对）
     """
-    handbook = load_json(ENEMY_HANDBOOK)
-    hb_names = {}
-    for eid, v in handbook.get("enemyData", {}).items():
-        nm = clean_desc(v.get("name"))
-        hb_names[eid] = (nm or "").strip() or None
-    db_names = {eid: nm for eid, nm in conn.execute("SELECT 敌人ID, 名称 FROM enemies")}
-
-    def resolve_name(eid):
-        return hb_names.get(eid) or db_names.get(eid) or eid
-
-    lc = LevelCache(build_level_index(), resolve_name, EnemyBase(ENEMY_DB))
+    lc = LevelCache(build_level_index(), EnemyIndex(conn, handbook_names()))
     rows = {}
     no_level = set()
 
