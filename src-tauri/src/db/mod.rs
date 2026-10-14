@@ -27,6 +27,7 @@ use rusqlite::Connection;
 // ═══════════════════════════════════════════════════════
 
 /// 所有可用表。Database::open 对每张表执行 PRAGMA table_info 构建白名单。
+/// 新表必须在这里登记，否则查询层会把它当“未知数据表”拒掉。
 const ALL_TABLES: &[&str] = &[
     "enemies",
     "operators",
@@ -39,6 +40,7 @@ const ALL_TABLES: &[&str] = &[
     "rogue_3_entries",
     "rogue_4_entries",
     "rogue_5_entries",
+    "enemy_name_map",
 ];
 
 // ═══════════════════════════════════════════════════════

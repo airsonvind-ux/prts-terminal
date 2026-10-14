@@ -17,6 +17,12 @@
 //! 重量、异常抗性、备注。默认级别 0，输出标注该敌人的级别变体总数
 //! （如"共 2 级变体"），说明级别可切换范围。
 //!
+//! ## 名称口径
+//!
+//! 展示用**图鉴名**（玩家在游戏内看到、PRTS 直接查询的名字）。
+//! `enemies` 表记录的是游戏数据名，少数敌人（`enemy_name_map` 里的那些）两者不同，
+//! 此时在该条下方注明表里记录的名字。按名称查也认图鉴名。
+//!
 //! | 维度 | 默认 | extra 可切换 |
 //! |------|------|-------------|
 //! | 级别 | 0    | `级别=1`、`级别=2` |
@@ -162,7 +168,7 @@ impl Tool for QueryEnemy {
                         .get("敌人ID")
                         .and_then(|id| count_variants(db, id).ok())
                         .unwrap_or(0);
-                    format_one_enemy(&row, &extra, variant_count, &mut output);
+                    format_one_enemy(db, &row, &extra, variant_count, &mut output);
                 }
                 None => {
                     let label = match target {
@@ -260,12 +266,18 @@ fn parse_level_status(value: &str, cfg: &mut ExtraConfig) {
 // ═══════════════════════════════════════════════════════
 
 fn format_one_enemy(
+    db: &Database,
     row: &HashMap<String, String>,
     extra: &ExtraConfig,
     variant_count: usize,
     out: &mut String,
 ) {
-    let enemy_name = row.get("名称").map(|s| s.as_str()).unwrap_or("未知");
+    let table_name = row.get("名称").map(|s| s.as_str()).unwrap_or("未知");
+    // 展示用图鉴名：PRTS 直接查的就是这个名字
+    let alias = row
+        .get("敌人ID")
+        .and_then(|id| display_name_by_id(db, id, table_name));
+    let enemy_name = alias.as_deref().unwrap_or(table_name);
     let enemy_level = row.get("级别").map(|s| s.as_str()).unwrap_or("?");
 
     if variant_count > 0 {
@@ -278,6 +290,15 @@ fn format_one_enemy(
 
     // ── 默认返回列（固定顺序）──
     for col in DEFAULT_COLUMNS {
+        if *col == "名称" {
+            out.push_str(&format!("名称: {enemy_name}\n"));
+            if alias.is_some() {
+                out.push_str(&format!(
+                    "  ※ 上面是图鉴名，enemies 表记录的是“{table_name}”\n"
+                ));
+            }
+            continue;
+        }
         format_field(col, row, out);
     }
 
@@ -482,6 +503,56 @@ fn format_field(field: &str, row: &HashMap<String, String>, output: &mut String)
 }
 
 // ═══════════════════════════════════════════════════════
+// 名称映射（enemy_name_map）
+// ═══════════════════════════════════════════════════════
+
+/// 图鉴名 → 敌人ID。表不存在（旧库）或未命中都返回 None。
+fn display_name_to_id(db: &Database, name: &str) -> Option<String> {
+    match db.query_filtered(
+        "enemy_name_map",
+        &["敌人ID".to_string()],
+        &[Filter::new("图鉴名", FilterOp::Eq, name)],
+        1,
+    ) {
+        Ok(result) => result
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.get("敌人ID").filter(|s| !s.is_empty()).cloned()),
+        Err(e) => {
+            // 旧库没有这张表时会走到这儿；不静默 —— 出事时日志里要看得见
+            log::warn!("[query_enemy] 图鉴名映射不可用：{e}");
+            None
+        }
+    }
+}
+
+/// 该敌人在图鉴里的名字；映射未命中、或与表内名称相同时返回 None。
+fn display_name_by_id(db: &Database, enemy_id: &str, table_name: &str) -> Option<String> {
+    let name = match db.query_filtered(
+        "enemy_name_map",
+        &["图鉴名".to_string()],
+        &[Filter::new("敌人ID", FilterOp::Eq, enemy_id)],
+        1,
+    ) {
+        Ok(result) => result
+            .rows
+            .into_iter()
+            .next()
+            .and_then(|row| row.get("图鉴名").cloned())?,
+        Err(e) => {
+            log::warn!("[query_enemy] 图鉴名映射不可用：{e}");
+            return None;
+        }
+    };
+    if name.is_empty() || name == table_name {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+// ═══════════════════════════════════════════════════════
 // 查询函数
 // ═══════════════════════════════════════════════════════
 
@@ -531,7 +602,15 @@ fn query_by_name(
         return Ok(exact.rows.into_iter().next());
     }
 
-    // 阶段 2：LIKE 模糊匹配，取名称最短者
+    // 阶段 2：图鉴名精确（`enemy_name_map`）。PRTS 用图鉴名查，而 enemies 表存的是数据名，
+    // 少数敌人两个名字不同（如图鉴名“浆果磐蟹” / 数据名“带果壳的磐蟹”），靠映射接上。
+    if let Some(id) = display_name_to_id(db, name) {
+        if let Some(row) = query_by_id(db, &id, query_fields, level)? {
+            return Ok(Some(row));
+        }
+    }
+
+    // 阶段 3：LIKE 模糊匹配，取名称最短者
     let candidates = db
         .query_filtered(
             "enemies",
@@ -648,6 +727,26 @@ mod tests {
         assert!(result.contains("源石虫"), "应包含敌人名称\n结果: {result}");
         assert!(!result.contains("源石虫·α"), "不应包含变种\n结果: {result}");
         assert!(result.contains("攻击力"), "默认输出应含攻击力\n结果: {result}");
+    }
+
+    #[test]
+    fn display_name_from_name_map() {
+        // 图鉴名与表内数据名不同时：按图鉴名能查到，并注明表里记的是另一个名字。
+        // 不设“表不在就跳过”的开关 —— 跳过的测试等于没测（这个坑真实踩过）：
+        // 表不在直接报错，表的就位由 open_database_succeeds 守。
+        let ctx = make_ctx();
+        let tool = QueryEnemy;
+        let result = tool
+            .execute(&ctx, r#"{"names":["浆果磐蟹"]}"#)
+            .unwrap()
+            .summary;
+
+        assert!(result.contains("浆果磐蟹"), "应按图鉴名查到\n结果: {result}");
+        assert!(result.contains("图鉴名"), "应注明图鉴名与表内名称不同\n结果: {result}");
+        assert!(
+            result.contains("带果壳的磐蟹"),
+            "应给出表内记录的数据名\n结果: {result}"
+        );
     }
 
     #[test]
