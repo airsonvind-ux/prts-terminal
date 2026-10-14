@@ -429,7 +429,8 @@ def main():
         record["校对"]["差异列数"] = len(diffs)
         record["校对"]["计数"] = per_col
         record["校对"]["明细"] = [
-            {"键": "%s|%s" % (k[0], k[1]), "列": col, "旧": uc.brief(old), "新": uc.brief(new)}
+            dict({"键": "%s|%s" % (k[0], k[1]), "列": col},
+                 **uc.diff_brief(old, new, as_json=col in JSON_COLS))
             for k, col, old, new in diffs[:MAX_DETAIL]
         ]
 

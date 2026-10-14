@@ -30,7 +30,7 @@
 //!
 //! | 列名     | 原始格式                              | 输出格式                    |
 //! |---------|--------------------------------------|---------------------------|
-//! | 敌人列表 | JSON `[{"名称":"x","级别":0,...}]`    | 紧凑列表（含覆写属性）       |
+//! | 敌人列表 | JSON `[{"名称":"x","敌人ID":"enemy_x","级别":0,...}]` | 紧凑列表（含敌人ID与覆写属性） |
 //! | 情报    | PRTS wiki 文本                        | 经 wiki::clean_wiki 清洗    |
 //! | 关卡描述 | 含 `\n` 的文本                        | 自然换行保留                |
 //! | 解锁条件 | JSON `[{stageId,completeState}]`     | 编号列表 + 中文状态         |
@@ -333,12 +333,13 @@ fn format_one_stage(
 
 /// 敌人列表 JSON → 紧凑编号列表。
 ///
-/// `[{"名称":"士兵","级别":0,"覆写属性":{"防御力":30}}]` →
+/// `[{"名称":"士兵","敌人ID":"enemy_1002_nsabr","级别":0,"覆写属性":{"防御力":30}}]` →
 /// ```ignore
 /// 敌人列表:
-///   1. 士兵 Lv0（覆写：防御力 30）
-///   2. 源石虫 Lv0
+///   1. 士兵[enemy_1002_nsabr] Lv0（覆写：防御力 30）
+///   2. 源石虫[enemy_1007_slime] Lv0
 /// ```
+/// 敌人ID 放在方括号里，用于同名敌人时精确查询（同名有 66 组，按名字查会撞）。
 fn format_enemy_list(row: &HashMap<String, String>, out: &mut String) {
     let raw = match row.get("敌人列表") {
         Some(v) if !v.is_empty() && v != "null" => v,
@@ -352,6 +353,8 @@ fn format_enemy_list(row: &HashMap<String, String>, out: &mut String) {
     struct EnemyEntry {
         #[serde(rename = "名称")]
         name: String,
+        #[serde(rename = "敌人ID")]
+        id: Option<String>,
         #[serde(rename = "级别")]
         level: Option<u32>,
         #[serde(rename = "覆写属性")]
@@ -374,7 +377,10 @@ fn format_enemy_list(row: &HashMap<String, String>, out: &mut String) {
     out.push_str("敌人列表:\n");
     for (i, entry) in entries.iter().enumerate() {
         let lv = entry.level.unwrap_or(0);
-        let mut line = format!("  {}. {} Lv{lv}", i + 1, entry.name);
+        let mut line = match entry.id {
+            Some(ref id) if !id.is_empty() => format!("  {}. {}[{id}] Lv{lv}", i + 1, entry.name),
+            _ => format!("  {}. {} Lv{lv}", i + 1, entry.name),
+        };
 
         // 覆写属性
         if let Some(ref overrides) = entry.overrides {
@@ -698,6 +704,25 @@ mod tests {
 
         assert!(!result.contains("✗"), "默认列重复指定不应报错\n结果: {result}");
         assert_eq!(result.matches("关卡描述:").count(), 1, "默认列不应重复输出\n结果: {result}");
+    }
+
+    #[test]
+    fn enemy_list_with_id() {
+        // 新格式（stages 更新脚本产出的形态）：每项带 敌人ID，输出应显示 [id]。
+        // 测试夹具库是随包的旧版，敌人列表里还没有 ID，所以这里直接喂 JSON 验格式。
+        let mut row = HashMap::new();
+        row.insert(
+            "敌人列表".to_string(),
+            r#"[{"名称":"士兵","敌人ID":"enemy_1002_nsabr","级别":0},{"名称":"士兵","敌人ID":"enemy_5056_yrnorm","级别":0}]"#.to_string(),
+        );
+        let mut out = String::new();
+        format_enemy_list(&row, &mut out);
+
+        assert!(out.contains("士兵[enemy_1002_nsabr] Lv0"), "结果: {out}");
+        assert!(
+            out.contains("士兵[enemy_5056_yrnorm] Lv0"),
+            "两个同名敌人应能靠 ID 区分\n结果: {out}"
+        );
     }
 
     #[test]

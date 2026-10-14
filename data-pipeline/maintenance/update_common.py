@@ -120,6 +120,136 @@ def brief(value, limit=120):
     return s[:limit] + ("…" if len(s) > limit else "")
 
 
+# ─── 明细：把「旧→新」压成能看出差异的形态 ────────────────────
+#
+# 长列的旧值/新值各截一刀是没用的（两边前缀一模一样）。所以：
+#   - 短值：照旧给 旧 / 新；
+#   - JSON 列：按项/按键给「哪一项、哪个字段、旧→新」（敌人列表这类）；
+#   - 长文本：算共同前缀，只给差异处及左右上下文。
+
+_MISSING = object()
+
+
+def _same_val(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return float(a) == float(b)
+    return (json.dumps(a, sort_keys=True, ensure_ascii=False) ==
+            json.dumps(b, sort_keys=True, ensure_ascii=False))
+
+
+values_equal = _same_val   # 供各表脚本复用（同一套“值是否相等”口径）
+
+
+def _brief_json(v, limit=70):
+    if v is None:
+        return None
+    s = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _json_items(value):
+    """list → {标识: 项}；标识优先用 名称|级别，否则用下标。
+
+    同名同级别可能出现多次（关卡里同一个敌人有两条 ref），所以加出现序号，
+    否则后一条会覆盖前一条，差异比对会错位。
+    """
+    out = {}
+    seen = {}
+    for i, item in enumerate(value):
+        if isinstance(item, dict) and "名称" in item:
+            base = "%s|%s" % (item.get("名称"), item.get("级别", 0))
+        else:
+            base = str(i)
+        seen[base] = seen.get(base, 0) + 1
+        out[base if seen[base] == 1 else "%s#%d" % (base, seen[base])] = item
+    return out
+
+
+def _dict_changes(a, b):
+    """{键: (旧, 新)}，含新增（旧为 None）与删除（新为 None）。"""
+    out = {}
+    for k in set(a) | set(b):
+        va, vb = a.get(k, _MISSING), b.get(k, _MISSING)
+        if va is _MISSING:
+            out[k] = (None, vb)
+        elif vb is _MISSING:
+            out[k] = (va, None)
+        elif not _same_val(va, vb):
+            out[k] = (va, vb)
+    return out
+
+
+def _json_diff(a, b, limit):
+    """a / b 为已解析的 JSON 对象；两者同为 list 或 dict 时给结构化差异，否则返回 None。"""
+    out = []
+    if isinstance(a, list) and isinstance(b, list):
+        fa, fb = _json_items(a), _json_items(b)
+        order = ([k for k in fa if k in fb] +
+                 [k for k in fa if k not in fb] +
+                 [k for k in fb if k not in fa])
+        for k in order:
+            if len(out) >= limit:
+                break
+            if k not in fa:
+                out.append({"项": k, "变化": "新增", "新": _brief_json(fb[k])})
+            elif k not in fb:
+                out.append({"项": k, "变化": "删除", "旧": _brief_json(fa[k])})
+            else:
+                va, vb = fa[k], fb[k]
+                if isinstance(va, dict) and isinstance(vb, dict):
+                    for kk, (o, n) in _dict_changes(va, vb).items():
+                        if len(out) >= limit:
+                            break
+                        out.append({"项": k, "字段": kk, "旧": _brief_json(o), "新": _brief_json(n)})
+                elif not _same_val(va, vb):
+                    out.append({"项": k, "旧": _brief_json(va), "新": _brief_json(vb)})
+    elif isinstance(a, dict) and isinstance(b, dict):
+        for kk, (o, n) in _dict_changes(a, b).items():
+            if len(out) >= limit:
+                break
+            out.append({"字段": kk, "旧": _brief_json(o), "新": _brief_json(n)})
+    else:
+        return None
+    return out or [{"说明": "结构相同，仅文本形式不同"}]
+
+
+def _text_diff(a, b, ctx=20, span=60):
+    """长文本：算共同前缀，只给差异处及左右上下文。"""
+    n = min(len(a), len(b))
+    p = 0
+    while p < n and a[p] == b[p]:
+        p += 1
+    return {"共同前缀": p, "上文": a[max(0, p - ctx):p],
+            "旧": brief(a[p:p + span]), "新": brief(b[p:p + span])}
+
+
+def diff_brief(old, new, as_json=False, limit=4):
+    """记录明细用：旧→新 的简短差异描述。
+
+    JSON 列一律走结构化差异（不依赖文本长短）；文本列超长时只给差异处与上下文。
+    """
+    if old is None or new is None:
+        return {"旧": brief(old, 120), "新": brief(new, 120)}
+    a, b = str(old), str(new)
+    if a == b:
+        return {"旧": brief(a, 80), "新": brief(b, 80)}
+    if as_json:
+        try:
+            va, vb = json.loads(a), json.loads(b)
+        except (TypeError, ValueError):
+            va = vb = None
+        if ((isinstance(va, list) and isinstance(vb, list)) or
+                (isinstance(va, dict) and isinstance(vb, dict))):
+            d = _json_diff(va, vb, limit)
+            if d is not None:
+                return {"差异": d}
+    if len(a) > 120 or len(b) > 120:
+        return _text_diff(a, b)
+    return {"旧": brief(a, 120), "新": brief(b, 120)}
+
+
 # ─── 列比较（校对用）───────────────────────────────────────────
 
 def _as_json(value):
