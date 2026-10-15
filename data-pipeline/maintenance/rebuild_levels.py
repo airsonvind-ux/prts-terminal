@@ -484,7 +484,17 @@ CREATE TABLE levels (
 )
 """
 
-INSERT_COLS = ["levelId", "地图数据", "路线", "额外路线", "波次", "分支", "预置单位", "关卡符文"]
+# DB 列名 → process_level 产出的行内键（行里是英文键，不能拿列名直接索引）
+INSERT_COLS = [
+    ("levelId", "levelId"),
+    ("地图数据", "mapData"),
+    ("路线", "routes"),
+    ("额外路线", "extraRoutes"),
+    ("波次", "waves"),
+    ("分支", "branches"),
+    ("预置单位", "predefines"),
+    ("关卡符文", "runes"),
+]
 SIZE_COLS = ["地图数据", "路线", "额外路线", "波次", "分支", "预置单位", "关卡符文"]
 
 
@@ -506,14 +516,16 @@ def main():
     ap = argparse.ArgumentParser(description="levels 表全量重建")
     ap.add_argument("--dry-run", action="store_true", help="全量处理并报告，不写库、不写记录")
     ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
+    ap.add_argument("--db", default=str(OUTPUT_DB), help="目标数据库（默认 paths.DB_PATH）")
     args = ap.parse_args()
+    db_path = args.db
 
     paths.ensure_gamedata()
     uc.reconfigure_stdout()
     started = datetime.datetime.now()
 
     print("====== levels 表全量重建 ======")
-    print("数据库  : %s" % OUTPUT_DB)
+    print("数据库  : %s" % db_path)
     print("数据源  : %s" % paths.DATA_SOURCE)
     src_ver = uc.read_source_version(paths.DATA_SOURCE)
     print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
@@ -528,12 +540,12 @@ def main():
             "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"],
         },
         "脚本": {"文件": os.path.basename(__file__), "版本": SCRIPT_VERSION},
-        "数据库": os.path.basename(str(OUTPUT_DB)),
+        "数据库": os.path.basename(str(db_path)),
         "源文件": {},
         "撞车": 0,
         "撞车明细": [],
         "内部levelId 与文件名不一致": {"数量": 0, "明细": []},
-        "行数": {"重建前": count_rows(OUTPUT_DB), "重建后": 0},
+        "行数": {"重建前": count_rows(db_path), "重建后": 0},
         "列统计": {},
         "体积KB": {},
         "备份": None,
@@ -621,11 +633,11 @@ def main():
     if args.no_backup:
         print("  (已跳过备份)")
     else:
-        bak = uc.backup_db(str(OUTPUT_DB))
+        bak = uc.backup_db(db_path)
         record["备份"] = os.path.basename(bak) if bak else None
         print("  备份: %s" % (record["备份"] or "（未生成，库不存在）"))
 
-    conn = sqlite3.connect(str(OUTPUT_DB), isolation_level=None)
+    conn = sqlite3.connect(db_path, isolation_level=None)
     try:
         conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
         conn.execute("PRAGMA synchronous=OFF")
@@ -635,8 +647,8 @@ def main():
             conn.execute(CREATE_SQL)
             conn.executemany(
                 "INSERT INTO levels (%s) VALUES (%s)"
-                % (", ".join(INSERT_COLS), ", ".join("?" * len(INSERT_COLS))),
-                [tuple(row[c] for c in INSERT_COLS) for row in rows],
+                % (", ".join(c for c, _ in INSERT_COLS), ", ".join("?" * len(INSERT_COLS))),
+                [tuple(row[k] for _, k in INSERT_COLS) for row in rows],
             )
             conn.execute("COMMIT")
         except Exception as e:
