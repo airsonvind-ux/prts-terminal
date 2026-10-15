@@ -30,7 +30,12 @@ import paths  # noqa: E402
 import update_common as uc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
 
-RE_COLOR = re.compile(r"\|?color=(?:#[0-9a-fA-F]{3,8}|[A-Za-z]{3,20})")
+# 颜色值只在两种形态： #RRGGBB 类十六进制，或已知颜色名。
+# 不能用 [A-Za-z]{3,20}：它贪婪，会把 color=orangeBuff 的 Buff 一起吃掉。
+COLOR_WORDS = ("orange", "red", "green", "blue", "purple", "grey", "gray", "white",
+               "black", "yellow", "cyan", "pink", "gold", "brown", "lime", "navy",
+               "teal", "maroon", "olive", "silver", "aqua", "fuchsia")
+RE_COLOR = re.compile(r"\|?color=(?:#[0-9a-fA-F]{3,8}|(?:%s))" % "|".join(COLOR_WORDS))
 RECORD_NAME = "repair-effect-color"
 MAX_DETAIL = 300
 
