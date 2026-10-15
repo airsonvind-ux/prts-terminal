@@ -15,11 +15,14 @@
 口径（Air 2026-10-15 定：不得覆盖人工修改）：
   · 页面没给出这一项          → 保持库内原值
   · 库内为空                  → 写入
-  · 库内已有且 looks_dirty()  → 重写为当前清洗结果
-  · 库内已有且看起来干净      → **跳过**，记入「疑似人工修改」（可能是你补的内容）
-`--page-wins` 改为以页面为准（会覆盖人工补充，需显式指定）；`--only-empty` 只填空值。
+  · 库内值再洗一遍恰好等于新值 → 重写为当前清洗结果
+  · 否则                      → **保留不动**，记入「保留（疑似人工内容）」
 
-流程：先把全表爬完、算完，再**单事务**写库。干跑会打印改动与跳过项。
+第三条判据是为「人工补充与 wiki 文本混在同一字段里」准备的：拿当前规则再洗一遍库内值，
+若结果正好等于页面的新清洗结果，说明这个字段里除了那段正文没别的东西；你补的内容洗不掉，
+等号不成立，于是被保留。`--page-wins` 才是以页面为准（会覆盖）；`--only-empty` 只填空值。
+
+流程：先把全表爬完、算完，再**单事务**写库。干跑会打印改动与保留项。
 
 用法：
     python reclean_operators.py --dry-run
@@ -44,7 +47,7 @@ sys.path.insert(0, str(HERE))          # maintenance/
 import paths  # noqa: E402
 import update_common as uc  # noqa: E402
 import update_operators as up  # noqa: E402
-from cleaning_wiki import looks_dirty  # noqa: E402
+from cleaning_wiki import clean_wiki  # noqa: E402
 
 TABLE = "operators"
 SCRIPT_VERSION = 1
@@ -52,12 +55,23 @@ MAX_DETAIL = 200
 JOURNAL_MODE = "MEMORY"
 
 
+def _pure_crawl(old, new):
+    """库内值是否就是同一段正文的旧清洗产物（空值也算）。
+
+    判据：拿当前规则再洗一遍库内值，洗出来等于页面的新清洗结果 —— 说明这个字段里
+    除了那段正文没别的东西；人工补充洗不掉，等号不成立 → 视为可能含手写内容，保留。
+    """
+    if not old:
+        return True
+    return clean_wiki(old) == new
+
+
 def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes,
              only_empty, page_wins):
     """算这一行该改哪几处、该跳过哪几处。
 
     返回 (changes, skipped)：changes = [(位置, 旧值, 新值)]；
-    skipped = [(位置, 旧值, 新值)]，即页面与库内不同但库内看起来干净、疑似人工修改的。
+    skipped = [(位置, 旧值, 新值)]，即页面给出了文本、但库内值洗不成同一段的（疑似含人工内容）。
     """
     changes, skipped = [], []
 
@@ -68,7 +82,7 @@ def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes,
             if not old:
                 changes.append((location, old, new))
             return
-        if not page_wins and old and not looks_dirty(old):
+        if not page_wins and not _pure_crawl(old, new):
             skipped.append((location, old, new))
             return
         changes.append((location, old, new))
@@ -86,11 +100,11 @@ def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes,
 def apply_skills(skills, skill_notes, only_empty, page_wins):
     for sk in skills:
         note = skill_notes.get(sk.get("技能名", ""))
-        if not note:
+        if not note or sk.get("备注") == note:
             continue
         if only_empty and sk.get("备注"):
             continue
-        if not page_wins and sk.get("备注") and not looks_dirty(sk["备注"]):
+        if not page_wins and not _pure_crawl(sk.get("备注"), note):
             continue
         sk["备注"] = note
     return json.dumps(skills, ensure_ascii=False)
@@ -99,11 +113,11 @@ def apply_skills(skills, skill_notes, only_empty, page_wins):
 def apply_talents(talents, talent_notes, only_empty, page_wins):
     for i, item in enumerate(talents):
         note = talent_notes[i] if i < len(talent_notes) else None
-        if not note:
+        if not note or item.get("备注") == note:
             continue
         if only_empty and item.get("备注"):
             continue
-        if not page_wins and item.get("备注") and not looks_dirty(item["备注"]):
+        if not page_wins and not _pure_crawl(item.get("备注"), note):
             continue
         item["备注"] = note
     return json.dumps(talents, ensure_ascii=False)
@@ -144,7 +158,7 @@ def main():
         "范围": ["备注", "技能列表[].备注", "天赋列表[].备注"],
         "爬取": {"目标干员": 0, "成功": 0, "无页面": 0, "重定向": [], "无页面明细": []},
         "变更": {"行": 0, "处": 0, "备注": 0, "技能备注": 0, "天赋备注": 0, "明细": []},
-        "跳过（疑似人工修改）": {"处": 0, "明细": []},
+        "保留（疑似人工内容）": {"处": 0, "明细": []},
         "结果": "未执行",
     }
 
@@ -227,11 +241,11 @@ def main():
         record["变更"]["技能备注"] = touched["技能备注"]
         record["变更"]["天赋备注"] = touched["天赋备注"]
         record["变更"]["明细"] = details
-        record["跳过（疑似人工修改）"]["处"] = skipped_total
-        record["跳过（疑似人工修改）"]["明细"] = skipped_details
+        record["保留（疑似人工内容）"]["处"] = skipped_total
+        record["保留（疑似人工内容）"]["明细"] = skipped_details
 
         print("\n------ 1. 结果 ------")
-        print("  成功 %d | 无页面 %d | 变更行 %d | 变更处 %d | 跳过（疑似人工）%d 处"
+        print("  成功 %d | 无页面 %d | 变更行 %d | 变更处 %d | 保留（疑似人工内容）%d 处"
               % (record["爬取"]["成功"], len(no_page), len(pending),
                  record["变更"]["处"], skipped_total))
         print("    备注列 %d | 技能备注 %d | 天赋备注 %d"
