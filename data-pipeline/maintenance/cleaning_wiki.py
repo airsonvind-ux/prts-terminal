@@ -187,8 +187,11 @@ BASE_RULES = [
     ("斜体", re.compile(r"''([^']*)''"), lambda m: m.group(1)),
 
     # HTML 标签删除（白名单，避免误伤游戏文本里的 <@xx> / <$xx>）
+    # HTML 标签删除（白名单，避免误伤游戏文本里的 <@xx> / <$xx> / <替身> 这类尖括号中文）
+    #   color 是游戏数据自身的富文本标签（<color=#20b4a1>…</color>），b/i 是残留的 HTML 强调
     ("html标签", re.compile(
-        r'</?(?:span|div|sup|sub|small|big|center|font|table|tr|td|th|ruby|rt|rb|p|li|ul|ol)\b[^>]*>',
+        r'</?(?:span|div|sup|sub|small|big|center|font|table|tr|td|th|ruby|rt|rb|p|li|ul|ol'
+        r'|color|b|i)\b[^>]*>',
         re.IGNORECASE), lambda m: ''),
 ]
 
