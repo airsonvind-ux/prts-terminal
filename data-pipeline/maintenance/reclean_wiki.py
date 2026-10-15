@@ -1,18 +1,26 @@
 # -*- coding: utf-8 -*-
-"""规则升级后的全库重清洗（`天赋文本` / `技能文本`）。
+"""规则升级后的全库重清洗（按表选要洗的列）。
 
 性质：**规则升级时的一次性全库迁移**。
   - 规则不变时不用跑——清洗在每次爬取时都会执行，新数据天生干净；
-  - 规则再升级后重跑即可，用途完全相同。
+  - 规则再升级后重跑即可，用途完全相同；
+  - 已存在、但当初是按旧规则洗过的列，靠这里补洗。
 
-只改 `天赋文本` / `技能文本` 两列，不碰 `描述` / `能力列表` / `备注` 等列。
+目标（`--table` 选，默认 enemies）：
 
-清洗是**幂等**的：已洗净的文本再洗一次结果相同。所以重复运行不会产生新变化，
-脚本会直接报「无变化」并跳过备份、写库、写记录。
+| 表 | 列 | 为什么要补洗 |
+|---|---|---|
+| `enemies` | `天赋文本` / `技能文本` | 规则升级后统一重洗 |
+| `stages` | `情报` | 情报只对**新增行**爬取，且不参与校对（`SKIP_COLS`）——2026-10-13 补齐规则之前的行会一直带着旧清洗的残留（`{{Popup|…}}`、`{{color|…}}`、`'''…'''`），补洗一次后残留归零 |
+
+只改指定列，不碰其它列；清洗是**幂等**的，已洗净的文本再洗一次结果相同，
+所以重复运行不会产生新变化，脚本会直接报「无变化」并跳过备份、写库、写记录。
 
 用法：
-    python reclean_wiki.py --dry-run   # 只看会改多少、改成什么样
-    python reclean_wiki.py             # 正式执行（先备份，单事务，失败回滚）
+    python reclean_wiki.py --dry-run                  # enemies（默认）：只看会改多少、改成什么样
+    python reclean_wiki.py
+    python reclean_wiki.py --table stages --dry-run    # stages.情报
+    python reclean_wiki.py --table stages
 """
 
 import argparse
@@ -26,13 +34,18 @@ import paths  # noqa: E402
 from cleaning_wiki import clean_wiki, looks_dirty  # noqa: E402
 from update_common import backup_db, write_record  # noqa: E402
 
-TABLE = "enemies"
-COLS = ("天赋文本", "技能文本")
+# 表名: (要洗的列, 键列)
+TARGETS = {
+    "enemies": (("天赋文本", "技能文本"), ("敌人ID", "级别")),
+    "stages": (("情报",), ("关卡ID",)),
+}
 MAX_SAMPLE = 5
 
 
 def main():
-    ap = argparse.ArgumentParser(description="重清洗 enemies 的天赋/技能文本")
+    ap = argparse.ArgumentParser(description="规则升级后的全库重清洗")
+    ap.add_argument("--table", choices=sorted(TARGETS), default="enemies",
+                    help="要洗哪张表（默认 enemies）")
     ap.add_argument("--dry-run", action="store_true", help="只报告，不写库")
     ap.add_argument("--no-backup", action="store_true", help="跳过自动备份")
     ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库")
@@ -41,20 +54,24 @@ def main():
     if not os.path.exists(args.db):
         raise SystemExit("数据库不存在：%s" % args.db)
 
+    table = args.table
+    cols, key_cols = TARGETS[table]
+
     started = datetime.now()
-    print("====== wikitext 重清洗（%s）======" % " / ".join(COLS))
+    print("====== wikitext 重清洗（%s：%s）======" % (table, " / ".join(cols)))
     print("数据库: %s" % args.db)
 
     conn = sqlite3.connect(args.db)
     conn.isolation_level = None
     try:
-        cols = [d[1] for d in conn.execute("PRAGMA table_info(%s)" % TABLE)]
-        for c in COLS:
-            if c not in cols:
+        have = [d[1] for d in conn.execute("PRAGMA table_info(%s)" % table)]
+        for c in cols:
+            if c not in have:
                 raise SystemExit("缺少列：%s" % c)
 
+        key_sel = ", ".join(key_cols)
         rows = conn.execute(
-            "SELECT rowid, 敌人ID, 级别, %s FROM %s" % (", ".join(COLS), TABLE)
+            "SELECT rowid, %s, %s FROM %s" % (key_sel, ", ".join(cols), table)
         ).fetchall()
         print("扫描行数: %d" % len(rows))
 
@@ -62,7 +79,9 @@ def main():
         checked = 0
         dirty_before = 0
         samples = []
-        for rowid, eid, lv, *values in rows:
+        for rowid, *rest in rows:
+            keys = rest[:len(key_cols)]
+            values = rest[len(key_cols):]
             news = []
             changed_here = False
             for v in values:
@@ -77,9 +96,9 @@ def main():
                 if nv != v:
                     changed_here = True
                     if len(samples) < MAX_SAMPLE:
-                        i = min([v.find(x) for x in ("{{", "<!--", "[[") if v.find(x) >= 0] or [0])
+                        i = min([v.find(x) for x in ("{{", "<!--", "[[", "'''") if v.find(x) >= 0] or [0])
                         samples.append({
-                            "键": "%s|%s" % (eid, lv),
+                            "键": "|".join(str(k) for k in keys),
                             "前": v[max(0, i - 40):i + 160],
                             "后": clean_wiki(v[max(0, i - 40):i + 160]),
                         })
@@ -98,8 +117,8 @@ def main():
             "任务": "reclean_wiki",
             "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
             "数据库": os.path.basename(args.db),
-            "表": TABLE,
-            "列": list(COLS),
+            "表": table,
+            "列": list(cols),
             "有文本列数": checked,
             "变化列数": len(plan),
             "清洗前含脏标记": dirty_before,
@@ -126,10 +145,10 @@ def main():
         print("------ 写库（单事务）------")
         conn.execute("BEGIN IMMEDIATE")
         try:
+            sets = ", ".join("%s=?" % c for c in cols)
             for rowid, news, _old in plan:
-                sets = ", ".join("%s=?" % c for c in COLS)
                 conn.execute(
-                    "UPDATE %s SET %s WHERE rowid=?" % (TABLE, sets),
+                    "UPDATE %s SET %s WHERE rowid=?" % (table, sets),
                     tuple(news) + (rowid,),
                 )
             conn.execute("COMMIT")
@@ -142,7 +161,7 @@ def main():
 
         # 复核
         after_dirty = 0
-        for r in conn.execute("SELECT %s FROM %s" % (", ".join(COLS), TABLE)):
+        for r in conn.execute("SELECT %s FROM %s" % (", ".join(cols), table)):
             for v in r:
                 if v and looks_dirty(v):
                     after_dirty += 1
