@@ -53,6 +53,7 @@ TABLE = "operators"
 SCRIPT_VERSION = 1
 MAX_DETAIL = 200
 JOURNAL_MODE = "MEMORY"
+RECORD_NAME = "operators-reclean"      # 记录文件名，与 update_operators 的记录区分开
 
 
 def _pure_crawl(old, new):
@@ -188,7 +189,7 @@ def main():
                 continue
             except Exception as e:
                 record["结果"] = "中止（爬取失败：%s）" % e
-                path = uc.write_record(TABLE, record)
+                path = uc.write_record(RECORD_NAME, record)
                 print("\n!! 中止：%s" % e)
                 print("   未对数据库做任何修改；记录：%s" % path)
                 return 1
@@ -286,7 +287,7 @@ def main():
         except Exception as e:
             conn.execute("ROLLBACK")
             record["结果"] = "中止（写库失败：%s）" % e
-            path = uc.write_record(TABLE, record)
+            path = uc.write_record(RECORD_NAME, record)
             print("\n!! 写库失败并已回滚：%s" % e)
             print("   记录：%s" % path)
             return 1
@@ -294,7 +295,7 @@ def main():
         conn.close()
 
     record["结果"] = "成功"
-    path = uc.write_record(TABLE, record)
+    path = uc.write_record(RECORD_NAME, record)
     elapsed = (datetime.now() - started).total_seconds()
     print("\n====== 完成（%.1fs）======" % elapsed)
     print("  更新记录: %s" % path)
