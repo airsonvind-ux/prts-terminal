@@ -37,6 +37,12 @@
 规则原来用非贪婪匹配，内容里嵌着别的模板时会在内层第一个 `}}` 处切断外层，
 在正文里留下 `{{异常效果…}}` 这类残骸（库里已有 5 个值这样坏掉，stages.情报还有
 12 处同形态尚未洗）。改为容忍一层嵌套的匹配。**已经切坏的值清洗救不回，只能重爬。**
+
+补规则（2026-10-15，Air 报告 装置机制 首行变 <nowiki/>）：合并时漏了 MediaWiki 的
+`<nowiki/>` / `<nowiki>` / `</nowiki>` 标记——旧的私有 cleaner（build_traps_prts /
+build_tokens_prts）有这条，新模块没有。装置页习惯把 `<nowiki/>` 放在多行参数
+（如 `装置机制`）开头，于是被原样写进了库。现在补到基础规则里（紧跟注释之后）。
+库里已有的那批由 `db_builder/repair_nowiki.py` 一次性清掉。
 """
 
 import re
@@ -46,6 +52,10 @@ import re
 BASE_RULES = [
     # 注释：一律删除（含 JSON 注释块与 spell_on / spell_end 之类标记）
     ("注释", re.compile(r'<!--[\s\S]*?-->'), lambda m: ''),
+
+    # <nowiki/> / <nowiki> / </nowiki>：MediaWiki 的「原样显示」标记，页面上不渲染任何东西。
+    #   页面常把 <nowiki/> 放在多行参数（如 装置机制）的开头；漏掉就会当作正文写进库。
+    ("nowiki", re.compile(r'</?nowiki\s*/?>', re.IGNORECASE), lambda m: ''),
 
     # 媒体链接：[[文件:xxx.png|缩略图|<center>名字</center>]] → 删除
     # （页名是文件名，后面是图片参数，都不是文本内容）
@@ -146,7 +156,8 @@ BASE_RULES = [
 ]
 
 # 用于定位「可能没洗干净」的文本（各脚本可用来做残留检查）
-DIRTY_MARKERS = ['<!--', '{{', '【{{', '[[', "'''", '<div', '<span', '<center', '<@', '<$']
+DIRTY_MARKERS = ['<!--', '{{', '【{{', '[[', "'''", '<div', '<span', '<center', '<@', '<$',
+                '<nowiki']
 
 _RE_EXTRA_BLANK = re.compile(r'\n{3,}')
 
