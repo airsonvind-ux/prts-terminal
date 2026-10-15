@@ -40,6 +40,7 @@ const ALL_TABLES: &[&str] = &[
     "rogue_3_entries",
     "rogue_4_entries",
     "rogue_5_entries",
+    "rogue_6_entries",
     "enemy_name_map",
 ];
 

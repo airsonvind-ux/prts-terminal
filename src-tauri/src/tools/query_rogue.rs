@@ -1,7 +1,7 @@
 ﻿//! query_rogue —— 集成战略条目查询工具
 //!
 //! 语义：输入肉鸽主题 + 名称或 ID → 返回该条目的全部有值字段。
-//! 跨五表独立查询，由 `theme` 参数指定目标表。
+//! 跨六表独立查询，由 `theme` 参数指定目标表。
 //! 与 search_entities 互为逆操作：
 //!   query_rogue：身份 → 属性（名称查询）
 //!   search_entities：条件 → 身份列表（集合筛选）
@@ -21,6 +21,7 @@
 //!   萨米/探索者的银凇止境/rogue3/3  → rogue_3_entries
 //!   萨卡兹/萨卡兹的无终奇语/rogue4/4 → rogue_4_entries
 //!   界园/rogue5/5                 → rogue_5_entries
+//!   黑流树海/rogue6/6             → rogue_6_entries
 
 use crate::db::{Database, Filter, FilterOp};
 use crate::tools::common::{self, Target};
@@ -37,45 +38,59 @@ pub struct QueryRogue;
 // ═══════════════════════════════════════════════════════
 
 /// 主题标识符 → 表名 + 主题显示名。
+///
+/// `aliases` 是这一个主题的全部叫法（全称/简称/英文/序号）。
+/// 精确匹配与模糊包含匹配都只读这一份，新增主题只需在 THEMES 里加一条。
 #[derive(Debug)]
 struct ThemeInfo {
     table: &'static str,
     display: &'static str,
+    aliases: &'static [&'static str],
 }
 
 /// 所有可用主题。display 用于输出中的主题标注。
 const THEMES: &[ThemeInfo] = &[
-    ThemeInfo { table: "rogue_1_entries", display: "傀影与猩红孤钻" },
-    ThemeInfo { table: "rogue_2_entries", display: "水月与深蓝之树" },
-    ThemeInfo { table: "rogue_3_entries", display: "探索者的银凇止境" },
-    ThemeInfo { table: "rogue_4_entries", display: "萨卡兹的无终奇语" },
-    ThemeInfo { table: "rogue_5_entries", display: "岁的界园志异" },
+    ThemeInfo { table: "rogue_1_entries", display: "傀影与猩红孤钻",
+                aliases: &["1", "rogue1", "rogue_1", "傀影", "傀影与猩红孤钻"] },
+    ThemeInfo { table: "rogue_2_entries", display: "水月与深蓝之树",
+                aliases: &["2", "rogue2", "rogue_2", "水月", "水月与深蓝之树"] },
+    ThemeInfo { table: "rogue_3_entries", display: "探索者的银凇止境",
+                aliases: &["3", "rogue3", "rogue_3", "萨米", "银凇", "凇止境",
+                          "探索者的银凇止境"] },
+    ThemeInfo { table: "rogue_4_entries", display: "萨卡兹的无终奇语",
+                aliases: &["4", "rogue4", "rogue_4", "萨卡兹", "萨卡兹的无终奇语"] },
+    ThemeInfo { table: "rogue_5_entries", display: "岁的界园志异",
+                aliases: &["5", "rogue5", "rogue_5", "界园", "岁的界园志异"] },
+    ThemeInfo { table: "rogue_6_entries", display: "沉沦者的黑流树海",
+                aliases: &["6", "rogue6", "rogue_6", "黑流", "黑流树海",
+                          "沉沦者的黑流树海"] },
 ];
 
 /// 解析用户输入的 theme 参数，返回对应的 ThemeInfo。
 ///
-/// 接受：中文全称、简称（傀影/水月/萨米/萨卡兹/界园）、
+/// 接受：中文全称、简称（傀影/水月/萨米/萨卡兹/界园/黑流树海）、
 /// 英文标识符（rogue1/rogue_1/1 等）。
 fn resolve_theme(input: &str) -> Result<&'static ThemeInfo, String> {
     let s = input.trim().to_lowercase();
 
-    // 数字
-    match s.as_str() {
-        "1" | "rogue1" | "rogue_1" | "傀影" | "傀影与猩红孤钻" => return Ok(&THEMES[0]),
-        "2" | "rogue2" | "rogue_2" | "水月" | "水月与深蓝之树" => return Ok(&THEMES[1]),
-        "3" | "rogue3" | "rogue_3" | "萨米" | "探索者的银凇止境" => return Ok(&THEMES[2]),
-        "4" | "rogue4" | "rogue_4" | "萨卡兹" | "萨卡兹的无终奇语" => return Ok(&THEMES[3]),
-        "5" | "rogue5" | "rogue_5" | "界园" | "岁的界园志异" => return Ok(&THEMES[4]),
-        _ => {}
+    // 精确匹配：主题的全部叫法都在 ThemeInfo.aliases 里
+    for t in THEMES {
+        if t.aliases.iter().any(|a| s == *a) {
+            return Ok(t);
+        }
     }
 
-    // 模糊匹配（处理用户加了空格等情况）—— 需唯一命中，多命中报错
+    // 模糊匹配（处理用户加了空格/带了后缀等情况）—— 同一份别名做包含匹配，
+    // 单字别名（序号）不参与，需唯一命中，多命中报错。
     let mut fuzzy_hits: Vec<&ThemeInfo> = Vec::new();
-    if s.contains("傀影") { fuzzy_hits.push(&THEMES[0]); }
-    if s.contains("水月") { fuzzy_hits.push(&THEMES[1]); }
-    if s.contains("萨米") || s.contains("银凇") || s.contains("凇止境") { fuzzy_hits.push(&THEMES[2]); }
-    if s.contains("萨卡兹") { fuzzy_hits.push(&THEMES[3]); }
-    if s.contains("界园") { fuzzy_hits.push(&THEMES[4]); }
+    for t in THEMES {
+        if t.aliases
+            .iter()
+            .any(|a| a.chars().count() >= 2 && s.contains(*a))
+        {
+            fuzzy_hits.push(t);
+        }
+    }
 
     match fuzzy_hits.len() {
         1 => return Ok(fuzzy_hits[0]),
@@ -120,7 +135,7 @@ impl Tool for QueryRogue {
             "properties": {
                 "theme": {
                     "type": "string",
-                    "description": "肉鸽主题：傀影/水月/萨米/萨卡兹/界园、序号 1~5、rogue1~5 或完整主题名"
+                    "description": "肉鸽主题：简称（傀影/水月/萨米/萨卡兹/界园/黑流树海/黑流）、序号 1~6、rogue1~6 或完整主题名"
                 },
                 "ids": {
                     "type": "array",
@@ -240,7 +255,7 @@ impl Tool for QueryRogue {
 // 数据库查询
 // ═══════════════════════════════════════════════════════
 
-/// 所有需要查询的列（五表通用 schema）。
+/// 所有需要查询的列（六表通用 schema）。
 const ALL_COLS: &[&str] = &["id", "名称", "效果", "类型", "稀有度", "buff", "备注", "特性"];
 
 /// 收集 dropped_fields，去重。
@@ -850,6 +865,18 @@ mod tests {
     #[test]
     fn resolve_theme_rogue5_full_name() {
         assert!(resolve_theme("岁的界园志异").unwrap().table == "rogue_5_entries");
+    }
+
+    #[test]
+    fn resolve_theme_rogue6() {
+        assert!(resolve_theme("6").unwrap().table == "rogue_6_entries");
+        assert!(resolve_theme("rogue6").unwrap().table == "rogue_6_entries");
+        assert!(resolve_theme("rogue_6").unwrap().table == "rogue_6_entries");
+        assert!(resolve_theme("黑流树海").unwrap().table == "rogue_6_entries");
+        assert!(resolve_theme("沉沦者的黑流树海").unwrap().table == "rogue_6_entries");
+        // 简称与模糊：用户常把黑流树海叫成"黑流"
+        assert!(resolve_theme("黑流").unwrap().table == "rogue_6_entries");
+        assert!(resolve_theme("黑流树海主题").unwrap().table == "rogue_6_entries");
     }
 
     #[test]
