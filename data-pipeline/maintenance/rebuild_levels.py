@@ -1,31 +1,43 @@
 """
 PRTS 终端 — levels 表全量重建脚本（维护用）
 
+levels 表采用「重建制」维护：数据源为本地 JSON、没有人工修正、无 PRTS 爬取，
+每次数据源更新后整表重建即可。其他含 Wiki 爬取信息的表用「更新制」，不要用重建方式维护。
+
 数据源：levels/obt/**/*.json + levels/activities/**/*.json
-每次数据源更新后，对本脚本执行一次即可完成 levels 表重建：
-    python rebuild_levels.py
+（同一 levelId 先到先得，撞车记入更新记录）
+重建前备份、失败即中止、单事务写库、结束写 updates/<时间戳>-levels.json。
 
 本脚本合并了旧 build_levels.py + build_remove_keys_levels.py + build_levels_runes.py
 三者的职责，一次产出最终入库格式（去键化 + 归一化 + 符文），不再分 build/refine 两阶段。
 
-levels 表采用「重建制」维护（数据源为本地 JSON，重建快且稳定）；
-其他含 Wiki 爬取信息的表采用「更新制」，不要用重建方式维护。
+用法：
+    python rebuild_levels.py --dry-run   # 全量处理并报告，不写库、不写记录
+    python rebuild_levels.py             # 正式执行
 """
 
+import argparse
+import datetime
 import json
 import os
-import shutil
 import sqlite3
 import sys
-import datetime
+import time
 
 # ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import paths  # noqa: E402
+import update_common as uc  # noqa: E402
 from paths import GAMEDATA as DATA_ROOT, DB_PATH as OUTPUT_DB  # noqa: E402
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))          # .../data-pipeline/maintenance
-DB_BUILDER_DIR = os.path.dirname(OUTPUT_DB)
+TABLE = "levels"
+SCRIPT_VERSION = 1
+MAX_DETAIL = 200      # 记录里明细条数上限
+PROGRESS_EVERY = 500  # 处理进度打印间隔
+# journal_mode=OFF 会连事务回滚一起关掉（写库失败时无法撤回）；WAL 会写进数据库文件头，
+# 这份库随包分发当只读资源用，届时需要目录写权限才能打开，故不用。
+JOURNAL_MODE = "MEMORY"
 
 # ─── 枚举映射表 ───────────────────────────
 
@@ -64,19 +76,34 @@ def normalize_enum(val, mapping):
 # ─── 文件收集 ─────────────────────────────
 
 def collect_json_files():
+    """收集关卡 json：先 levels/obt 再 levels/activities，文件名即候选键。
+
+    同一「文件名」出现多次时保留先者，撞车记入明细（返回 (files, 撞车明细)）。
+    遍历顺序显式排序，避免依赖文件系统顺序导致每次重建结果不同。
+    """
     files = {}
+    collisions = []
+
     def walk(root):
-        for dirpath, _, fnames in os.walk(root):
-            for fname in fnames:
-                if fname.endswith(".json"):
-                    lid = fname.replace(".json", "")
-                    if lid not in files:
-                        files[lid] = os.path.join(dirpath, fname)
+        for dirpath, dirnames, fnames in os.walk(root):
+            dirnames.sort()
+            for fname in sorted(fnames):
+                if not fname.endswith(".json"):
+                    continue
+                lid = fname.removesuffix(".json")
+                full = os.path.join(dirpath, fname)
+                if lid in files:
+                    collisions.append({"来源": "文件名相同", "键": lid,
+                                       "保留": os.path.relpath(files[lid], DATA_ROOT),
+                                       "忽略": os.path.relpath(full, DATA_ROOT)})
+                else:
+                    files[lid] = full
+
     walk(os.path.join(DATA_ROOT, "levels", "obt"))
     act_root = os.path.join(DATA_ROOT, "levels", "activities")
     if os.path.isdir(act_root):
         walk(act_root)
-    return files
+    return files, collisions
 
 
 # ─── mapData ──────────────────────────────
@@ -440,131 +467,217 @@ def process_level(filepath):
 
 # ─── 主流程 ───────────────────────────────
 
-def backup_db():
-    """重建前备份现有库（若存在）。"""
-    if not os.path.exists(OUTPUT_DB):
+CREATE_SQL = """
+CREATE TABLE levels (
+    levelId     TEXT PRIMARY KEY,
+    地图数据     TEXT NOT NULL,
+    路线        TEXT NOT NULL,
+    额外路线     TEXT,
+    波次        TEXT NOT NULL,
+    分支        TEXT,
+    预置单位     TEXT,
+    关卡符文     TEXT NOT NULL DEFAULT '{}'
+)
+"""
+
+INSERT_COLS = ["levelId", "地图数据", "路线", "额外路线", "波次", "分支", "预置单位", "关卡符文"]
+SIZE_COLS = ["地图数据", "路线", "额外路线", "波次", "分支", "预置单位", "关卡符文"]
+
+
+def count_rows(db_path):
+    """库里现有的 levels 行数；库或表不存在返回 None（首次重建）。"""
+    if not os.path.exists(db_path):
         return None
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    bak = os.path.join(DB_BUILDER_DIR, f"arknights_backup_{ts}.db")
-    shutil.copy2(OUTPUT_DB, bak)
-    return bak
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return conn.execute("SELECT COUNT(*) FROM levels").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
 
 
-def build():
+def main():
+    ap = argparse.ArgumentParser(description="levels 表全量重建")
+    ap.add_argument("--dry-run", action="store_true", help="全量处理并报告，不写库、不写记录")
+    ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
+    args = ap.parse_args()
+
+    paths.ensure_gamedata()
+    uc.reconfigure_stdout()
+    started = datetime.datetime.now()
+
     print("====== levels 表全量重建 ======")
-    print(f"数据源: {DATA_ROOT}")
-    print(f"目标 DB: {OUTPUT_DB}")
+    print("数据库  : %s" % OUTPUT_DB)
+    print("数据源  : %s" % paths.DATA_SOURCE)
+    src_ver = uc.read_source_version(paths.DATA_SOURCE)
+    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
+          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
 
-    bak = backup_db()
-    if bak:
-        print(f"已备份: {os.path.basename(bak)}")
+    record = {
+        "表": TABLE,
+        "模式": "全量重建",
+        "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
+        "数据源": {
+            "提交": src_ver["提交"], "提交标题": src_ver["提交标题"],
+            "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"],
+        },
+        "脚本": {"文件": os.path.basename(__file__), "版本": SCRIPT_VERSION},
+        "数据库": os.path.basename(str(OUTPUT_DB)),
+        "源文件": {},
+        "撞车": 0,
+        "撞车明细": [],
+        "行数": {"重建前": count_rows(OUTPUT_DB), "重建后": 0},
+        "列统计": {},
+        "体积KB": {},
+        "备份": None,
+        "结果": "未执行",
+    }
 
-    all_files = collect_json_files()
-    print(f"文件总数: {len(all_files)}")
+    # ── 1. 收集源文件 ──
+    print("\n------ 1. 收集源文件 ------")
+    obt_root = os.path.join(DATA_ROOT, "levels", "obt")
+    if not os.path.isdir(obt_root):
+        raise SystemExit("数据源缺少 levels/obt，疑似未就位：%s" % obt_root)
+    files, collisions = collect_json_files()
+    if not files:
+        raise SystemExit("levels/obt 下没有可用关卡文件，疑似数据源未就位：%s" % obt_root)
+    record["源文件"] = {
+        "总数": len(files),
+        "obt": sum(1 for p in files.values() if p.startswith(obt_root)),
+        "activities": sum(1 for p in files.values() if not p.startswith(obt_root)),
+    }
+    print("  源文件: 共 %d（obt %d / activities %d）"
+          % (record["源文件"]["总数"], record["源文件"]["obt"], record["源文件"]["activities"]))
 
-    print("处理关卡数据...")
-    rows = []
-    errors = []
-    for lid, filepath in sorted(all_files.items()):
-        rid, row = process_level(filepath)
+    # ── 2. 处理 ──
+    print("\n------ 2. 处理关卡数据 ------")
+    rows, errors = [], []
+    total_src = len(files)
+    start = time.time()
+    for i, lid in enumerate(sorted(files), 1):
+        if i % PROGRESS_EVERY == 0 or i == total_src:
+            el = time.time() - start
+            rate = i / el if el > 0 else 0
+            eta = (total_src - i) / rate if rate > 0 else 0
+            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total_src, el, eta, lid))
+        rid, row = process_level(files[lid])
         if rid is None:
-            errors.append((lid, row))
+            errors.append({"文件": os.path.relpath(files[lid], DATA_ROOT), "错误": str(row)})
         else:
+            row["源文件"] = os.path.relpath(files[lid], DATA_ROOT)
             rows.append(row)
 
     if errors:
-        print(f"错误: {len(errors)} 个文件处理失败")
-        for lid, msg in errors[:5]:
-            print(f"  [{lid}] {msg}")
-    print(f"成功: {len(rows)} 行")
+        record["失败文件"] = errors[:MAX_DETAIL]
+        record["结果"] = "中止（%d 个文件处理失败）" % len(errors)
+        path = uc.write_record(TABLE, record)
+        print("\n!! %d 个文件处理失败，未对数据库做任何修改：" % len(errors))
+        for e in errors[:MAX_DETAIL]:
+            print("   [%s] %s" % (e["文件"], e["错误"]))
+        print("   记录: %s" % path)
+        return 1
 
-    print("建表 + 写入...")
-    conn = sqlite3.connect(OUTPUT_DB)
-    conn.execute("PRAGMA journal_mode=OFF")
-    conn.execute("PRAGMA synchronous=OFF")
-    conn.execute("DROP TABLE IF EXISTS levels")
-    conn.execute("""
-    CREATE TABLE levels (
-        levelId     TEXT PRIMARY KEY,
-        地图数据     TEXT NOT NULL,
-        路线        TEXT NOT NULL,
-        额外路线     TEXT,
-        波次        TEXT NOT NULL,
-        分支        TEXT,
-        预置单位     TEXT,
-        关卡符文     TEXT NOT NULL DEFAULT '{}'
-    )
-    """)
-
-    conn.execute("BEGIN")
-    dupes = 0
+    # 同一 levelId 被多个文件产出时保留先者（文件名排序在前）
+    kept = {}
+    level_collisions = []
     for row in rows:
+        k = row["levelId"]
+        if k in kept:
+            level_collisions.append({"来源": "levelId 相同", "键": k,
+                                     "保留": kept[k]["源文件"], "忽略": row["源文件"]})
+        else:
+            kept[k] = row
+    rows = list(kept.values())
+    all_collisions = collisions + level_collisions
+    record["撞车"] = len(all_collisions)
+    record["撞车明细"] = all_collisions[:MAX_DETAIL]
+    record["行数"]["重建后"] = len(rows)
+    print("\n  处理成功: %d 行 | 撞车跳过: %d" % (len(rows), len(all_collisions)))
+    for c in all_collisions[:10]:
+        print("    [%s] %s：保留 %s，忽略 %s" % (c["来源"], c["键"], c["保留"], c["忽略"]))
+
+    if args.dry_run:
+        print("\n(干跑：未写库、未写记录)")
+        print("  重建前 %s 行 → 本次会写出 %d 行"
+              % (record["行数"]["重建前"], record["行数"]["重建后"]))
+        return 0
+
+    # ── 3. 写库（单事务）──
+    print("\n------ 3. 写库（单事务）------")
+    if args.no_backup:
+        print("  (已跳过备份)")
+    else:
+        bak = uc.backup_db(str(OUTPUT_DB))
+        record["备份"] = os.path.basename(bak) if bak else None
+        print("  备份: %s" % (record["备份"] or "（未生成，库不存在）"))
+
+    conn = sqlite3.connect(str(OUTPUT_DB), isolation_level=None)
+    try:
+        conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
+        conn.execute("PRAGMA synchronous=OFF")
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(
-                "INSERT INTO levels (levelId, 地图数据, 路线, 额外路线, 波次, 分支, 预置单位, 关卡符文) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (row["levelId"], row["mapData"], row["routes"], row["extraRoutes"],
-                 row["waves"], row["branches"], row["predefines"], row["runes"])
+            conn.execute("DROP TABLE IF EXISTS levels")
+            conn.execute(CREATE_SQL)
+            conn.executemany(
+                "INSERT INTO levels (%s) VALUES (%s)"
+                % (", ".join(INSERT_COLS), ", ".join("?" * len(INSERT_COLS))),
+                [tuple(row[c] for c in INSERT_COLS) for row in rows],
             )
-        except sqlite3.IntegrityError:
-            dupes += 1
-    conn.commit()
+            conn.execute("COMMIT")
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            record["结果"] = "中止（写库失败：%s）" % e
+            path = uc.write_record(TABLE, record)
+            print("\n!! 写库失败并已回滚: %s" % e)
+            print("   记录: %s" % path)
+            return 1
 
-    total = conn.execute("SELECT COUNT(*) FROM levels").fetchone()[0]
-    with_extra = conn.execute("SELECT COUNT(*) FROM levels WHERE 额外路线 IS NOT NULL").fetchone()[0]
-    with_branches = conn.execute("SELECT COUNT(*) FROM levels WHERE 分支 IS NOT NULL").fetchone()[0]
-    with_predefines = conn.execute("SELECT COUNT(*) FROM levels WHERE 预置单位 IS NOT NULL").fetchone()[0]
-    with_runes = conn.execute("SELECT COUNT(*) FROM levels WHERE 关卡符文 != '{}'").fetchone()[0]
+        # ── 4. 复核 ──
+        total = conn.execute("SELECT COUNT(*) FROM levels").fetchone()[0]
+        flags = {
+            "有额外路线": "额外路线 IS NOT NULL",
+            "有分支": "分支 IS NOT NULL",
+            "有预置单位": "预置单位 IS NOT NULL",
+            "有关卡符文": "关卡符文 != '{}'",
+        }
+        counts = {k: conn.execute("SELECT COUNT(*) FROM levels WHERE %s" % w).fetchone()[0]
+                  for k, w in flags.items()}
+        sizes = conn.execute(
+            "SELECT %s FROM levels" % ", ".join("SUM(LENGTH(%s))" % c for c in SIZE_COLS)
+        ).fetchone()
 
-    # visitEveryCheckPoint 统计（从路线 JSON 中扫描第 7 位）
-    visit_true_routes = 0
-    visit_true_extra = 0
-    route_len7 = 0
-    for lid, routes_raw, extra_raw in conn.execute("SELECT levelId, 路线, 额外路线 FROM levels"):
-        for arr in json.loads(routes_raw):
-            if arr is None:
-                continue
-            if len(arr) >= 7 and arr[6] is True:
-                visit_true_routes += 1
-                route_len7 += 1
-        if extra_raw:
-            for arr in json.loads(extra_raw):
-                if arr is None:
+        # visitEveryCheckPoint 统计（从路线 JSON 中扫描第 7 位）
+        visit_true = 0
+        for routes_raw, extra_raw in conn.execute("SELECT 路线, 额外路线 FROM levels"):
+            for raw in (routes_raw, extra_raw):
+                if not raw:
                     continue
-                if len(arr) >= 7 and arr[6] is True:
-                    visit_true_extra += 1
-                    route_len7 += 1
+                for arr in json.loads(raw):
+                    if isinstance(arr, list) and len(arr) >= 7 and arr[6] is True:
+                        visit_true += 1
+    finally:
+        conn.close()
 
-    sizes = conn.execute("""
-        SELECT SUM(LENGTH(地图数据)), SUM(LENGTH(路线)),
-               SUM(LENGTH(COALESCE(额外路线,''))), SUM(LENGTH(波次)),
-               SUM(LENGTH(COALESCE(分支,''))), SUM(LENGTH(COALESCE(预置单位,''))),
-               SUM(LENGTH(关卡符文))
-        FROM levels
-    """).fetchone()
+    record["行数"]["重建后"] = total
+    record["行数"]["visitEveryCheckPoint=true"] = visit_true
+    record["列统计"] = counts
+    record["体积KB"] = {c: round((s or 0) / 1024, 1) for c, s in zip(SIZE_COLS, sizes)}
+    record["结果"] = "成功"
+    path = uc.write_record(TABLE, record)
 
-    conn.close()
-
-    print(f"\n====== 完成 ======")
-    print(f"  总行数:              {total}")
-    if dupes:
-        print(f"  跳过重复 levelId:     {dupes}")
-    print(f"  有 extraRoutes:      {with_extra}")
-    print(f"  有 branches:         {with_branches}")
-    print(f"  有 predefines:       {with_predefines}")
-    print(f"  有 runes:            {with_runes}")
-    print(f"  visitEveryCheckPoint=true:")
-    print(f"    路线:              {visit_true_routes}")
-    print(f"    额外路线:           {visit_true_extra}")
-    print(f"    合计:              {visit_true_routes + visit_true_extra}")
-    print(f"  mapData:             {sizes[0]/1024:,.1f} KB")
-    print(f"  routes:              {sizes[1]/1024:,.1f} KB")
-    print(f"  extraRoutes:         {sizes[2]/1024:,.1f} KB")
-    print(f"  waves:               {sizes[3]/1024:,.1f} KB")
-    print(f"  branches:            {sizes[4]/1024:,.1f} KB")
-    print(f"  predefines:          {sizes[5]/1024:,.1f} KB")
-    print(f"  runes:               {sizes[6]/1024:,.1f} KB")
+    elapsed = (datetime.datetime.now() - started).total_seconds()
+    print("\n====== 完成（%.1fs）======" % elapsed)
+    print("  行数: %s → %d | 撞车跳过: %d" % (record["行数"]["重建前"], total, record["撞车"]))
+    print("  有额外路线 %d / 有分支 %d / 有预置单位 %d / 有关卡符文 %d"
+          % (counts["有额外路线"], counts["有分支"], counts["有预置单位"], counts["有关卡符文"]))
+    print("  visitEveryCheckPoint=true: %d" % visit_true)
+    print("  体积: %s" % " | ".join("%s %.1fKB" % (c, record["体积KB"][c]) for c in SIZE_COLS))
+    print("  更新记录: %s" % path)
+    return 0
 
 
 if __name__ == "__main__":
-    build()
+    sys.exit(main())
