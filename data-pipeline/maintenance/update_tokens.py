@@ -6,26 +6,29 @@
   <EXCEL>/skill_table.json       技能名 / 类型 / 各级描述与 SP
   operators 表                    持有者（反查 `关联token`，该列存 tokenID 列表）
 
-PRTS 侧（**每行一次请求**，已有行与新增行都爬）：
-  {{召唤物信息}}|备注                                  → tokens.备注（**只写新增行**）
+PRTS 侧（**只对新增行爬**，每行一次请求）：
+  {{召唤物信息}}|备注                                  → tokens.备注
   {{技能}} / {{技能2}} / {{无等级技能}} / {{召唤物技能}}|备注 → 技能列表[].备注（按技能名匹配）
   {{召唤物天赋}}|备注                                  → 天赋列表[].备注（按天赋名匹配）
 
 三段式：
   ① 校对：重算结构列并与库内比，差异写回；
-  ② 新增：源有库无的召唤物建档；
+  ② 新增：源有库无的召唤物建档，并补爬三类备注；
   ③ 记录：updates/<时间戳>-tokens.json。
-另外把爬到的技能 / 天赋备注按「以页面为准」同步进已有行（含清空）。
 
 跳过清单（对**已有**行永不比对、永不写入）：
-  · 备注   PRTS 爬取列（Air 2026-10-15 定），更新脚本只对**新增行**爬这一列。
+  · 备注             PRTS 爬取列（Air 2026-10-15 定）
+  · 技能列表[].备注   PRTS 爬取列（同上）
+  · 天赋列表[].备注   PRTS 爬取列（同上）
+这三处都归页面：只在新增行填；**全量同步只在 reclean_tokens.py（一次性修复脚本）里做**，
+更新脚本一律增量——全量爬取只出现在 reclean 脚本里。
 
 口径（Air 2026-10-15 定）：
   · 持有者 = 反查 `operators.关联token`（纯脚本列，校对时重算）。
     反查不到的（仅用于技能实现、游戏内不向玩家展示的召唤物）留空就是正确答案。
     **顺序依赖：operators 必须先更新。**
-  · 技能列表[].备注 / 天赋列表[].备注 = 以页面为准，含清空；
-    页面上找不到该技能 / 天赋名对不上 / 整页没抓到 → 不动。
+  · 技能列表[].备注 / 天赋列表[].备注 = 爬取列，跳过清单成员；
+    全量同步见 reclean_tokens.py（按技能名 / 天赋名匹配，页面上找不到则不动）。
   · 源里 profession == "TOKEN" 的一律进表（与「是否向玩家展示」无关）。
 
 用法：
@@ -81,8 +84,9 @@ INT_COLS = {"部署费用", "阻挡数", "嘲讽等级", "再部署时间"}
 FLOAT_COLS = {"攻击速度", "攻击间隔"}
 # 对已有行永不比对、永不写入的列
 SKIP_COLS = {"备注"}
-# 备注寄居在 JSON 列里的子键：结构比对时剔除，写库时由页面结果决定
-NOTE_SUBKEY_COLS = ("技能列表", "天赋列表")
+# 寄居在 JSON 列里的爬取子键：比对时剔除、写库时沿用库内值。
+# 内容归 PRTS 页面：只在新增行填，全量同步归 reclean_tokens.py。
+SKIP_SUBKEY = {"技能列表": "备注", "天赋列表": "备注"}
 
 # ─── 枚举映射（与 db_builder/build_tokens.py 同一套语义）────
 
@@ -123,8 +127,8 @@ def _parse_json(value):
 
 
 def strip_notes(col, value):
-    """比对用：去掉 JSON 列里寄居的 `备注` 子键（它由页面决定，不由源数据决定）。"""
-    if col not in NOTE_SUBKEY_COLS or value is None:
+    """比对用：去掉 JSON 列里寄居的爬取子键（它归页面，不由源数据决定）。"""
+    if col not in SKIP_SUBKEY or value is None:
         return value
     obj = _parse_json(value)
     if not isinstance(obj, list):
@@ -132,7 +136,7 @@ def strip_notes(col, value):
     obj = copy.deepcopy(obj)
     for item in obj:
         if isinstance(item, dict):
-            item.pop("备注", None)
+            item.pop(SKIP_SUBKEY[col], None)
     return json.dumps(obj, ensure_ascii=False)
 
 
@@ -273,12 +277,14 @@ def compute_rows(ct, skill_table, owners, notes):
 def crawl_token_page(name, redirects=None):
     """抓一个召唤物页，取三类文本。
 
-    返回 (备注列, {技能名: 备注}, {天赋名: 备注})。
+    返回 (备注列, {技能名: 备注}, {天赋名: 备注}, 页面是否带召唤物信息模板)。
+    第四项给 reclean 用：区分「页面没这个模板」（不动）与「模板在但备注为空」（清空）。
     """
     text = uc.fetch_wikitext(name, redirects=redirects)
 
     note = None
     tpls = uc.parse_template(text, "召唤物信息")
+    info_found = bool(tpls)
     if tpls:
         raw = tpls[0].get("备注")
         if raw:
@@ -304,7 +310,7 @@ def crawl_token_page(name, redirects=None):
             if _RE_TALENT_NAME_KEY.search(key) and tname:
                 talent_notes[tname.strip()] = val
 
-    return note, skill_notes, talent_notes
+    return note, skill_notes, talent_notes, info_found
 
 
 def carry_db_notes(col, want_value, have_value):
@@ -419,12 +425,11 @@ def main():
         "新增": {"召唤物": 0, "明细": []},
         "爬取": {"目标": 0, "成功": 0, "无页面": 0, "有备注": 0,
                  "有技能备注": 0, "有天赋备注": 0, "重定向": [], "无页面明细": []},
-        "备注同步": {"检查行": 0, "变更行": 0, "技能备注变更": 0, "技能备注清空": 0,
-                     "天赋备注变更": 0, "天赋备注清空": 0, "明细": []},
         "跳过": {
             "列": sorted(SKIP_COLS),
-            "说明": "备注为 PRTS 爬取列，对已有行一律不比对、不写入；新增行照常爬。"
-                     "技能/天赋备注寄居在 JSON 列里，按「以页面为准（含清空）」同步。",
+            "子键": {"技能列表": ["备注"], "天赋列表": ["备注"]},
+            "说明": "备注类（含技能/天赋的备注子键）为 PRTS 爬取列，对已有行一律不比对、"
+                     "不写入；新增行照常爬。全量同步见 reclean_tokens.py。",
         },
         "构建提示": [],
         "结果": "未执行",
@@ -470,7 +475,7 @@ def main():
                 if col in SKIP_COLS:
                     continue
                 a, b = have[col], want[col]
-                if col in NOTE_SUBKEY_COLS:
+                if col in SKIP_SUBKEY:
                     a, b = strip_notes(col, a), strip_notes(col, b)
                 if not uc.same(col, a, b, json_cols=JSON_COLS,
                                int_cols=INT_COLS, float_cols=FLOAT_COLS):
@@ -511,98 +516,72 @@ def main():
             record["结果"] = "干跑"
             return 0
 
-        # ── 3. 爬取（全表：技能/天赋备注要以页面为准）──
-        print("\n------ 3. 爬取 PRTS（%d 行）------" % len(rows))
-        for probe, marker in (SENTINEL_INFO, SENTINEL_SKILL, SENTINEL_TALENT):
-            ok, msg = uc.sentinel_ok(probe, marker)
-            if not ok:
-                record["结果"] = "中止（结构哨兵失败：%s）" % msg
-                path = uc.write_record(TABLE, record)
-                print("\n!! 中止：%s" % msg)
-                print("   未对数据库做任何修改；记录：%s" % path)
-                return 1
+        # ── 3. 爬取（只爬新增；失败整体中止）──
+        crawled = {}
+        if new_ids:
+            print("\n------ 3. 爬取 PRTS（%d 个新增召唤物）------" % len(new_ids))
+            for probe, marker in (SENTINEL_INFO, SENTINEL_SKILL, SENTINEL_TALENT):
+                ok, msg = uc.sentinel_ok(probe, marker)
+                if not ok:
+                    record["结果"] = "中止（结构哨兵失败：%s）" % msg
+                    path = uc.write_record(TABLE, record)
+                    print("\n!! 中止：%s" % msg)
+                    print("   未对数据库做任何修改；记录：%s" % path)
+                    return 1
 
-        no_page, redirects = [], []
-        note_diffs = []
-        totals = {"技能备注变更": 0, "技能备注清空": 0, "天赋备注变更": 0, "天赋备注清空": 0}
-        note_rows = skill_note_rows = talent_note_rows = 0
-        t0 = time.time()
-        for i, tid in enumerate(sorted(rows), 1):
-            want = rows[tid]
-            name = want["名称"]
-            if i % 10 == 0 or i == len(rows):
-                print("  [%d/%d] %.0fs | %s" % (i, len(rows), time.time() - t0, name))
-            try:
-                page = crawl_token_page(PAGE_OVERRIDE.get(name, name), redirects=redirects)
-            except uc.NoPage:
-                no_page.append(name)
-                continue
-            except Exception as e:
-                record["结果"] = "中止（爬取失败：%s）" % e
-                path = uc.write_record(TABLE, record)
-                print("\n!! 中止：%s" % e)
-                print("   未对数据库做任何修改；记录：%s" % path)
-                return 1
+            no_page, redirects = [], []
+            note_rows = skill_note_rows = talent_note_rows = 0
+            t0 = time.time()
+            for i, tid in enumerate(new_ids, 1):
+                name = rows[tid]["名称"]
+                if i % 10 == 0 or i == len(new_ids):
+                    print("  [%d/%d] %.0fs | %s" % (i, len(new_ids), time.time() - t0, name))
+                try:
+                    page = crawl_token_page(PAGE_OVERRIDE.get(name, name), redirects=redirects)
+                except uc.NoPage:
+                    no_page.append(name)
+                    continue
+                except Exception as e:
+                    record["结果"] = "中止（爬取失败：%s）" % e
+                    path = uc.write_record(TABLE, record)
+                    print("\n!! 中止：%s" % e)
+                    print("   未对数据库做任何修改；记录：%s" % path)
+                    return 1
 
-            note_rows += 1 if page[0] else 0
-            skill_note_rows += 1 if any(page[1].values()) else 0
-            talent_note_rows += 1 if any(page[2].values()) else 0
+                note_rows += 1 if page[0] else 0
+                skill_note_rows += 1 if any(page[1].values()) else 0
+                talent_note_rows += 1 if any(page[2].values()) else 0
+                apply_page_notes(rows[tid], page[0], page[1], page[2], True, notes, name)
+                crawled[tid] = page
+                time.sleep(0.1)
 
-            if tid in existing:
-                before = {c: existing[tid][c] for c in NOTE_SUBKEY_COLS}
-                for col in NOTE_SUBKEY_COLS:
-                    want[col] = carry_db_notes(col, want[col], existing[tid][col])
-                counts = apply_page_notes(want, page[0], page[1], page[2], False, notes, name)
-                # 备注列对已有行永远不动
-                want["备注"] = existing[tid]["备注"]
-                for col in NOTE_SUBKEY_COLS:
-                    if not uc.same(col, before[col], want[col], json_cols={col}):
-                        note_diffs.append((tid, col))
-                for k, v in counts.items():
-                    totals[k] += v
-            else:
-                apply_page_notes(want, page[0], page[1], page[2], True, notes, name)
-            time.sleep(0.1)
-
-        record["爬取"]["目标"] = len(rows)
-        record["爬取"]["成功"] = len(rows) - len(no_page)
-        record["爬取"]["无页面"] = len(no_page)
-        record["爬取"]["无页面明细"] = no_page[:MAX_DETAIL]
-        record["爬取"]["重定向"] = ["%s → %s" % ab for ab in redirects[:MAX_DETAIL]]
-        record["爬取"]["有备注"] = note_rows
-        record["爬取"]["有技能备注"] = skill_note_rows
-        record["爬取"]["有天赋备注"] = talent_note_rows
-        record["备注同步"]["检查行"] = len(existing)
-        record["备注同步"]["技能备注变更"] = totals["技能备注变更"]
-        record["备注同步"]["技能备注清空"] = totals["技能备注清空"]
-        record["备注同步"]["天赋备注变更"] = totals["天赋备注变更"]
-        record["备注同步"]["天赋备注清空"] = totals["天赋备注清空"]
-        kept = {d[0] for d in note_diffs}
-        record["备注同步"]["变更行"] = len(kept)
-        record["备注同步"]["明细"] = [
-            {"tokenID": tid, "名称": rows[tid]["名称"], "列": col,
-             "旧": uc.brief(existing[tid][col], 160), "新": uc.brief(rows[tid][col], 160)}
-            for tid, col in note_diffs[:MAX_DETAIL]
-        ]
-        print("  成功 %d | 无页面 %d | 有备注 %d | 技能备注变更 %d（清空 %d）| 天赋备注变更 %d（清空 %d）"
-              % (record["爬取"]["成功"], len(no_page), note_rows,
-                 totals["技能备注变更"], totals["技能备注清空"],
-                 totals["天赋备注变更"], totals["天赋备注清空"]))
+            record["爬取"]["目标"] = len(new_ids)
+            record["爬取"]["成功"] = len(crawled)
+            record["爬取"]["无页面"] = len(no_page)
+            record["爬取"]["无页面明细"] = no_page[:MAX_DETAIL]
+            record["爬取"]["重定向"] = ["%s → %s" % ab for ab in redirects[:MAX_DETAIL]]
+            record["爬取"]["有备注"] = note_rows
+            record["爬取"]["有技能备注"] = skill_note_rows
+            record["爬取"]["有天赋备注"] = talent_note_rows
+            print("  成功 %d | 无页面 %d | 有备注 %d | 有技能备注 %d | 有天赋备注 %d"
+                  % (len(crawled), len(no_page), note_rows, skill_note_rows, talent_note_rows))
 
         # ── 4. 写库（单事务）──
-        write_cols = {(tid, col) for tid, col in struct_diffs} | set(note_diffs)
+        # JSON 列若因结构差异要重写，先把库内已有的备注子键搬回来（它归页面，不归源）
+        for tid, col in struct_diffs:
+            if col in SKIP_SUBKEY:
+                rows[tid][col] = carry_db_notes(col, rows[tid][col], existing[tid][col])
         print("\n------ 4. 写库（单事务）------")
         if args.no_backup:
             print("  (已跳过备份)")
         else:
             bak = uc.backup_db(args.db)
             print("  备份: %s" % (bak or "（未生成）"))
-        print("  写回: %d 列（校对 %d + 备注 %d）| 插入新增: %d 行"
-              % (len(write_cols), len(struct_diffs), len(note_diffs), len(new_ids)))
+        print("  写回校对差异: %d 列 | 插入新增: %d 行" % (len(struct_diffs), len(new_ids)))
         conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for tid, col in sorted(write_cols):
+            for tid, col in struct_diffs:
                 conn.execute("UPDATE %s SET %s=? WHERE tokenID=?" % (TABLE, col),
                              (rows[tid][col], tid))
             for tid in new_ids:
@@ -628,9 +607,9 @@ def main():
 
     elapsed = (datetime.now() - started).total_seconds()
     print("\n====== 完成（%.1fs）======" % elapsed)
-    print("  校对写回: %d 列 | 备注同步: %d 行 | 新增: %d | 爬取成功: %d | 无页面: %d"
-          % (record["校对"]["差异列数"], record["备注同步"]["变更行"],
-             record["新增"]["召唤物"], record["爬取"]["成功"], record["爬取"]["无页面"]))
+    print("  校对写回: %d 列 | 新增: %d | 爬取成功: %d | 无页面: %d"
+          % (record["校对"]["差异列数"], record["新增"]["召唤物"],
+             record["爬取"]["成功"], record["爬取"]["无页面"]))
     print("  更新记录: %s" % path)
     return 0
 
