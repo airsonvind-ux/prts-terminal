@@ -5,7 +5,7 @@ levels 表采用「重建制」维护：数据源为本地 JSON、没有人工�
 每次数据源更新后整表重建即可。其他含 Wiki 爬取信息的表用「更新制」，不要用重建方式维护。
 
 数据源：levels/obt/**/*.json + levels/activities/**/*.json
-（同一 levelId 先到先得，撞车记入更新记录）
+（键取文件名，与 stages.levelId 对齐；同文件名先到先得，撞车记入更新记录）
 重建前备份、失败即中止、单事务写库、结束写 updates/<时间戳>-levels.json。
 
 本脚本合并了旧 build_levels.py + build_remove_keys_levels.py + build_levels_runes.py
@@ -417,14 +417,17 @@ def process_runes(level_data):
 
 # ─── 单关处理 ─────────────────────────────
 
-def process_level(filepath):
+def process_level(filepath, level_id):
+    """处理单个关卡文件。入库键由调用方给定：取文件名，与 stages.levelId 对齐。
+
+    源文件内部的 `levelId` 字段不可信（15 个生息演算关卡里写的是地图编辑器的模板名
+    `[dev]test/level_training`，而 stages 侧引用的是文件名），故只作记录、不作键。
+    """
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             lv = json.load(f)
     except Exception as e:
         return None, str(e)
-
-    level_id = lv.get("levelId") or os.path.basename(filepath).replace(".json", "")
 
     map_data = process_map(lv.get("mapData"))
     map_json = json.dumps(map_data, ensure_ascii=False) if map_data else None
@@ -455,6 +458,7 @@ def process_level(filepath):
 
     return level_id, {
         "levelId": level_id,
+        "内部levelId": lv.get("levelId"),
         "mapData": map_json,
         "routes": routes_json,
         "extraRoutes": extra_json,
@@ -528,6 +532,7 @@ def main():
         "源文件": {},
         "撞车": 0,
         "撞车明细": [],
+        "内部levelId 与文件名不一致": {"数量": 0, "明细": []},
         "行数": {"重建前": count_rows(OUTPUT_DB), "重建后": 0},
         "列统计": {},
         "体积KB": {},
@@ -562,7 +567,7 @@ def main():
             rate = i / el if el > 0 else 0
             eta = (total_src - i) / rate if rate > 0 else 0
             print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total_src, el, eta, lid))
-        rid, row = process_level(files[lid])
+        rid, row = process_level(files[lid], lid)
         if rid is None:
             errors.append({"文件": os.path.relpath(files[lid], DATA_ROOT), "错误": str(row)})
         else:
@@ -590,11 +595,18 @@ def main():
         else:
             kept[k] = row
     rows = list(kept.values())
+    id_mismatch = [
+        {"键": r["levelId"], "内部levelId": r["内部levelId"], "源文件": r["源文件"]}
+        for r in rows if r.get("内部levelId") and r["内部levelId"] != r["levelId"]
+    ]
     all_collisions = collisions + level_collisions
     record["撞车"] = len(all_collisions)
     record["撞车明细"] = all_collisions[:MAX_DETAIL]
+    record["内部levelId 与文件名不一致"] = {"数量": len(id_mismatch),
+                                            "明细": id_mismatch[:MAX_DETAIL]}
     record["行数"]["重建后"] = len(rows)
-    print("\n  处理成功: %d 行 | 撞车跳过: %d" % (len(rows), len(all_collisions)))
+    print("\n  处理成功: %d 行 | 撞车跳过: %d | 内部 levelId 与文件名不一致: %d"
+          % (len(rows), len(all_collisions), len(id_mismatch)))
     for c in all_collisions[:10]:
         print("    [%s] %s：保留 %s，忽略 %s" % (c["来源"], c["键"], c["保留"], c["忽略"]))
 
