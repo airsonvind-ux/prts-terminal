@@ -20,12 +20,13 @@ PRTS 侧（**只对新增干员爬**，每行一次请求）：
   ③ 记录：updates/<时间戳>-operators.json。
 失败即中止；写库单事务；干跑不写库、不爬取、不写记录。
 
-跳过清单（对**已有**干员永不重取、永不覆盖）：
+跳过清单（对**已有**干员永不比对、永不写入）：
+  · 描述                        人工调整过（Air 2026-10-15 定）
   · 备注                        爬取的特性备注 + 人工补充的算法说明
   · 技能列表[].备注             爬取 + 人工
   · 天赋列表[].备注             爬取 + 人工
-  · 模组列表[].各级效果[].特性   人工源（模组特性信息.md）的产物
-新增行例外：这四处由本次爬取 / 人工源填上。
+  · 模组列表                    整列人工调整过（Air 2026-10-15 定）
+新增行例外：这些列在新增时照常由源数据 / 爬取 / 人工源填上（描述与模组列表随后由 Air 手工调整）。
 
 用法：
     python update_operators.py --dry-run
@@ -74,12 +75,13 @@ ALL_COLS = [
 JSON_COLS = {"标签", "信赖加成", "精英化阶段", "技能列表", "关联token", "天赋列表",
              "潜能提升", "模组列表"}
 INT_COLS = {"是否不可获取", "是否为异格", "稀有度", "最大潜能"}
-SKIP_COLS = {"备注"}
+# 对已有干员永不比对、永不写入的列（描述与模组列表是 Air 手工调整过的）
+SKIP_COLS = {"描述", "备注", "模组列表"}
 
-# 顶层跳过列的「子键」：比对时剔除、写库时保留（内容归爬取 / 人工源）
-KEEP_SUBKEY = {"技能列表": "备注", "天赋列表": "备注", "模组列表": "特性"}
+# 顶层跳过列的「子键」：比对时剔除、写库时保留（内容归爬取 / 人工）
+KEEP_SUBKEY = {"技能列表": "备注", "天赋列表": "备注"}
 # 各表项的身份键（用于把子键搬回对应项）
-ITEM_ID = {"技能列表": "技能ID", "天赋列表": "序号", "模组列表": "模组ID"}
+ITEM_ID = {"技能列表": "技能ID", "天赋列表": "序号"}
 
 # ─── 枚举映射（与 db_builder/build_operators.py 同一套语义）────
 
@@ -104,10 +106,10 @@ MODULE_ATTR_MAP = {"max_hp": "生命上限", "atk": "攻击", "def": "防御",
                    "magic_resistance": "法术抗性", "attack_speed": "攻击速度",
                    "block_cnt": "阻挡数", "respawn_time": "再部署时间", "cost": "部署费用"}
 
-# 重名/重号修正：源里同名同字的形态靠这张表区分（人工确认过的）
+# 重名/重号修正：源里同名同字的形态靠这张表区分（人工确认过的，半角括号）
 PATCH_RENAME = {
-    "char_1001_amiya2": "阿米娅（近卫）",
-    "char_1037_amiya3": "阿米娅（医疗）",
+    "char_1001_amiya2": "阿米娅(近卫)",
+    "char_1037_amiya3": "阿米娅(医疗)",
 }
 # 人工源里的类型记号
 TYPE_REMAP = {"D": "Δ"}
@@ -411,12 +413,7 @@ def strip_keep(col, value):
     obj = copy.deepcopy(obj)
     sub = KEEP_SUBKEY[col]
     for item in obj:
-        if not isinstance(item, dict):
-            continue
-        if col == "模组列表":
-            for lvl in item.get("各级效果") or []:
-                lvl.pop(sub, None)
-        else:
+        if isinstance(item, dict):
             item.pop(sub, None)
     return json.dumps(obj, ensure_ascii=False)
 
@@ -438,18 +435,10 @@ def merge_keep(col, old_value, new_value):
         old_item = old_by_id.get(item.get(id_key))
         if not isinstance(old_item, dict):
             continue
-        if col == "模组列表":
-            old_levels = old_item.get("各级效果") or []
-            for i, lvl in enumerate(item.get("各级效果") or []):
-                if i < len(old_levels) and sub in old_levels[i]:
-                    lvl[sub] = old_levels[i][sub]
-                else:
-                    lvl.pop(sub, None)
+        if sub in old_item:
+            item[sub] = old_item[sub]
         else:
-            if sub in old_item:
-                item[sub] = old_item[sub]
-            else:
-                item.pop(sub, None)
+            item.pop(sub, None)
     return json.dumps(new_obj, ensure_ascii=False)
 
 
@@ -593,9 +582,9 @@ def main():
                  "有技能备注": 0, "有天赋备注": 0, "重定向": [], "无页面明细": []},
         "跳过": {
             "列": sorted(SKIP_COLS),
-            "子键": {"技能列表": ["备注"], "天赋列表": ["备注"],
-                     "模组列表": ["各级效果[].特性"]},
-            "说明": "爬取 / 人工源产物；对已有干员永不重取、永不覆盖，新增行由本次爬取填充",
+            "子键": {"技能列表": ["备注"], "天赋列表": ["备注"]},
+            "说明": "描述与模组列表由 Air 手工调整；备注类为爬取 / 人工产物。"
+                     "对已有干员一律不比对、不写入；新增行照常由源数据 / 爬取 / 人工源填充",
         },
         "构建提示": [],
         "结果": "未执行",

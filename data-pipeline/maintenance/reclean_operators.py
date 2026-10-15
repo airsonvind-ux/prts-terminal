@@ -1,25 +1,31 @@
 # -*- coding: utf-8 -*-
 """operators 表：三处 wiki 文本的一次性同步清洗。
 
-背景：库内这三处的文本是**旧清洗方案**的产物，与现在的 cleaning_wiki 规则集不同。
+背景：库内这三处的文本来自**旧的清洗方案**，与现在的 `cleaning_wiki` 规则集不同。
 旧 `build_operators_note.py` 的 `clean_note` 遇到 `{{popup|…}}` 整段删掉（注释里写着
-「浮窗内容过于复杂」），旧 `clean_wiki` 又比现在少十几条规则。清洗是会丢信息的，
-就地再洗一遍救不回来，所以必须回 PRTS 页面**重取原文**、用当前规则重洗。
+「浮窗内容过于复杂」），旧 `clean_wiki` 又比现在少十几条规则。清洗会丢信息，就地再洗
+一遍救不回来，所以回 PRTS 页面**重取原文**、用当前规则重洗。
 
-对象（只动这三处）：
+清洗对象只有这三处（其余列一律不碰）：
   · 备注                 ← {{CharinfoV2}} 的 特性备注
   · 技能列表[].备注       ← {{技能2}} 的 备注
   · 天赋列表[].备注       ← {{天赋列表3}} 的 备注
+（干员描述、模组列表是 Air 手工调整过的，本脚本不涉及。）
 
-口径：**页面给出文本才写**（页面没有这一项时保持库内原值，人工补充不会因缺页面被清掉）。
-默认以页面为准重写；`--only-empty` 只填空值。干跑会打印全部改动，先看再跑。
+口径（Air 2026-10-15 定：不得覆盖人工修改）：
+  · 页面没给出这一项          → 保持库内原值
+  · 库内为空                  → 写入
+  · 库内已有且 looks_dirty()  → 重写为当前清洗结果
+  · 库内已有且看起来干净      → **跳过**，记入「疑似人工修改」（可能是你补的内容）
+`--page-wins` 改为以页面为准（会覆盖人工补充，需显式指定）；`--only-empty` 只填空值。
 
-流程：先把 446 行爬完、算完差异，再**单事务**写库（与 update_*.py 同形）。
+流程：先把全表爬完、算完，再**单事务**写库。干跑会打印改动与跳过项。
 
 用法：
     python reclean_operators.py --dry-run
-    python reclean_operators.py --only-empty
     python reclean_operators.py
+    python reclean_operators.py --only-empty
+    python reclean_operators.py --page-wins      # 以页面为准，覆盖人工补充
 """
 
 import argparse
@@ -38,6 +44,7 @@ sys.path.insert(0, str(HERE))          # maintenance/
 import paths  # noqa: E402
 import update_common as uc  # noqa: E402
 import update_operators as up  # noqa: E402
+from cleaning_wiki import looks_dirty  # noqa: E402
 
 TABLE = "operators"
 SCRIPT_VERSION = 1
@@ -45,14 +52,24 @@ MAX_DETAIL = 200
 JOURNAL_MODE = "MEMORY"
 
 
-def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes, only_empty):
-    """算出这一行要改哪几处，返回 [(位置, 旧值, 新值), ...]。"""
-    changes = []
+def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes,
+             only_empty, page_wins):
+    """算这一行该改哪几处、该跳过哪几处。
+
+    返回 (changes, skipped)：changes = [(位置, 旧值, 新值)]；
+    skipped = [(位置, 旧值, 新值)]，即页面与库内不同但库内看起来干净、疑似人工修改的。
+    """
+    changes, skipped = [], []
 
     def want(location, old, new):
         if not new or new == old:
             return
-        if only_empty and old:
+        if only_empty:
+            if not old:
+                changes.append((location, old, new))
+            return
+        if not page_wins and old and not looks_dirty(old):
+            skipped.append((location, old, new))
             return
         changes.append((location, old, new))
 
@@ -63,36 +80,54 @@ def plan_row(cur_note, skills, talents, charinfo, skill_notes, talent_notes, onl
     for i, item in enumerate(talents):
         note = talent_notes[i] if i < len(talent_notes) else None
         want("天赋备注[%s]" % item.get("序号", ""), item.get("备注"), note)
-    return changes
+    return changes, skipped
 
 
-def apply_changes(location, skills, talents, skill_notes, talent_notes, only_empty):
-    """把该写的新值落到实处（就地修改 skills / talents），返回改造后的 JSON。"""
-    if location.startswith("技能"):
-        for sk in skills:
-            note = skill_notes.get(sk.get("技能名", ""))
-            if note and (not only_empty or not sk.get("备注")):
-                sk["备注"] = note
-        return json.dumps(skills, ensure_ascii=False), None
+def apply_skills(skills, skill_notes, only_empty, page_wins):
+    for sk in skills:
+        note = skill_notes.get(sk.get("技能名", ""))
+        if not note:
+            continue
+        if only_empty and sk.get("备注"):
+            continue
+        if not page_wins and sk.get("备注") and not looks_dirty(sk["备注"]):
+            continue
+        sk["备注"] = note
+    return json.dumps(skills, ensure_ascii=False)
+
+
+def apply_talents(talents, talent_notes, only_empty, page_wins):
     for i, item in enumerate(talents):
         note = talent_notes[i] if i < len(talent_notes) else None
-        if note and (not only_empty or not item.get("备注")):
-            item["备注"] = note
-    return None, json.dumps(talents, ensure_ascii=False)
+        if not note:
+            continue
+        if only_empty and item.get("备注"):
+            continue
+        if not page_wins and item.get("备注") and not looks_dirty(item["备注"]):
+            continue
+        item["备注"] = note
+    return json.dumps(talents, ensure_ascii=False)
 
 
 def main():
     ap = argparse.ArgumentParser(description="operators 三处 wiki 文本的同步清洗（重爬重洗）")
     ap.add_argument("--dry-run", action="store_true", help="只报告，不写库、不写记录、不备份")
-    ap.add_argument("--only-empty", action="store_true", help="只填空值，不覆盖已有文本")
+    ap.add_argument("--only-empty", action="store_true", help="只填空值，任何已有文本都不动")
+    ap.add_argument("--page-wins", action="store_true",
+                    help="以页面为准重写（会覆盖人工补充）；不加则为保护模式")
     ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
     ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
     args = ap.parse_args()
 
+    if args.only_empty and args.page_wins:
+        raise SystemExit("--only-empty 与 --page-wins 不能同时用")
+    mode = "only-empty" if args.only_empty else ("page-wins" if args.page_wins else "protect")
+
     started = datetime.now()
     print("====== operators 三处 wiki 文本同步清洗 ======")
     print("数据库  : %s" % args.db)
-    print("模式    : %s" % ("只填空值" if args.only_empty else "以页面为准重写"))
+    print("模式    : %s" % {"only-empty": "只填空值", "page-wins": "以页面为准（会覆盖人工补充）",
+                          "protect": "保护模式：只重写明显没洗干净的"}[mode])
     if not os.path.exists(args.db):
         raise SystemExit("数据库不存在：%s" % args.db)
 
@@ -105,10 +140,11 @@ def main():
         "数据库": os.path.basename(args.db),
         "数据源": {"提交": src_ver["提交"], "游戏版本": src_ver["游戏版本"],
                    "数据时间": src_ver["数据时间"]},
-        "模式": "only-empty" if args.only_empty else "page-wins",
+        "模式": mode,
         "范围": ["备注", "技能列表[].备注", "天赋列表[].备注"],
         "爬取": {"目标干员": 0, "成功": 0, "无页面": 0, "重定向": [], "无页面明细": []},
         "变更": {"行": 0, "处": 0, "备注": 0, "技能备注": 0, "天赋备注": 0, "明细": []},
+        "跳过（疑似人工修改）": {"处": 0, "明细": []},
         "结果": "未执行",
     }
 
@@ -123,7 +159,8 @@ def main():
         no_page, redirects = [], []
         pending = []          # [(干员ID, 备注 或 None, 技能列表 或 None, 天赋列表 或 None)]
         touched = {"备注": 0, "技能备注": 0, "天赋备注": 0}
-        details = []
+        details, skipped_details = [], []
+        skipped_total = 0
         t0 = time.time()
 
         for i, (cid, name, cur_note, sk_json, ta_json) in enumerate(rows, 1):
@@ -145,12 +182,16 @@ def main():
 
             skills = json.loads(sk_json) if sk_json else []
             talents = json.loads(ta_json) if ta_json else []
-            changes = plan_row(cur_note, skills, talents, charinfo, skill_notes,
-                               talent_notes, args.only_empty)
+            changes, skipped = plan_row(cur_note, skills, talents, charinfo, skill_notes,
+                                        talent_notes, args.only_empty, args.page_wins)
+            skipped_total += len(skipped)
+            for location, old, new in skipped:
+                if len(skipped_details) < MAX_DETAIL:
+                    skipped_details.append({"干员ID": cid, "名称": name, "位置": location,
+                                            "库内": uc.brief(old, 120), "页面": uc.brief(new, 120)})
             if not changes:
                 continue
 
-            new_skills = new_talents = None
             new_note = None
             for location, old, new in changes:
                 if location == "备注":
@@ -161,16 +202,19 @@ def main():
                     if len(details) < MAX_DETAIL:
                         details.append({"干员ID": cid, "名称": name, "位置": location,
                                         "旧": uc.brief(old, 120), "新": uc.brief(new, 120)})
-            if any(loc.startswith("技能") for loc, _, _ in changes):
-                new_skills, _ = apply_changes("技能", skills, talents,
-                                              skill_notes, talent_notes, args.only_empty)
-            if any(loc.startswith("天赋") for loc, _, _ in changes):
-                _, new_talents = apply_changes("天赋", skills, talents,
-                                               skill_notes, talent_notes, args.only_empty)
             if new_note is not None and len(details) < MAX_DETAIL:
                 details.append({"干员ID": cid, "名称": name, "位置": "备注",
                                 "旧": uc.brief(cur_note, 120), "新": uc.brief(new_note, 120)})
-            pending.append((cid, name, new_note, new_skills, new_talents))
+
+            want_skills = any(loc.startswith("技能") for loc, _, _ in changes)
+            want_talents = any(loc.startswith("天赋") for loc, _, _ in changes)
+            pending.append((
+                cid, new_note,
+                apply_skills(skills, skill_notes, args.only_empty, args.page_wins)
+                if want_skills else None,
+                apply_talents(talents, talent_notes, args.only_empty, args.page_wins)
+                if want_talents else None,
+            ))
 
         record["爬取"]["目标干员"] = len(rows)
         record["爬取"]["无页面"] = len(no_page)
@@ -183,17 +227,21 @@ def main():
         record["变更"]["技能备注"] = touched["技能备注"]
         record["变更"]["天赋备注"] = touched["天赋备注"]
         record["变更"]["明细"] = details
+        record["跳过（疑似人工修改）"]["处"] = skipped_total
+        record["跳过（疑似人工修改）"]["明细"] = skipped_details
 
         print("\n------ 1. 结果 ------")
-        print("  成功 %d | 无页面 %d | 变更行 %d | 变更处 %d"
+        print("  成功 %d | 无页面 %d | 变更行 %d | 变更处 %d | 跳过（疑似人工）%d 处"
               % (record["爬取"]["成功"], len(no_page), len(pending),
-                 record["变更"]["处"]))
+                 record["变更"]["处"], skipped_total))
         print("    备注列 %d | 技能备注 %d | 天赋备注 %d"
               % (touched["备注"], touched["技能备注"], touched["天赋备注"]))
         if no_page:
             print("    无页面: %s" % ", ".join(no_page[:10]))
         for d in details[:10]:
-            print("    · %s %s | %s → %s" % (d["名称"], d["位置"], d["旧"], d["新"]))
+            print("    改 · %s %s | %s → %s" % (d["名称"], d["位置"], d["旧"], d["新"]))
+        for d in skipped_details[:10]:
+            print("    留 · %s %s | 库内 %s | 页面 %s" % (d["名称"], d["位置"], d["库内"], d["页面"]))
 
         if args.dry_run:
             print("\n(干跑：未写库、未写记录、未备份)")
@@ -211,7 +259,7 @@ def main():
         conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for cid, _name, new_note, new_skills, new_talents in pending:
+            for cid, new_note, new_skills, new_talents in pending:
                 if new_note is not None:
                     conn.execute("UPDATE %s SET 备注=? WHERE 干员ID=?" % TABLE, (new_note, cid))
                 if new_skills is not None:
