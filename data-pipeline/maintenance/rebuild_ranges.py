@@ -29,7 +29,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from paths import GAMEDATA as DATA_ROOT, RESOURCES  # noqa: E402
+from paths import DATA_SOURCE, GAMEDATA as DATA_ROOT, RESOURCES  # noqa: E402
 
 import update_common as uc  # noqa: E402
 
@@ -107,7 +107,8 @@ def main():
         "脚本": {"文件": "maintenance/rebuild_ranges.py", "版本": 1},
         "运行时间": time.strftime("%Y-%m-%d %H:%M:%S"),
         "模式": "重建",
-        "数据源": {"文件": "ArknightsGameData/excel/range_table.json"},
+        "数据源": dict({"文件": "ArknightsGameData/excel/range_table.json"},
+                   **uc.read_source_version(DATA_SOURCE)),
         "表": "ranges.json",
         "计数": {"官方": len(official), "原文件": len(old), "输出": len(out)},
         "新增": added,

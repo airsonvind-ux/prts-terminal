@@ -34,7 +34,7 @@ import time
 # ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from paths import GAMEDATA as DATA_ROOT, DB_PATH, RESOURCES  # noqa: E402
+from paths import DATA_SOURCE, GAMEDATA as DATA_ROOT, DB_PATH, RESOURCES  # noqa: E402
 
 import update_common as uc  # noqa: E402
 
@@ -158,8 +158,10 @@ def build(dry_run=False):
         "脚本": {"文件": "maintenance/rebuild_tile_info.py", "版本": 1},
         "运行时间": time.strftime("%Y-%m-%d %H:%M:%S"),
         "模式": "重建",
-        "数据源": {"文件": "ArknightsGameData/excel/stage_table.json",
-                   "库": "maintenance/arknights.db（levels.地图数据，用于补全清单）"},
+        "数据源": dict(
+            {"文件": "ArknightsGameData/excel/stage_table.json",
+             "库": "maintenance/arknights.db（levels.地图数据，用于补全清单）"},
+            **uc.read_source_version(DATA_SOURCE)),
         "表": "tile_info.json",
         "计数": {"官方": len(official), "DB 出现": len(db_keys),
                  "需人工补充": len(missing), "输出": len(out),

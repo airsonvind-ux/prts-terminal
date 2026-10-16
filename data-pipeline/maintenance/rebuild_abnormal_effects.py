@@ -44,6 +44,15 @@ DST = os.path.join(str(RESOURCES), "abnormal_effects.json")
 
 CATEGORIES = ["无法选择", "阻止攻击", "阻止能力", "阻止移动", "对友方隐藏", "对非友方隐藏"]
 
+# 本表的页面专有模板规则（暂无：页面表格的「效果」列基础层已够用）。
+# 将来页面出现新模板、报残留时，在这里加 (名称, 编译正则, 替换函数)，与 rebuild_term 同形。
+EXTRA_RULES = []
+
+
+def clean_value(raw):
+    """本表的取值口径：update_common.clean_value + 本表 extra_rules。"""
+    return pw.clean_value(raw, EXTRA_RULES)
+
 
 def parse_flags():
     """异常效果表格 → OrderedDict{名称: 效果原文}（保持页面顺序）。"""
@@ -108,7 +117,7 @@ def build():
     out = OrderedDict()
     for name in flags:
         out[name] = {
-            "效果": pw.clean_value(flags[name]),
+            "效果": clean_value(flags[name]),
             "分类": cats.get(name, []),
             "可抵抗": name in resist,
         }
