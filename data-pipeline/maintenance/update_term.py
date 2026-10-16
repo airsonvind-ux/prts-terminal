@@ -3,7 +3,8 @@
 
 数据源：PRTS「术语释义」页的 **战斗术语** 段（== 战斗术语 == 下属各小节）
         + PRTS「特殊机制」页的 **特殊机制表格** 条目
-        + 现有 term.json（两个页面都没有的条目原样保留）
+        + PRTS「技能」页的 **特殊属性** 节（* '''名''' / : 说明 逐条）
+        + 现有 term.json（三个页面都没有的条目原样保留）
 输出：src-tauri/resources/term.json
 
 用法：
@@ -17,7 +18,10 @@
 
 口径：
   - 术语释义页只取「战斗术语」段；「基建术语」段不取。
-  - 特殊机制页取 `{{特殊机制表格|名称|简介|举例}}`（名称即条目名，取简介）。
+  - 特殊机制页取 `{{特殊机制表格|名称|简介|举例}}`（名称即条目名，取简介）；
+    页面上的名称可能带全角引号（如 `“叠叠乐”`），去引号后入库。
+  - 技能页取「特殊属性」节：`* '''名'''` 为条目名（带括注时只取括注前），
+    紧随的 `: ` 行为说明。
   - 文本取页面全文，`<br>` 作段落分隔、※ 与 `<code>` 标记去掉，其余交给 cleaning_wiki。
   - 库内条目按原键序保留；新条目追加在末尾。
 """
@@ -37,13 +41,45 @@ import prts_wiki as pw  # noqa: E402
 
 PAGE = "术语释义"
 PAGE_SPECIAL = "特殊机制"
+PAGE_SKILL = "技能"
 DST = os.path.join(str(RESOURCES), "term.json")
 UPDATES = os.path.join(HERE, "updates")
 BACKUPS = os.path.join(HERE, "backups")
 
 
+def parse_skill_terms():
+    """技能页「特殊属性」节：`* '''名'''` 起条，`:` 行为说明。"""
+    text = pw.fetch_page(PAGE_SKILL)
+    body = ""
+    for level, name, seg in pw.sections(text):
+        if name == "特殊属性":
+            body = seg
+            break
+    if not body:
+        raise RuntimeError("未找到「特殊属性」节：%s" % PAGE_SKILL)
+
+    out, cur, buf = {}, None, []
+    for line in body.splitlines():
+        s = line.strip()
+        if s.startswith("*") and "'''" in s:
+            if cur:
+                out[cur] = pw.clean_value("\n".join(buf))
+            # 名称：去标记后取“（”前（如“可关闭（可随时主动关闭）”→“可关闭”）
+            name = pw.plain(s.lstrip("*").strip()).split("（")[0].strip()
+            cur, buf = name or None, []
+        elif s.startswith(":") and cur:
+            buf.append(s[1:].strip())
+    if cur:
+        out[cur] = pw.clean_value("\n".join(buf))
+    return {k: v for k, v in out.items() if k and v}
+
+
 def parse_page():
-    """两个来源合计：术语释义（战斗术语段）+ 特殊机制（特殊机制表格）。"""
+    """三个来源合计，**顺序即优先级**：特殊机制 → 技能 → 术语释义。
+
+    术语释义页最后应用，冲突时以它为准（它是术语表主来源；
+    例如「过载」在技能页与术语页都有且文案不同）。
+    """
     out, dup = {}, []
 
     text = pw.fetch_page(PAGE)
@@ -54,25 +90,32 @@ def parse_page():
             break
     if not body:
         raise RuntimeError("未找到「战斗术语」段：%s" % PAGE)
-    for frag in pw.templates(body, "术语释义"):
-        ps = pw.split_params(frag)
-        if len(ps) < 2:
-            continue
-        name = ps[0].strip().replace("\u00a0", " ")
-        value = pw.clean_value(ps[1])
-        if name in out and out[name] != value:
-            dup.append(name)
-        out[name] = value
 
     text2 = pw.fetch_page(PAGE_SPECIAL)
     for frag in pw.templates(text2, "特殊机制表格"):
         ps = pw.split_params(frag)
         if len(ps) < 2:
             continue
-        name = pw.plain(ps[0])
+        # 页面上的名称可能带全角引号（“叠叠乐”），入库时去掉
+        name = pw.plain(ps[0]).strip().strip("“”\"'")
         value = pw.clean_value(ps[1])
         if not name:
             continue
+        if name in out and out[name] != value:
+            dup.append(name)
+        out[name] = value
+
+    for name, value in parse_skill_terms().items():
+        if name in out and out[name] != value:
+            dup.append(name)
+        out[name] = value
+
+    for frag in pw.templates(body, "术语释义"):     # 最后应用：术语页优先
+        ps = pw.split_params(frag)
+        if len(ps) < 2:
+            continue
+        name = ps[0].strip().replace("\u00a0", " ")
+        value = pw.clean_value(ps[1])
         if name in out and out[name] != value:
             dup.append(name)
         out[name] = value
@@ -130,8 +173,8 @@ def main():
     record = {
         "脚本": {"文件": "maintenance/update_term.py", "版本": 1},
         "运行时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "数据源": {"页面": [PAGE, PAGE_SPECIAL],
-                   "段": ["战斗术语", "特殊机制表格"]},
+        "数据源": {"页面": [PAGE, PAGE_SPECIAL, PAGE_SKILL],
+                   "段": ["战斗术语", "特殊机制表格", "特殊属性"]},
         "表": "term.json",
         "计数": {"页面": len(page), "库内": len(old), "输出": len(out)},
         "文本变化": [{"键": k, "旧": o, "新": n} for k, o, n in changed],
