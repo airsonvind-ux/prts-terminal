@@ -320,11 +320,31 @@ def _fetch_once(name, redirects, timeout, depth):
     return text
 
 
+def _fetch_via_api(name, timeout=FETCH_TIMEOUT):
+    """备路：走 api.php 取 wikitext。
+
+    PRTS 有反爬盾：部分 `?action=raw` 请求会被 302 到 sisyphus.prts.wiki（跟着跳会成环），
+    而 api.php 不受影响。两条路径拿到的是同一份 wikitext。
+    """
+    params = {"action": "query", "prop": "revisions", "rvprop": "content",
+              "rvslots": "main", "format": "json", "titles": name, "redirects": "1"}
+    url = PRTS_API + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={"User-Agent": PRTS_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    for pg in data.get("query", {}).get("pages", {}).values():
+        if "revisions" not in pg:
+            raise NoPage(name)
+        return pg["revisions"][0]["slots"]["main"]["*"]
+    raise RuntimeError("api.php 未返回页面：%s" % name)
+
+
 def fetch_wikitext(name, redirects=None, retries=FETCH_RETRIES, timeout=FETCH_TIMEOUT):
     """取 PRTS 页面原始 wikitext，自动跟随重定向。
 
-    网络类异常按 retries 重试（每次间隔 1 秒），仍失败抛 RuntimeError（调用方据此中止）；
-    404 抛 NoPage。redirects 传入列表时，每次重定向追加 (原名, 目标名)。
+    网络类异常按 retries 重试（每次间隔 1 秒）；raw 路径全失败后改走 api.php；
+    两者都失败才抛 RuntimeError（调用方据此中止）。404 抛 NoPage。
+    redirects 传入列表时，每次重定向追加 (原名, 目标名)。
     """
     last = None
     for attempt in range(retries + 1):
@@ -332,11 +352,16 @@ def fetch_wikitext(name, redirects=None, retries=FETCH_RETRIES, timeout=FETCH_TI
             return _fetch_once(name, redirects, timeout, 0)
         except NoPage:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             last = e
             if attempt < retries:
                 time.sleep(1.0)
-    raise RuntimeError("PRTS 抓取失败（%s，重试 %d 次）：%s" % (name, retries, last))
+    try:
+        return _fetch_via_api(name, timeout)
+    except NoPage:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError("PRTS 抓取失败（%s）：raw=%s；api=%s" % (name, last, e))
 
 
 def parse_template(text, tpl_name):
@@ -402,3 +427,177 @@ def sentinel_ok(sample_name, marker, retries=FETCH_RETRIES):
     if marker not in text:
         return False, "哨兵页面 %r 中未见 %r，疑似 PRTS 结构变化" % (sample_name, marker)
     return True, "ok"
+
+
+# ─── PRTS 页面解析与取值（「页面文本型」表共用：term / abnormal_effects 等）────
+#
+# 为什么需要这套：这些表的值是页面正文，模板参数**按位置**给
+# （`{{术语释义|停顿|移动速度降低80%}}`），而本模块的 parse_template 按行首 `|`
+# 切键值对，读不了单行位置参数；且参数里嵌着别的模板与链接，非贪婪正则会在内层 `}}`
+# 处咬断。这里一律用深度计数配平。
+
+PRTS_API = "https://prts.wiki/api.php"
+PRTS_UA = "PRTS-terminal-maintenance/1.0 (read-only)"
+_PAGE_CACHE = {}
+
+
+def api(params, retries=3):
+    """只读 API 调用（带重试与 maxlag），返回解析后的 JSON。
+
+    供需要分页/多次查询的脚本使用（如 slang 的全站重定向扫描）；
+    单页取文本用 fetch_page。
+    """
+    params = dict(params)
+    params.setdefault("format", "json")
+    params.setdefault("maxlag", "5")
+    url = PRTS_API + "?" + urllib.parse.urlencode(params)
+    last = None
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": PRTS_UA})
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            if "error" in data:
+                if data["error"].get("code") == "maxlag":
+                    time.sleep(5)
+                    continue
+                raise RuntimeError(str(data["error"]))
+            return data
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1.5 * (i + 1))
+    raise RuntimeError("API 请求失败：%s（%s）" % (url, last))
+
+
+def fetch_page(title, retries=FETCH_RETRIES):
+    """取页面 wikitext，一次运行内缓存。抓取口径沿用本模块 fetch_wikitext。"""
+    if title not in _PAGE_CACHE:
+        _PAGE_CACHE[title] = fetch_wikitext(title, retries=retries)
+    return _PAGE_CACHE[title]
+
+
+def strip_comments(text):
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+
+def templates(text, name):
+    """返回所有 {{name|…}} 的原始片段（括号配平）。"""
+    out, i, tag = [], 0, "{{" + name + "|"
+    while True:
+        i = text.find(tag, i)
+        if i < 0:
+            return out
+        depth, j = 0, i
+        while j < len(text):
+            if text.startswith("{{", j):
+                depth += 1
+                j += 2
+            elif text.startswith("}}", j):
+                depth -= 1
+                j += 2
+                if depth == 0:
+                    break
+            else:
+                j += 1
+        if j >= len(text):          # 未闭合，丢弃
+            return out
+        out.append(text[i:j])
+        i = j
+
+
+def split_params(frag):
+    """切模板参数（不含模板名）。顶层 `|` 才切，嵌套模板/链接整体保留。"""
+    body = frag[2:-2]
+    parts, cur, d1, d2, k = [], [], 0, 0, 0
+    while k < len(body):
+        if body.startswith("{{", k):
+            d1 += 1
+        elif body.startswith("}}", k):
+            d1 -= 1
+        elif body.startswith("[[", k):
+            d2 += 1
+        elif body.startswith("]]", k):
+            d2 -= 1
+        if body[k] == "|" and d1 == 0 and d2 == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(body[k])
+        k += 1
+    parts.append("".join(cur))
+    return parts[1:]
+
+
+def sections(text):
+    """返回 [(层级, 标题, 正文)]；正文到同层或更浅的下一个标题为止。"""
+    marks = list(re.finditer(r"^(=+)\s*([^=\n]+?)\s*\1\s*$", text, re.M))
+    out = []
+    for i, m in enumerate(marks):
+        level = len(m.group(1))
+        end = len(text)
+        for nxt in marks[i + 1:]:
+            if len(nxt.group(1)) <= level:
+                end = nxt.start()
+                break
+        out.append((level, m.group(2).strip(), text[m.end():end]))
+    return out
+
+
+def block_cells(body):
+    """从 {|…|} 表格块里取单元格文本（按 || 切，跳过表头与样式行）。"""
+    cells = []
+    for block in re.findall(r"\{\|.*?\|\}", body, re.S):
+        for line in block.splitlines():
+            s = line.strip()
+            if not s.startswith("|") or s.startswith(("|-", "|}", "|+")):
+                continue
+            s = s[1:]
+            if re.match(r"^(class|style|colspan|rowspan|width)\s*=", s):
+                continue
+            for c in s.split("||"):
+                c = c.strip()
+                if c and c != "}":
+                    cells.append(c)
+    return cells
+
+
+def plain(text):
+    """去掉媒体链接、链接与样式，粗略取显示文字（供匹配用）。"""
+    # 媒体链接先删：[[文件:x.png|25px]] 抠不出名字，其“显示名”是 25px 不是条目名
+    t = re.sub(r"\[\[(?:文件|图像|影音|File|Image):[^\]]*\]\]", "", text, flags=re.IGNORECASE)
+    t = re.sub(r"\[\[(?:[^\]|]*\|)?([^\]|]*)\]\]", r"\1", t)
+    t = re.sub(r"\{\{[^{}]*\|([^{}|]*)\}\}", r"\1", t)
+    t = re.sub(r"\{\{[^{}]*\}\}", "", t)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = t.replace("'''", "").replace("''", "")
+    return t.replace("\u00a0", " ").strip()
+
+
+def clean_value(raw, extra_rules=()):
+    """页面参数 → 库内文本（页面文本型表共用）。
+
+    只做两类处理：
+      1. 去掉页面渲染不出来的东西：注释、媒体链接、`<code>` 里的内部 ID；
+         以及被**删除线**标注为失效的内容（`<del>`/`<s>`/`<strike>`——页面用删除线
+         表示“这段已作废”，只留文字不留线就是误导）。
+      2. 其余交给 cleaning_wiki（`<br>` → 换行在那里做）。
+    页面渲染成文字的字符（`※`、`·`、`=`、`*`）一律保留。
+    """
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from cleaning_wiki import clean_wiki, looks_dirty  # noqa: E402
+
+    t = re.sub(r"</?code(\s[^>]*)?>", "", raw)
+    t = re.sub(r"<(?:del|s|strike)(?:\s[^>]*)?>.*?</(?:del|s|strike)>", "", t, flags=re.S)
+    t = re.sub(r"</?(?:del|s|strike)(?:\s[^>]*)?>", "", t)      # 未闭合的残留标签
+    t = clean_wiki(t, extra_rules)
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    t = re.sub(r"\n{2,}", "\n", t)
+    t = t.strip()
+    # 硬门：还有未处理标记就不放行（页面一变就抦在这里，而不是把残渣写进库）
+    if looks_dirty(t):
+        raise RuntimeError("清洗后仍有未处理标记，请补规则：%r" % t[:120])
+    return t

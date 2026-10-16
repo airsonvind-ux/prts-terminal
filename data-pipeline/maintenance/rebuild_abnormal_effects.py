@@ -34,7 +34,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from paths import RESOURCES  # noqa: E402
 
-import prts_wiki as pw  # noqa: E402
+# 抓取与解析口径都在 update_common（原 prts_wiki.py 已并入）；pw 是沿用旧调用名的别名
+import update_common as pw  # noqa: E402
 import update_common as uc  # noqa: E402
 
 PAGE_AB = "异常效果"

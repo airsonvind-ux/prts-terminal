@@ -24,6 +24,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from collections import OrderedDict
 from datetime import datetime
@@ -33,13 +34,76 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from paths import RESOURCES  # noqa: E402
 
-import prts_wiki as pw  # noqa: E402
+# 抓取与解析口径都在 update_common（原 prts_wiki.py 已并入）；pw 是沿用旧调用名的别名
+import update_common as pw  # noqa: E402
 import update_common as uc  # noqa: E402
 
 PAGE = "术语释义"
 PAGE_SPECIAL = "特殊机制"
 PAGE_SKILL = "技能"
 DST = os.path.join(str(RESOURCES), "term.json")
+
+# ─── 本表专有的页面模板规则（基础层不管这些）───────────────
+# 每条写清页面渲染结果与处理依据：
+
+
+def _star_replacer(m):
+    """{{**|A|B}}：渲染为「图标 (%)✕ A B」——伤害倍率标注。
+    取参依旧版 term 的值（“20%-80%”与“归零”）：B 带正负号时取 A+B，否则取 B。"""
+    a, b = m.group(1).strip(), m.group(2).strip()
+    if b[:1] in ("+", "-", "−"):
+        return a + b
+    return b or a
+
+
+_RANGE_TABLE = None
+
+
+def _load_ranges():
+    global _RANGE_TABLE
+    if _RANGE_TABLE is None:
+        with open(os.path.join(str(RESOURCES), "ranges.json"), encoding="utf-8") as f:
+            _RANGE_TABLE = {k: {tuple(g) for g in v["grids"]} for k, v in json.load(f).items()}
+    return _RANGE_TABLE
+
+
+def _range_replacer(m):
+    """{{攻击范围/兼容版|行1=⋯}}：渲染为范围图。按格子集合在 ranges.json 反查 rangeID（Air 定）。"""
+    rows = re.findall(r"行\d+\s*=\s*([^|}]*)", m.group(0))
+    cells, self_pos = set(), None
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row.strip()):
+            if ch == "我":
+                self_pos = (r, c)
+            elif ch == "框":
+                cells.add((r, c))
+    if self_pos is None or not cells:
+        return "[攻击范围: 未知]"
+    want = {(r - self_pos[0], c - self_pos[1]) for r, c in cells} | {(0, 0)}
+    for rid, grid in _load_ranges().items():
+        if grid == want:
+            return "[攻击范围: %s]" % rid
+    return "[攻击范围: 未知]"
+
+
+EXTRA_RULES = [
+    # {{无效描述|X}}：渲染为划掉的灰字（<del>，title 写明“可能根本不存在”）——
+    # 页面用它标注作废内容，所以删掉（只留文字不留线才是误导）。
+    ("无效描述", re.compile(r"\{\{无效描述[^{}]*\}\}"), lambda m: ""),
+    # {{dot}}：渲染为 &nbsp;<b>&middot;</b>，一个圆点。列表记号保留。
+    ("dot", re.compile(r"\{\{dot\}\}"), lambda m: "·"),
+    # {{=}}：渲染就是一个等号。
+    ("等号", re.compile(r"\{\{=\}\}"), lambda m: "="),
+    # {{**|A|B}}：见 _star_replacer。
+    ("变动数值", re.compile(r"\{\{\*\*\|([^{}|]*)\|([^{}|]*)\}\}"), _star_replacer),
+    # {{攻击范围/兼容版|⋯}}：见 _range_replacer。
+    ("攻击范围兼容版", re.compile(r"\{\{攻击范围/兼容版[^{}]*\}\}"), _range_replacer),
+]
+
+
+def clean_value(raw):
+    """本表的取值口径：update_common.clean_value + 本表 extra_rules。"""
+    return pw.clean_value(raw, EXTRA_RULES)
 
 
 def parse_terms():
@@ -57,7 +121,7 @@ def parse_terms():
         ps = pw.split_params(frag)
         if len(ps) < 2:
             continue
-        out[ps[0].strip().replace("\u00a0", " ")] = pw.clean_value(ps[1])
+        out[ps[0].strip().replace("\u00a0", " ")] = clean_value(ps[1])
     return out
 
 
@@ -70,7 +134,7 @@ def parse_special():
             continue
         name = pw.plain(ps[0])
         if name:
-            out[name] = pw.clean_value(ps[1])
+            out[name] = clean_value(ps[1])
     return out
 
 
@@ -90,13 +154,13 @@ def parse_skill():
         s = line.strip()
         if s.startswith("*") and "'''" in s:
             if cur:
-                out[cur] = pw.clean_value("\n".join(buf))
+                out[cur] = clean_value("\n".join(buf))
             name = pw.plain(s.lstrip("*").strip()).split("（")[0].strip()
             cur, buf = name or None, []
         elif s.startswith(":") and cur:
             buf.append(s[1:].strip())
     if cur:
-        out[cur] = pw.clean_value("\n".join(buf))
+        out[cur] = clean_value("\n".join(buf))
     return OrderedDict((k, v) for k, v in out.items() if k and v)
 
 
