@@ -27,8 +27,6 @@ import sqlite3
 import sys
 import time
 import unicodedata
-import urllib.parse
-import urllib.request
 from collections import Counter
 from datetime import datetime
 from difflib import SequenceMatcher
