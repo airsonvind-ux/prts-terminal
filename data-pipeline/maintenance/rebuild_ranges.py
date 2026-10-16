@@ -23,11 +23,15 @@ import argparse
 import json
 import os
 import sys
+import time
 
 # ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from paths import GAMEDATA as DATA_ROOT, RESOURCES  # noqa: E402
+
+import update_common as uc  # noqa: E402
 
 SRC = os.path.join(str(DATA_ROOT), "excel", "range_table.json")
 DST = os.path.join(str(RESOURCES), "ranges.json")
@@ -95,9 +99,25 @@ def main():
         print("\n(干跑：未写文件)")
         return 0
 
+    uc.backup_file(DST)                      # 写前备份（保留 3 份）
     with open(DST, "w", encoding="utf-8") as f:
         f.write(text)
+
+    record = {
+        "脚本": {"文件": "maintenance/rebuild_ranges.py", "版本": 1},
+        "运行时间": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "模式": "重建",
+        "数据源": {"文件": "ArknightsGameData/excel/range_table.json"},
+        "表": "ranges.json",
+        "计数": {"官方": len(official), "原文件": len(old), "输出": len(out)},
+        "新增": added,
+        "新增数": len(added),
+        "原文件有官方无": gone,
+        "grids 变化": changed,
+        "结果": "成功",
+    }
     print("\n====== 完成：写入 %s ======" % DST)
+    print("记录：%s" % os.path.basename(uc.write_record("ranges", record)))
     return 0
 
 

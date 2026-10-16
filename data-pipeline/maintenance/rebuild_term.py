@@ -24,23 +24,22 @@
 import argparse
 import json
 import os
-import shutil
 import sys
 from collections import OrderedDict
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 from paths import RESOURCES  # noqa: E402
 
 import prts_wiki as pw  # noqa: E402
+import update_common as uc  # noqa: E402
 
 PAGE = "术语释义"
 PAGE_SPECIAL = "特殊机制"
 PAGE_SKILL = "技能"
 DST = os.path.join(str(RESOURCES), "term.json")
-UPDATES = os.path.join(HERE, "updates")
-BACKUPS = os.path.join(HERE, "backups")
 
 
 def parse_terms():
@@ -150,11 +149,7 @@ def main():
         print("\n(干跑：未写文件)")
         return 0
 
-    os.makedirs(BACKUPS, exist_ok=True)
-    os.makedirs(UPDATES, exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    if os.path.exists(DST):
-        shutil.copy2(DST, os.path.join(BACKUPS, "term.json.%s.bak" % ts.replace("-", "")[0:8]))
+    uc.backup_file(DST)                      # 写前备份（保留 3 份）
     with open(DST, "w", encoding="utf-8") as f:
         json.dump(new, f, ensure_ascii=False, indent=2)
 
@@ -173,11 +168,8 @@ def main():
         "多来源重名": dup,
         "结果": "成功",
     }
-    path = os.path.join(UPDATES, "%s-term.json" % ts)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
     print("\n====== 完成：%s ======" % DST)
-    print("记录：%s" % os.path.basename(path))
+    print("记录：%s" % os.path.basename(uc.write_record("term", record)))
     return 0
 
 

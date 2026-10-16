@@ -25,22 +25,21 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
 from collections import OrderedDict
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 from paths import RESOURCES  # noqa: E402
 
 import prts_wiki as pw  # noqa: E402
+import update_common as uc  # noqa: E402
 
 PAGE_AB = "异常效果"
 PAGE_RESIST = "可抵抗状态"
 DST = os.path.join(str(RESOURCES), "abnormal_effects.json")
-UPDATES = os.path.join(HERE, "updates")
-BACKUPS = os.path.join(HERE, "backups")
 
 CATEGORIES = ["无法选择", "阻止攻击", "阻止能力", "阻止移动", "对友方隐藏", "对非友方隐藏"]
 
@@ -152,12 +151,7 @@ def main():
         print("\n(干跑：未写文件)")
         return 0
 
-    os.makedirs(BACKUPS, exist_ok=True)
-    os.makedirs(UPDATES, exist_ok=True)
-    ts = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    if os.path.exists(DST):
-        shutil.copy2(DST, os.path.join(BACKUPS, "abnormal_effects.json.%s.bak"
-                                       % ts.replace("-", "")[0:8]))
+    uc.backup_file(DST)                      # 写前备份（保留 3 份）
     with open(DST, "w", encoding="utf-8") as f:
         json.dump(new, f, ensure_ascii=False, indent=2)
 
@@ -175,11 +169,8 @@ def main():
         "变化数": len(changed),
         "结果": "成功",
     }
-    path = os.path.join(UPDATES, "%s-abnormal_effects.json" % ts)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(record, f, ensure_ascii=False, indent=2)
     print("\n====== 完成：%s ======" % DST)
-    print("记录：%s" % os.path.basename(path))
+    print("记录：%s" % os.path.basename(uc.write_record("abnormal_effects", record)))
     return 0
 
 

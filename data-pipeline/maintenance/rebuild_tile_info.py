@@ -29,11 +29,14 @@ import json
 import os
 import sqlite3
 import sys
+import time
 
 # ─── 路径配置（唯一来源见 data-pipeline/paths.py）─────────────
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from paths import GAMEDATA as DATA_ROOT, DB_PATH, RESOURCES  # noqa: E402
+
+import update_common as uc  # noqa: E402
 
 STAGE_TABLE = os.path.join(DATA_ROOT, "excel", "stage_table.json")
 DST = os.path.join(RESOURCES, "tile_info.json")
@@ -147,10 +150,28 @@ def build(dry_run=False):
         print("\n(干跑：未写文件)")
         return
 
+    uc.backup_file(DST)                      # 写前备份（保留 3 份）
     with open(DST, "w", encoding="utf-8") as f:
         f.write(text)
 
+    record = {
+        "脚本": {"文件": "maintenance/rebuild_tile_info.py", "版本": 1},
+        "运行时间": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "模式": "重建",
+        "数据源": {"文件": "ArknightsGameData/excel/stage_table.json",
+                   "库": "maintenance/arknights.db（levels.地图数据，用于补全清单）"},
+        "表": "tile_info.json",
+        "计数": {"官方": len(official), "DB 出现": len(db_keys),
+                 "需人工补充": len(missing), "输出": len(out),
+                 "备注透传": kept_notes},
+        "新增": added,
+        "新增数": len(added),
+        "消失": gone,
+        "变化": changed,
+        "结果": "成功",
+    }
     print(f"\n====== 完成：共 {len(out)} 种地块 ======")
+    print("记录：%s" % os.path.basename(uc.write_record("tile_info", record)))
 
 
 if __name__ == "__main__":

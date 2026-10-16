@@ -14,7 +14,8 @@ PRTS 终端 — 更新系统通用模块
 
 系统级约定（各表脚本共享，会写进更新记录）：
   - 更新记录：<maintenance>/updates/<时间戳>-<表>.json
-  - 写库前备份：<maintenance>/backups/<库名>.<时间戳>.bak，保留最近 KEEP_BACKUPS 份
+  - 写法前备份：<maintenance>/backups/<文件名>.<时间戳>.bak，每个文件名保留最近
+    KEEP_BACKUPS 份（库与资源 JSON 走同一条路径：backup_file，各表互不挤占）
 """
 
 import json
@@ -77,21 +78,24 @@ def read_source_version(data_source):
 
 # ─── 库备份 / 更新记录 ────────────────────────────────────────
 
-def backup_db(db_path, keep=KEEP_BACKUPS, backup_dir=None):
-    """把库备份到 backup_dir（默认 <maintenance>/backups），只保留最近 keep 份。
+def backup_file(path, keep=KEEP_BACKUPS, backup_dir=None):
+    """把文件备份到 backup_dir（默认 <maintenance>/backups），只保留最近 keep 份。
 
-    返回备份文件路径；库不存在时返回 None。
+    返回备份文件路径；源文件不存在时返回 None。数据库与资源 JSON 共用。
     """
-    if not os.path.exists(db_path):
+    if not os.path.exists(path):
         return None
     if backup_dir is None:
         backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
     os.makedirs(backup_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dst = os.path.join(backup_dir, "%s.%s.bak" % (os.path.basename(db_path), stamp))
-    with open(db_path, "rb") as src, open(dst, "wb") as out:
+    dst = os.path.join(backup_dir, "%s.%s.bak" % (os.path.basename(path), stamp))
+    with open(path, "rb") as src, open(dst, "wb") as out:
         shutil.copyfileobj(src, out, 1024 * 1024)
-    backups = sorted(f for f in os.listdir(backup_dir) if f.endswith(".bak"))
+    # 按源文件名分别保留：不同表/不同库的备份互不挤占
+    base = os.path.basename(path)
+    backups = sorted(f for f in os.listdir(backup_dir)
+                     if f.endswith(".bak") and f.startswith(base + "."))
     if len(backups) > keep:
         for stale in backups[:-keep]:
             try:
@@ -99,6 +103,11 @@ def backup_db(db_path, keep=KEEP_BACKUPS, backup_dir=None):
             except OSError:
                 pass
     return dst
+
+
+# 旧名保留：数据库类脚本仍按 backup_db 调用
+def backup_db(db_path, keep=KEEP_BACKUPS, backup_dir=None):
+    return backup_file(db_path, keep=keep, backup_dir=backup_dir)
 
 
 def write_record(table, record, out_dir=None):
