@@ -37,6 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from paths import DATA_SOURCE, GAMEDATA as DATA_ROOT, DB_PATH, RESOURCES  # noqa: E402
 
 import update_common as uc  # noqa: E402
+from cleaning_game import clean_desc  # noqa: E402
+from cleaning_wiki import looks_dirty  # noqa: E402   # 残留标记表（含 <@ / <$）
 
 STAGE_TABLE = os.path.join(DATA_ROOT, "excel", "stage_table.json")
 DST = os.path.join(RESOURCES, "tile_info.json")
@@ -46,15 +48,20 @@ DB = str(DB_PATH)
 # ─── 主流程 ───────────────────────────────
 
 def collect_official():
-    """从 stage_table.json tileInfo 提取官方条目。"""
+    """从 stage_table.json tileInfo 提取官方条目。
+
+    名称/描述过 cleaning_game.clean_desc：游戏数据里带富文本标签
+    （`<@ba.kw>能量束</>`、`<color=#…>…</color>`），数据库那批表就是这么洗的；
+    `<浆果虫>` 这类实体引用由 clean_desc 保留。
+    """
     with open(STAGE_TABLE, encoding="utf-8") as f:
         data = json.load(f)
     tile_info = data.get("tileInfo") or {}
     out = {}
     for k, v in tile_info.items():
         out[k] = {
-            "名称": v.get("name", ""),
-            "描述": v.get("description", ""),
+            "名称": clean_desc(v.get("name", "")),
+            "描述": clean_desc(v.get("description", "")),
             "功能": bool(v.get("isFunctional", False)),
         }
     return out
@@ -117,6 +124,7 @@ def build(dry_run=False):
         }
 
     # 备注透传：人工补充层，不生成、不修改，旧文件里有的原样带回
+    # （补充条目的名称/描述也来自旧文件，即当年人工写的，同样不过清洗）
     kept_notes = 0
     for k, entry in out.items():
         note = (old.get(k) or {}).get("备注")
@@ -130,6 +138,13 @@ def build(dry_run=False):
             has_desc = bool(out[k]["描述"])
             marker = "（已补充）" if has_desc else "（待补充）"
             print(f"  {k:32s} {marker}")
+
+    # 残留检查：官方字段过 clean_desc 后不应再有富文本标记（拿现成的标记表验，不自列）
+    dirty = [k for k, e in out.items()
+             if looks_dirty(e.get("名称", "")) or looks_dirty(e.get("描述", ""))]
+    if dirty:
+        raise RuntimeError(
+            "清洗后仍有残留标记，官方字段应全过 clean_desc；请检查口径：%s" % dirty[:8])
 
     # ── 重建前后对比 ───────────────────────────────
     added = [k for k in out if k not in old]
