@@ -24,6 +24,7 @@ tile_info.json 结构：
 }
 """
 
+import argparse
 import json
 import os
 import sqlite3
@@ -85,7 +86,7 @@ def load_old_supplement():
     return old
 
 
-def build():
+def build(dry_run=False):
     print("====== 地块信息表全量重建 ======")
     print(f"数据源: {STAGE_TABLE}")
     print(f"目标: {DST}")
@@ -127,12 +128,32 @@ def build():
             marker = "（已补充）" if has_desc else "（待补充）"
             print(f"  {k:32s} {marker}")
 
-    with open(DST, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
-
+    # ── 重建前后对比 ───────────────────────────────
+    added = [k for k in out if k not in old]
+    gone = [k for k in old if k not in out]
+    changed = [k for k in out if k in old and old[k] != out[k]]
+    text = json.dumps(out, ensure_ascii=False, indent=2)
+    identical = False
+    if os.path.exists(DST):
+        with open(DST, encoding="utf-8") as f:
+            identical = f.read() == text
+    print(f"\n新增 {len(added)} {added[:6]}；消失 {len(gone)} {gone[:6]}；变化 {len(changed)} {changed[:6]}")
+    same_order = [k for k in old if k in out] == [k for k in out if k in old]
+    print(f"键序一致（共同键）: {same_order}（现有 {len(old)} 键 / 重建 {len(out)} 键）")
+    print(f"与现有文件逐字节一致: {identical}")
     print(f"备注透传保留: {kept_notes} 条")
+
+    if dry_run:
+        print("\n(干跑：未写文件)")
+        return
+
+    with open(DST, "w", encoding="utf-8") as f:
+        f.write(text)
+
     print(f"\n====== 完成：共 {len(out)} 种地块 ======")
 
 
 if __name__ == "__main__":
-    build()
+    ap = argparse.ArgumentParser(description="重建地块信息表 tile_info.json")
+    ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
+    build(dry_run=ap.parse_args().dry_run)
