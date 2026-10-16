@@ -25,6 +25,34 @@ UA = "PRTS-terminal-maintenance/1.0 (read-only, one-shot per table)"
 _CACHE = {}
 
 
+def api(params, retries=3):
+    """只读 API 调用（带重试与 maxlag），返回解析后的 JSON。
+
+    供需要分页/多次查询的脚本使用（如 update_slang 的全站重定向扫描）；
+    单页取文本用 fetch_page 即可。
+    """
+    params = dict(params)
+    params.setdefault("format", "json")
+    params.setdefault("maxlag", "5")
+    url = API + "?" + urllib.parse.urlencode(params)
+    last = None
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            if "error" in data:
+                if data["error"].get("code") == "maxlag":
+                    time.sleep(5)
+                    continue
+                raise RuntimeError(str(data["error"]))
+            return data
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1.5 * (i + 1))
+    raise RuntimeError("API 请求失败：%s（%s）" % (url, last))
+
+
 def fetch_page(title, retries=3):
     """取页面 wikitext；跟随重定向。失败重试后抛异常（更新脚本据此中止）。"""
     if title in _CACHE:
