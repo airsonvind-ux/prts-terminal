@@ -1,34 +1,34 @@
 # -*- coding: utf-8 -*-
-"""PRTS 终端 — 异常效果表重建（维护用）
+"""abnormal_effects · 重建（异常效果表）
 
-**重建制**：每次从 PRTS 页面全量重建 src-tauri/resources/abnormal_effects.json，
-与页面对齐，不做保留合并。
+数据源（PRTS 两页）
+    ① 异常效果页「异常效果（AbnormalFlag）」表格 → 条目名 + 效果（表格「效果」列原文）
+    ② 同页「异常效果的统一检查」小节 → 分类（本表用 6 类）
+    ③ 可抵抗状态页「已知的可抵抗状态」的「常见同名状态」→ 可抵抗
 
-数据源：
-  ① 异常效果页「异常效果（AbnormalFlag）」表格 → 条目名 + `效果`（表格「效果」列原文）
-  ② 同页「异常效果的统一检查」小节 → `分类`（本表用 6 类：无法选择 / 阻止攻击 /
-     阻止能力 / 阻止移动 / 对友方隐藏 / 对非友方隐藏；页面另有「无法被友方选择」
-     「无法被治疗选择」两节，页面注明这两类站内通常直接标注异常效果名，故不作为分类）
-  ③ 可抵抗状态页「已知的可抵抗状态」的「常见同名状态」→ `可抵抗`
-     （晕眩 / 寒冷 / 冻结 / 恐惧 / 诱导 / 麻痹；该小节之外列的是具体 Buff，不落到异常效果上）
+输出
+    src-tauri/resources/abnormal_effects.json · {名: {效果, 分类, 可抵抗}}
 
-口径：
-  - 表格行取注释清除后的 `{{异常效果表格|…}}`，跳过带 `组合=` 的异常组合表与 × 占位；
-  - 文本：`<br>` 作段落分隔、※ 与 `<code>` 标记去掉，其余交给 cleaning_wiki。
+口径
+    表格行取注释清除后的 {{异常效果表格|…}}，跳过带「组合=」的异常组合表与 × 占位。
+    分类只取 6 类：无法选择 / 阻止攻击 / 阻止能力 / 阻止移动 / 对友方隐藏 / 对非友方隐藏
+    （页面另有「无法被友方选择」「无法被治疗选择」两节，页面注明站内通常直接标注异常效果名）。
+    可抵抗只取「常见同名状态」那一小节，该小节之外列的是具体 Buff，不落到异常效果上。
+    与页面对齐，不做保留合并。
 
-用法：
-    python rebuild_abnormal_effects.py --dry-run
-    python rebuild_abnormal_effects.py
+本表专有模板规则
+    EXTRA_RULES 暂时为空——页面表格的「效果」列基础层已够用。
+    将来报残留时在这里加 (名称, 编译正则, 替换函数)，与 term 同形。
+
+用法
+    python rebuild.py --dry-run
+    python rebuild.py
 """
 
-import argparse
 import json
-import os
 import re
 import sys
 from collections import OrderedDict
-from datetime import datetime
-
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -36,25 +36,21 @@ MAINT = next(p for p in HERE.parents if (p / "lib").is_dir())   # maintenance/
 for _p in (str(HERE), str(MAINT / "lib"), str(MAINT.parent)):   # 本表目录 / 通用模块 / data-pipeline
     if _p not in sys.path:
         sys.path.insert(0, _p)
-from paths import RESOURCES  # noqa: E402
 
-# 抓取与解析口径都在 update_common（原 prts_wiki.py 已并入）；pw 是沿用旧调用名的别名
+import paths  # noqa: E402
+import table_base as tb  # noqa: E402
 import update_common as pw  # noqa: E402
-import update_common as uc  # noqa: E402
 
 PAGE_AB = "异常效果"
 PAGE_RESIST = "可抵抗状态"
-DST = os.path.join(str(RESOURCES), "abnormal_effects.json")
+OUT = paths.RESOURCES / "abnormal_effects.json"
 
 CATEGORIES = ["无法选择", "阻止攻击", "阻止能力", "阻止移动", "对友方隐藏", "对非友方隐藏"]
 
-# 本表的页面专有模板规则（暂无：页面表格的「效果」列基础层已够用）。
-# 将来页面出现新模板、报残留时，在这里加 (名称, 编译正则, 替换函数)，与 rebuild_term 同形。
 EXTRA_RULES = []
 
 
 def clean_value(raw):
-    """本表的取值口径：update_common.clean_value + 本表 extra_rules。"""
     return pw.clean_value(raw, EXTRA_RULES)
 
 
@@ -92,9 +88,8 @@ def parse_categories(names):
 
 def parse_resistable(names):
     """可抵抗状态页「常见同名状态」列出的可抵抗状态。"""
-    text = pw.fetch_page(PAGE_RESIST)
     chunk = ""
-    for level, sec, body in pw.sections(text):
+    for level, sec, body in pw.sections(pw.fetch_page(PAGE_RESIST)):
         if sec == "已知的可抵抗状态":
             chunk = body
             break
@@ -114,7 +109,7 @@ def parse_resistable(names):
     return out
 
 
-def build():
+def build(old=None):
     flags = parse_flags()
     cats = parse_categories(list(flags))
     resist = parse_resistable(list(flags))
@@ -125,68 +120,12 @@ def build():
             "分类": cats.get(name, []),
             "可抵抗": name in resist,
         }
+    yes = [k for k, v in out.items() if v["可抵抗"]]
+    print("  页面条目 %d | 可抵抗 %d %s" % (len(out), len(yes), yes))
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description="重建异常效果表 abnormal_effects.json")
-    ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
-    args = ap.parse_args()
-
-    new = build()
-    old = {}
-    if os.path.exists(DST):
-        with open(DST, encoding="utf-8") as f:
-            old = json.load(f)
-
-    added = [k for k in new if k not in old]
-    removed = [k for k in old if k not in new]
-    changed = [(k, old[k], new[k]) for k in new if k in old and old[k] != new[k]]
-
-    print("====== 异常效果表重建 ======")
-    print("页面条目   : %d" % len(new))
-    print("原文件     : %d" % len(old))
-    print("新增       : %d %s" % (len(added), added[:10]))
-    print("页面已无（将删除）: %d %s" % (len(removed), removed[:10]))
-    print("变化       : %d" % len(changed))
-    for k, o, n in changed[:8]:
-        for field in ("效果", "分类", "可抵抗"):
-            if o.get(field) != n.get(field):
-                print("  [%s].%s\n    旧 %s\n    新 %s" % (
-                    k, field, json.dumps(o.get(field), ensure_ascii=False)[:90],
-                    json.dumps(n.get(field), ensure_ascii=False)[:90]))
-    if len(changed) > 8:
-        print("  …（其余 %d 项%s）" % (len(changed) - 8,
-                                    "见记录文件" if not args.dry_run else "干跑略过"))
-    yes = [k for k, v in new.items() if v["可抵抗"]]
-    print("可抵抗标记为 true : %d %s" % (len(yes), yes))
-
-    if args.dry_run:
-        print("\n(干跑：未写文件)")
-        return 0
-
-    uc.backup_file(DST)                      # 写前备份（保留 3 份）
-    with open(DST, "w", encoding="utf-8") as f:
-        json.dump(new, f, ensure_ascii=False, indent=2)
-
-    record = {
-        "脚本": {"文件": "maintenance/rebuild_abnormal_effects.py", "版本": 1},
-        "运行时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "模式": "重建",
-        "数据源": {"页面": [PAGE_AB, PAGE_RESIST],
-                   "段": ["异常效果（AbnormalFlag）", "异常效果的统一检查", "已知的可抵抗状态"]},
-        "表": "abnormal_effects.json",
-        "计数": {"页面": len(new), "原文件": len(old)},
-        "新增": added, "新增数": len(added),
-        "页面已无": removed, "页面已无数": len(removed),
-        "变化": [{"键": k, "旧": o, "新": n} for k, o, n in changed],
-        "变化数": len(changed),
-        "结果": "成功",
-    }
-    print("\n====== 完成：%s ======" % DST)
-    print("记录：%s" % os.path.basename(uc.write_record("abnormal_effects", record)))
-    return 0
-
+SPEC = tb.RebuildSpec(name="abnormal_effects", output=OUT, build=build)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(tb.run_rebuild(SPEC))

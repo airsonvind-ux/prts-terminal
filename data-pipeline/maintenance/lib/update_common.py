@@ -122,11 +122,10 @@ def backup_db(db_path, keep=KEEP_BACKUPS, backup_dir=None):
 
 
 def write_record(table, record, out_dir=None):
-    """把更新记录写到 <maintenance>/updates/<时间戳>-<表>.json，返回路径。"""
-    if out_dir is None:
-        out_dir = str(paths.UPDATES)
+    """把更新记录写到 <maintenance>/updates/<表>/<时间戳>.json，返回路径。"""
+    out_dir = out_dir or str(paths.UPDATES / table)
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, time.strftime("%Y-%m-%d-%H%M%S") + "-%s.json" % table)
+    path = os.path.join(out_dir, time.strftime("%Y-%m-%d-%H%M%S") + ".json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
     return path
