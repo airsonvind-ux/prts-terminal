@@ -249,6 +249,26 @@ def _record(spec, mode, src_ver, db):
 
 # ─── 主流程 ───────────────────────────────────────────────────
 
+def _pending_for(spec, db):
+    """待办文件跟着数据库走：用默认库时读仓库里的 pending.json，
+    用副本（--db）时读写副本旁边的 <副本名>-<表>.pending.json，不碰仓库状态。
+    """
+    db_path = Path(db).resolve()
+    if db_path == Path(paths.DB_PATH).resolve():
+        return spec.pending_path
+    alt = db_path.with_name("%s-%s.pending.json" % (db_path.stem, spec.table))
+    print("待办    : %s（副本配套）" % alt)
+    return alt
+
+
+def _record_dir(spec, db):
+    """记录目录跟着数据库走：默认库用 updates/<表>/，副本则写在副本旁边。"""
+    db_path = Path(db).resolve()
+    if db_path == Path(paths.DB_PATH).resolve():
+        return None
+    return str(db_path.parent)
+
+
 def run(spec, argv=None):
     ap = argparse.ArgumentParser(description="%s 表更新" % spec.table)
     ap.add_argument("--dry-run", action="store_true",
@@ -291,7 +311,8 @@ def run(spec, argv=None):
           % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
 
     record = _record(spec, mode, src_ver, args.db)
-    pending = Pending(spec.pending_path)
+    pending = Pending(_pending_for(spec, args.db))
+    rec_dir = _record_dir(spec, args.db)
     existing = _read_db(args.db, spec)
 
     def exempt(key):
@@ -381,7 +402,7 @@ def run(spec, argv=None):
             outcomes = spec.crawl(targets, rows) or {}
         except Exception as e:
             record["结果"] = "中止（爬取失败：%s）" % e
-            uc.write_record(spec.table, record)
+            uc.write_record(spec.table, record, rec_dir)
             print("\n!! 中止：%s" % e)
             print("   未对数据库做任何修改")
             return 1
@@ -429,7 +450,7 @@ def run(spec, argv=None):
             outs = spec.crawl(scope, rows) or {}
         except Exception as e:
             record["结果"] = "中止（爬取失败：%s）" % e
-            uc.write_record(spec.table, record)
+            uc.write_record(spec.table, record, rec_dir)
             print("\n!! 中止：%s" % e)
             print("   未对数据库做任何修改")
             return 1
@@ -490,14 +511,14 @@ def run(spec, argv=None):
         _write_db(args.db, spec, diffs, new_rows, backup=not args.no_backup)
     except Exception as e:
         record["结果"] = "中止（写库失败：%s）" % e
-        uc.write_record(spec.table, record)
+        uc.write_record(spec.table, record, rec_dir)
         print("\n!! 写库失败并已回滚：%s" % e)
         return 1
     pending.save()
     record["pending"]["总数"] = len(pending.data)
 
     record["结果"] = "成功"
-    path = uc.write_record(spec.table, record)
+    path = uc.write_record(spec.table, record, rec_dir)
     print("\n====== 完成 ======")
     print("  校对写回 %d 列 | 新增 %d 行 | 待办剩余 %d | 记录 %s"
           % (len(diffs), len(new_keys), len(pending.data), os.path.basename(path)))
