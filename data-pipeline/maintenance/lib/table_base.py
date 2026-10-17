@@ -125,15 +125,27 @@ class TableSpec:
     table: str
     columns: Columns
     key_cols: list
-    load_rows: object                     # () -> {key: row}
+    load_rows: object                     # (db_path) -> {key: row}
     pending_path: Path                    # <表目录>/pending.json
     crawl: object = None                  # (keys, rows) -> {key: Outcome}
     row_exempt: object = None             # (key) -> bool
+    skip_column: object = None            # (key, col) -> bool
     on_diff: object = None                # (key, col, want, have) -> 写入值
     extra_args: object = None             # (parser) -> None
+    recheck_enabled: bool = True          # 本表要不要 --recheck
 
 
 # ─── 工具 ─────────────────────────────────────────────────────
+
+def _k(key):
+    """键归一成元组：单键表（如 stages 的 关卡ID）常直接返回字符串键。"""
+    return key if isinstance(key, tuple) else (key,)
+
+
+def _is_empty(value):
+    """空串与 NULL 都算空（与 uc.same 的判等口径一致）。"""
+    return value is None or (isinstance(value, str) and not value.strip())
+
 
 def _same(cols, col, a, b):
     if cols.compare.get(col) == "exact":
@@ -235,6 +247,9 @@ def run(spec, argv=None):
     do_base = args.base or not explicit
     do_crawl = (args.crawl or not explicit) and not args.recheck
     do_recheck = args.recheck
+    if do_recheck and not spec.recheck_enabled:
+        print("本表不提供 --recheck（爬取耗时且内容不易变化）；重爬列请用 --crawl。")
+        return 1
     if do_recheck and args.dry_run:
         print("注意：--recheck 需要联网，--dry-run 下只报告目标行数。")
 
@@ -262,7 +277,7 @@ def run(spec, argv=None):
         return bool(spec.row_exempt and spec.row_exempt(key))
 
     print("\n------ 重算目标行 ------")
-    rows = spec.load_rows()
+    rows = {_k(k): v for k, v in spec.load_rows(args.db).items()}
     print("  目标行数: %d" % len(rows))
 
     diffs, new_keys = [], []
@@ -279,6 +294,8 @@ def run(spec, argv=None):
                 exempt_rows += 1
                 continue
             for col in cols.source:
+                if spec.skip_column and spec.skip_column(key, col):
+                    continue
                 a = have[col]
                 b = want.get(col)
                 if any(c == col for c, _ in cols.subkeys):
@@ -336,13 +353,14 @@ def run(spec, argv=None):
             if out.state == "synced":
                 pending.drop(key)
                 ok += 1
-                # 行已入库（--base 已在上一轮插入过）→ 把爬到的值写回爬取列
+                # 行已入库（--base 已在上一轮插入过）→ 把爬到的值写回爬取列。
+                # 只填空：库内已有内容（多半是人工写的）一律不动。
                 if key in existing:
                     for col in cols.crawl:
                         if col not in out.values:
                             continue
                         a = existing[key][col]
-                        if not _same(cols, col, a, out.values[col]):
+                        if _is_empty(a) and not _is_empty(out.values[col]):
                             diffs.append((key, col, a, out.values[col]))
             else:
                 pending.set_state(key, out.state, page=out.page, note=out.note)
@@ -350,7 +368,9 @@ def run(spec, argv=None):
                           "缺失": sum(1 for o in outcomes.values() if o.state == "missing"),
                           "部分": sum(1 for o in outcomes.values() if o.state == "partial")}
         record["pending"].update({"补齐": ok, "仍缺": len(targets) - ok})
-        print("  补上 %d | 仍缺 %d" % (ok, len(targets) - ok))
+        record["校对"].update({"差异行": len({d[0] for d in diffs}),
+                              "差异列数": len(diffs)})
+        print("  补上 %d | 仍缺 %d | 写回 %d 列" % (ok, len(targets) - ok, len(diffs)))
 
     # ── 3. 全量校对（--recheck）──
     if do_recheck:

@@ -205,8 +205,11 @@ def pick_hb_entry(hb_data, enemy_id, name):
 
 # ─── 重算目标行 ────────────────────────────────────────────────
 
-def compute_rows():
-    """从本地数据源算出全部目标行：{(敌人ID, 级别): {列名: 值}}。"""
+def compute_rows(db_path=None):
+    """从本地数据源算出全部目标行：{(敌人ID, 级别): {列名: 值}}。
+
+    db_path 用不到（本表只读数据源）；参数是为了与 table_base 的约定一致。
+    """
     database, handbook = load_source()
     race_map = {k: v.get("raceName") for k, v in handbook.get("raceData", {}).items()}
     hb_data = handbook.get("enemyData", {})

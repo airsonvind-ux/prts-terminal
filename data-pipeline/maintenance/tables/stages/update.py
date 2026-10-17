@@ -1,53 +1,54 @@
+# -*- coding: utf-8 -*-
+"""stages · 更新（增量）
+
+数据源（本地，一个主源 + 五个特殊源）
+    excel/stage_table.json                     关卡基本信息（主源）
+    excel/roguelike_topic_table.json           集成战略
+    excel/sandbox_table.json / sandbox_perm_table.json   生息演算（第0期 / V2 / V3）
+    excel/crisis_v2_table.json                 全息作战矩阵
+    excel/handbook_info_table.json             悖论模拟
+    excel/story_review_meta_table.json         训练场
+    levels/{obt,activities}/**/*.json          战斗列：部署上限 / 初始费用 / 费用上限 / 目标点耐久 / 敌人列表
+    excel/enemy_handbook_table.json            敌人名（图鉴口径）
+    enemies 表                                 敌人表名、覆写属性的基准行
+
+PRTS 侧（一页可覆盖多个难度身份）
+    {{普通/突袭/磨难险地/剿灭关卡信息}} · 情报 → 情报
+                                        · 敌人数量 → 待处理目标数量
+
+列分类
+    数据源列（14）关卡名 关卡描述 关卡编号 关卡类型 解锁条件 推荐等级 理智消耗 levelId
+                  部署上限 初始费用 费用上限 目标点耐久 敌人列表
+    爬取列（2）   情报 待处理目标数量    ← 只在新增首次爬取时填空，之后归人
+    人工列        —（这两列本身就归人；手改后脚本不会覆盖）
+
+格子级豁免
+    关卡ID 含 `_dlc` → 关卡名（岁·界园 DLC1 的差分关卡与基础关卡同名，脚本推不出区域名）
+    源里找不到 level 文件 → 部署上限 / 初始费用 / 费用上限 / 目标点耐久 / 敌人列表
+
+完整性判据
+    页面里「情报」与「敌人数量」都没有 → partial（待填）
+    有其中一样                        → synced（另一样就是本就没有）
+    页面 404                          → missing
+
+依赖
+    **enemies 必须先跑**：敌人列表的覆写属性要拿 enemies 表当基准（EnemyIndex）。
+
+不做 recheck
+    本表只爬两列、且都不易变、爬取耗时长；这两列还会被人工修改，重爬风险大于收益。
+    新增时由 Air 手动校验 pending 清单。
+
+用法
+    python update.py --dry-run    # 本地预分析：不联网、不写任何文件
+    python update.py --base       # 数据源 → 库 + 登记待办
+    python update.py --crawl      # 只爬 pending
 """
-PRTS 终端 — stages 表更新脚本（维护用）
 
-三段式，顺序固定：
-  1. 校对：以 `关卡ID` 为键，把库内行与「由本地数据源重新算出的值」逐列比对，差异写回。
-  2. 新增：库内不存在的键 INSERT（`stage_table.json` 全量 + 六个特殊来源）。
-  3. 爬取：只对新增行补 `情报` / `待处理目标数量`（按 PRTS 页面分组，一页一次）。
-  4. 记录：单事务，任何异常都不落库；结束写 updates/<时间戳>-stages.json。
-
-校对列 = 除 `情报` / `待处理目标数量` 之外的全部列：
-  - `情报` 来自 PRTS 爬取；
-  - `待处理目标数量` 来自 PRTS，且允许人工校正（同名条目可能爬到同一页）→ 两者都不校对。
-
-算不出就不改（Air 2026-10-13）：源里找不到该关卡的 level 文件时，`部署上限` / `初始费用` /
-`费用上限` / `目标点耐久` / `敌人列表` 不参与比对。游戏资源本身存在 stage→level 映射缺失的
-情况（如 act21side_01_m），不可能逐一校对，也不应改动原始信息。
-
-敌人名口径（Air 2026-10-13）：`敌人列表` 里的名字用 `enemy_handbook_table.json`（玩家在
-游戏内图鉴能读到的名字）；图鉴里没有的，退回 `enemies` 表的名字，再退回覆写里的名称，
-都没有就留空。每项形如 `{名称, 敌人ID, 级别, 覆写属性?, 天赋覆写?, 技能覆写?}`——名称用于
-展示与自足查询，敌人ID 用于精确关联（同名敌人有 66 组，按名字查会撞）。
-
-覆写属性的取舍（Air 2026-10-14）：
-  - 只留 `enemies` 表里有同名列的属性，PRTS 拿到的每个键都能回表；
-  - 再与「该敌人在表里的常规值」比，相同的不记（游戏会把整套字段都标成 m_defined=true，
-    它标的是“显式给了值”，不是“值变了”）；
-  - `天赋覆写` / `技能覆写` 没有对应列，但 PRTS 要配合关卡信息与天赋/技能描述判断改动，
-    所以与 `覆写属性` 平级保留。
-
-特殊来源（不在 stage_table.json 里，均无 stageId 的危机合约不在此列）：
-  - 集成战略   excel/roguelike_topic_table.json
-  - 生息演算   excel/sandbox_table.json + excel/sandbox_perm_table.json
-  - 全息作战矩阵 excel/crisis_v2_table.json 的 recalRuneData.seasons
-  - 悖论模拟   excel/handbook_info_table.json
-  - 训练场    excel/story_review_meta_table.json
-
-用法：
-    python update_stages.py --dry-run   # 只报告校对差异与新增，不写库、不爬取、不写记录
-    python update_stages.py             # 正式执行
-"""
-
-import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
-from datetime import datetime
-
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -55,30 +56,26 @@ MAINT = next(p for p in HERE.parents if (p / "lib").is_dir())   # maintenance/
 for _p in (str(HERE), str(MAINT / "lib"), str(MAINT.parent)):   # 本表目录 / 通用模块 / data-pipeline
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
 import paths  # noqa: E402
+import table_base as tb  # noqa: E402
 import update_common as uc  # noqa: E402
 from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
-# 枚举与免疫映射的唯一事实来源在 lib/enemy_attrs.py（游戏新增异常状态时只改那里）
 from enemy_attrs import ATK_MAP, IMMUNE_MAP, MOTION_MAP, STATUS_MAP  # noqa: E402
 
 TABLE = "stages"
-SCRIPT_VERSION = 2
-MAX_DETAIL = 200
+SENTINEL_PAGE = "0-1_坍塌"     # 结构哨兵：实测存在且带关卡模板
+SENTINEL_MARKER = "关卡信息"
+SLEEP = uc.SLEEP_BETWEEN_FETCH
 
-# 不参与校对：PRTS 爬取列 + 人工校正列
-SKIP_COLS = {"情报", "待处理目标数量"}
-# 需要 level 文件才能算出来的列（源里缺文件时跳过比对）
-COMBAT_COLS = {"部署上限", "初始费用", "费用上限", "目标点耐久", "敌人列表"}
-JSON_COLS = {"解锁条件", "敌人列表"}
-INT_COLS = {"理智消耗", "部署上限", "初始费用", "费用上限", "目标点耐久"}
-FLOAT_COLS = set()          # 本表没有浮点列
+NO_DETAIL_RECHECK_EVERY = 5
+NO_DETAIL_RATIO_LIMIT = 0.5
+NO_DETAIL_MIN_TOTAL = 20
 
-ALL_COLS = [
-    "关卡ID", "关卡名", "关卡描述", "关卡编号", "关卡类型", "解锁条件", "推荐等级",
-    "理智消耗", "levelId", "部署上限", "初始费用", "费用上限", "目标点耐久",
-    "敌人列表", "情报", "待处理目标数量",
-]
+STAGE_TABLE = paths.GAMEDATA / "excel" / "stage_table.json"
+ENEMY_HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
+LEVELS_ROOT = paths.GAMEDATA / "levels"
 
 STAGE_TYPE_MAP = {
     "MAIN": "主线", "ACTIVITY": "活动", "SUB": "支线", "DAILY": "日常",
@@ -86,11 +83,32 @@ STAGE_TYPE_MAP = {
     "SPECIAL_STORY": "特殊故事",
 }
 
-# 覆写属性：游戏原始字段 → enemies 表的列名（键必须与表列一致，PRTS 才能回表）。
-# 两个例外：`numOfExtraDrops` / `viewRadius` 与斗蝉蝉模式相关，我们没做解析，
-# 表里本身就是英文列名，所以原样保留英文。没有对应列的字段（prefabKey、enemyTags、
-# spRecoveryPerSec 等）一律不列在这里，也就不会被记进覆写属性。
-# 映射口径以 lib/enemy_attrs.py 的取值为准。
+# 人工维护的关卡名：ID 含此串的行，关卡名不参与校对
+EXCLUDE_NAME_FROM_CHECK = "_dlc"
+
+# 源里缺 level 文件时不算数的战斗列
+COMBAT_COLS = {"部署上限", "初始费用", "费用上限", "目标点耐久", "敌人列表"}
+NO_LEVEL_KEYS = set()          # compute_rows 填充：这些键的战斗列跳过
+
+# ─── 列声明 ────────────────────────────────────────────────────
+
+COLUMNS = tb.Columns(
+    all=[
+        "关卡ID", "关卡名", "关卡描述", "关卡编号", "关卡类型", "解锁条件", "推荐等级",
+        "理智消耗", "levelId", "部署上限", "初始费用", "费用上限", "目标点耐久",
+        "敌人列表", "情报", "待处理目标数量",
+    ],
+    source=[
+        "关卡名", "关卡描述", "关卡编号", "关卡类型", "解锁条件", "推荐等级", "理智消耗",
+        "levelId", "部署上限", "初始费用", "费用上限", "目标点耐久", "敌人列表",
+    ],
+    crawl=["情报", "待处理目标数量"],
+    json=["解锁条件", "敌人列表"],
+    int=["理智消耗", "部署上限", "初始费用", "费用上限", "目标点耐久"],
+)
+
+# ─── 覆写属性映射（键必须与 enemies 表列名一致，PRTS 才能回表）───
+
 ATTR_COL = {
     "name": "名称", "description": "描述", "levelType": "地位",
     "applyWay": "攻击方式", "motion": "行动方式",
@@ -111,40 +129,16 @@ ATTR_COL = {
     "groundBoundImmune": "缚地抗性",
     "talentBlackboard": "天赋覆写", "skills": "技能覆写",
 }
-
-# ─── 覆写属性的取舍 ──────────────────────────────────────────
-# 各单项抗性 → enemies 表 `异常抗性` 列表里的名字（口径同 IMMUNE_MAP）。
-# 这组键是 `异常抗性` 列的元素，不是列名本身（Air 2026-10-14 定）。
 IMMUNE_CN = {ATTR_COL[raw]: cn for raw, cn in IMMUNE_MAP.items() if raw in ATTR_COL}
-# 覆写里是游戏原始枚举，enemies 表存的是中文
 ENUM_CN = {"攻击方式": ATK_MAP, "行动方式": MOTION_MAP, "地位": STATUS_MAP}
-# 与 `覆写属性` 平级：没有对应列，但 PRTS 要配合关卡信息与天赋/技能描述判断改动
 SIBLING_KEYS = ("天赋覆写", "技能覆写")
 
-# PRTS 页面名规则（沿 build_stages_prts_v2.py）
+# PRTS 页面名规则
 URL_RULES = {
     "生息演算·沙洲遗闻": "{code}_{name}(沙洲遗闻)",
     "悖论模拟": "悖论模拟_{name}",
 }
 DEFAULT_URL = "{code}_{name}"
-SENTINEL_MARKER = "关卡信息"
-SENTINEL_PAGE = "0-1_坍塌"   # 结构哨兵：实测存在且带关卡模板（1-7_坍塌 实测不存在）
-
-# 爬取结构健康判定（与 enemies 同口径）
-NO_DETAIL_RECHECK_EVERY = 5
-NO_DETAIL_RATIO_LIMIT = 0.5
-NO_DETAIL_MIN_TOTAL = 20
-
-# 人工维护的关卡名：ID 含此串的行，`关卡名` 不参与校对（脚本推不出，改了就抹掉人工成果）。
-# 岁·界园 DLC1：这些关卡是在“今昔境”区域对基础关卡做的差分，与基础关卡同名；
-# Wiki 与 PRTS 都靠名字后的 (区域名) 区分，而 DLC→区域的映射源里没有，故整列豁免。
-EXCLUDE_NAME_FROM_CHECK = "_dlc"
-
-uc.reconfigure_stdout()
-
-STAGE_TABLE = paths.GAMEDATA / "excel" / "stage_table.json"
-ENEMY_HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
-LEVELS_ROOT = paths.GAMEDATA / "levels"
 
 
 # ─── 数据源读取 ───────────────────────────────────────────────
@@ -164,7 +158,7 @@ def handbook_names():
 
 
 def build_level_index():
-    """levelId → 文件路径。按 obt → activities 顺序走，后者覆盖前者（与旧构建脚本一致）。"""
+    """levelId → 文件路径。按 obt → activities 顺序走，后者覆盖前者。"""
     index = {}
     for base in ("obt", "activities"):
         root = os.path.join(LEVELS_ROOT, base)
@@ -178,7 +172,7 @@ def build_level_index():
 
 
 class LevelCache:
-    """按需加载 level JSON，只留下战斗列所需的字段并缓存（旧脚本一次性全读进内存）。"""
+    """按需加载 level JSON，只留战斗列所需字段并缓存。"""
 
     def __init__(self, index, enemy_index):
         self.index = index
@@ -194,8 +188,7 @@ class LevelCache:
             if p is None:
                 self.cache[lid] = None
             else:
-                with open(p, encoding="utf-8") as f:
-                    lv = json.load(f)
+                lv = load_json(p)
                 opts = lv.get("options", {})
                 self.cache[lid] = (
                     opts.get("characterLimit"),
@@ -208,9 +201,7 @@ class LevelCache:
 
 
 def clean_level_id(raw):
-    if raw is None:
-        return None
-    return raw.split("/")[-1]
+    return raw.split("/")[-1] if raw else None
 
 
 def clean_unlock_condition(raw):
@@ -224,18 +215,12 @@ def clean_unlock_condition(raw):
 
 
 def extract_overrides(od):
-    """取 overwrittenData 的覆写字段，键名转中文。
-
-    只走两层：顶层字段 + `attributes` 子字段。旧版遇到没有 m_defined 的 dict 就继续递归，
-    并把递归结果里的子键平铺到顶层，于是 `0数量` / `1级别` / `damageHitratePhysical`
-    这类嵌套碎片被漏成了顶层键；现在没有 m_defined 的 dict 一律不再下钻。
-    """
+    """取 overwrittenData 的覆写字段，键名转中文（只走顶层 + attributes 两层）。"""
     result = {}
     if not isinstance(od, dict):
         return result
 
     def leaf(node):
-        """dict 按 m_defined 取叶值；list 整段保留；其余丢弃。"""
         if isinstance(node, dict):
             if node.get("m_defined") is True:
                 return True, node.get("m_value")
@@ -258,7 +243,7 @@ def extract_overrides(od):
 
 
 def build_enemy_list(refs, index):
-    """`敌人列表`：名称用于展示，敌人ID 用于回表，覆写属性只留真差异。"""
+    """敌人列表：名称用于展示，敌人ID 用于回表，覆写属性只留真差异。"""
     if not refs:
         return "[]"
     out = []
@@ -267,11 +252,7 @@ def build_enemy_list(refs, index):
         level = ref.get("level", 0)
         ov = extract_overrides(ref.get("overwrittenData"))
         tid, base = index.lookup(eid, level, ov.get("名称"))
-        item = {
-            "名称": index.display_name(eid, tid, ov),
-            "敌人ID": tid or eid,
-            "级别": level,
-        }
+        item = {"名称": index.display_name(eid, tid, ov), "敌人ID": tid or eid, "级别": level}
         attrs = filter_overrides(ov, base, index.cols)
         if attrs:
             item["覆写属性"] = attrs
@@ -283,7 +264,6 @@ def build_enemy_list(refs, index):
 
 
 def _norm_attr(key, val):
-    """把覆写值归一成 enemies 表的取值口径（文本清洗、枚举转中文）。"""
     if key in ("名称", "描述") and isinstance(val, str):
         return clean_desc(val) or ""
     if key in ENUM_CN and isinstance(val, str):
@@ -310,10 +290,7 @@ def _parse_json_list(raw):
 
 
 def filter_overrides(ov, base, cols):
-    """只留 enemies 表里存在的属性列，且值与该敌人常规值不同的那些。
-
-    base 为 None（关卡内联敌人，表里没有正身）时白名单内的全留：它们本来就是定义。
-    """
+    """只留 enemies 表里存在的属性列，且值与该敌人常规值不同的那些。"""
     out = {}
     for key, val in ov.items():
         if key in SIBLING_KEYS:
@@ -322,21 +299,21 @@ def filter_overrides(ov, base, cols):
             cur = (base or {}).get("异常抗性") or []
             want = bool(val)
             if base is not None and want == (IMMUNE_CN[key] in cur):
-                continue          # 与表里一致 → 不记
+                continue
             out[key] = want
             continue
-        col = key                 # 键已按 ATTR_COL 归一成 enemies 表的列名
+        col = key
         if col not in cols:
-            continue              # 表里没有这一列 → 不留（PRTS 无法回表）
+            continue
         val = _norm_attr(key, val)
         if base is not None and _same_attr(val, base.get(col)):
-            continue              # 与常规值相同 → 不记
+            continue
         out[key] = val
     return out
 
 
 def _strip_chain(eid):
-    """逐段去尾的候选 ID（`enemy_a_b_c` → `enemy_a_b` → `enemy_a`）。"""
+    """逐段去尾的候选 ID（enemy_a_b_c → enemy_a_b → enemy_a）。"""
     parts = (eid or "").split("_")
     out = []
     while len(parts) > 2:
@@ -346,15 +323,10 @@ def _strip_chain(eid):
 
 
 class EnemyIndex:
-    """enemies 表快照：提供名称、常规值基准，以及 ID 归属判断。
+    """enemies 表快照：名称、常规值基准、ID 归属判断。
 
-    `enemyDbRefs[].id` 分两种情况：
-      - 原样就在 enemies 表里（含级别变体与独立敌人）→ 直接用，绝不去尾；
-      - 原样不在（关卡内联敌人，或表内 ID 加了后缀的变体）→ 逐段去尾找候选，
-        候选在表里、且名称与覆写里的名称一致，才算同一个敌人；否则算关卡内联。
-
-    去尾只能放在“原样查不到”之后：表里 691 个 ID 去尾会落到另一个真实存在的敌人上
-    （enemy_1007_slime_2 是源石虫·α，不是源石虫），盲目去尾会把基准换成另一个敌人。
+    `enemyDbRefs[].id` 原样在表里就直接用，绝不去尾；原样不在才逐段去尾找候选，
+    且候选的名称须与覆写里的名称一致才算同一敌人（否则算关卡内联）。
     """
 
     def __init__(self, conn, hb_names):
@@ -370,7 +342,6 @@ class EnemyIndex:
             self.rows[(d["敌人ID"], d["级别"])] = d
 
     def lookup(self, eid, level, want_name):
-        """→ (表内 ID 或 None, 常规值基准行 或 None)。"""
         if eid in self.name_by_id:
             return eid, self._row(eid, level)
         for cand in _strip_chain(eid):
@@ -394,15 +365,22 @@ class EnemyIndex:
         return _norm_attr("名称", ov.get("名称")) if ov.get("名称") else ""
 
 
-# ─── 重算全部目标行 ───────────────────────────────────────────
+# ─── 重算目标行 ────────────────────────────────────────────────
 
-def compute_rows(conn):
-    """返回 (rows, no_level_keys)。
+def compute_rows(db_path):
+    """从数据源 + enemies 表算出全部目标行：{关卡ID: {列名: 值}}。"""
+    conn = sqlite3.connect(db_path)
+    try:
+        lc = LevelCache(build_level_index(), EnemyIndex(conn, handbook_names()))
+        rows, no_level = _compute(lc)
+    finally:
+        conn.close()
+    NO_LEVEL_KEYS.clear()
+    NO_LEVEL_KEYS.update(no_level)
+    return rows
 
-    rows: {关卡ID: {列名: 值}}
-    no_level_keys: 源里找不到 level 文件的键（这些行的战斗列不参与校对）
-    """
-    lc = LevelCache(build_level_index(), EnemyIndex(conn, handbook_names()))
+
+def _compute(lc):
     rows = {}
     no_level = set()
 
@@ -411,11 +389,7 @@ def compute_rows(conn):
         row["部署上限"] = row["初始费用"] = row["费用上限"] = None
         row["目标点耐久"] = None
         row["敌人列表"] = None
-        if not lid_raw:
-            no_level.add(row["关卡ID"])
-            return
-        multi = "," in lid_raw
-        if multi and "集成战略" not in kind:
+        if not lid_raw or ("," in lid_raw and "集成战略" not in kind):
             no_level.add(row["关卡ID"])
             return
         combat = lc.combat(lid_main)
@@ -425,8 +399,7 @@ def compute_rows(conn):
         row["部署上限"], row["初始费用"], row["费用上限"], row["目标点耐久"], row["敌人列表"] = combat
 
     # ── A. stage_table.json ──
-    st = load_json(STAGE_TABLE)["stages"]
-    for sid, s in st.items():
+    for sid, s in load_json(STAGE_TABLE)["stages"].items():
         lid_raw = clean_level_id(s.get("levelId"))
         kind = STAGE_TYPE_MAP.get(s.get("stageType"), s.get("stageType"))
         row = {
@@ -470,8 +443,7 @@ def compute_rows(conn):
     # B1. 集成战略
     rl = load_optional("roguelike_topic_table.json")
     if rl:
-        topics = rl.get("topics", {})
-        for topic_id, topic in topics.items():
+        for topic_id, topic in rl.get("topics", {}).items():
             topic_name = topic.get("name", topic_id)
             for sid, s in rl.get("details", {}).get(topic_id, {}).get("stages", {}).items():
                 main_lid = clean_level_id(s.get("levelId"))
@@ -488,9 +460,10 @@ def compute_rows(conn):
                         "生息演算·第0期", clean_level_id(s.get("levelId")))
     sbp = load_optional("sandbox_perm_table.json")
     if sbp:
-        for key, kind_suffix in (("sandbox_1", None), ("sandbox_2", None)):
+        for key in ("sandbox_1", "sandbox_2"):
             info = sbp.get("basicInfo", {}).get(key, {})
-            sub = sbp.get("detail", {}).get("SANDBOX_V2" if key == "sandbox_1" else "SANDBOX_V3", {}).get(key, {})
+            sub = sbp.get("detail", {}).get(
+                "SANDBOX_V2" if key == "sandbox_1" else "SANDBOX_V3", {}).get(key, {})
             kind = "生息演算·%s" % info.get("topicName", key)
             for sid, s in sub.get("stageData", {}).items():
                 if key == "sandbox_1":
@@ -498,18 +471,15 @@ def compute_rows(conn):
                                 s.get("code"), kind, clean_level_id(s.get("levelId")))
                 else:
                     story = sub.get("storyStageData", {}).get(sid, {})
-                    sub_ids = [x for x in (story.get("subStageIdList") or []) if x]
                     lids = []
-                    for si in sub_ids:
+                    for si in [x for x in (story.get("subStageIdList") or []) if x]:
                         lid = clean_level_id(sub.get("subStageData", {}).get(si, {}).get("levelId"))
                         if lid:
                             lids.append(lid)
                     add_special(s.get("stageId"), s.get("name"), s.get("description"),
                                 s.get("code"), kind, ",".join(lids), lids[0] if lids else None)
 
-    # B3. 全息作战矩阵：名/编号/描述取自源里的 levelName / levelCode / levelDesc。
-    # 编号额外加“全息”前缀——全息关是在常规关卡上做的高难版本、与常规关卡同名，
-    # 加前缀以免 PRTS 按 `7-18` 之类的编号误认到全息关上（Air 定，仅本类型适用）。
+    # B3. 全息作战矩阵：编号加「全息」前缀（与常规关卡同名，避免 PRTS 误认）
     cv2 = load_optional("crisis_v2_table.json")
     if cv2:
         for _, season in cv2.get("recalRuneData", {}).get("seasons", {}).items():
@@ -524,6 +494,7 @@ def compute_rows(conn):
         for _, s in hbi.get("handbookStageData", {}).items():
             add_special(s.get("stageId"), s.get("name"), s.get("description"), s.get("code"),
                         "悖论模拟", clean_level_id(s.get("levelId")))
+
     # B5. 训练场
     srm = load_optional("story_review_meta_table.json")
     if srm:
@@ -534,10 +505,15 @@ def compute_rows(conn):
     return rows, no_level
 
 
-# ─── 比较 ────────────────────────────────────────────────────
+# ─── 格子级豁免 ────────────────────────────────────────────────
 
-def same(col, a, b):
-    return uc.same(col, a, b, JSON_COLS, FLOAT_COLS, INT_COLS)
+def skip_column(key, col):
+    sid = key[0] if isinstance(key, tuple) else key
+    if col == "关卡名" and EXCLUDE_NAME_FROM_CHECK in sid:
+        return True
+    if col in COMBAT_COLS and sid in NO_LEVEL_KEYS:
+        return True
+    return False
 
 
 # ─── PRTS 爬取（情报 / 待处理目标数量）─────────────────────────
@@ -550,24 +526,17 @@ def build_url_key(sid, code, name, stype):
         eff = "险地" + eff
     tpl = URL_RULES.get(stype, DEFAULT_URL)
     key = tpl.format(code=eff, name=(name or "").strip())
-    # MediaWiki 页名不能含 `#`（钡点分隔符），PRTS 用全角 `＃` 代替
-    return key.replace("#", "＃")
+    return key.replace("#", "＃")      # MediaWiki 页名不能含 #，PRTS 用全角代替
 
 
 def _intel_from_template(params):
-    """从模板参数里取情报（清洗交给 cleaning_wiki 基础规则）。"""
     raw = params.get("情报")
     return clean_wiki(raw) if raw else None
 
 
 def _template_intel(text):
-    """从关卡页 wikitext 里取出各难度身份的情报 + 敌人数量。
-
-    返回 {"NORMAL": str|None, "FOUR_STAR": ..., "SIX_STAR": ..., "IS_EMERGENCY": ..., "ANNIHILATION": ...,
-          "_count": str|None}
-    """
+    """关卡页 wikitext → 各难度身份的情报 + 敌人数量。"""
     out = {}
-    # 普通关卡信息（含四星/六星难度变体）
     for tpl in uc.parse_template(text, "普通关卡信息"):
         if tpl.get("全息矩阵化") == "true" or tpl.get("战斗关卡") == "false":
             continue
@@ -582,7 +551,7 @@ def _template_intel(text):
     for tpl in uc.parse_template(text, "剿灭关卡信息"):
         out.setdefault("ANNIHILATION", _intel_from_template(tpl))
 
-    # 敌人数量：按模板名顺序找第一个带该参数的模板
+    out["_count"] = None
     for tpl_name in ("普通关卡信息", "突袭关卡信息", "剿灭关卡信息", "保全派驻关卡信息",
                      "集成战略关卡信息", "区块化关卡信息", "教学关卡信息", "活动关卡信息",
                      "主线关卡信息", "支线关卡信息"):
@@ -590,13 +559,10 @@ def _template_intel(text):
         if tpls and tpls[0].get("敌人数量"):
             out["_count"] = tpls[0]["敌人数量"]
             break
-    else:
-        out["_count"] = None
     return out
 
 
 def match_intel(sid, table):
-    """按 stage ID 的难度身份挑对应情报。"""
     if "IS_EMERGENCY" in table and "_e_" in sid:
         return table.get("IS_EMERGENCY")
     if sid.startswith("tough_") or "#s" in sid:
@@ -608,223 +574,81 @@ def match_intel(sid, table):
     return table.get("NORMAL")
 
 
-def crawl_new(conn, new_keys, rows):
-    """对新增行爬 PRTS，返回 {关卡ID: (情报, 待处理目标数量)} 与统计。"""
-    targets = [k for k in new_keys
-               if rows[k]["关卡编号"] and rows[k]["关卡名"]]
-    groups = {}
-    for k in targets:
-        r = rows[k]
-        url = build_url_key(k, r["关卡编号"], r["关卡名"], r["关卡类型"])
+def crawl(keys, rows):
+    """爬 pending 里的关卡。一个页面覆盖多个难度身份，按页面分组后一页一次。
+
+    判据：页面里情报与敌人数量都没有 → partial（待填）；有其一 → synced。
+    """
+    groups, unpageable = {}, []
+    for k in keys:
+        sid = k[0] if isinstance(k, tuple) else k
+        r = rows.get(k) or {}
+        if not r.get("关卡编号") or not r.get("关卡名"):
+            unpageable.append(k)
+            continue
+        url = build_url_key(sid, r["关卡编号"], r["关卡名"], r["关卡类型"])
         groups.setdefault(url, []).append(k)
 
-    result = {}
-    no_page, no_detail, redirects = [], [], []
-    total = len(groups)
-    print("  待爬页面: %d 个（覆盖 %d 个新增关卡）" % (total, len(targets)))
+    out = {}
+    for k in unpageable:
+        out[k] = tb.Outcome("partial", note="无编号或名称，拼不出页面")
 
-    ok, why = uc.sentinel_ok(SENTINEL_PAGE, SENTINEL_MARKER)
-    if not ok:
-        raise RuntimeError(why)
+    pages = list(groups)
+    if pages:
+        ok, why = uc.sentinel_ok(SENTINEL_PAGE, SENTINEL_MARKER)
+        if not ok:
+            raise RuntimeError(why)
 
     skipped = 0
     start = time.time()
-    for i, (url, keys) in enumerate(groups.items()):
-        if i % 25 == 0 or i == total - 1:
-            el = time.time() - start
-            rate = (i / el) if el > 0 else 0
-            eta = (total - i) / rate if rate > 0 else 0
-            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total, el, eta, url[:56]))
+    for i, (url, ks) in enumerate(groups.items(), 1):
+        if i % 25 == 0 or i == len(pages):
+            elapsed = time.time() - start
+            rate = (i - 1) / elapsed if elapsed > 0 else 0
+            eta = (len(pages) - i) / rate if rate > 0 else 0
+            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, len(pages), elapsed, eta, url[:56]))
         try:
-            text = uc.fetch_wikitext(url, redirects)
+            text = uc.fetch_wikitext(url)
         except uc.NoPage:
-            for k in keys:
-                no_page.append(k)
+            for k in ks:
+                out[k] = tb.Outcome("missing", page=url, note="页面不存在")
+            time.sleep(SLEEP)
             continue
+
         table = _template_intel(text)
         count = table.pop("_count", None)
         hit = False
-        for k in keys:
-            intel = match_intel(k, table)
-            if intel is not None:
-                result.setdefault(k, [None, None])[0] = intel
-                hit = True
-            if count:
-                result.setdefault(k, [None, None])[1] = count
-                hit = True
+        for k in ks:
+            sid = k[0] if isinstance(k, tuple) else k
+            intel = match_intel(sid, table)
+            if intel is None and not count:
+                out[k] = tb.Outcome("partial", page=url, note="情报与敌人数量都没有")
+                continue
+            hit = True
+            out[k] = tb.Outcome("synced", page=url,
+                                values={"情报": intel, "待处理目标数量": count})
         if not hit:
-            no_detail.extend(keys)
             skipped += 1
             if skipped % NO_DETAIL_RECHECK_EVERY == 0:
                 ok2, why2 = uc.sentinel_ok(SENTINEL_PAGE, SENTINEL_MARKER)
                 if not ok2:
-                    raise RuntimeError("站点结构复核失败（已跳过 %d 页）: %s" % (skipped, why2))
-            if skipped >= NO_DETAIL_MIN_TOTAL and skipped > (i + 1) * NO_DETAIL_RATIO_LIMIT:
-                raise RuntimeError("无结构页面占比过高（%d/%d），疑似 PRTS 结构变化"
-                                   % (skipped, i + 1))
-        time.sleep(uc.SLEEP_BETWEEN_FETCH)
-    return {k: tuple(v) for k, v in result.items()}, no_page, no_detail, redirects
+                    raise RuntimeError("站点结构复核失败（已空页 %d 个）: %s" % (skipped, why2))
+            if skipped >= NO_DETAIL_MIN_TOTAL and skipped > i * NO_DETAIL_RATIO_LIMIT:
+                raise RuntimeError("空页占比过高（%d/%d），疑似 PRTS 结构变化" % (skipped, i))
+        time.sleep(SLEEP)
+    return out
 
 
-# ─── 主流程 ──────────────────────────────────────────────────
-
-def main():
-    ap = argparse.ArgumentParser(description="stages 表更新（校对 + 新增 + 记录）")
-    ap.add_argument("--dry-run", action="store_true", help="只报告，不写库、不爬取、不写记录")
-    ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
-    ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
-    args = ap.parse_args()
-
-    paths.ensure_gamedata()
-    if not os.path.exists(args.db):
-        raise SystemExit("数据库不存在：%s" % args.db)
-
-    started = datetime.now()
-    print("====== stages 表更新 ======")
-    print("数据库  : %s" % args.db)
-    print("数据源  : %s" % paths.DATA_SOURCE)
-    src_ver = uc.read_source_version(paths.DATA_SOURCE)
-    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
-          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
-
-    record = {
-        "表": TABLE,
-        "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
-        "数据源": {
-            "仓库": "Kengxxiao/ArknightsGameData",
-            "提交": src_ver["提交"], "提交标题": src_ver["提交标题"],
-            "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"],
-        },
-        "脚本": {"文件": "update_stages.py", "版本": SCRIPT_VERSION},
-        "数据库": os.path.basename(args.db),
-        "校对": {"检查行": 0, "差异行": 0, "差异列数": 0, "明细": [], "计数": {}},
-        "新增": {"行": 0, "明细": []},
-        "爬取": {"目标关卡": 0, "成功": 0, "无页面": 0, "无详情结构": 0,
-                 "重定向": [], "无页面明细": [], "无详情明细": []},
-        "结果": "未执行",
-    }
-
-    conn = sqlite3.connect(args.db)
-    conn.isolation_level = None
-    try:
-        print("\n------ 重算目标行 ------")
-        rows, no_level = compute_rows(conn)
-        print("  目标行数: %d | 源里缺 level 文件: %d" % (len(rows), len(no_level)))
-
-        db_cols = [d[1] for d in conn.execute("PRAGMA table_info(%s)" % TABLE)]
-        cur = conn.execute("SELECT %s FROM %s" % (", ".join(db_cols), TABLE))
-        existing = {r[0]: dict(zip(db_cols, r)) for r in cur.fetchall()}
-
-        # ── 1. 校对 ──
-        diffs = []
-        per_col = {}
-        skipped_no_level = 0
-        for k, want in rows.items():
-            have = existing.get(k)
-            if have is None:
-                continue
-            for col in db_cols:
-                if col in SKIP_COLS:
-                    continue
-                if col in COMBAT_COLS and k in no_level:
-                    skipped_no_level += 1
-                    continue
-                if col == "关卡名" and EXCLUDE_NAME_FROM_CHECK in k:
-                    continue
-                if not same(col, have[col], want[col]):
-                    diffs.append((k, col, have[col], want[col]))
-                    per_col[col] = per_col.get(col, 0) + 1
-        record["校对"]["检查行"] = len(existing)
-        record["校对"]["差异行"] = len({d[0] for d in diffs})
-        record["校对"]["差异列数"] = len(diffs)
-        record["校对"]["计数"] = per_col
-        record["校对"]["缺 level 跳过列"] = skipped_no_level
-        record["校对"]["明细"] = [
-            dict({"键": k, "列": col}, **uc.diff_brief(old, new, as_json=col in JSON_COLS))
-            for k, col, old, new in diffs[:MAX_DETAIL]
-        ]
-        print("\n------ 1. 校对结果 ------")
-        print("  库内行数: %d | 差异行: %d | 差异列: %d | 缺 level 跳过列: %d"
-              % (len(existing), record["校对"]["差异行"], len(diffs), skipped_no_level))
-        for col, n in sorted(per_col.items(), key=lambda x: -x[1]):
-            print("    %s: %d 处" % (col, n))
-
-        # ── 2. 新增 ──
-        new_keys = sorted(k for k in rows if k not in existing)
-        record["新增"]["行"] = len(new_keys)
-        record["新增"]["明细"] = [{"键": k, "名": rows[k]["关卡名"], "类型": rows[k]["关卡类型"]}
-                                  for k in new_keys[:MAX_DETAIL]]
-        print("\n------ 2. 新增 ------")
-        print("  新增关卡: %d" % len(new_keys))
-
-        if args.dry_run:
-            print("\n(干跑：未写库、未爬取、未写记录)")
-            record["结果"] = "干跑"
-            return 0
-
-        # ── 3. 爬取（先爬后写）──
-        crawl = {}
-        if new_keys:
-            print("\n------ 3. 爬取 PRTS ------")
-            try:
-                crawl, no_page, no_detail, redirects = crawl_new(conn, new_keys, rows)
-            except Exception as e:
-                record["结果"] = "中止（%s）" % e
-                path = uc.write_record(TABLE, record)
-                print("\n!! 中止：%s" % e)
-                print("   未对数据库做任何修改；记录：%s" % path)
-                return 1
-            record["爬取"]["目标关卡"] = len([k for k in new_keys
-                                              if rows[k]["关卡编号"] and rows[k]["关卡名"]])
-            record["爬取"]["成功"] = len(crawl)
-            record["爬取"]["无页面"] = len(no_page)
-            record["爬取"]["无页面明细"] = no_page[:MAX_DETAIL]
-            record["爬取"]["无详情结构"] = len(no_detail)
-            record["爬取"]["无详情明细"] = no_detail[:MAX_DETAIL]
-            record["爬取"]["重定向"] = ["%s → %s" % (a, b) for a, b in redirects[:MAX_DETAIL]]
-
-        # ── 4. 写库（单事务）──
-        print("\n------ 4. 写库（单事务）------")
-        if args.no_backup:
-            print("  (已跳过备份)")
-        else:
-            bak = uc.backup_db(args.db)
-            print("  备份: %s" % (bak or "（未生成）"))
-        print("  写回校对差异: %d 列 | 插入新增: %d 行" % (len(diffs), len(new_keys)))
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            for k, col, old, new in diffs:
-                conn.execute("UPDATE %s SET %s=? WHERE 关卡ID=?" % (TABLE, col), (new, k))
-            for k in new_keys:
-                want = dict(rows[k])
-                if k in crawl:
-                    want["情报"], want["待处理目标数量"] = crawl[k]
-                conn.execute(
-                    "INSERT OR IGNORE INTO %s (%s) VALUES (%s)"
-                    % (TABLE, ", ".join(ALL_COLS), ", ".join("?" * len(ALL_COLS))),
-                    tuple(want[c] for c in ALL_COLS),
-                )
-            conn.execute("COMMIT")
-        except Exception as e:
-            conn.execute("ROLLBACK")
-            record["结果"] = "中止（写库失败：%s）" % e
-            path = uc.write_record(TABLE, record)
-            print("\n!! 写库失败并已回滚：%s" % e)
-            print("   记录：%s" % path)
-            return 1
-    finally:
-        conn.close()
-
-    record["结果"] = "成功"
-    path = uc.write_record(TABLE, record)
-    elapsed = (datetime.now() - started).total_seconds()
-    print("\n====== 完成（%.1fs）======" % elapsed)
-    print("  校对写回: %d 列 | 新增: %d 行 | 爬取成功: %d | 无页面: %d | 无详情结构: %d"
-          % (record["校对"]["差异列数"], record["新增"]["行"], record["爬取"]["成功"],
-             record["爬取"]["无页面"], record["爬取"]["无详情结构"]))
-    print("  更新记录: %s" % path)
-    return 0
-
+SPEC = tb.TableSpec(
+    table=TABLE,
+    columns=COLUMNS,
+    key_cols=["关卡ID"],
+    load_rows=compute_rows,
+    pending_path=HERE / "pending.json",
+    crawl=crawl,
+    skip_column=skip_column,
+    recheck_enabled=False,
+)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(tb.run(SPEC))
