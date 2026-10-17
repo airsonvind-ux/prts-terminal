@@ -223,6 +223,8 @@ def run(spec, argv=None):
     ap.add_argument("--base", action="store_true", help="数据源 → 校对 + 新增 + 登记待办")
     ap.add_argument("--crawl", action="store_true", help="只处理 pending 里的待爬项")
     ap.add_argument("--recheck", action="store_true", help="全表重爬，只比对爬取列")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="--recheck 单次最多处理多少行（0 = 不限；便于分段跑与调试）")
     ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
     ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
     if spec.extra_args:
@@ -352,7 +354,9 @@ def run(spec, argv=None):
 
     # ── 3. 全量校对（--recheck）──
     if do_recheck:
-        scope = [k for k in existing if not exempt(k)]
+        scope = [k for k in existing if k in rows and not exempt(k)]
+        if args.limit:
+            scope = scope[:args.limit]
         print("\n------ 全量重爬（%d 行）------" % len(scope))
         if args.dry_run:
             print("  (干跑：未联网)")
@@ -367,7 +371,9 @@ def run(spec, argv=None):
             return 1
         per_col = {}
         for key, out in outs.items():
-            if out.state not in ("synced", "partial"):
+            # 只写有内容的；partial / missing 不覆写库内已有的值
+            # （页面暂时为空不代表内容被删，保守起见不动）
+            if out.state != "synced":
                 continue
             for col in cols.crawl:
                 if col not in out.values:

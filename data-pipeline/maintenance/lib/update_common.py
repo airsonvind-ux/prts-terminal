@@ -289,7 +289,10 @@ def same(col, a, b, json_cols=(), float_cols=(), int_cols=()):
     if col in json_cols:
         return _as_json(a) == _as_json(b)
     if a is None or b is None:
-        return a is None and b is None
+        # 空字符串与 NULL 视为同一种「没有值」：页面没写 ≠ 数据变了
+        # （2026-10-17 修：爬取列的库内值常是 ""、页面取值是 None，旧写法会报假差异）
+        empty = lambda v: v is None or (isinstance(v, str) and not v.strip())
+        return empty(a) and empty(b)
     if col in float_cols:
         try:
             return abs(float(a) - float(b)) < 1e-9
