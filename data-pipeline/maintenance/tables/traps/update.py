@@ -350,9 +350,14 @@ def crawl(keys, rows):
 # ─── 备注合并 / 页面赢 ──────────────────────────────────────
 
 def merge_notes(have, notes):
+    """按技能名把页面备注并进库内技能列表。notes 可能是 dict 或 JSON 文本。"""
     obj = _parse(have)
     if not isinstance(obj, list):
         return have if have is not None else ""
+    if isinstance(notes, str):
+        notes = _parse(notes)
+    if not isinstance(notes, dict):
+        notes = {}
     obj = copy.deepcopy(obj)
     for item in obj:
         if not isinstance(item, dict):
