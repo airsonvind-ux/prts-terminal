@@ -280,15 +280,15 @@ def run(spec, argv=None):
     for_human = []
 
     def resolve(key, col, want, have):
-        """→ 写入值；None 表示不写、只记进「待人工核对」。"""
+        """→ 写入值；None 表示不写。on_diff 返回 None 才算「待人工核对」。"""
         if spec.on_diff:
             out = spec.on_diff(key, col, want, have)
+            if out is None:
+                for_human.append({"键": Pending.kstr(key), "列": col,
+                                  "库内": have, "爬取结果": want})
+                return None
         else:
             out = want
-        if out is None:
-            for_human.append({"键": Pending.kstr(key), "列": col,
-                              "库内": have, "爬取结果": want})
-            return None
         return out if not _same(cols, col, have, out) else have
 
     print("\n------ 重算目标行 ------")
