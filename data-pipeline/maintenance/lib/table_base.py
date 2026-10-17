@@ -276,6 +276,21 @@ def run(spec, argv=None):
     def exempt(key):
         return bool(spec.row_exempt and spec.row_exempt(key))
 
+    # on_diff：写库前的改写；返回 None 表示只记录、不写库（等人工核对）
+    for_human = []
+
+    def resolve(key, col, want, have):
+        """→ 写入值；None 表示不写、只记进「待人工核对」。"""
+        if spec.on_diff:
+            out = spec.on_diff(key, col, want, have)
+        else:
+            out = want
+        if out is None:
+            for_human.append({"键": Pending.kstr(key), "列": col,
+                              "库内": have, "爬取结果": want})
+            return None
+        return out if not _same(cols, col, have, out) else have
+
     print("\n------ 重算目标行 ------")
     rows = {_k(k): v for k, v in spec.load_rows(args.db).items()}
     print("  目标行数: %d" % len(rows))
@@ -301,7 +316,10 @@ def run(spec, argv=None):
                 if any(c == col for c, _ in cols.subkeys):
                     a, b = _strip_subkeys(cols, col, a), _strip_subkeys(cols, col, b)
                 if not _same(cols, col, a, b):
-                    diffs.append((key, col, a, b))
+                    n = resolve(key, col, b, a)
+                    if n is None or _same(cols, col, a, n):
+                        continue
+                    diffs.append((key, col, a, n))
                     per_col[col] = per_col.get(col, 0) + 1
         record["校对"] = {
             "检查行": len(existing), "豁免行": exempt_rows,
@@ -360,7 +378,11 @@ def run(spec, argv=None):
                         if col not in out.values:
                             continue
                         a = existing[key][col]
-                        if _is_empty(a) and not _is_empty(out.values[col]):
+                        if spec.on_diff or not _is_empty(a):
+                            n = resolve(key, col, out.values[col], a)
+                            if n is not None and not _same(cols, col, a, n):
+                                diffs.append((key, col, a, n))
+                        elif not _is_empty(out.values[col]):
                             diffs.append((key, col, a, out.values[col]))
             else:
                 pending.set_state(key, out.state, page=out.page, note=out.note)
@@ -399,8 +421,9 @@ def run(spec, argv=None):
                 if col not in out.values:
                     continue
                 a = existing[key][col]
-                if not _same(cols, col, a, out.values[col]):
-                    diffs.append((key, col, a, out.values[col]))
+                n = resolve(key, col, out.values[col], a)
+                if n is not None and not _same(cols, col, a, n):
+                    diffs.append((key, col, a, n))
                     per_col[col] = per_col.get(col, 0) + 1
         record["校对"] = {"检查行": len(scope), "豁免行": len(existing) - len(scope),
                           "差异行": len({d[0] for d in diffs}), "差异列数": len(diffs),
@@ -421,10 +444,15 @@ def run(spec, argv=None):
             print("  待爬条目: %d（未执行）" % len(pending.data))
         return 0
 
-    if not diffs and not new_keys:
+    # on_diff 已在爬取/校对阶段统一解算，这里直接用 diffs
+    if not diffs and not new_keys and not for_human:
         print("\n------ 没有变化：未写库、未写记录 ------")
         pending.save()
         return 0
+
+    record["待人工核对"] = for_human[:MAX_DETAIL]
+    if for_human:
+        print("\n  待人工核对: %d 条（不写库，已记入更新记录）" % len(for_human))
 
     print("\n------ 4. 写库（单事务）------")
     if args.no_backup:
@@ -437,8 +465,6 @@ def run(spec, argv=None):
             want.update(out.values)
         new_rows.append((key, want))
     try:
-        if spec.on_diff:
-            diffs = [(k, c, o, spec.on_diff(k, c, n, existing[k][c])) for k, c, o, n in diffs]
         _write_db(args.db, spec, diffs, new_rows, backup=not args.no_backup)
     except Exception as e:
         record["结果"] = "中止（写库失败：%s）" % e
