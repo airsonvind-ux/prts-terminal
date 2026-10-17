@@ -13,8 +13,8 @@
   官方代号与名称变体、日文名、关卡类重定向、Wiki 内部活动编号、编号规范化。
 
 用法：
-    python update_slang.py --dry-run   # 只报告，不写文件
-    python update_slang.py             # 写入（写前备份 + 写记录）
+    python update.py --dry-run   # 只报告，不写文件
+    python update.py             # 写入（写前备份 + 写记录）
 
 输出：src-tauri/resources/slang.json（键序 = 类型序（干员/敌人/其他实体）再按名称）
 """
@@ -334,7 +334,7 @@ def main():
         json.dump(out, f, ensure_ascii=False, indent=2)
 
     record = {
-        '脚本': {'文件': 'maintenance/update_slang.py', '版本': 1},
+        '脚本': {'文件': 'maintenance/resources/slang/update.py', '版本': 1},
         '运行时间': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         '模式': '增量',
         '数据源': {'页面': 'prts.wiki 全站重定向', '库': 'maintenance/arknights.db'},

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """沉沦者的黑流树海（rogue_6）的数据来源与组装。
 
-页面解析（三页）+ JSON 侧组装，`build_rogue_6.py`（建表，一次）与
-`update_rogue_6.py`（增量，可复用）共用这一份——所以它住在 `maintenance/`
+页面解析（三页）+ JSON 侧组装，`db_builder/build_rogue_6.py`（建表，一次）与
+`tables/rogue_6/update.py`（增量，可复用）共用这一份。它住在 `maintenance/`
 （发布物、自包含），不反向依赖 `db_builder/`。
 
 列的口径见本文件末尾的注释（与《rogues表结构文档》一致）。

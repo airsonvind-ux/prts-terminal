@@ -11,8 +11,8 @@
 要长期保住某个手改值，把它写进 rogue6_source.MANUAL_FIXES。
 
 用法：
-    python update_rogue_6.py --dry-run
-    python update_rogue_6.py
+    python update.py --dry-run
+    python update.py
 """
 
 import argparse
@@ -120,7 +120,7 @@ def main():
         by_type[r["类型"]] = by_type.get(r["类型"], 0) + 1
 
     record = {
-        "脚本": {"文件": "maintenance/update_rogue_6.py", "版本": SCRIPT_VERSION},
+        "脚本": {"文件": "maintenance/tables/rogue_6/update.py", "版本": SCRIPT_VERSION},
         "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
         "数据源": version, "数据库": os.path.basename(args.db), "表": TABLE,
         "计数": by_type, "重算合计": len(rows),

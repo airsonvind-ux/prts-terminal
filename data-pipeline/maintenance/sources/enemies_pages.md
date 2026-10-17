@@ -8,7 +8,7 @@ enemies 表爬取时的页面定位：**默认**按（页面名 = 名称，index
 - 一个页面可以对应多个键（同一页面里分节写不同形态/级别），index 就是分节位置
 - `enemy_190` / `enemy_50` / `enemy_55` / `enemy_150` 四类是行级豁免，不在本文件范围内
 
-> 这张表代替了原先写在 `update_enemies.py` 里的 `PAGE_MAP`。
+> 这张表代替了原先写在 `tables/enemies/update.py` 里的 `PAGE_MAP`。
 > 《04-数据/特殊页面爬取映射清单.md》是逐条追查的过程记录，只作背景材料。
 
 | 敌人ID | 级别 | 页面名 | index | 依据 |

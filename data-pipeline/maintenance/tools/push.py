@@ -5,8 +5,8 @@
 本脚本把它推到 `src-tauri/resources/arknights.db`（随包发布、运行时读取的种子）。
 
 用法：
-    python push_to_resources.py --dry-run   # 只报告：两边行数、大小差异
-    python push_to_resources.py             # 推送（写前备份目标 + 写记录）
+    python push.py --dry-run   # 只报告：两边行数、大小差异
+    python push.py             # 推送（写前备份目标 + 写记录）
 
 说明：
   - resources 下的五张 JSON 表由各自的 rebuild/update 脚本直接写入，不走这里。
@@ -100,7 +100,7 @@ def main():
         raise RuntimeError("推送失败（目标可能被占用，请先关掉 PRTS 终端）：%s" % DST)
 
     record = {
-        "脚本": {"文件": "maintenance/push_to_resources.py", "版本": 1},
+        "脚本": {"文件": "maintenance/tools/push.py", "版本": 1},
         "运行时间": time.strftime("%Y-%m-%d %H:%M:%S"),
         "模式": "推送",
         "源": SRC,
