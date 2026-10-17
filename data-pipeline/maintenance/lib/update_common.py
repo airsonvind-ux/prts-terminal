@@ -286,13 +286,16 @@ def same(col, a, b, json_cols=(), float_cols=(), int_cols=()):
 
     JSON 列按解析后的结构比，浮点列给小容差，整型列按 int 比，其余按去空白文本比。
     """
-    if col in json_cols:
-        return _as_json(a) == _as_json(b)
     if a is None or b is None:
         # 空字符串与 NULL 视为同一种「没有值」：页面没写 ≠ 数据变了
         # （2026-10-17 修：爬取列的库内值常是 ""、页面取值是 None，旧写法会报假差异）
         empty = lambda v: v is None or (isinstance(v, str) and not v.strip())
         return empty(a) and empty(b)
+    if not str(a).strip() and not str(b).strip():
+        # 两边都是空串也要在 JSON 分支之前拦住（json.loads("") 会失败回退成原字符串）
+        return True
+    if col in json_cols:
+        return _as_json(a) == _as_json(b)
     if col in float_cols:
         try:
             return abs(float(a) - float(b)) < 1e-9
