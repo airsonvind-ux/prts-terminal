@@ -332,7 +332,7 @@ def crawl(keys, rows):
             continue
 
         cand, (radius_raw, mech, skill_notes) = found
-        values = {"阻挡半径": None, "装置机制": mech, "技能列表": skill_notes}
+        values = {"阻挡半径": None, "装置机制": mech, "技能列表": dump(skill_notes)}
         if radius_raw:
             try:
                 values["阻挡半径"] = str(float(radius_raw))
@@ -341,7 +341,7 @@ def crawl(keys, rows):
 
         if values["阻挡半径"] is None and not mech and not any(skill_notes.values()):
             out[key] = tb.Outcome("partial", page=cand,
-                                  values={"阻挡半径": None, "装置机制": None, "技能列表": {}},
+                                  values={"阻挡半径": None, "装置机制": None, "技能列表": dump({})},
                                   note="三处全空")
         else:
             out[key] = tb.Outcome("synced", page=cand, values=values)
