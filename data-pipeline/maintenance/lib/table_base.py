@@ -538,3 +538,117 @@ def run_rebuild(spec, argv=None):
     print("\n====== 完成：%s ======" % spec.output)
     print("  记录: %s" % os.path.basename(path))
     return 0
+
+
+# ─── 重建型（库表）─────────────────────────────────────────
+
+@dataclass
+class RebuildDbSpec:
+    """库表重建：build() 产出整表，与库内现有行对比后 DROP + CREATE + 全量 INSERT。
+
+    无人工层、无爬取的表用它（levels / enemy_name_map）。
+    verify(conn) 返回写后复核统计，直接并进记录。
+    """
+    table: str
+    create_sql: str
+    insert_cols: list                     # [(库列名, 行内键), ...]
+    build: object                         # (old: {key: row}) -> {key: row}
+    key: str                              # 行内的键名（与库列名一致）
+    verify: object = None                 # (conn) -> dict
+
+
+def run_rebuild_db(spec, argv=None):
+    ap = argparse.ArgumentParser(description="%s 表全量重建" % spec.table)
+    ap.add_argument("--dry-run", action="store_true", help="全量处理并报告，不写库、不写记录")
+    ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
+    ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
+    args = ap.parse_args(argv)
+
+    if not os.path.exists(args.db):
+        raise SystemExit("数据库不存在：%s" % args.db)
+    paths.ensure_gamedata()
+    src_ver = uc.read_source_version(paths.DATA_SOURCE)
+
+    print("====== %s 表全量重建 ======" % spec.table)
+    print("数据库  : %s" % args.db)
+    print("数据源  : %s" % paths.DATA_SOURCE)
+    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
+          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
+
+    # 读现有行（表不存在 = 首次重建）
+    old = {}
+    conn = sqlite3.connect(args.db)
+    try:
+        cols = [d[1] for d in conn.execute("PRAGMA table_info(%s)" % spec.table)]
+        if cols:
+            keys = [spec.key] + [c for c, _ in spec.insert_cols if c != spec.key]
+            for r in conn.execute("SELECT %s FROM %s" % (", ".join(keys), spec.table)):
+                d = dict(zip(keys, r))
+                old[d[spec.key]] = d
+    finally:
+        conn.close()
+
+    new = spec.build(dict(old))
+    added = [k for k in new if k not in old]
+    gone = [k for k in old if k not in new]
+    changed = [k for k in new if k in old and any(
+        old[k].get(c) != new[k].get(rk) for c, rk in spec.insert_cols)]
+    identical = not (added or gone or changed)
+
+    print("\n------ 对比 ------")
+    print("  库内 %d 行 | 重建后 %d 行 | 新增 %d | 消失 %d | 变化 %d"
+          % (len(old), len(new), len(added), len(gone), len(changed)))
+    for label, keys in (("新增", added), ("消失", gone), ("变化", changed)):
+        if keys:
+            print("    %s: %s" % (label, " ".join(str(k) for k in keys[:8])))
+
+    if args.dry_run:
+        print("\n(干跑：未写库、未写记录)")
+        return 0
+
+    if identical:
+        print("\n------ 与库内完全一致：未写库、未写记录 ------")
+        return 0
+
+    print("\n------ 写库（DROP + CREATE + 全量 INSERT，单事务）------")
+    if args.no_backup:
+        print("  (已跳过备份)")
+    else:
+        print("  备份: %s" % (uc.backup_file(args.db) or "（未生成）"))
+
+    conn = sqlite3.connect(args.db, isolation_level=None)
+    try:
+        conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP TABLE IF EXISTS %s" % spec.table)
+            conn.execute(spec.create_sql)
+            conn.executemany(
+                "INSERT INTO %s (%s) VALUES (%s)"
+                % (spec.table, ", ".join(c for c, _ in spec.insert_cols),
+                   ", ".join(["?"] * len(spec.insert_cols))),
+                [tuple(row.get(rk) for _, rk in spec.insert_cols) for row in new.values()])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        stats = spec.verify(conn) if spec.verify else {}
+    finally:
+        conn.close()
+
+    record = {
+        "表": spec.table,
+        "模式": "全量重建",
+        "运行时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "数据源": {"提交": src_ver["提交"], "提交标题": src_ver["提交标题"],
+                   "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"]},
+        "脚本": {"文件": os.path.basename(sys.argv[0]) if sys.argv else "", "版本": 1},
+        "计数": {"原": len(old), "新": len(new)},
+        "新增": added[:MAX_DETAIL], "消失": gone[:MAX_DETAIL], "变化": changed[:MAX_DETAIL],
+        "复核": stats,
+        "结果": "成功",
+    }
+    path = uc.write_record(spec.table, record)
+    print("\n====== 完成 ======")
+    print("  行数 %d → %d | 记录 %s" % (len(old), len(new), os.path.basename(path)))
+    return 0
