@@ -249,6 +249,32 @@ def _record(spec, mode, src_ver, db):
 
 # ─── 主流程 ───────────────────────────────────────────────────
 
+def _diff_block(cols, diffs):
+    """把差异列表压成记录用的块：行数 / 列数 / 按列计数 / 明细。
+
+    校对、爬取、重爬三条路径共用，保证更新日志结构一致。
+    """
+    per_col = {}
+    for _, c, _, _ in diffs:
+        per_col[c] = per_col.get(c, 0) + 1
+    return {
+        "差异行": len({d[0] for d in diffs}),
+        "差异列数": len(diffs),
+        "计数": per_col,
+        "明细": [dict({"键": Pending.kstr(k), "列": c},
+                      **uc.diff_brief(a, b, as_json=c in cols.json))
+                 for k, c, a, b in diffs[:MAX_DETAIL]],
+    }
+
+
+def _print_diff_counts(diffs):
+    per_col = {}
+    for _, c, _, _ in diffs:
+        per_col[c] = per_col.get(c, 0) + 1
+    for col, n in sorted(per_col.items(), key=lambda x: -x[1]):
+        print("    %s: %d 处" % (col, n))
+
+
 def _pending_for(spec, db):
     """待办文件跟着数据库走：用默认库时读仓库里的 pending.json，
     用副本（--db）时读写副本旁边的 <副本名>-<表>.pending.json，不碰仓库状态。
@@ -363,17 +389,11 @@ def run(spec, argv=None):
                         continue
                     diffs.append((key, col, a, n))
                     per_col[col] = per_col.get(col, 0) + 1
-        record["校对"] = {
-            "检查行": len(existing), "豁免行": exempt_rows,
-            "差异行": len({d[0] for d in diffs}), "差异列数": len(diffs), "计数": per_col,
-            "明细": [dict({"键": Pending.kstr(k), "列": c},
-                          **uc.diff_brief(a, b, as_json=c in cols.json))
-                     for k, c, a, b in diffs[:MAX_DETAIL]],
-        }
+        record["校对"] = dict({"检查行": len(existing), "豁免行": exempt_rows},
+                             **_diff_block(cols, diffs))
         print("  库内 %d 行 | 豁免 %d | 差异行 %d | 差异列 %d"
               % (len(existing), exempt_rows, record["校对"]["差异行"], len(diffs)))
-        for col, n in sorted(per_col.items(), key=lambda x: -x[1]):
-            print("    %s: %d 处" % (col, n))
+        _print_diff_counts(diffs)
 
         print("\n------ 2. 新增 ------")
         new_keys = [k for k in rows if k not in existing]
@@ -433,9 +453,9 @@ def run(spec, argv=None):
                           "缺失": sum(1 for o in outcomes.values() if o.state == "missing"),
                           "部分": sum(1 for o in outcomes.values() if o.state == "partial")}
         record["pending"].update({"补齐": ok, "仍缺": len(targets) - ok})
-        record["校对"].update({"差异行": len({d[0] for d in diffs}),
-                              "差异列数": len(diffs)})
+        record["校对"].update(_diff_block(cols, diffs))
         print("  补上 %d | 仍缺 %d | 写回 %d 列" % (ok, len(targets) - ok, len(diffs)))
+        _print_diff_counts(diffs)
 
     # ── 3. 全量校对（--recheck）──
     if do_recheck:
@@ -468,17 +488,14 @@ def run(spec, argv=None):
                 if n is not None and not _same(cols, col, a, n):
                     diffs.append((key, col, a, n))
                     per_col[col] = per_col.get(col, 0) + 1
-        record["校对"] = {"检查行": len(scope), "豁免行": len(existing) - len(scope),
-                          "差异行": len({d[0] for d in diffs}), "差异列数": len(diffs),
-                          "计数": per_col,
-                          "明细": [dict({"键": Pending.kstr(k), "列": c},
-                                       **uc.diff_brief(a, b, as_json=c in cols.json))
-                                   for k, c, a, b in diffs[:MAX_DETAIL]]}
+        record["校对"] = dict({"检查行": len(scope), "豁免行": len(existing) - len(scope)},
+                             **_diff_block(cols, diffs))
         record["爬取"] = {"目标": len(scope),
                           "补上": sum(1 for o in outs.values() if o.state == "synced"),
                           "缺失": sum(1 for o in outs.values() if o.state == "missing"),
                           "部分": sum(1 for o in outs.values() if o.state == "partial")}
         print("  差异行 %d | 差异列 %d" % (record["校对"]["差异行"], len(diffs)))
+        _print_diff_counts(diffs)
 
     # ── 4. 写库 ──
     if args.dry_run:
