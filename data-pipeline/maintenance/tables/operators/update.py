@@ -1,47 +1,48 @@
 # -*- coding: utf-8 -*-
-"""operators 表更新：校对 + 新增 + 记录。
+"""operators · 更新（增量）
 
-数据源（除爬取外全在本地）：
-  <EXCEL>/character_table.json     干员主体（21 列里绝大多数）
-  <EXCEL>/char_patch_table.json    升变/异格形态（阿米娅等），并入干员集合
-  <EXCEL>/skill_table.json         技能名/类型/各级描述与 SP
-  <EXCEL>/uniequip_table.json      职业分支名、模组目录
-  <EXCEL>/battle_equip_table.json  模组各级效果
-  maintenance/sources/模组特性信息.md   模组的「特性」文本（人工维护，脚本只读）
+数据源（本地）
+    excel/character_table.json      干员主体（profession ∈ 八职业）
+    excel/char_patch_table.json     升变 / 异格（阿米娅等），并入干员集合
+    excel/skill_table.json          技能名 / 类型 / 各级描述与 SP
+    excel/uniequip_table.json       职业分支名、模组目录
+    excel/battle_equip_table.json   模组各级效果
+    sources/模组特性信息.md          模组「特性」文本（人工源，只读；`###` 标题即查表键）
 
-PRTS 侧（**只对新增干员爬**，每行一次请求）：
-  {{天赋列表3}}   天赋表模板，取 `备注` 参数（一页一个实例）
-  {{技能2}}       单个技能表模板，取 `备注` 参数（一页多个，按技能名匹配）
-  {{CharinfoV2}}  取 `特性备注` 参数，写入 operators.备注 列
+PRTS 侧（新增首次爬取；recheck 时按页重爬）
+    {{CharinfoV2}}  · 特性备注 → 备注
+    {{技能2}}       · 备注     → 技能列表[].备注（按技能名匹配）
+    {{天赋列表3}}   · 备注     → 天赋列表[].备注（按出现顺序）
 
-三段式：
-  ① 校对：重算每一列，与库内比；差异写回。本地源列基本不变，这一段主要是守结构。
-  ② 新增：源有库无的干员建档，并补爬三类备注（否则新干员是空的）。
-  ③ 记录：updates/<时间戳>-operators.json。
-失败即中止；写库单事务；干跑不写库、不爬取、不写记录。
+列分类
+    数据源列（18）见 COLUMNS.source
+    爬取列（1）   备注
+    人工列（2）   描述、模组列表（整列手工调整过，永不比对、永不写入）
+    子键          技能列表.备注、天赋列表.备注（比对时剔除，写库时按身份键搬回）
 
-跳过清单（对**已有**干员永不比对、永不写入）：
-  · 描述                        人工调整过（Air 2026-10-15 定）
-  · 备注                        爬取的特性备注 + 人工补充的算法说明
-  · 技能列表[].备注             爬取 + 人工
-  · 天赋列表[].备注             爬取 + 人工
-  · 模组列表                    整列人工调整过（Air 2026-10-15 定）
-新增行例外：这些列在新增时照常由源数据 / 爬取 / 人工源填上（描述与模组列表随后由 Air 手工调整）。
+完整性判据
+    三处备注（备注列 / 技能备注 / 天赋备注）全空 → partial（待填）
+    其余                                        → synced
 
-用法：
-    python update_operators.py --dry-run
-    python update_operators.py
+recheck 三路分流（on_diff）
+    技能列表 / 天赋列表  Wiki 为准：把爬到的备注合进库内 JSON，其余字段保留
+    备注              库内内容包含爬取结果 → 不动；不包含 → 不替换，进「待人工核对」
+
+依赖
+    无跨表依赖；模组特性依赖人工源 sources/模组特性信息.md（文件缺失则脚本不运行）
+
+用法
+    python update.py --dry-run    # 本地预分析：不联网、不写任何文件
+    python update.py --base
+    python update.py --crawl
+    python update.py --recheck
 """
 
-import argparse
 import copy
 import json
-import os
 import re
-import sqlite3
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -51,41 +52,41 @@ for _p in (str(HERE), str(MAINT / "lib"), str(MAINT.parent)):   # 本表目录 /
         sys.path.insert(0, _p)
 
 import paths  # noqa: E402
+import table_base as tb  # noqa: E402
 import update_common as uc  # noqa: E402
 from blackboard import replace as bb_replace  # noqa: E402
 from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
 
-TABLE = "operators"
-SCRIPT_VERSION = 1
-MAX_DETAIL = 200
-PROGRESS_EVERY = 50
-JOURNAL_MODE = "MEMORY"
 MODULE_TRAITS_MD = "模组特性信息.md"
-
-# 哨兵：抓一个稳定页面，确认 wiki 侧模板名还在（PRTS 改版会换模板代号）
 SENTINEL_SKILL = ("玫兰莎", "{{技能2")
 SENTINEL_TALENT = ("香草", "{{天赋列表3")
+SLEEP = uc.SLEEP_BETWEEN_FETCH
 
-# ─── 列分类 ──────────────────────────────────────────────────
+# ─── 列声明 ────────────────────────────────────────────────────
 
-ALL_COLS = [
-    "干员ID", "名称", "代号", "描述", "部署位置", "标签", "获取方式", "是否不可获取",
-    "是否为异格", "稀有度", "职业", "职业分支", "最大潜能", "备注", "信赖加成",
-    "精英化阶段", "技能列表", "关联token", "天赋列表", "潜能提升", "模组列表",
-]
-JSON_COLS = {"标签", "信赖加成", "精英化阶段", "技能列表", "关联token", "天赋列表",
-             "潜能提升", "模组列表"}
-INT_COLS = {"是否不可获取", "是否为异格", "稀有度", "最大潜能"}
-# 对已有干员永不比对、永不写入的列（描述与模组列表是 Air 手工调整过的）
-SKIP_COLS = {"描述", "备注", "模组列表"}
+COLUMNS = tb.Columns(
+    all=[
+        "干员ID", "名称", "代号", "描述", "部署位置", "标签", "获取方式", "是否不可获取",
+        "是否为异格", "稀有度", "职业", "职业分支", "最大潜能", "备注", "信赖加成",
+        "精英化阶段", "技能列表", "关联token", "天赋列表", "潜能提升", "模组列表",
+    ],
+    source=[
+        "干员ID", "名称", "代号", "部署位置", "标签", "获取方式", "是否不可获取",
+        "是否为异格", "稀有度", "职业", "职业分支", "最大潜能", "信赖加成",
+        "精英化阶段", "技能列表", "关联token", "天赋列表", "潜能提升",
+    ],
+    crawl=["备注"],
+    manual=["描述", "模组列表"],
+    subkeys=[("技能列表", "备注"), ("天赋列表", "备注")],
+    json=["标签", "信赖加成", "精英化阶段", "技能列表", "关联token", "天赋列表",
+          "潜能提升", "模组列表"],
+    int=["是否不可获取", "是否为异格", "稀有度", "最大潜能"],
+)
 
-# 顶层跳过列的「子键」：比对时剔除、写库时保留（内容归爬取 / 人工）
-KEEP_SUBKEY = {"技能列表": "备注", "天赋列表": "备注"}
-# 各表项的身份键（用于把子键搬回对应项）
 ITEM_ID = {"技能列表": "技能ID", "天赋列表": "序号"}
 
-# ─── 枚举映射（与 db_builder/build_operators.py 同一套语义）────
+# ─── 枚举映射 ────────────────────────────────────────────────
 
 OPS_PROFS = {"WARRIOR", "SNIPER", "TANK", "MEDIC", "SUPPORT", "CASTER", "SPECIAL", "PIONEER"}
 POSITION_MAP = {"MELEE": "近战位", "RANGED": "远程位"}
@@ -98,8 +99,6 @@ DUR_TYPE_MAP = {"NONE": "普通持续", "AMMO": "弹药类"}
 PHASE_MAP = {"PHASE_0": 0, "PHASE_1": 1, "PHASE_2": 2}
 SP_KEY_MAP = {"spCost": "技力消耗", "initSp": "初始技力",
               "maxChargeTime": "可充能次数", "increment": "技力回复速度"}
-
-# 属性名：前者来自 build_operators，后五行来自 refine_modules 的补正
 ATTR_NAMES = {"maxHp": "生命上限", "atk": "攻击", "def": "防御",
               "magicResistance": "法术抗性", "cost": "部署费用",
               "blockCnt": "阻挡数", "respawnTime": "再部署时间",
@@ -107,18 +106,18 @@ ATTR_NAMES = {"maxHp": "生命上限", "atk": "攻击", "def": "防御",
 MODULE_ATTR_MAP = {"max_hp": "生命上限", "atk": "攻击", "def": "防御",
                    "magic_resistance": "法术抗性", "attack_speed": "攻击速度",
                    "block_cnt": "阻挡数", "respawn_time": "再部署时间", "cost": "部署费用"}
-
-# 重名/重号修正：源里同名同字的形态靠这张表区分（人工确认过的，半角括号）
 PATCH_RENAME = {
     "char_1001_amiya2": "阿米娅(近卫)",
     "char_1037_amiya3": "阿米娅(医疗)",
 }
-# 人工源里的类型记号
 TYPE_REMAP = {"D": "Δ"}
+
+# 本次运行的构建提示（进记录）
+NOTES = []
 
 
 def dump(value):
-    """列表/字典 → JSON 文本；空值与空表一律 None（与旧构建脚本的口径一致）。"""
+    """列表/字典 → JSON 文本；空值与空表一律 None。"""
     if value is None:
         return None
     if isinstance(value, (list, dict)) and not value:
@@ -126,22 +125,15 @@ def dump(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-# ─── 文本处理 ────────────────────────────────────────────────
-
-_RE_PAT = re.compile(r'\{(-?)([^}:]+)(?::([^}]+))?\}')
-
-
 def replace_enhanced(text, blackboard, duration=None):
     """取反 + 大小写不敏感 + {duration} 兜底（语义见 maintenance/blackboard.py）。"""
     return bb_replace(text, blackboard, duration)
 
 
-def merge_phases(desc_raw, items):
-    """多候选（同一 trait 的不同精英化阶段）合并成紧凑格式。
+# ─── 各列构建 ────────────────────────────────────────────────
 
-    变化处用 `/` 连接，末尾标 `（精英化0/1/2）`。文本长度不一致时返回 None。
-    与 db_builder/refine_operators.py 的 merge_phases 同一算法。
-    """
+def merge_phases(desc_raw, items):
+    """多候选（同一 trait 的不同精英化阶段）合并成紧凑格式（既有算法）。"""
     texts = [replace_enhanced(desc_raw, bb)[0] for _, bb in items]
     if len(set(texts)) == 1:
         return texts[0]
@@ -186,8 +178,6 @@ def merge_phases(desc_raw, items):
     return out
 
 
-# ─── 各列的构建 ──────────────────────────────────────────────
-
 def build_favor(cv):
     favor = cv.get("favorKeyFrames") or []
     if not favor:
@@ -223,9 +213,7 @@ def build_desc(cv, notes):
         items.append((PHASE_MAP.get(phase, 0), bb))
     items.sort(key=lambda x: x[0])
 
-    text = None
     if not items:
-        # 306/463 的干员在源里没有 trait 候选（描述本来就是纯文本），是正常路径，不记提示
         text = clean_desc(raw)
     elif len(items) > 1:
         text = merge_phases(raw, items)
@@ -255,11 +243,8 @@ def build_skills(skills_ref, skill_table, notes, who):
             text, _ = replace_enhanced(lv.get("description") or "", bb, lv.get("duration"))
             if text and re.search(r'\{[^{}]*\}|</>', text):
                 notes.append("%s / %s Lv%d：描述有未解析残留" % (who, lv0.get("name", ""), i + 1))
-            sp = {}
-            for raw_key, cn_key in SP_KEY_MAP.items():
-                val = (lv.get("spData") or {}).get(raw_key)
-                if val is not None:
-                    sp[cn_key] = val
+            sp = {cn: (lv.get("spData") or {})[raw]
+                  for raw, cn in SP_KEY_MAP.items() if (lv.get("spData") or {}).get(raw) is not None}
             details.append({"等级": i + 1, "范围ID": lv.get("rangeId"),
                             "描述": text, "持续时间": lv.get("duration"), "SP": sp})
 
@@ -294,7 +279,7 @@ def build_talents(talents):
 
 
 def build_modules(equip_ids, ue, be, talent_names, trait_lookup, notes, who):
-    """模组列表。特性文本优先取人工源，取不到时退回源数据里的 override 文本。"""
+    """模组列表。特性文本优先取人工源，取不到时退回源数据的 override 文本。"""
     if not equip_ids:
         return []
     out = []
@@ -340,7 +325,7 @@ def build_modules(equip_ids, ue, be, talent_names, trait_lookup, notes, who):
             talent_text = "\n".join(talent_parts) or None
             effects = {"数值更新": stat_updates, "特性": trait_text if phase_idx == 0 else None}
 
-            # 天赋更新文本 / 新增天赋：提到的天赋名不在本干员天赋表里 → 判为新增天赋
+            # 提到的天赋名不在本干员天赋表里 → 判为新增天赋
             if talent_text and lv in (2, 3):
                 sep = "：" if "：" in talent_text else (":" if ":" in talent_text else None)
                 mentioned = talent_text.split(sep)[0].strip() if sep else ""
@@ -371,87 +356,53 @@ def build_modules(equip_ids, ue, be, talent_names, trait_lookup, notes, who):
 # ─── 人工源 ──────────────────────────────────────────────────
 
 def load_module_traits(path):
-    """解析《模组特性信息.md》。契约：`### 标题` 就是查表键，其下所有正文行（含 ※）为文本。"""
+    """解析《模组特性信息.md》。契约：`### 标题` 就是查表键，其下所有正文行为文本。"""
     lookup = {}
-    if not os.path.isfile(path):
+    if not path.is_file():
         return lookup
     key, buf = None, []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip()
-            m = re.match(r'^### (.+)', line)
-            if m:
-                if key and buf:
-                    lookup[key] = "\n".join(buf)
-                key, buf = m.group(1).strip(), []
-                continue
-            if not line or line.startswith("#"):
-                continue
-            if key:
-                buf.append(line)
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.rstrip()
+        m = re.match(r'^### (.+)', line)
+        if m:
+            if key and buf:
+                lookup[key] = "\n".join(buf)
+            key, buf = m.group(1).strip(), []
+            continue
+        if not line or line.startswith("#"):
+            continue
+        if key:
+            buf.append(line)
     if key and buf:
         lookup[key] = "\n".join(buf)
     return lookup
 
 
-# ─── 子键的剔除 / 搬回（备注类的比对与保留）───────────────────
-
-def _parse_json(value):
-    if value is None:
-        return None
-    try:
-        return json.loads(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def strip_keep(col, value):
-    """比对用：去掉只由爬取 / 人工源提供的子键。"""
-    if col not in KEEP_SUBKEY or value is None:
-        return value
-    obj = _parse_json(value)
-    if not isinstance(obj, list):
-        return value
-    obj = copy.deepcopy(obj)
-    sub = KEEP_SUBKEY[col]
-    for item in obj:
-        if isinstance(item, dict):
-            item.pop(sub, None)
-    return json.dumps(obj, ensure_ascii=False)
-
-
-def merge_keep(col, old_value, new_value):
-    """写库用：把旧值里那些子键搬回新值的对应项。"""
-    if col not in KEEP_SUBKEY:
-        return new_value
-    old_obj, new_obj = _parse_json(old_value), _parse_json(new_value)
-    if not isinstance(old_obj, list) or not isinstance(new_obj, list):
-        return new_value
-    id_key = ITEM_ID[col]
-    sub = KEEP_SUBKEY[col]
-    old_by_id = {it.get(id_key): it for it in old_obj
-                 if isinstance(it, dict) and it.get(id_key) is not None}
-    for item in new_obj:
-        if not isinstance(item, dict):
-            continue
-        old_item = old_by_id.get(item.get(id_key))
-        if not isinstance(old_item, dict):
-            continue
-        if sub in old_item:
-            item[sub] = old_item[sub]
-        else:
-            item.pop(sub, None)
-    return json.dumps(new_obj, ensure_ascii=False)
-
-
 # ─── 重算全表 ────────────────────────────────────────────────
 
-def compute_rows(ct, cpt, skt, ue, be, trait_lookup, notes):
+def compute_rows(db=None):
+    """全部干员 → {干员ID: 21 列}。人工源缺失时直接退出（环境问题，不降级）。"""
+    def load_json(name):
+        with open(paths.EXCEL / name, encoding="utf-8") as f:
+            return json.load(f)
+
+    trait_md = paths.MANUAL_SOURCES / MODULE_TRAITS_MD
+    if not trait_md.is_file():
+        raise SystemExit("人工源缺失，脚本不运行：%s\n"
+                         "  · 模组「特性」文本来自这份人工维护的文件，缺失时无法保证数据正确" % trait_md)
+    trait_lookup = load_module_traits(trait_md)
+    print("  人工源: %s（%d 条）" % (trait_md, len(trait_lookup)))
+
+    ct = load_json("character_table.json")
+    cpt = load_json("char_patch_table.json")
+    skt = load_json("skill_table.json")
+    ue = load_json("uniequip_table.json")
+    be = load_json("battle_equip_table.json")
+
     ops = [(k, v) for k, v in ct.items() if v.get("profession") in OPS_PROFS]
     for cid, cv in (cpt.get("patchChars") or {}).items():
         if cv.get("profession") in OPS_PROFS:
             ops.append((cid, cv))
-
     subprof_map = {v.get("subProfessionId"): v.get("subProfessionName")
                    for v in (ue.get("subProfDict") or {}).values()}
 
@@ -465,7 +416,7 @@ def compute_rows(ct, cpt, skt, ue, be, trait_lookup, notes):
             "干员ID": cid,
             "名称": PATCH_RENAME.get(cid, cv.get("name", "")),
             "代号": cv.get("appellation", ""),
-            "描述": build_desc(cv, notes),
+            "描述": build_desc(cv, NOTES),
             "部署位置": POSITION_MAP.get(cv.get("position", ""), cv.get("position", "")),
             "标签": dump(cv.get("tagList")),
             "获取方式": cv.get("itemObtainApproach") or None,
@@ -478,292 +429,150 @@ def compute_rows(ct, cpt, skt, ue, be, trait_lookup, notes):
             "备注": None,
             "信赖加成": build_favor(cv),
             "精英化阶段": build_phases(cv),
-            "技能列表": dump(build_skills(cv.get("skills") or [], skt, notes, who)),
+            "技能列表": dump(build_skills(cv.get("skills") or [], skt, NOTES, who)),
             "关联token": dump(list((cv.get("displayTokenDict") or {}).keys())),
             "天赋列表": dump(talents),
             "潜能提升": dump([pr.get("description", "") for pr in (cv.get("potentialRanks") or [])]),
             "模组列表": dump(build_modules((ue.get("charEquip") or {}).get(cid), ue, be,
                                            {t["天赋名"] for t in talents},
-                                           trait_lookup, notes, who)),
+                                           trait_lookup, NOTES, who)),
         }
+    if NOTES:
+        print("  构建提示 %d 条（已记入更新记录）" % len(NOTES))
     return rows
 
 
-# ─── PRTS 爬取 ───────────────────────────────────────────────
+# ─── 爬取 ────────────────────────────────────────────────────
 
-def crawl_operator_page(name, redirects=None):
-    """抓一个干员页，取三类文本。返回 (备注列, {技能名: 备注}, [天赋备注...])。"""
-    text = uc.fetch_wikitext(name, redirects=redirects)
+def crawl(keys, rows):
+    """抓干员页的三类备注。返回 {干员ID: Outcome}。
 
-    charinfo = None
-    tpls = uc.parse_template(text, "CharinfoV2")
-    if tpls:
-        raw = tpls[0].get("特性备注")
-        if raw:
-            charinfo = clean_wiki(raw) or None
+    values：
+      备注      → 特性备注文本
+      技能列表  → {技能名: 备注}（交给 on_diff 合并进 JSON）
+      天赋列表  → [备注, ...]（按出现顺序）
+    判据：三处全空 → partial（待填）；其余 → synced。
+    """
+    for probe, marker in (SENTINEL_SKILL, SENTINEL_TALENT):
+        ok, msg = uc.sentinel_ok(probe, marker)
+        if not ok:
+            raise RuntimeError(msg)
 
-    skill_notes = {}
-    for params in uc.parse_template(text, "技能2") + uc.parse_template(text, "技能\n"):
-        sname = params.get("技能名", "")
-        if not sname:
-            continue
-        raw = params.get("备注")
-        note = (clean_wiki(raw) or None) if raw else None
-        if sname not in skill_notes or (note and not skill_notes[sname]):
-            skill_notes[sname] = note
-
-    talent_notes = []
-    for params in uc.parse_template(text, "天赋列表3"):
-        raw = params.get("备注")
-        talent_notes.append((clean_wiki(raw) or None) if raw else None)
-
-    return charinfo, skill_notes, talent_notes
-
-
-def fill_new_row(row, charinfo, skill_notes, talent_notes):
-    """把爬到的三类备注写进新行的结构里。"""
-    if charinfo:
-        row["备注"] = charinfo
-
-    skills = _parse_json(row["技能列表"]) or []
-    for sk in skills:
-        note = skill_notes.get(sk.get("技能名", ""))
-        if note:
-            sk["备注"] = note
-    row["技能列表"] = dump(skills)
-
-    talents = _parse_json(row["天赋列表"]) or []
-    for i, item in enumerate(talents):
-        if i < len(talent_notes) and talent_notes[i]:
-            item["备注"] = talent_notes[i]
-    row["天赋列表"] = dump(talents)
-
-
-# ─── 主流程 ──────────────────────────────────────────────────
-
-def main():
-    ap = argparse.ArgumentParser(description="operators 表更新（校对 + 新增 + 记录）")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="只报告，不写库、不爬取、不写记录、不备份")
-    ap.add_argument("--no-backup", action="store_true", help="跳过写库前的自动备份")
-    ap.add_argument("--db", default=str(paths.DB_PATH), help="目标数据库（默认 paths.DB_PATH）")
-    args = ap.parse_args()
-
-    paths.ensure_gamedata()
-    if not os.path.exists(args.db):
-        raise SystemExit("数据库不存在：%s" % args.db)
-
-    started = datetime.now()
-    print("====== operators 表更新 ======")
-    print("数据库  : %s" % args.db)
-    print("数据源  : %s" % paths.DATA_SOURCE)
-    src_ver = uc.read_source_version(paths.DATA_SOURCE)
-    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
-          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
-
-    trait_md = os.path.join(str(paths.MANUAL_SOURCES), MODULE_TRAITS_MD)
-    trait_lookup = load_module_traits(trait_md)
-    print("人工源  : %s（%d 条）" % (trait_md, len(trait_lookup)))
-    if not trait_lookup:
-        print("  · 提示：人工源为空或不存在，模组「特性」将退回源数据的 override 文本")
-
-    record = {
-        "表": TABLE,
-        "运行时间": started.strftime("%Y-%m-%d %H:%M:%S"),
-        "数据源": {
-            "仓库": "Kengxxiao/ArknightsGameData",
-            "提交": src_ver["提交"], "提交标题": src_ver["提交标题"],
-            "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"],
-        },
-        "脚本": {"文件": "update_operators.py", "版本": SCRIPT_VERSION},
-        "数据库": os.path.basename(args.db),
-        "人工源": {"文件": os.path.basename(trait_md), "条目": len(trait_lookup)},
-        "校对": {"检查行": 0, "差异行": 0, "差异列数": 0, "计数": {}, "明细": []},
-        "新增": {"干员": 0, "明细": []},
-        "爬取": {"目标干员": 0, "成功": 0, "无页面": 0, "有特性备注": 0,
-                 "有技能备注": 0, "有天赋备注": 0, "重定向": [], "无页面明细": []},
-        "跳过": {
-            "列": sorted(SKIP_COLS),
-            "子键": {"技能列表": ["备注"], "天赋列表": ["备注"]},
-            "说明": "描述与模组列表由 Air 手工调整；备注类为爬取 / 人工产物。"
-                     "对已有干员一律不比对、不写入；新增行照常由源数据 / 爬取 / 人工源填充",
-        },
-        "构建提示": [],
-        "结果": "未执行",
-    }
-
-    print("\n------ 读取源数据 ------")
-    def load_json(name):
-        path = paths.EXCEL / name
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-
-    ct = load_json("character_table.json")
-    cpt = load_json("char_patch_table.json")
-    skt = load_json("skill_table.json")
-    ue = load_json("uniequip_table.json")
-    be = load_json("battle_equip_table.json")
-    print("  干员表 %d 条 | 补丁 %d 条 | 技能 %d 条 | 模组目录 %d 条"
-          % (len(ct), len(cpt.get("patchChars") or {}), len(skt), len(ue.get("equipDict") or {})))
-
-    notes = []
-    print("\n------ 重算目标行 ------")
-    rows = compute_rows(ct, cpt, skt, ue, be, trait_lookup, notes)
-    print("  目标行数: %d" % len(rows))
-    if notes:
-        record["构建提示"] = notes[:MAX_DETAIL]
-        print("  构建提示 %d 条（已记入更新记录）" % len(notes))
-
-    conn = sqlite3.connect(args.db)
-    conn.isolation_level = None
-    try:
-        db_cols = [d[1] for d in conn.execute("PRAGMA table_info(%s)" % TABLE)]
-        existing = {}
-        for r in conn.execute("SELECT %s FROM %s" % (", ".join(db_cols), TABLE)):
-            d = dict(zip(db_cols, r))
-            existing[d["干员ID"]] = d
-
-        # ── 1. 校对 ──
-        print("\n------ 1. 校对 ------")
-        diffs, per_col = [], {}
-        for n, (cid, want) in enumerate(rows.items(), 1):
-            if n % 100 == 0 or n == len(rows):
-                print("  比对 %d/%d" % (n, len(rows)))
-            have = existing.get(cid)
-            if have is None:
-                continue
-            for col in ALL_COLS:
-                if col in SKIP_COLS:
-                    continue
-                if not uc.same(col, strip_keep(col, have[col]), strip_keep(col, want[col]),
-                               json_cols=JSON_COLS, int_cols=INT_COLS):
-                    write_value = merge_keep(col, have[col], want[col])
-                    diffs.append((cid, col, have[col], write_value))
-                    per_col[col] = per_col.get(col, 0) + 1
-        record["校对"]["检查行"] = len(existing)
-        record["校对"]["差异行"] = len({d[0] for d in diffs})
-        record["校对"]["差异列数"] = len(diffs)
-        record["校对"]["计数"] = per_col
-        record["校对"]["明细"] = [
-            dict({"干员ID": cid, "名称": rows[cid]["名称"], "列": col},
-                 **uc.diff_brief(old, new, as_json=col in JSON_COLS))
-            for cid, col, old, new in diffs[:MAX_DETAIL]
-        ]
-        print("  库内 %d 行 | 差异行 %d | 差异列 %d"
-              % (len(existing), record["校对"]["差异行"], len(diffs)))
-        for col, cnt in sorted(per_col.items(), key=lambda x: -x[1]):
-            print("    %s: %d 处" % (col, cnt))
-        for cid, col, old, new in diffs[:10]:
-            print("    · %s %s" % (rows[cid]["名称"], col))
-
-        # ── 2. 新增 ──
-        new_ids = sorted(k for k in rows if k not in existing)
-        record["新增"]["干员"] = len(new_ids)
-        record["新增"]["明细"] = [
-            {"干员ID": cid, "名称": rows[cid]["名称"]} for cid in new_ids[:MAX_DETAIL]
-        ]
-        print("\n------ 2. 新增 ------")
-        print("  新增干员: %d" % len(new_ids))
-        for cid in new_ids[:20]:
-            print("    %s  %s" % (cid, rows[cid]["名称"]))
-        gone = sorted(k for k in existing if k not in rows)
-        if gone:
-            print("  库有源无（不删，仅记录）: %d 个" % len(gone))
-
-        if args.dry_run:
-            print("\n(干跑：未写库、未爬取、未写记录)")
-            record["结果"] = "干跑"
-            return 0
-
-        # ── 3. 爬取（只爬新增；失败整体中止）──
-        crawled = {}
-        if new_ids:
-            print("\n------ 3. 爬取 PRTS（%d 名新增干员）------" % len(new_ids))
-            for probe, marker in (SENTINEL_SKILL, SENTINEL_TALENT):
-                ok, msg = uc.sentinel_ok(probe, marker)
-                if not ok:
-                    record["结果"] = "中止（结构哨兵失败：%s）" % msg
-                    path = uc.write_record(TABLE, record)
-                    print("\n!! 中止：%s" % msg)
-                    print("   未对数据库做任何修改；记录：%s" % path)
-                    return 1
-
-            no_page, redirects = [], []
-            t0 = time.time()
-            for i, cid in enumerate(new_ids, 1):
-                name = rows[cid]["名称"]
-                if i % 10 == 0 or i == len(new_ids):
-                    print("  [%d/%d] %.0fs | %s" % (i, len(new_ids), time.time() - t0, name))
-                try:
-                    crawled[cid] = crawl_operator_page(name, redirects=redirects)
-                except uc.NoPage:
-                    no_page.append(name)
-                    continue
-                except Exception as e:
-                    record["结果"] = "中止（爬取失败：%s）" % e
-                    path = uc.write_record(TABLE, record)
-                    print("\n!! 中止：%s" % e)
-                    print("   未对数据库做任何修改；记录：%s" % path)
-                    return 1
-                time.sleep(0.1)
-
-            record["爬取"]["目标干员"] = len(new_ids)
-            record["爬取"]["成功"] = len(crawled)
-            record["爬取"]["无页面"] = len(no_page)
-            record["爬取"]["无页面明细"] = no_page[:MAX_DETAIL]
-            record["爬取"]["有特性备注"] = sum(1 for v in crawled.values() if v[0])
-            record["爬取"]["有技能备注"] = sum(1 for v in crawled.values()
-                                              if any(v[1].values()))
-            record["爬取"]["有天赋备注"] = sum(1 for v in crawled.values()
-                                              if any(v[2]))
-            record["爬取"]["重定向"] = ["%s → %s" % ab for ab in redirects[:MAX_DETAIL]]
-            for cid, (charinfo, skill_notes, talent_notes) in crawled.items():
-                fill_new_row(rows[cid], charinfo, skill_notes, talent_notes)
-            print("  成功 %d | 无页面 %d | 有特性备注 %d | 有技能备注 %d | 有天赋备注 %d"
-                  % (len(crawled), len(no_page), record["爬取"]["有特性备注"],
-                     record["爬取"]["有技能备注"], record["爬取"]["有天赋备注"]))
-
-        # ── 4. 写库（单事务）──
-        print("\n------ 4. 写库（单事务）------")
-        if args.no_backup:
-            print("  (已跳过备份)")
-        else:
-            bak = uc.backup_db(args.db)
-            print("  备份: %s" % (bak or "（未生成）"))
-        print("  写回校对差异: %d 列 | 插入新增: %d 行" % (len(diffs), len(new_ids)))
-        conn.execute("PRAGMA journal_mode=%s" % JOURNAL_MODE)
-        conn.execute("BEGIN IMMEDIATE")
+    out = {}
+    start = time.time()
+    for i, key in enumerate(keys, 1):
+        cid = key[0] if isinstance(key, tuple) else key
+        name = (rows.get(key) or {}).get("名称") or cid
+        if i % 10 == 0 or i == len(keys):
+            print("  [%d/%d] %.0fs | %s" % (i, len(keys), time.time() - start, name))
         try:
-            for cid, col, _old, new in diffs:
-                conn.execute("UPDATE %s SET %s=? WHERE 干员ID=?" % (TABLE, col), (new, cid))
-            for cid in new_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO %s (%s) VALUES (%s)"
-                    % (TABLE, ", ".join(ALL_COLS), ", ".join("?" * len(ALL_COLS))),
-                    tuple(rows[cid][c] for c in ALL_COLS),
-                )
-            conn.execute("COMMIT")
-        except Exception as e:
-            conn.execute("ROLLBACK")
-            record["结果"] = "中止（写库失败：%s）" % e
-            path = uc.write_record(TABLE, record)
-            print("\n!! 写库失败并已回滚：%s" % e)
-            print("   记录：%s" % path)
-            return 1
-    finally:
-        conn.close()
+            text = uc.fetch_wikitext(name)
+        except uc.NoPage:
+            out[key] = tb.Outcome("missing", page=name, note="页面不存在")
+            time.sleep(SLEEP)
+            continue
 
-    record["结果"] = "成功"
-    path = uc.write_record(TABLE, record)
+        charinfo = None
+        tpls = uc.parse_template(text, "CharinfoV2")
+        if tpls and tpls[0].get("特性备注"):
+            charinfo = clean_wiki(tpls[0]["特性备注"]) or None
 
-    elapsed = (datetime.now() - started).total_seconds()
-    print("\n====== 完成（%.1fs）======" % elapsed)
-    print("  校对写回: %d 列 | 新增: %d 名 | 爬取成功: %d | 无页面: %d"
-          % (record["校对"]["差异列数"], record["新增"]["干员"],
-             record["爬取"]["成功"], record["爬取"]["无页面"]))
-    print("  更新记录: %s" % path)
-    return 0
+        skill_notes = {}
+        for params in uc.parse_template(text, "技能2") + uc.parse_template(text, "技能\n"):
+            sname = params.get("技能名", "")
+            if not sname:
+                continue
+            raw = params.get("备注")
+            note = (clean_wiki(raw) or None) if raw else None
+            if sname not in skill_notes or (note and not skill_notes[sname]):
+                skill_notes[sname] = note
 
+        talent_notes = []
+        for params in uc.parse_template(text, "天赋列表3"):
+            raw = params.get("备注")
+            talent_notes.append((clean_wiki(raw) or None) if raw else None)
+
+        if not charinfo and not any(skill_notes.values()) and not any(talent_notes):
+            out[key] = tb.Outcome("partial", page=name,
+                                  values={"备注": None, "技能列表": {}, "天赋列表": []},
+                                  note="三处备注全空")
+        else:
+            out[key] = tb.Outcome("synced", page=name, values={
+                "备注": charinfo, "技能列表": skill_notes, "天赋列表": talent_notes})
+        time.sleep(SLEEP)
+    return out
+
+
+# ─── 备注的合并 / 仲裁 ───────────────────────────────────────
+
+def _parse(value):
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def merge_skill_notes(have, notes):
+    """把 {技能名: 备注} 合进库内 技能列表 JSON，其余字段保留。"""
+    obj = _parse(have)
+    if not isinstance(obj, list):
+        return have
+    obj = copy.deepcopy(obj)
+    for item in obj:
+        if not isinstance(item, dict):
+            continue
+        note = notes.get(item.get("技能名", ""))
+        if note:
+            item["备注"] = note
+        elif "备注" in item:
+            item.pop("备注")
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def merge_talent_notes(have, notes):
+    """按出现顺序把备注合进库内 天赋列表 JSON。"""
+    obj = _parse(have)
+    if not isinstance(obj, list):
+        return have
+    obj = copy.deepcopy(obj)
+    for i, item in enumerate(obj):
+        if not isinstance(item, dict):
+            continue
+        note = notes[i] if i < len(notes) else None
+        if note:
+            item["备注"] = note
+        elif "备注" in item:
+            item.pop("备注")
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def on_diff(key, col, want, have):
+    """写库前的仲裁。返回 None 表示只记录、不写库。"""
+    if col == "备注":
+        old = have or ""
+        if not old.strip():
+            return want if want is not None else old   # 新增 / 库内空 → 直接填（无内容则不动）
+        if (want or "") and want in old:
+            return old                  # 爬取内容仍在（后面可能追加了人工内容）
+        return None                     # 页面变了 → 交人工核对
+    if col == "技能列表":
+        return merge_skill_notes(have, want or {})
+    if col == "天赋列表":
+        return merge_talent_notes(have, want or [])
+    return want
+
+
+SPEC = tb.TableSpec(
+    table="operators",
+    columns=COLUMNS,
+    key_cols=["干员ID"],
+    load_rows=compute_rows,
+    pending_path=HERE / "pending.json",
+    crawl=crawl,
+    on_diff=on_diff,
+)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(tb.run(SPEC))

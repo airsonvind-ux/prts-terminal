@@ -374,7 +374,7 @@ def run(spec, argv=None):
                 # 行已入库（--base 已在上一轮插入过）→ 把爬到的值写回爬取列。
                 # 只填空：库内已有内容（多半是人工写的）一律不动。
                 if key in existing:
-                    for col in cols.crawl:
+                    for col in list(cols.crawl) + [c for c, _ in cols.subkeys]:
                         if col not in out.values:
                             continue
                         a = existing[key][col]
@@ -417,7 +417,7 @@ def run(spec, argv=None):
             # （页面暂时为空不代表内容被删，保守起见不动）
             if out.state != "synced":
                 continue
-            for col in cols.crawl:
+            for col in list(cols.crawl) + [c for c, _ in cols.subkeys]:
                 if col not in out.values:
                     continue
                 a = existing[key][col]
