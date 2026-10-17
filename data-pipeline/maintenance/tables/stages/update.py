@@ -48,13 +48,19 @@ import sys
 import time
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MAINT = next(p for p in HERE.parents if (p / "lib").is_dir())   # maintenance/
+for _p in (str(HERE), str(MAINT / "lib"), str(MAINT.parent)):   # 本表目录 / 通用模块 / data-pipeline
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import paths  # noqa: E402
 import update_common as uc  # noqa: E402
 from cleaning_game import clean_desc  # noqa: E402
 from cleaning_wiki import clean_wiki  # noqa: E402
-# 枚举与免疫映射的唯一事实来源在 update_enemies（游戏新增异常状态时只改那里）
-from update_enemies import ATK_MAP, IMMUNE_MAP, MOTION_MAP, STATUS_MAP  # noqa: E402
+# 枚举与免疫映射的唯一事实来源在 lib/enemy_attrs.py（游戏新增异常状态时只改那里）
+from enemy_attrs import ATK_MAP, IMMUNE_MAP, MOTION_MAP, STATUS_MAP  # noqa: E402
 
 TABLE = "stages"
 SCRIPT_VERSION = 2
@@ -84,7 +90,7 @@ STAGE_TYPE_MAP = {
 # 两个例外：`numOfExtraDrops` / `viewRadius` 与斗蝉蝉模式相关，我们没做解析，
 # 表里本身就是英文列名，所以原样保留英文。没有对应列的字段（prefabKey、enemyTags、
 # spRecoveryPerSec 等）一律不列在这里，也就不会被记进覆写属性。
-# 映射口径以 update_enemies.py 的建表取值为准。
+# 映射口径以 lib/enemy_attrs.py 的取值为准。
 ATTR_COL = {
     "name": "名称", "description": "描述", "levelType": "地位",
     "applyWay": "攻击方式", "motion": "行动方式",

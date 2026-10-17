@@ -27,11 +27,16 @@ EXCEL = GAMEDATA / "excel"
 LEVELS = GAMEDATA / "levels"
 
 RESOURCES = PROJECT_ROOT / "src-tauri" / "resources"
+
+MAINT = HERE / "maintenance"
 # 权威副本：数据更新脚本唯一操作对象（db_builder/ 下那份为归档，不再更新）
-DB_PATH = HERE / "maintenance" / "arknights.db"
+DB_PATH = MAINT / "db" / "arknights.db"
+# 更新系统的产物目录（被 lib/update_common 引用；脚本里不要自己拼）
+BACKUPS = MAINT / "backups"
+UPDATES = MAINT / "updates"
 
 # 人工维护的数据源（人工更新，脚本只读；放在仓库内，更新系统不依赖项目目录外的文件）
-MANUAL_SOURCES = HERE / "maintenance" / "sources"
+MANUAL_SOURCES = MAINT / "sources"
 
 # 便于脚本做"数据源是否就位"的显式检查，而不是等到 open() 才报错
 def ensure_gamedata() -> None:

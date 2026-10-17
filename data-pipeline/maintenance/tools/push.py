@@ -21,9 +21,13 @@ import sqlite3
 import sys
 import time
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))
-sys.path.insert(0, HERE)
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+MAINT = next(p for p in HERE.parents if (p / "lib").is_dir())   # maintenance/
+for _p in (str(HERE), str(MAINT / "lib"), str(MAINT.parent)):   # 本目录 / 通用模块 / data-pipeline
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from paths import DB_PATH, RESOURCES  # noqa: E402
 
 import update_common as uc  # noqa: E402

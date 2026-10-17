@@ -25,9 +25,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))   # data-pipeline/（paths.py 在这一层）
-sys.path.insert(0, str(HERE))          # maintenance/
+HERE = Path(__file__).resolve().parent          # data-pipeline/db_builder
+_MAINT = HERE.parent / "maintenance"           # 通用模块在 maintenance/lib
+for _p in (str(HERE), str(_MAINT / "lib"), str(HERE.parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import paths  # noqa: E402
 import update_common as uc  # noqa: E402

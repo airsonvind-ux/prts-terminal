@@ -31,8 +31,8 @@ sim_logs/
 src-tauri/resources/*.db
 # 数据更新脚本的自动备份（每份 43 MB，绝不入库，2026-10-13）
 data-pipeline/maintenance/backups/
-# 更新记录（本次运行产物，Air 定不入库，2026-10-13）
-data-pipeline/maintenance/updates/
+# 更新记录（变更史，入库可查；2026-10-17 改为入库）
+# data-pipeline/maintenance/updates/
 src-tauri/$null
 src-tauri/binaries/
 bridge/target/

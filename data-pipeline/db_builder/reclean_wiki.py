@@ -29,7 +29,13 @@ import sqlite3
 import sys
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent          # data-pipeline/db_builder
+_MAINT = HERE.parent / "maintenance"           # 通用模块在 maintenance/lib
+for _p in (str(HERE), str(_MAINT / "lib"), str(HERE.parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 import paths  # noqa: E402
 from cleaning_wiki import clean_wiki, looks_dirty  # noqa: E402
 from update_common import backup_db, write_record  # noqa: E402

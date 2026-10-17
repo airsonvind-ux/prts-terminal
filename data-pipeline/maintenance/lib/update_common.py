@@ -13,9 +13,11 @@ PRTS 终端 — 更新系统通用模块
   - 表结构、枚举映射、列类型集合 → 各自的表脚本。
 
 系统级约定（各表脚本共享，会写进更新记录）：
-  - 更新记录：<maintenance>/updates/<时间戳>-<表>.json
+  - 更新记录：<maintenance>/updates/<表>/<时间戳>.json
   - 写法前备份：<maintenance>/backups/<文件名>.<时间戳>.bak，每个文件名保留最近
     KEEP_BACKUPS 份（库与资源 JSON 走同一条路径：backup_file，各表互不挤占）
+  - 两个目录都不在本模块里推算，统一从 paths.BACKUPS / paths.UPDATES 取
+    （本模块放在 lib/ 下，按 __file__ 推算会差一级）
 """
 
 import json
@@ -28,6 +30,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+# 路径唯一来源：paths.py 在 data-pipeline/（上一级或更上）。这里只补 sys.path，不自算目录
+_HERE = Path(__file__).resolve().parent
+_DP = next(p for p in _HERE.parents if (p / "paths.py").is_file())   # data-pipeline/
+for _p in (str(_HERE), str(_DP)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import paths  # noqa: E402
 
 KEEP_BACKUPS = 3            # 自动备份保留份数
 SLEEP_BETWEEN_FETCH = 0.1   # 爬取间隔，礼貌抓取
@@ -86,7 +97,7 @@ def backup_file(path, keep=KEEP_BACKUPS, backup_dir=None):
     if not os.path.exists(path):
         return None
     if backup_dir is None:
-        backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+        backup_dir = str(paths.BACKUPS)
     os.makedirs(backup_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     dst = os.path.join(backup_dir, "%s.%s.bak" % (os.path.basename(path), stamp))
@@ -113,7 +124,7 @@ def backup_db(db_path, keep=KEEP_BACKUPS, backup_dir=None):
 def write_record(table, record, out_dir=None):
     """把更新记录写到 <maintenance>/updates/<时间戳>-<表>.json，返回路径。"""
     if out_dir is None:
-        out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "updates")
+        out_dir = str(paths.UPDATES)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, time.strftime("%Y-%m-%d-%H%M%S") + "-%s.json" % table)
     with open(path, "w", encoding="utf-8") as f:
