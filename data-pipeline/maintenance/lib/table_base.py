@@ -428,3 +428,87 @@ def run(spec, argv=None):
     print("  校对写回 %d 列 | 新增 %d 行 | 待办剩余 %d | 记录 %s"
           % (len(diffs), len(new_keys), len(pending.data), os.path.basename(path)))
     return 0
+
+
+# ─── 重建型（JSON 表）───────────────────────────────────────
+
+@dataclass
+class RebuildSpec:
+    """重建表：每次从源全量生成，与现有文件对比后整体替换。
+
+    ``build(old)`` 拿到旧数据（首次运行是空 dict），返回完整的新数据。
+    人工层（如 ranges 的 alias）由 build 自己从旧数据带回，执行器不关心。
+    """
+    name: str                     # 记录名 / 表名
+    output: Path                  # 输出文件（如 resources/ranges.json）
+    build: object                 # (old: dict) -> dict
+
+
+def run_rebuild(spec, argv=None):
+    ap = argparse.ArgumentParser(description="%s 表重建" % spec.name)
+    ap.add_argument("--dry-run", action="store_true", help="只报告，不写文件")
+    ap.add_argument("--no-backup", action="store_true", help="跳过写前备份")
+    args = ap.parse_args(argv)
+
+    old, old_text = {}, None
+    if spec.output.exists():
+        old_text = spec.output.read_text(encoding="utf-8")
+        try:
+            old = json.loads(old_text)
+        except ValueError:
+            raise SystemExit("现有文件不是合法 JSON：%s" % spec.output)
+
+    src_ver = uc.read_source_version(paths.DATA_SOURCE)
+    print("====== %s 表重建 ======" % spec.name)
+    print("输出    : %s" % spec.output)
+    print("源版本  : 提交 %s | 游戏版本 %s | 数据时间 %s"
+          % (src_ver["提交"], src_ver["游戏版本"], src_ver["数据时间"]))
+
+    new = spec.build(old)
+    added = [k for k in new if k not in old]
+    gone = [k for k in old if k not in new]
+    changed = [k for k in new if k in old and old[k] != new[k]]
+    text = json.dumps(new, ensure_ascii=False, indent=2)
+    identical = old_text == text
+
+    print("\n------ 对比 ------")
+    print("  原 %d 项 | 新 %d 项 | 新增 %d | 消失 %d | 变化 %d"
+          % (len(old), len(new), len(added), len(gone), len(changed)))
+    for label, keys in (("新增", added), ("消失", gone), ("变化", changed)):
+        if keys:
+            print("    %s: %s" % (label, " ".join(str(k) for k in keys[:8])))
+    print("  与现有文件逐字节一致: %s" % identical)
+
+    if args.dry_run:
+        print("\n(干跑：未写文件)")
+        return 0
+
+    if identical:
+        print("\n------ 没有变化：未写文件、未写记录 ------")
+        return 0
+
+    if args.no_backup:
+        print("\n  (已跳过备份)")
+    else:
+        print("\n  备份: %s" % (uc.backup_file(str(spec.output)) or "（未生成）"))
+    spec.output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = str(spec.output) + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    os.replace(tmp, str(spec.output))
+
+    record = {
+        "表": spec.name,
+        "模式": "重建",
+        "运行时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "数据源": {"提交": src_ver["提交"], "提交标题": src_ver["提交标题"],
+                   "游戏版本": src_ver["游戏版本"], "数据时间": src_ver["数据时间"]},
+        "脚本": {"文件": os.path.basename(sys.argv[0]) if sys.argv else "", "版本": 1},
+        "计数": {"原": len(old), "新": len(new)},
+        "新增": added[:MAX_DETAIL], "消失": gone[:MAX_DETAIL], "变化": changed[:MAX_DETAIL],
+        "结果": "成功",
+    }
+    path = uc.write_record(spec.name, record)
+    print("\n====== 完成：%s ======" % spec.output)
+    print("  记录: %s" % os.path.basename(path))
+    return 0
