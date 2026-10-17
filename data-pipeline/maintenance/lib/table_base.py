@@ -29,6 +29,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -207,6 +208,26 @@ def _write_db(db, spec, diffs, new_rows, backup):
         raise
     finally:
         conn.close()
+
+
+def progress(i, total, label, start=None):
+    """逐项进度：每项一行，保证终端立刻看到推进。
+
+    项数多时抽稀（20 项以内逐项，200 项以内每 5 项，更多按总量分 40 段），
+    但首项与末项必打。每行都 flush，避免缓冲把进度吞掉。
+    """
+    if total <= 20:
+        step = 1
+    elif total <= 200:
+        step = 5
+    else:
+        step = max(1, total // 40)
+    if i % step and i != total:
+        return
+    elapsed = time.time() - start if start else 0
+    rate = (i - 1) / elapsed if elapsed > 0 else 0
+    eta = (total - i) / rate if rate > 0 else 0
+    print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, total, elapsed, eta, label), flush=True)
 
 
 def _record(spec, mode, src_ver, db):

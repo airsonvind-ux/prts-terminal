@@ -381,11 +381,7 @@ def crawl(keys, rows):
     no_detail = 0
     start = time.time()
     for i, page in enumerate(pages, 1):
-        if i % 10 == 0 or i == len(pages):
-            elapsed = time.time() - start
-            rate = (i - 1) / elapsed if elapsed > 0 else 0
-            eta = (len(pages) - i) / rate if rate > 0 else 0
-            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, len(pages), elapsed, eta, page))
+        tb.progress(i, len(pages), page, start)
 
         try:
             wikitext = uc.fetch_wikitext(page)

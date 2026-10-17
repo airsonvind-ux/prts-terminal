@@ -602,11 +602,7 @@ def crawl(keys, rows):
     skipped = 0
     start = time.time()
     for i, (url, ks) in enumerate(groups.items(), 1):
-        if i % 25 == 0 or i == len(pages):
-            elapsed = time.time() - start
-            rate = (i - 1) / elapsed if elapsed > 0 else 0
-            eta = (len(pages) - i) / rate if rate > 0 else 0
-            print("  [%d/%d] %.0fs | ETA %.0fs | %s" % (i, len(pages), elapsed, eta, url[:56]))
+        tb.progress(i, len(pages), url[:56], start)
         try:
             text = uc.fetch_wikitext(url)
         except uc.NoPage:

@@ -303,8 +303,7 @@ def crawl(keys, rows):
     for i, key in enumerate(keys, 1):
         tid = key[0] if isinstance(key, tuple) else key
         name = (rows.get(key) or {}).get("名称") or tid
-        if i % 10 == 0 or i == len(keys):
-            print("  [%d/%d] %.0fs | %s" % (i, len(keys), time.time() - start, name))
+        tb.progress(i, len(keys), name, start)
 
         candidates = []
         if tid in page_map:
