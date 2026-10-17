@@ -552,7 +552,7 @@ class RebuildDbSpec:
     table: str
     create_sql: str
     insert_cols: list                     # [(库列名, 行内键), ...]
-    build: object                         # (old: {key: row}) -> {key: row}
+    build: object                         # (old: {key: row}, db_path) -> {key: row}
     key: str                              # 行内的键名（与库列名一致）
     verify: object = None                 # (conn) -> dict
 
@@ -588,7 +588,7 @@ def run_rebuild_db(spec, argv=None):
     finally:
         conn.close()
 
-    new = spec.build(dict(old))
+    new = spec.build(dict(old), args.db)
     added = [k for k in new if k not in old]
     gone = [k for k in old if k not in new]
     changed = [k for k in new if k in old and any(

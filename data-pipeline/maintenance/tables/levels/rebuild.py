@@ -439,7 +439,7 @@ SIZE_COLS = ["地图数据", "路线", "额外路线", "波次", "分支", "预�
 
 # ─── 构建 ─────────────────────────────────
 
-def build(old=None):
+def build(old=None, db=None):
     """全部关卡文件 → {levelId: 行}。文件处理失败即抛（中止本次重建）。"""
     files, collisions = collect_json_files()
     if not files:
