@@ -44,6 +44,7 @@ KEEP_BACKUPS = 3            # 自动备份保留份数
 SLEEP_BETWEEN_FETCH = 0.1   # 爬取间隔，礼貌抓取
 FETCH_RETRIES = 2           # 单页网络异常重试次数（每次间隔 1 秒）
 FETCH_TIMEOUT = 30          # 单页抓取超时（秒）
+SLOW_FETCH = 5              # 单页超过这个秒数就提示，便于定位卡顿
 
 
 # ─── 输出环境 ─────────────────────────────────────────────────
@@ -361,23 +362,40 @@ def fetch_wikitext(name, redirects=None, retries=FETCH_RETRIES, timeout=FETCH_TI
     网络类异常按 retries 重试（每次间隔 1 秒）；raw 路径全失败后改走 api.php；
     两者都失败才抛 RuntimeError（调用方据此中止）。404 抛 NoPage。
     redirects 传入列表时，每次重定向追加 (原名, 目标名)。
+
+    单页耗时超过 SLOW_FETCH（秒）或失败时打一行提示，便于判断卡在哪一步。
     """
+    t0 = time.time()
     last = None
     for attempt in range(retries + 1):
         try:
-            return _fetch_once(name, redirects, timeout, 0)
+            text = _fetch_once(name, redirects, timeout, 0)
+            _report_slow(name, time.time() - t0)
+            return text
         except NoPage:
+            _report_slow(name, time.time() - t0)
             raise
         except Exception as e:  # noqa: BLE001
             last = e
             if attempt < retries:
                 time.sleep(1.0)
     try:
-        return _fetch_via_api(name, timeout)
+        text = _fetch_via_api(name, timeout)
+        _report_slow(name, time.time() - t0, via="api")
+        return text
     except NoPage:
+        _report_slow(name, time.time() - t0)
         raise
     except Exception as e:  # noqa: BLE001
+        print("  ! 抓取失败 %s：%.1fs（raw=%s；api=%s）"
+              % (name, time.time() - t0, last, e), flush=True)
         raise RuntimeError("PRTS 抓取失败（%s）：raw=%s；api=%s" % (name, last, e))
+
+
+def _report_slow(name, elapsed, via=None):
+    """单页耗时异常时打一行，正常情况不吭声。"""
+    if elapsed >= SLOW_FETCH:
+        print("  ! 慢 %s：%.1fs%s" % (name, elapsed, "（走 api）" if via else ""), flush=True)
 
 
 def parse_template(text, tpl_name):

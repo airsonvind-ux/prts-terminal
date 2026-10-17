@@ -376,6 +376,7 @@ def run(spec, argv=None):
     targets = pending.keys(spec.key_cols, int_cols) if do_crawl else []
     if targets and not args.dry_run:
         print("\n------ 3. 爬取（pending %d 项）------" % len(targets))
+        print("  逐项输出，每完成一页打一行；单页超过 5 秒或失败会额外提示", flush=True)
         try:
             outcomes = spec.crawl(targets, rows) or {}
         except Exception as e:
