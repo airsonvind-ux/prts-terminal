@@ -10,7 +10,8 @@ PRTS 侧（每页一次请求，按页面去重）
     {{敌人信息/levelcontent}} · 天赋    → 天赋文本
                               · 技能1..N → 技能文本（JSON）
     页面定位：sources/enemies_pages.md（人工源）→ 否则（名称, 级别）
-    取块：index>0 的节与 index=0 合并（PRTS 约定后面的节只写差异项）
+    取块：映射表按节位置（0 基）取，默认按 index 参数取；非首节与首节合并
+          （PRTS 约定后面的节只写差异项）
 
 列分类
     数据源列（29）见 COLUMNS.source                    ← 参与校对
@@ -344,6 +345,20 @@ def pick_level(levels, index):
     return None
 
 
+def pick_level_by_pos(levels, pos):
+    """按页面上的节位置取块（0 基），与首节合并。
+
+    映射表用位置而不是 index 参数：参数是人工填的，复制模板时容易忘改
+    （沉沦之人第三节就还写着 index=1）。
+    """
+    if pos < 0 or pos >= len(levels):
+        return None
+    merged = dict(levels[0])
+    if pos:
+        merged.update(levels[pos])
+    return merged
+
+
 def text_from_level(block):
     """一个 levelcontent 块 → (天赋文本, 技能文本)。"""
     skills = extract_skills(block)
@@ -365,10 +380,15 @@ def crawl(keys, rows):
     by_page = {}
     for key in keys:
         name = (rows.get(key) or {}).get("名称") or ""
-        page, index = page_map.get(key) or (name, key[1])
+        mapped = page_map.get(key)
+        if mapped:
+            page, index = mapped
+            by_page.setdefault(page, []).append((key, index, True))
+            continue
+        page, index = name, key[1]
         if not page:
             continue
-        by_page.setdefault(page, []).append((key, index))
+        by_page.setdefault(page, []).append((key, index, False))
     pages = list(by_page)
     if not pages:
         return {}
@@ -402,16 +422,18 @@ def crawl(keys, rows):
                 if no_detail >= NO_DETAIL_MIN_TOTAL and no_detail > i * NO_DETAIL_RATIO_LIMIT:
                     raise RuntimeError("空壳页面占比过高（%d/%d），疑似 PRTS 结构变化"
                                        % (no_detail, i))
-            for key, _idx in by_page[page]:
+            for key, _idx, _pos in by_page[page]:
                 out[key] = tb.Outcome(state, page=page, note=note)
             time.sleep(SLEEP)
             continue
 
-        for key, index in by_page[page]:
-            block = pick_level(levels, index)
+        for key, index, by_pos in by_page[page]:
+            block = (pick_level_by_pos(levels, index) if by_pos
+                     else pick_level(levels, index))
             if block is None:
-                out[key] = tb.Outcome("partial", page=page,
-                                      note="index %s 不在页面" % index)
+                note = ("第 %d 节不在页面（共 %d 节）" % (index, len(levels))
+                        if by_pos else "index %s 不在页面" % index)
+                out[key] = tb.Outcome("partial", page=page, note=note)
                 continue
             tianfu, jinneng = text_from_level(block)
             if not tianfu and not jinneng:
