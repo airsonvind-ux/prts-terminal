@@ -716,3 +716,52 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(useConversationStore.getState().conversations[0].lastNoticeSeq).toBe(10);
   });
 });
+
+describe("场景 11：step/end 实时上下文", () => {
+  it("step/end 更新 live；turn/end 提交最终值并清空 live", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("实时上下文测试");
+    const { sid } = getSingleSnapshot();
+
+    store.updateLiveContextFromStep(sid, {
+      inputTokens: 900,
+      outputTokens: 10,
+    });
+    let conv = useConversationStore.getState().conversations[0];
+    expect(conv.liveContextTokens).toEqual({ inputTokens: 900, outputTokens: 10 });
+    expect(conv.contextTokens).toBeUndefined();
+
+    store.appendCurrentEvent({
+      type: "assistant/message",
+      sessionId: sid,
+      content: "完成",
+      reasoningContent: null,
+      usage: { inputTokens: 1200, outputTokens: 80 },
+    });
+    store.finishProcessing(sid);
+
+    conv = useConversationStore.getState().conversations[0];
+    expect(conv.liveContextTokens).toBeUndefined();
+    expect(conv.contextTokens).toEqual({ inputTokens: 1200, outputTokens: 80 });
+  });
+
+  it("失败轮清空 live，保留上一次已提交值", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("失败轮实时上下文");
+    const { sid, snap } = getSingleSnapshot();
+    const convId = snap.conversationId;
+    useConversationStore
+      .getState()
+      .updateContextTokens(convId, { inputTokens: 500, outputTokens: 20 });
+
+    store.updateLiveContextFromStep(sid, {
+      inputTokens: 950,
+      outputTokens: 10,
+    });
+    store.failProcessing(sid, "测试失败");
+
+    const conv = useConversationStore.getState().conversations[0];
+    expect(conv.liveContextTokens).toBeUndefined();
+    expect(conv.contextTokens).toEqual({ inputTokens: 500, outputTokens: 20 });
+  });
+});

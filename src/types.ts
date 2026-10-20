@@ -212,7 +212,7 @@ export interface StepStartEvent {
   estimatedTokens: number;
 }
 
-/** step 结束：本次调用的 token 用量（最后一次即最终上下文状态） */
+/** step 结束：本次调用的 token 用量（最后一次即最终上下文状态；前端用于实时圆环） */
 export interface StepEndEvent {
   type: "step/end";
   sessionId: string;
@@ -1035,6 +1035,12 @@ export interface Conversation {
   contextLength?: number;
   /** 最近一轮 assistant/message 的上下文 Token 用量快照（覆盖式更新） */
   contextTokens?: TokenUsage;
+  /**
+   * 当前轮实时上下文用量（仅内存，不落盘）。
+   * step/end 收到 provider usage 时写入；turn/end、失败、压缩时清空，
+   * 圆环回退到 contextTokens。
+   */
+  liveContextTokens?: TokenUsage;
   /**
    * 压缩记录（模块 D；undefined = 未压缩过）。压缩后 contextTokens 被置空
    * （进度环归零）——下一次真实轮 usage 自然覆盖。

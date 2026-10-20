@@ -2,9 +2,10 @@
 // 上下文用量指示器 · 圆环 + 悬停浮层 + 压缩入口（模块 D · 上下文衰减）
 //
 // 圆环进度 = 已用上下文 input token / 模型上下文窗口。
-// 水位口径（模块 D 修正）：used = contextTokens.inputTokens——usage 是上轮请求
+// 水位口径（模块 D 修正）：used = contextTokens.inputTokens——usage 是最近一次请求
 // 的真实输入占用，即当时的上下文大小；output 是成本信息非水位，仅展示于
 // tooltip 辅行（input/output 分开展示，避免再被误当水位）。
+// 当前轮 step/end 到达时优先读 liveContextTokens（仅内存）；轮末归档后回退到 contextTokens。
 //
 // 交互（产品决策 + 验收修正 2026-09-06）：
 //   hover    → 纯信息浮层（模型名 + 占用 + 预警行）
@@ -121,9 +122,9 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
   const contextWindow = modelInfo?.contextLength ?? 0;
 
   // 水位口径（模块 D 修正）：input 侧。output 是成本信息非水位。
-  const used = activeConv?.contextTokens
-    ? activeConv.contextTokens.inputTokens
-    : 0;
+  // step/end 写入的 liveContextTokens 优先；轮末归档后 live 清空，回退持久快照。
+  const contextTokens = activeConv?.liveContextTokens ?? activeConv?.contextTokens;
+  const used = contextTokens ? contextTokens.inputTokens : 0;
   const pct = contextWindow > 0 ? Math.round((used / contextWindow) * 100) : 0;
   const offset = calcOffset(used, contextWindow);
   // 揭示前显示空环：圆环随覆盖层淡出从空扫到当前水位（.fill 已有

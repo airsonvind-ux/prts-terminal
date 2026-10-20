@@ -13,7 +13,8 @@
 //   轮次边界 → finishProcessing（turn/end 归档整轮）
 //   错误     → error(recoverable=false) → failProcessing（终止）
 //   瞬时信号 → onPhase（phase）
-//   结构事件（turn/start、step/*、request/header）→ 忽略（log 结构性事实）
+//   step/end → updateLiveContextFromStep（实时上下文水位；仅内存）
+//   结构事件（turn/start、step/start、request/header）→ 忽略（log 结构性事实）
 
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -28,7 +29,7 @@ export function useAgentEvents(): void {
   useEffect(() => {
     // Zustand action 引用稳定，effect 顶层捕获一次，
     // 不在每个事件回调中重复调用 getState()
-    const { appendCurrentEvent, finishProcessing, onPhase, failProcessing } =
+    const { appendCurrentEvent, finishProcessing, onPhase, failProcessing, updateLiveContextFromStep } =
       useProcessingStore.getState();
 
     const setup = listen<AgentEvent>("agent-event", (event) => {
@@ -59,6 +60,11 @@ export function useAgentEvents(): void {
           useSteerStore.getState().resolveInjected(convId, e.sessionId, e.content);
           break;
         }
+
+        // ── step 结束：本次 LLM 调用的真实 usage → 实时上下文水位（仅内存）──
+        case "step/end":
+          if (e.usage) updateLiveContextFromStep(e.sessionId, e.usage);
+          break;
 
         // ── 轮次结束：归档整轮（快照已被 failProcessing 清理时幂等） ──
         // M3-B：reason 透传——turn/end(aborted) → finishProcessing 归档前

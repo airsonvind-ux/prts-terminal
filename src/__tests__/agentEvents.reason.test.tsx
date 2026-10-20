@@ -128,4 +128,37 @@ describe("useAgentEvents · turn/end reason 传递", () => {
     expect(turn.some((e) => e.type === "turn/aborted")).toBe(false);
     expect(useProcessingStore.getState().processing).toEqual({});
   });
+
+  it("step/end 更新实时上下文，turn/end 归档后清空", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("实时上下文事件");
+    const sid = Object.keys(useProcessingStore.getState().processing)[0];
+
+    pushEvent({
+      type: "step/end",
+      sessionId: sid,
+      step: 1,
+      usage: { inputTokens: 900, outputTokens: 12 },
+      elapsedMs: 10,
+    });
+    await flush();
+
+    let conv = useConversationStore.getState().conversations[0];
+    expect(conv.liveContextTokens).toEqual({ inputTokens: 900, outputTokens: 12 });
+    expect(conv.contextTokens).toBeUndefined();
+
+    pushEvent({
+      type: "assistant/message",
+      sessionId: sid,
+      content: "完整回答",
+      reasoningContent: null,
+      usage: { inputTokens: 1200, outputTokens: 80 },
+    });
+    pushEvent({ type: "turn/end", sessionId: sid, reason: "completed" });
+    await flush();
+
+    conv = useConversationStore.getState().conversations[0];
+    expect(conv.liveContextTokens).toBeUndefined();
+    expect(conv.contextTokens).toEqual({ inputTokens: 1200, outputTokens: 80 });
+  });
 });

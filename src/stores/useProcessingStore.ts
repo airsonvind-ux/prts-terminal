@@ -158,6 +158,12 @@ interface ProcessingStore {
   appendCurrentEvent: (event: SessionEvent) => void;
 
   /**
+   * step/end：把本次 LLM 调用的 provider usage 写入对应对话的实时上下文。
+   * 只更新内存，不落盘；快照不存在（已收尾/已删除）时忽略。
+   */
+  updateLiveContextFromStep: (sessionId: string, usage: TokenUsage) => void;
+
+  /**
    * 更新 Agent 认知模式。收到 Phase 事件时调用。
    *
    * PhaseEvent.phase（后端推送的值） → ProcessingState.agentPhase（内部值）：
@@ -178,7 +184,8 @@ interface ProcessingStore {
    * 归档处理结果。turn/end 事件到达时由 useAgentEvents Hook 调用。
    *
    * 1. currentEvents（含合成 user/message 与后端持久事实）→ Conversation.turns 整轮归档
-   * 2. 上下文 Token 用量：从最后一个 assistant/message 的 usage 快照读取（覆盖式）
+   * 2. 上下文 Token 用量：从最后一个 assistant/message 的 usage 快照读取（覆盖式）；
+   *    liveContextTokens 随 appendTurn 清空，圆环回退到已提交值。
    * 3. 从 processing 字典删除该条目
    *
    * 快照不存在（failProcessing 已清理，如停滞路径 error 先到）时幂等返回。
@@ -900,6 +907,14 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
     // 若该 session 有未 flush 的 chunk 缓冲，同一 set 内先追加缓冲再追加本事件
     // （缓冲 chunk 必须排在后续事件之前，事件顺序不变）。
     appendImmediate(event);
+  },
+
+  updateLiveContextFromStep: (sessionId, usage) => {
+    const snap = get().processing[sessionId];
+    if (!snap) return;
+    useConversationStore
+      .getState()
+      .updateLiveContextTokens(snap.conversationId, usage);
   },
 
   onPhase: (event) => {

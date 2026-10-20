@@ -53,7 +53,7 @@ interface ConversationStore {
    *  对话不存在（已删除）→ 内存空操作且不发 invoke。
    *  @param usage 本轮归档的上下文 Token 用量快照（finishProcessing 从轮内
    *   最后一个 assistant/message 扫出；随轮持久覆盖。缺省时用对话现值——
-   *   错误轮无新 usage 不覆盖） */
+   *   错误轮无新 usage 不覆盖）。liveContextTokens 随归档清空。 */
   appendTurn: (
     conversationId: string,
     events: SessionEvent[],
@@ -89,6 +89,9 @@ interface ConversationStore {
    *  纯内存 action：持久化随 append_turn 的 metaSnapshot（usage 参数）提交，
    *  本 action 不再发 IPC（内存 = updateContextTokens 管、持久 = append_turn 管）。 */
   updateContextTokens: (conversationId: string, usage: TokenUsage) => void;
+  /** 更新当前轮实时上下文用量（仅内存，不落盘）。step/end 使用。 */
+  updateLiveContextTokens: (conversationId: string, usage: TokenUsage) => void;
+
   /**
    * 推进对话的环境通知游标（M1 Reminder，覆盖式）。
    * sendMessage 拼装通知后推进（防同对话重复拼）；invoke 失败时以旧值回滚
@@ -176,7 +179,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     set((state) => ({
       conversations: state.conversations.map((c) => {
         if (c.id !== conversationId) return c;
-        const next: Conversation = { ...c, turns: [...c.turns, events] };
+        const next: Conversation = { ...c, turns: [...c.turns, events], liveContextTokens: undefined };
         if (usageDeltas && usageDeltas.length > 0) {
           next.usage = usageDeltas.reduce(addUsageDelta, c.usage);
         }
@@ -314,8 +317,15 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     set((state) => ({
       conversations: state.conversations.map((c) =>
         c.id === conversationId
-          ? { ...c, contextTokens: usage }
+          ? { ...c, contextTokens: usage, liveContextTokens: undefined }
           : c
+      ),
+    })),
+
+  updateLiveContextTokens: (conversationId, usage) =>
+    set((state) => ({
+      conversations: state.conversations.map((c) =>
+        c.id === conversationId ? { ...c, liveContextTokens: usage } : c
       ),
     })),
 
@@ -335,7 +345,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       ? [{ category: "compaction", ...usage }]
       : undefined;
     // 内存先行（同步）：compaction 覆盖写 + contextTokens 置空（归零）
-    // + 环境游标复位（批 4：undefined 走“新对话”分支，下一条消息重发
+    // + liveContextTokens 清空（实时水位不跨压缩）+ 环境游标复位（批 4：undefined 走“新对话”分支，下一条消息重发
     //   三值快照，仅 workspace/knowledge/model，不回放事件）+ 用量累加
     set((state) => ({
       conversations: state.conversations.map((c) => {
@@ -344,6 +354,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
           ...c,
           compaction: record,
           contextTokens: undefined,
+          liveContextTokens: undefined,
           lastNoticeSeq: undefined,
         };
         if (usageDeltas) next.usage = usageDeltas.reduce(addUsageDelta, c.usage);
