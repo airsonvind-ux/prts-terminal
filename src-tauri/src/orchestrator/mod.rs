@@ -246,7 +246,7 @@ impl TurnState {
 ///
 /// - `emit(...)`：持久事实 → 先入 log 再推 IPC（前端投影缓存消费）
 /// - `ipc_only(...)`：仅推 IPC（流式 tool/call：实时卡片，log 由执行阶段批量写）
-/// - `log_only(...)`：仅写 log（step 边界、request/header、批量 tool/call）
+/// - `log_only(...)`：仅写 log（step/start、request/header、批量 tool/call）
 /// - `phase(...)`：仅推 IPC（Phase 是纯 UI 信号，不入 log）
 ///
 /// 写 log 先于推 IPC：事实落账优先，IPC 失败不丢账。
@@ -744,7 +744,7 @@ async fn dispatch_turn_with_memory(
                 usage,
             ));
             let elapsed_ms = t0.elapsed().as_millis() as u64;
-            sink.log_only(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
+            sink.emit(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
 
             // ── 插话关轮重读（2026-09-25 语义修订）──
             // 本段已收尾（assistant 消息归档、step/end 已闭）：重读队列——
@@ -805,7 +805,7 @@ async fn dispatch_turn_with_memory(
 
         // step/end：工具执行完成后闭合 step 边界
         let elapsed_ms = t0.elapsed().as_millis() as u64;
-        sink.log_only(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
+        sink.emit(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
 
         // ── 停滞检测：升格为终止原因（turn/end reason=stagnation）──
         // M3-B：停滞与中止并发 → 中止优先（中止先于停滞判定）
@@ -2862,6 +2862,12 @@ mod tests {
             e,
             SessionEvent::TurnEnd { reason: TurnEndReason::Completed, .. }
         )));
+        // 实时上下文水位：两个 step 的 step/end 都必须推 IPC（不能只写 log）
+        let ipc_step_ends = ipc_sessions
+            .iter()
+            .filter(|e| matches!(e, SessionEvent::StepEnd { .. }))
+            .count();
+        assert_eq!(ipc_step_ends, 2, "step/end 必须推送 IPC，供前端实时更新上下文圆环");
     }
 
     /// 工具步正文回填（2026-09 修复）：工具步的正文必须进入后续上下文。
