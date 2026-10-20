@@ -65,6 +65,38 @@
   animation: backdropFadeIn 150ms ease-out;
 }
 
+/* 覆盖层打开时的全局待处理指示：审批请求不能被设置/历史面板藏住。 */
+.pendingNotice {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid rgba(216, 160, 74, 0.5);
+  border-radius: var(--radius-sm);
+  background: var(--depth-1);
+  color: var(--warn);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pendingNotice::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pendingNotice:hover {
+  background: var(--depth-3);
+}
+
 @keyframes backdropFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

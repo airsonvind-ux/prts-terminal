@@ -5,6 +5,8 @@
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean      # 先清空构建目录，全量重编
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Jobs 4     # 限制并行编译数（内存紧张时）
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -DryRun     # 只做检查与预告，不构建
+#   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Config src-tauri\tauri.updater-test.conf.json
+#                                                                    # 合并测试配置（本地更新源）
 #
 # 屏幕上看得到：
 #   1) 前置检查（工具是否就绪、构建盘剩余空间）
@@ -15,7 +17,8 @@
 param(
     [switch]$Clean,
     [int]$Jobs = 0,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$Config = ""
 )
 
 $ErrorActionPreference = 'Continue'
@@ -27,6 +30,8 @@ $script:logFile = Join-Path $root "build-log-$stamp.txt"
 # 单一写入通道：控制台与日志文件各写一次，且日志只由本流写。
 # 曾经用 Add-Content 与 Tee-Object 同时写同一文件，结果报“正由另一进程使用”。
 $script:logStream = [System.IO.StreamWriter]::new($script:logFile, $true, [System.Text.Encoding]::UTF8)
+$script:sigMissing = $false
+$script:sigInvalid = $false
 
 function Say([string]$msg) {
     $line = '[{0}] {1}' -f (Get-Date -Format 'HH:mm:ss'), $msg
@@ -55,6 +60,27 @@ function SizeGB([string]$p) {
     return ($m.Sum / 1GB)
 }
 
+# 读取 .sig 的 trusted comment，返回 CLI 写入的版本号。
+# .sig 是 base64 编码的 minisign 文本；兼容直接读取裸文本的情况。
+# 旧版 CLI（< 2.11.5）不写 version，返回 $null。
+function Get-SigVersion([string]$path) {
+    try {
+        $raw = (Get-Content -Raw -LiteralPath $path).Trim()
+        try {
+            $text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($raw))
+        } catch {
+            $text = $raw
+        }
+        $line = ($text -split "`r?`n" | Where-Object { $_ -like 'trusted comment:*' } | Select-Object -First 1)
+        if (-not $line) { return $null }
+        $m = [regex]::Match($line, '(?:^|\s)version:(\S+)')
+        if ($m.Success) { return $m.Groups[1].Value }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
 Write-Host ''
 Say '========================================'
 Say 'PRTS Terminal 发布构建'
@@ -73,6 +99,22 @@ foreach ($tool in 'node', 'npm', 'python', 'cargo', 'rustc') {
     }
 }
 if ($missing.Count -gt 0) { Say '存在缺失工具，已中止。'; exit 1 }
+
+# 版本一致性：关于页读 Cargo 版本，更新器比较 tauri.conf 版本；
+# 两者不一致时，界面显示与升级判断会各说各话。
+Say ''
+Say '      版本一致性'
+$pkgVersion = (Get-Content -Raw -LiteralPath (Join-Path $root 'package.json') | ConvertFrom-Json).version
+$tauriVersion = (Get-Content -Raw -LiteralPath (Join-Path $root 'src-tauri\tauri.conf.json') | ConvertFrom-Json).version
+$cargoLine = Select-String -LiteralPath (Join-Path $root 'src-tauri\Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+$cargoVersion = if ($cargoLine) { $cargoLine.Matches[0].Groups[1].Value } else { '' }
+Say ('      package.json     {0}' -f $pkgVersion)
+Say ('      tauri.conf.json  {0}' -f $tauriVersion)
+Say ('      Cargo.toml       {0}' -f $cargoVersion)
+if ($pkgVersion -ne $tauriVersion -or $pkgVersion -ne $cargoVersion) {
+    Say '      版本不一致，已中止。请先把三处版本改成同一个值。'
+    exit 1
+}
 
 $drive = $root.Substring(0, 1)
 $freeGB = [math]::Round((Get-PSDrive -Name $drive).Free / 1GB, 1)
@@ -96,15 +138,56 @@ if ($DryRun) {
     exit 0
 }
 
+# 签名链：缺少私钥或密码时直接中止，避免产出没有 .sig 的安装包。
+# 只检查存在性，不输出私钥内容或密码。
+Say ''
+Say '      更新签名'
+$keyPath = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+$keyInline = $env:TAURI_SIGNING_PRIVATE_KEY
+if (-not $keyPath -and -not $keyInline) {
+    Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PATH 或 TAURI_SIGNING_PRIVATE_KEY，已中止。'
+    exit 1
+}
+if ($keyPath -and -not (Test-Path -LiteralPath $keyPath)) {
+    Say ('      私钥文件不存在：{0}' -f $keyPath)
+    exit 1
+}
+# Tauri CLI 2.11.x 的构建签名只读 TAURI_SIGNING_PRIVATE_KEY 的内容；
+# TAURI_SIGNING_PRIVATE_KEY_PATH 不参与构建签名。这里把路径转成内容，
+# 仍然不回显私钥，也不把内容写进日志。
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and $keyPath) {
+    try {
+        $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content -Raw -LiteralPath $keyPath).Trim()
+        Say '      已从私钥路径加载签名内容（不输出内容）'
+    } catch {
+        Say ('      读取私钥文件失败：{0}' -f $_.Exception.Message)
+        exit 1
+    }
+}
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+    Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD，已中止。'
+    exit 1
+}
+Say '      私钥与密码已就位（不输出内容）'
+
 if ($Clean) {
     Say '      -Clean：清空构建目录'
     Push-Location (Join-Path $root 'src-tauri'); cargo clean | Out-Null; Pop-Location
     Push-Location (Join-Path $root 'bridge'); cargo clean | Out-Null; Pop-Location
 }
 if ($Jobs -gt 0) { $env:CARGO_BUILD_JOBS = "$Jobs"; Say ('      并行编译数限制为 {0}' -f $Jobs) }
+if ($Config) {
+    if (-not (Test-Path -LiteralPath $Config)) {
+        Say ('      附加配置不存在：{0}' -f $Config)
+        exit 1
+    }
+    Say ('      附加配置：{0}' -f $Config)
+}
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-& npm run tauri build 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
+$npmArgs = @('run', 'tauri', 'build')
+if ($Config) { $npmArgs += @('--', '--config', $Config) }
+& npm @npmArgs 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
 $code = $LASTEXITCODE
 $sw.Stop()
 
@@ -114,11 +197,48 @@ if ($code -eq 0) {
     Say ('[3/3] 构建成功，耗时 {0}' -f $sw.Elapsed.ToString('hh\:mm\:ss'))
     Say '      安装包：'
     $nsis = Join-Path $root 'src-tauri\target\release\bundle\nsis'
+    $versionToken = '_' + [regex]::Escape($tauriVersion) + '_'
     $pkgs = Get-ChildItem $nsis -Filter '*.exe' -ErrorAction SilentlyContinue
-    if ($pkgs) {
-        $pkgs | ForEach-Object { Say ('        {0}  ({1:N2} MB)' -f $_.Name, ($_.Length / 1MB)) }
+    $currentPkgs = @($pkgs | Where-Object { $_.Name -match $versionToken })
+    $stalePkgs = @($pkgs | Where-Object { $_.Name -notmatch $versionToken })
+    if ($currentPkgs.Count -gt 0) {
+        $currentPkgs | ForEach-Object { Say ('        {0}  ({1:N2} MB)' -f $_.Name, ($_.Length / 1MB)) }
     } else {
-        Say '        未找到安装包（构建成功但 bundle 目录为空，请检查）'
+        Say '        未找到当前版本的安装包（构建成功但 bundle 目录里没有对应产物，请检查）'
+        $script:sigMissing = $true
+    }
+    if ($stalePkgs.Count -gt 0) {
+        Say '      旧版本安装包（保留在目录中，不参与本次校验）：'
+        $stalePkgs | ForEach-Object { Say ('        {0}  ({1:N2} MB)' -f $_.Name, ($_.Length / 1MB)) }
+    }
+    Say '      更新签名：'
+    $sigs = Get-ChildItem $nsis -Filter '*.sig' -ErrorAction SilentlyContinue
+    $currentSigs = @($sigs | Where-Object { $_.Name -match $versionToken })
+    $staleSigs = @($sigs | Where-Object { $_.Name -notmatch $versionToken })
+    if ($currentSigs.Count -gt 0) {
+        foreach ($sig in $currentSigs) {
+            $sigVersion = Get-SigVersion $sig.FullName
+            if (-not $sigVersion) {
+                Say ('        {0}  ({1} B)  缺少 version 字段（构建 CLI 可能低于 2.11.5）' -f $sig.Name, $sig.Length)
+                $script:sigInvalid = $true
+            } elseif ($sigVersion -ne $tauriVersion) {
+                Say ('        {0}  ({1} B)  签名版本 {2} 与配置版本 {3} 不一致' -f $sig.Name, $sig.Length, $sigVersion, $tauriVersion)
+                $script:sigInvalid = $true
+            } else {
+                Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigVersion)
+            }
+        }
+    } else {
+        Say '        错误：未找到当前版本的 .sig 更新签名。'
+        $script:sigMissing = $true
+    }
+    if ($staleSigs.Count -gt 0) {
+        Say '      旧版本签名（保留在目录中，不参与本次校验）：'
+        foreach ($sig in $staleSigs) {
+            $sigVersion = Get-SigVersion $sig.FullName
+            $sigLabel = if ($sigVersion) { $sigVersion } else { '未标注' }
+            Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigLabel)
+        }
     }
     $targetGB = SizeGB (Join-Path $root 'src-tauri\target')
     Say ('      target 目录：' + (SizeOf (Join-Path $root 'src-tauri\target')))
@@ -129,6 +249,10 @@ if ($code -eq 0) {
         Say '        cd src-tauri; cargo sweep --maxsize 8GB .'
     }
     Say ''
+    if ($script:sigMissing -or $script:sigInvalid) {
+        Say '签名产物缺失或版本校验失败，本次构建不能作为更新包发布。'
+        exit 1
+    }
     Say '完成。'
 } else {
     Say ('[3/3] 构建失败（退出码 {0}），耗时 {1}' -f $code, $sw.Elapsed.ToString('hh\:mm\:ss'))

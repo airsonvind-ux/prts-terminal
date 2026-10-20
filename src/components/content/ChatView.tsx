@@ -13,7 +13,6 @@ import type { Attachment } from "../../types";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useProcessingStore, getModelInfo, markAborting } from "../../stores/useProcessingStore";
 import { useUIStore } from "../../stores/useUIStore";
-import { useUIState } from "../../hooks/useUIState";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
@@ -23,6 +22,7 @@ import { MessageList } from "./MessageList";
 import { BootSequence } from "./BootSequence";
 import { FindBar } from "./FindBar";
 import { InputArea } from "./InputArea";
+import { ActionDock } from "./ActionDock";
 import { AttachmentStrip } from "./AttachmentStrip";
 import { DragOverlay } from "./DragOverlay";
 import { ContextIndicator } from "./ContextIndicator";
@@ -68,7 +68,6 @@ export function ChatView({ onDragHandle }: Props) {
 
   // ── 发送与状态 ──
   const sendMessage = useProcessingStore((s) => s.sendMessage);
-  const uiState = useUIState();
   // 启动会话恢复中（Phase 4）：期间抑制欢迎界面判定 + 禁发（防竞态）
   const restoring = useUIStore((s) => s.restoring);
   // 覆盖层面板（设置 / 历史）：开着时欢迎页导览不弹——锚点会被盖住
@@ -93,9 +92,10 @@ export function ChatView({ onDragHandle }: Props) {
   });
   const generating = processingSessionId !== null;
 
-  // 硬禁（非生成态）：错误 / 会话恢复中 / 启动演出未撤 / 压缩中——不发送也不插话不中止
+  // 硬禁（非生成态）：会话恢复中 / 启动演出未撤 / 压缩中——不发送也不插话不中止。
+  // 错误不再硬禁：错误是上一轮失败，用户配置好 API Key 后必须能直接重试。
   const hardDisabled =
-    restoring || bootVisible || compacting || uiState === "error";
+    restoring || bootVisible || compacting;
 
   // ── 插话：pending 待注入气泡（对话级，2026-09-25 修订）──
   // 不再要求「进行中轮」：中止/错误后未交付条目跨轮存活（后端保留、
@@ -349,6 +349,7 @@ export function ChatView({ onDragHandle }: Props) {
         )}
       </div>
       {!showWelcome && <FindBar />}
+      {!bootVisible && <ActionDock />}
       <div className={styles.bottomArea}>
         {attachments.length > 0 && (
           <AttachmentStrip files={attachments} onRemove={removeAttachment} />

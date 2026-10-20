@@ -10,13 +10,23 @@ import styles from "./settings-ui.module.css";
 
 interface SectionProps {
   title?: ReactNode;
+  /** 无可见标题时的节语义（例如关于页的身份区） */
+  ariaLabel?: string;
   children: ReactNode;
   className?: string;
 }
 
-export function SettingsSection({ title, children, className }: SectionProps) {
+export function SettingsSection({
+  title,
+  ariaLabel,
+  children,
+  className,
+}: SectionProps) {
   return (
-    <section className={[styles.section, className].filter(Boolean).join(" ")}>
+    <section
+      aria-label={ariaLabel}
+      className={[styles.section, className].filter(Boolean).join(" ")}
+    >
       {title && <h2 className={styles.sectionTitle}>{title}</h2>}
       <div className={styles.sectionBody}>{children}</div>
     </section>

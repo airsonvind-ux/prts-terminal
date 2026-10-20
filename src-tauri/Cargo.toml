@@ -36,8 +36,15 @@ windows-capture = "2.0.0"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# 应用内更新：清单解析、签名校验与 NSIS 安装由插件承担；
+# 源切换、重试与安装前保护由 Rust 层负责（4.4）。
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 更新源版本比较（多源时选出最高版本）
+semver = "1"
+# 更新源端点解析（tauri-plugin-updater 的 endpoints 入参）
+url = "2"
 # 命令输出的 GBK 兜底解码（Windows 中文控制台，见 exec/runner.rs）
 encoding_rs = "0.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
@@ -76,6 +83,8 @@ windows = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    # 更新前磁盘空间预检：GetDiskFreeSpaceExW
+    "Win32_Storage_FileSystem",
 ] }
 # M5 网络层：web_fetch 的 HTML 正文提取（readabilityrs = Mozilla Readability 的 Rust 移植，
 # Firefox Reader View 同源算法；输入纯 HTML 字符串，输出 text/markdown 双形态，不自带 fetch）。

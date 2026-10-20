@@ -439,18 +439,57 @@ export function buildSummaryUserMessage(compaction: CompactionMeta): ChatMessage
 }
 
 /**
+ * 是否为“只有 user + error、没有完成 assistant”的错误轮。
+ *
+ * failProcessing 归档的错误轮固定为 [user/message, error]；不会含
+ * assistant/message。用它区分“启动/鉴权失败”与真正完成过的轮次。
+ */
+export function isErrorOnlyTurn(turn: SessionEvent[]): boolean {
+  let hasError = false;
+  let hasAssistantMessage = false;
+  for (const event of turn) {
+    if (event.type === "error") hasError = true;
+    if (event.type === "assistant/message") hasAssistantMessage = true;
+  }
+  return hasError && !hasAssistantMessage;
+}
+
+/**
+ * 去掉对话首部连续的错误轮。
+ *
+ * 语义：首轮 401 / 网络失败不应成为模型的“第一段对话历史”；第一次正常轮
+ * 才是事实上的首轮。后续轮次中出现的错误轮不受影响（那是真实对话中的失败）。
+ */
+export function stripLeadingErrorTurns(
+  turns: SessionEvent[][]
+): SessionEvent[][] {
+  let firstKept = 0;
+  while (firstKept < turns.length && isErrorOnlyTurn(turns[firstKept])) {
+    firstKept += 1;
+  }
+  return firstKept === 0 ? turns : turns.slice(firstKept);
+}
+
+/**
  * 派生「发给 LLM 的历史」：压缩后 = 摘要消息（首条）+ 保留段派生；未压缩 =
  * 全量派生（与既有 deriveMessages 输出一致）。sendMessage 的唯一历史来源。
+ *
+ * 首部错误轮先剥离：错误轮本身不进 LLM 上下文（error 事件已过滤），但其
+ * user 消息会残留成悬空历史；首轮 401 后重新配置再对话时，模型不应看到那段
+ * 失败的 user 消息。
  */
 export function deriveActiveHistory(
   turns: SessionEvent[][],
   compaction?: CompactionMeta
 ): ChatMessage[] {
   if (!compaction || compaction.retainedFrom <= 0) {
-    return deriveMessages(turns);
+    return deriveMessages(stripLeadingErrorTurns(turns));
   }
   const kept = turns.slice(compaction.retainedFrom);
-  return [buildSummaryUserMessage(compaction), ...deriveMessages(kept)];
+  return [
+    buildSummaryUserMessage(compaction),
+    ...deriveMessages(stripLeadingErrorTurns(kept)),
+  ];
 }
 
 // ═══════════════════════════════════════════════════════

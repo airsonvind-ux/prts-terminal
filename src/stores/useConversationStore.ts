@@ -31,6 +31,7 @@ import type {
   UsageStat,
 } from "../types";
 import { generateId } from "../utils";
+import { useUIStore } from "./useUIStore";
 
 interface ConversationStore {
   conversations: Conversation[];
@@ -69,6 +70,11 @@ interface ConversationStore {
   deleteConversation: (id: string) => void;
   /** 重命名对话 */
   renameConversation: (id: string, title: string) => void;
+  /**
+   * 用首条正常消息的截断名替换“首轮失败留下的默认标题”（CAS 守卫）。
+   * 仅用于自动标题路径：用户已改名时 expectedTitle 不匹配 → 不覆盖。
+   */
+  replaceDefaultTitle: (id: string, title: string, expectedTitle: string) => void;
   /**
    * 仅更新内存标题（自动标题应用路径）。
    *
@@ -213,6 +219,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   switchConversation: (id) => {
+    // 错误属于上一段对话的失败轮，切走后不再锁当前界面。
+    useUIStore.getState().clearError();
     // 经历管线触发（Phase 4 任务二）：切走旧对话前 fire-and-forget 提炼其增量。
     const prev = get().activeId;
     if (prev && prev !== id) {
@@ -222,6 +230,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   },
 
   newChat: () => {
+    useUIStore.getState().clearError();
     const { conversations } = get();
     set({
       activeId: null,
@@ -237,6 +246,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
     let newPendingTitle = get().pendingTitle;
 
     if (activeId === id) {
+      useUIStore.getState().clearError();
       if (remaining.length > 0) {
         // 删除当前对话 → 自动切到最近一条剩余对话
         newActiveId = remaining[remaining.length - 1].id;
@@ -265,13 +275,31 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   renameConversation: (id, title) => {
     set((state) => ({
       conversations: state.conversations.map((c) =>
-        c.id === id ? { ...c, title } : c
+        c.id === id ? { ...c, title, titleGenerated: true } : c
       ),
     }));
     // 标题持久化（fire-and-forget：失败静默，重启丢重命名——低频低危）
     invoke("update_conversation_meta", { conversationId: id, title }).catch(
       () => {}
     );
+  },
+
+  replaceDefaultTitle: (id, title, expectedTitle) => {
+    let applied = false;
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (c.id !== id || c.title !== expectedTitle) return c;
+        applied = true;
+        return { ...c, title };
+      }),
+    }));
+    if (!applied) return;
+    // CAS 写盘：用户改名 / 已生成标题时不覆盖。
+    invoke("update_conversation_meta", {
+      conversationId: id,
+      title,
+      expectedTitle,
+    }).catch(() => {});
   },
 
   setConversationTitle: (id, title) => {

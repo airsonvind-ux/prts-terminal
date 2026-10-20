@@ -40,13 +40,21 @@ afterEach(() => {
 
 // ── 渲染辅助：mount → unmount（仿 Markdown.test.ts 模式） ──
 
-function renderBadge(events: SessionEvent[], interactive: boolean) {
+function renderBadge(
+  events: SessionEvent[],
+  interactive: boolean,
+  showApprovalControls = true
+) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   act(() => {
     root.render(
-      React.createElement(EventBadge, { events, interactive })
+      React.createElement(EventBadge, {
+        events,
+        interactive,
+        showApprovalControls,
+      })
     );
   });
   const entry = { container, root, unmounted: false };
@@ -54,6 +62,7 @@ function renderBadge(events: SessionEvent[], interactive: boolean) {
   return {
     html: () => container.innerHTML,
     text: () => container.textContent ?? "",
+    container,
     unmount: () => {
       if (!entry.unmounted) {
         act(() => root.unmount());
@@ -196,6 +205,20 @@ describe("EventBadge · 审批 pending（M3-A）", () => {
       html().indexOf("Remove-Item C:\\tmp\\x.txt")
     );
     expect(html()).toContain("PRTS需要你确认执行命令");
+    unmount();
+  });
+
+  it("Action Dock 模式（showApprovalControls=false）→ 不渲染按钮，保留只读提示", () => {
+    const events: SessionEvent[] = [
+      toolCall("run_command", C1),
+      approvalRequest(C1, "Get-Process", "high"),
+    ];
+    const { text, container, unmount } = renderBadge(events, true, false);
+    expect(text()).toContain("PRTS 正在等待你确认执行命令");
+    expect(text()).toContain("请在输入框上方处理");
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons.some((b) => b.textContent?.includes("确认执行"))).toBe(false);
+    expect(buttons.some((b) => b.textContent?.includes("拒绝"))).toBe(false);
     unmount();
   });
 

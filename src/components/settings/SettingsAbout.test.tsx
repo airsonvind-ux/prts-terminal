@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// SettingsAbout · 关于页（使用说明入口 + 许可证折叠块）
+// SettingsAbout · 关于页（应用身份 + 更新控制台 + 资源入口）
 //
 // 覆盖：
-//   - 默认折叠：不请求 read_license
+//   - 应用节：图标 / 名称 / 版本
+//   - 许可证默认折叠：不请求 read_license
 //   - 展开：请求一次并显示全文；再折叠再展开命中缓存，不重复请求
 //   - 读取失败：就地显示错误，不弹窗
 
@@ -43,8 +44,8 @@ async function flush(): Promise<void> {
 }
 
 function licenseToggle(): HTMLButtonElement {
-  const btn = Array.from(container.querySelectorAll("button")).find((b) =>
-    b.textContent?.includes("许可证")
+  const btn = container.querySelector(
+    'button[aria-label="查看许可证"], button[aria-label="收起许可证"]'
   );
   if (!btn) throw new Error("未找到许可证折叠行");
   return btn as HTMLButtonElement;
@@ -73,6 +74,19 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+});
+
+describe("SettingsAbout · 应用身份", () => {
+  it("图标、名称、版本居中显示", async () => {
+    renderAbout();
+    await flush();
+
+    const icon = container.querySelector("img");
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
+    expect(container.textContent).toContain("PRTS 终端助手");
+    expect(container.textContent).toContain("版本 0.1.0");
+  });
 });
 
 describe("SettingsAbout · 许可证块", () => {

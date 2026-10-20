@@ -18,7 +18,7 @@
 import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { useProcessingStore, stashTitleUsage } from "../stores/useProcessingStore";
+import { useProcessingStore, stashTitleUsage, titleExpectedFor } from "../stores/useProcessingStore";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useSteerStore } from "../stores/useSteerStore";
 import { defaultTitleForContent } from "../projection";
@@ -102,7 +102,9 @@ export function useAgentEvents(): void {
               ? (archivedUser as UserMessageEvent).content
               : undefined);
           if (firstUserContent === undefined) break;
-          const expected = defaultTitleForContent(firstUserContent);
+          const expected =
+            titleExpectedFor(e.conversationId) ??
+            defaultTitleForContent(firstUserContent);
           if (conv.title !== expected) break; // 复检：标题已被改 → 丢弃
           convStore.setConversationTitle(e.conversationId, e.title);
           const titleDelta: UsageDelta | null = e.usage

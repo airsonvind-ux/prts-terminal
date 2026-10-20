@@ -30,7 +30,6 @@ import { useUIStore } from "../../stores/useUIStore";
 import { useGuideStore } from "../../stores/useGuideStore";
 import { SETTINGS_TAB_GUIDE } from "../guide/guideContent";
 import {
-  hasPendingApproval,
   isProcessingBusy,
   useProcessingStore,
 } from "../../stores/useProcessingStore";
@@ -172,19 +171,9 @@ export function SettingsPanel() {
     if (key) useGuideStore.getState().enqueueNotice(key);
   }, [activeTab, guideHydrated, panelReady]);
 
-  // ── 待审批：不留面板 ──
-  // 审批确认卡在消息流里，被遮罩盖住就点不到——这正是原先“处理中一律不能进设置”
-  // 要防的那件事（会一直到 300s 超时）。现在只针对这一种情况收窄：有待审批时
-  // 面板自动收起并把原因说出来，其余处理中情况一律可进、按项锁。
-  const pendingApproval = useProcessingStore(hasPendingApproval);
-  useEffect(() => {
-    if (!pendingApproval) return;
-    showToast("有新命令待确认", {
-      kind: "info",
-      dedupeKey: "approval-blocking",
-    });
-    useUIStore.getState().setOverlay(null);
-  }, [pendingApproval]);
+  // ── 待审批：覆盖层不自动关闭 ──
+  // Action Dock 在输入框上方；设置/历史覆盖时由 OverlayContainer 的全局
+  // 待确认胶囊提示，点击返回对话即可处理。不再用“关掉设置”代替提示。
 
   // active 供应商视角配置（模型页受控）：providers[active] 拼 LlmConfig
   // （provider = active 名 + 段顶层 thinking_level），缺条目 = 空视角

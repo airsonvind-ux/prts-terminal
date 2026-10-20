@@ -377,6 +377,67 @@ export interface MaaResolved {
   root: string;
 }
 
+/** 应用内更新状态（updater_status / update-status 事件） */
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "upToDate"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "installing"
+  | "error"
+  | "dev";
+
+/** 更新失败发生阶段；启动检查失败不应显示成“安装没有完成” */
+export type UpdateErrorStage = "check" | "download" | "install";
+
+export interface UpdateSourceInfo {
+  id: string;
+  label: string;
+  endpoint: string;
+}
+
+export interface AvailableUpdate {
+  version: string;
+  currentVersion: string;
+  notes: string | null;
+  pubDate: string | null;
+  source: string;
+  downloadUrl: string;
+}
+
+export interface UpdateStatus {
+  phase: UpdatePhase;
+  currentVersion: string;
+  devMode: boolean;
+  sources: UpdateSourceInfo[];
+  available: AvailableUpdate | null;
+  source: string | null;
+  downloadedBytes: number | null;
+  totalBytes: number | null;
+  lastCheckedAt: string | null;
+  warnings: string[];
+  manualDownloadUrl: string | null;
+  error: string | null;
+  /** 旧版后端可能不带此字段 */
+  errorStage?: UpdateErrorStage | null;
+}
+
+/** 安装后重启展示一次的更新日志 */
+export interface PostInstallNotice {
+  version: string;
+  previousVersion: string;
+  notes: string | null;
+  pubDate: string | null;
+}
+
+/** 安装前实时阻塞原因 */
+export interface UpdaterInstallBlockers {
+  activeTurn: boolean;
+  maaRunning: boolean;
+}
+
 /** llm 段（v2 供应商分区；snake 对齐后端 LlmSection） */
 export interface LlmSection {
   /** 当前生效供应商（providers 的键） */

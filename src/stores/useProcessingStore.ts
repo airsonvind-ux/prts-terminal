@@ -25,6 +25,7 @@ import type {
   UsageDelta,
   UsageStat,
   Attachment,
+  Conversation,
 } from "../types";
 import {
   scanTextChunk,
@@ -499,6 +500,39 @@ function clearTitleGenState(conversationId: string): void {
   titleGenState.delete(conversationId);
 }
 
+/**
+ * 生成请求的默认标题哨兵：事件回来时用它做“用户是否已改名”的复检。
+ * 与 titleGenState 分开保存——标题事件可能晚于轮末清理到达。
+ */
+const titleExpected = new Map<string, string>();
+
+/** 读取某对话最近一次标题生成使用的哨兵（事件通道复检用）。 */
+export function titleExpectedFor(conversationId: string): string | undefined {
+  return titleExpected.get(conversationId);
+}
+
+/** 该对话是否已有成功轮（以 assistant/message 为完成标志）。 */
+function hasSuccessfulTurn(conv: Conversation): boolean {
+  return conv.turns.some((turn) =>
+    turn.some((event) => event.type === "assistant/message")
+  );
+}
+
+/**
+ * 是否应在本次发送时重新启动自动标题。
+ *
+ * 条件（三者同时满足）：
+ * - 尚未生成过真标题（用户改名也视为真标题）；
+ * - 还没有成功轮（前几轮可能全是 401/网络错误）；
+ *
+ * 不再要求“标题等于首条 user 的默认哨兵”：首个正常轮可能已经把占位标题
+ * 替换成自己的截断名（见 replaceDefaultTitle），仍然要继续挂标题现场。
+ */
+function conversationNeedsTitle(conv: Conversation | undefined): boolean {
+  if (!conv || conv.titleGenerated === true) return false;
+  return !hasSuccessfulTurn(conv);
+}
+
 /** 按 conversationId 找当前处理快照（标题素材取首条 user 事件）。 */
 function findProcessingSnapshot(conversationId: string): ProcessingState | undefined {
   return Object.values(useProcessingStore.getState().processing).find(
@@ -554,6 +588,7 @@ function triggerTitleGeneration(
   const material = collectTitleMaterial(conversationId);
   if (!material || !material.assistantText.trim()) return;
   st.attempts += 1;
+  titleExpected.set(conversationId, material.expectedTitle);
   invoke("generate_conversation_title", {
     conversationId,
     userText: material.userText,
@@ -608,6 +643,8 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
   processing: {},
 
   sendMessage: async (input: string, attachments: Attachment[] = []) => {
+    // 上一轮错误不锁死发送：用户重新提交即为重试。
+    useUIStore.getState().clearError();
     const convStore = useConversationStore.getState();
     const { processing } = get();
     const activeId = convStore.activeId;
@@ -725,6 +762,24 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       registerTitleGen(conversationId, dTitle);
     } else {
       conversationId = st.activeId!;
+      // 首轮报错后对话已存在，但还没有成功轮：下次正常发送仍要重新挂标题现场。
+      // 哨兵用当前标题（首条错误消息的截断名），生成成功后由事件替换。
+      if (
+        conversationNeedsTitle(conv) &&
+        !titleGenState.has(conversationId)
+      ) {
+        // 首轮错误标题不再作为长期默认：首个正常消息先替换截断名，
+        // 再按正常标题流程生成。CAS 守卫防止覆盖用户已改的标题。
+        const nextDefault = defaultTitleFromInput(input);
+        if (nextDefault && nextDefault !== conv!.title) {
+          useConversationStore
+            .getState()
+            .replaceDefaultTitle(conversationId, nextDefault, conv!.title);
+          registerTitleGen(conversationId, nextDefault);
+        } else {
+          registerTitleGen(conversationId, conv!.title);
+        }
+      }
     }
 
     // 游标推进：游标＝payload.seq（快照与增量同口径；含本次未拼入的事件，防下轮补放）。
@@ -901,11 +956,8 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
         : snap.currentEvents;
 
     const convStore = useConversationStore.getState();
-    // 首轮判定（归档前）：该对话尚无已归档轮 → 本次为首个 turn。
-    const convBefore = convStore.conversations.find(
-      (c) => c.id === snap.conversationId
-    );
-    const isFirstTurn = convBefore ? convBefore.turns.length === 0 : false;
+    // 本次轮是否挂着自动标题现场（失败轮/中止轮会清掉；下一轮正常发送再挂上）。
+    const hadTitleGen = titleGenState.has(snap.conversationId);
     // 上下文 Token 用量（覆盖式）：最后一个 assistant/message 的 usage 快照。
     // 职责分工（§7.8）：内存由 updateContextTokens 管、持久由 append_turn 的
     // metaSnapshot（usage 参数）管——先扫出本轮 usage，随轮提交保证落盘。
@@ -943,9 +995,9 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       convStore.updateContextTokens(snap.conversationId, usage);
     }
 
-    // 会话自动标题：首轮轮末兜底（仅正常完成——阈值已触发但未成功时也兜底）
-    // + 现场清理（标题可能在轮末之后到达，由事件处理按 turns 重算哨兵）。
-    if (isFirstTurn) {
+    // 会话自动标题：本次轮挂有标题现场（含报错后第一次正常轮）→ 轮末兜底；
+    // 标题事件可能晚于轮末到达，故现场清理不影响事件通道（titleExpected 保留）。
+    if (hadTitleGen) {
       if (reason === undefined || reason === "completed") {
         maybeTriggerTitleFallback(snap.conversationId);
       }

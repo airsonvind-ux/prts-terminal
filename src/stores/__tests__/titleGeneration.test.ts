@@ -206,6 +206,30 @@ describe("轮末兜底", () => {
     useProcessingStore.getState().failProcessing(sessionId, "后端错误");
     expect(titleGenCalls()).toHaveLength(0);
   });
+
+  it("首轮报错后，首次正常轮仍能接管标题生成", async () => {
+    const { sessionId } = await startNewConversation("第一问");
+    useProcessingStore.getState().failProcessing(sessionId, "HTTP 401");
+    expect(useUIStore.getState().errorMsg).toBe("HTTP 401");
+
+    // 配置好 API Key 后再发：对话已存在，但还没有成功轮。
+    await useProcessingStore.getState().sendMessage("第二问");
+    expect(useUIStore.getState().errorMsg).toBeNull();
+    const nextSessionId = Object.keys(useProcessingStore.getState().processing)[0];
+    useProcessingStore
+      .getState()
+      .appendCurrentEvent(textChunk(nextSessionId, "简短回答"));
+    useProcessingStore.getState().finishProcessing(nextSessionId, "completed");
+
+    const calls = titleGenCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].userText).toBe("第二问");
+    expect(calls[0].assistantText).toBe("简短回答");
+    expect(calls[0].expectedTitle).toBe("第二问");
+    expect(
+      useConversationStore.getState().conversations[0].title
+    ).toBe("第二问");
+  });
 });
 
 // ═══════════════════════════════════════════════════════

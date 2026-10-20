@@ -16,6 +16,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { useConversationStore } from "../useConversationStore";
+import { useUIStore } from "../useUIStore";
 
 /** 重置 store 并清理跨测试累积的 invoke 调用记录 */
 function resetStore(): void {
@@ -74,6 +75,28 @@ describe("deleteConversation 删除后端持久文件", () => {
     await Promise.resolve();
     expect(useConversationStore.getState().conversations).toHaveLength(0);
     expect(useConversationStore.getState().activeId).toBeNull();
+  });
+});
+
+describe("错误状态清理", () => {
+  it("切换对话 / 新建对话会清掉上一段的错误态", () => {
+    const store = useConversationStore.getState();
+    const a = store.createConversation("对话A");
+    const b = store.createConversation("对话B");
+    useUIStore.setState({ errorMsg: "HTTP 401" });
+
+    store.switchConversation(a);
+    expect(useUIStore.getState().errorMsg).toBeNull();
+
+    useUIStore.setState({ errorMsg: "HTTP 401" });
+    store.newChat();
+    expect(useUIStore.getState().errorMsg).toBeNull();
+
+    // 删除活跃对话同样解除错误态
+    store.switchConversation(b);
+    useUIStore.setState({ errorMsg: "HTTP 401" });
+    store.deleteConversation(b);
+    expect(useUIStore.getState().errorMsg).toBeNull();
   });
 });
 

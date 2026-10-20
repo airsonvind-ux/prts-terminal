@@ -58,6 +58,7 @@ function render(turns: SessionEvent[][], currentEvents: SessionEvent[] = []) {
   });
   return {
     text: () => container.textContent ?? "",
+    container,
     messageAreas: () =>
       Array.from(container.querySelectorAll<HTMLElement>("[data-message-area]")),
   };
@@ -121,5 +122,49 @@ describe("MessageList · aborted 轮展示", () => {
     const abortedText = render([abortedTurn("s3")]).text();
     expect(abortedText).toContain("半截回答");
     expect(abortedText).toContain("该轮已中止");
+  });
+
+  it("首部错误轮在后续正常轮后折叠为启动失败记录", () => {
+    const errorTurn: SessionEvent[] = [
+      { type: "user/message", sessionId: "e1", content: "第一问" },
+      {
+        type: "error",
+        sessionId: "e1",
+        message: "HTTP 401",
+        recoverable: false,
+      },
+    ];
+    const normalTurn: SessionEvent[] = [
+      { type: "user/message", sessionId: "s2", content: "第二问" },
+      {
+        type: "assistant/message",
+        sessionId: "s2",
+        content: "正常回答",
+        reasoningContent: null,
+        usage: null,
+      },
+    ];
+    const view = render([errorTurn, normalTurn]);
+    expect(view.text()).toContain("启动阶段失败 1 次 · 已恢复");
+    expect(view.text()).not.toContain("第一问");
+    expect(view.text()).not.toContain("HTTP 401");
+    expect(view.text()).toContain("第二问");
+    expect(view.container.querySelector("[data-preflight-card]")).not.toBeNull();
+  });
+
+  it("只有错误轮、尚无正常轮时不折叠", () => {
+    const errorTurn: SessionEvent[] = [
+      { type: "user/message", sessionId: "e1", content: "第一问" },
+      {
+        type: "error",
+        sessionId: "e1",
+        message: "HTTP 401",
+        recoverable: false,
+      },
+    ];
+    const view = render([errorTurn]);
+    expect(view.text()).toContain("第一问");
+    expect(view.text()).toContain("HTTP 401");
+    expect(view.container.querySelector("[data-preflight-card]")).toBeNull();
   });
 });

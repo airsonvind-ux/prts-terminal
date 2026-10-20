@@ -37,9 +37,24 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGRDhFRUJDRUIzNkYxNzUKUldSMThUYnJ2TzdZZjN0WlpxM0dXT3h6RVJvNXBOSjZYRXNOU01JOVJPa2doamRJcis2ZUlsYlQK",
+      "endpoints": [
+        "https://gitee.com/airsonvind0/prts-terminal-release/raw/master/latest.json",
+        "https://github.com/AirsonVInd0/prts-terminal-release/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "manualDownloadUrl": "https://gitee.com/airsonvind0/prts-terminal-release/releases",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "nsis",
+    "createUpdaterArtifacts": true,
     "publisher": "AirsonVind",
     "resources": {
       "resources/arknights.db": "./",

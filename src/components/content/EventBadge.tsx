@@ -16,8 +16,9 @@
 //
 // 审批第四态（M3-A §5.3）：run_command 询问路径在 tool/call 与 tool/result
 // 之间插入 tool/approval-request / tool/approval-result 两事件：
-//   pending（request 无配对 result，且 interactive 轮次）→ 确认卡：
-//     类别短语行（ruleId→短语）+ 完整命令（等宽）+ 确认/拒绝按钮（invoke resolve_tool_approval）
+//   pending（request 无配对 result，且 interactive 轮次）→ 消息流只读提示；
+//     产品界面的确认/拒绝按钮由输入框上方的 Action Dock 承担
+//     （showApprovalControls=false）。独立用法/旧测试可开 true 渲染内置按钮。
 //   approved → 回归"执行中"（等 tool/result）
 //   rejected → 预置失败态（"已拒绝该命令执行"）；tool/result(ok=false) 到达后
 //              以正常失败态展示后端文案（summary 覆盖）
@@ -25,7 +26,7 @@
 //   await 保证），归档数据中 request 必有配对 result → pending 永不出现于归档
 //
 // 所有具体内容（推理文本、工具三态文案）默认折叠，用户点 ▸ 才展开。
-// 审批 pending 存在时工具阶段强制展开（按钮不可被折叠吞掉）。
+// 审批 pending 存在时工具阶段强制展开（等待提示不可被折叠吞掉）。
 
 import { useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -150,7 +151,7 @@ const RULE_ID_PHRASES: Record<string, string> = {
 };
 
 /** ruleId → 类别短语；null/未收录 → undefined（不渲染类别行） */
-function categoryPhrase(ruleId: string | null): string | undefined {
+export function categoryPhrase(ruleId: string | null): string | undefined {
   return ruleId ? RULE_ID_PHRASES[ruleId] : undefined;
 }
 
@@ -194,9 +195,14 @@ interface Props {
   interactive?: boolean;
   /** 外层附加类（消息列表传入的行级样式：屏幕外跳过布局等） */
   className?: string;
+  /**
+   * 是否在事件卡内渲染审批按钮（默认 true，兼容既有测试/独立用法）。
+   * 产品界面传 false：交互按钮只在 Action Dock，消息流保留只读记录。
+   */
+  showApprovalControls?: boolean;
 }
 
-export function EventBadge({ events, interactive = false, className }: Props) {
+export function EventBadge({ events, interactive = false, className, showApprovalControls = true }: Props) {
   // ── 推理内容提取：assistant/chunk(Reasoning) 累积 ──
   const reasoningText = useMemo(() => {
     let text = "";
@@ -459,6 +465,19 @@ export function EventBadge({ events, interactive = false, className }: Props) {
                 }
                 // ── 审批态（进行中且 tool/result 未达） ──
                 if (approval === "pending" && interactive) {
+                  if (!showApprovalControls) {
+                    return (
+                      <div
+                        key={slot.callId || i}
+                        className={`${styles.toolItem} ${styles.toolApproval}`}
+                      >
+                        <span>PRTS 正在等待你确认{slot.phrase}</span>
+                        <div className={styles.approvalCategory}>
+                          请在输入框上方处理
+                        </div>
+                      </div>
+                    );
+                  }
                   const category = categoryPhrase(
                     slot.approval?.ruleId ?? null
                   );

@@ -8,6 +8,7 @@
 // 外壳动画（翅膀、尾巴）不受影响——覆盖层不遮挡立方体的左面、底面和外延元素。
 
 import { useUIStore } from "../../stores/useUIStore";
+import { hasPendingApproval, useProcessingStore } from "../../stores/useProcessingStore";
 import { HistoryPanel } from "./HistoryPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import styles from "./OverlayContainer.module.css";
@@ -15,6 +16,7 @@ import styles from "./OverlayContainer.module.css";
 export function OverlayContainer() {
   const overlay = useUIStore((s) => s.overlay);
   const setOverlay = useUIStore((s) => s.setOverlay);
+  const pendingApproval = useProcessingStore(hasPendingApproval);
 
   // 无覆盖层时完全不渲染，DOM 树中无额外节点
   if (overlay === null) return null;
@@ -79,6 +81,15 @@ export function OverlayContainer() {
         >
           {panel.node}
         </div>
+      )}
+      {pendingApproval && (
+        <button
+          className={styles.pendingNotice}
+          onClick={() => setOverlay(null)}
+          type="button"
+        >
+          命令待确认 · 返回对话
+        </button>
       )}
     </div>
   );

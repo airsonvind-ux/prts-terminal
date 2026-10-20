@@ -10,10 +10,13 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveMessages,
+  deriveActiveHistory,
   deriveAssistantFromEvents,
   deriveTextSegments,
   splitTurnByUserBoundary,
   isMetaEvent,
+  isErrorOnlyTurn,
+  stripLeadingErrorTurns,
   firstUserContent,
   stripReminderBlock,
   buildReminderBlock,
@@ -581,5 +584,37 @@ describe("splitTurnByUserBoundary（插话轮内多段切分）", () => {
     expect(segs).toEqual([
       { kind: "assistant", events: [textChunk("s1", "孤儿内容")] },
     ]);
+  });
+});
+
+describe("deriveActiveHistory · 首部错误轮", () => {
+  it("首部连续错误轮被排除，首次正常轮成为 LLM 历史首条", () => {
+    const errorTurn: SessionEvent[] = [
+      user("s1", "第一问"),
+      { type: "error", sessionId: "s1", message: "HTTP 401", recoverable: false },
+    ];
+    const normalTurn: SessionEvent[] = [
+      user("s2", "第二问"),
+      textChunk("s2", "正常回答"),
+      { type: "assistant/message", sessionId: "s2", content: "正常回答", reasoningContent: null, usage: null },
+    ];
+    expect(isErrorOnlyTurn(errorTurn)).toBe(true);
+    expect(isErrorOnlyTurn(normalTurn)).toBe(false);
+    const history = deriveActiveHistory([errorTurn, normalTurn]);
+    expect(history.some((m) => m.content.includes("第一问"))).toBe(false);
+    expect(history.some((m) => m.content === "第二问")).toBe(true);
+  });
+
+  it("后续错误轮不误删（只剥离开头连续段）", () => {
+    const normal: SessionEvent[] = [
+      user("s1", "正常问"),
+      textChunk("s1", "正常答"),
+      { type: "assistant/message", sessionId: "s1", content: "正常答", reasoningContent: null, usage: null },
+    ];
+    const laterError: SessionEvent[] = [
+      user("s2", "后来问"),
+      { type: "error", sessionId: "s2", message: "超时", recoverable: false },
+    ];
+    expect(stripLeadingErrorTurns([normal, laterError])).toHaveLength(2);
   });
 });

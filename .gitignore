@@ -41,6 +41,11 @@ __pycache__/
 # Phase 5 本地工作文件（不入库，2026-10-04）
 /_*.md
 
+# 发布测试暂存（安装包、签名、测试清单，不入库）
+/.tmp/
+# 本地更新源测试配置（仅本地测试构建使用）
+/src-tauri/tauri.updater-test.conf.json
+
 # 构建日志（build.ps1 产物，2026-10-11）
 build-log-*.txt
 

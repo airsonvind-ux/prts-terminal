@@ -37,6 +37,7 @@ mod tools;
 mod llm;
 mod commands;
 mod turn_registry;
+mod updater;
 mod workspace;
 
 use std::sync::{Arc, Mutex};
@@ -530,6 +531,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 应用内更新：插件只提供清单检查、签名校验与安装能力；
+        // 更新源切换与安装前保护在 updater 模块中实现（4.4）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // 键盘治理（发布质量）：拦截浏览器默认行为（刷新/打印/源码/下载/
         // 查找/焦点移动等；右键菜单为保险层——前端自绘体系照常工作）。
         // debug() 语义随构建自动分档：dev 保留「刷新 + 开发者工具 + 右键」，
@@ -560,6 +564,16 @@ pub fn run() {
         // 置顶初值：tauri.conf.json 静态 alwaysOnTop=true 为窗口创建兜底；
         // settings.window.always_on_top=false 时启动即关闭（文件值优先）。
         .setup(|app| {
+            // 更新服务：源顺序来自 tauri.conf.json 的 plugins.updater.endpoints。
+            // dev 模式下 Service 内部会拒绝检查/安装；后台任务也会自行跳过。
+            let update_service = Arc::new(updater::UpdateService::new(
+                app.package_info().version.to_string(),
+                updater::sources_from_config(app.handle()),
+                updater::manual_download_url_from_config(app.handle()),
+            ));
+            app.manage(Arc::clone(&update_service));
+            updater::start_background_checks(app.handle().clone());
+
             let store = app.state::<Arc<Mutex<SettingsStore>>>();
             let atop = store.lock().unwrap().settings.window.always_on_top;
             if !atop {
@@ -601,6 +615,12 @@ pub fn run() {
             commands::reveal_api_key,
             commands::get_app_meta,
             commands::get_boot_status,
+            updater::updater_status,
+            updater::updater_check,
+            updater::updater_download,
+            updater::updater_install,
+            updater::updater_install_blockers,
+            updater::updater_take_post_install_notice,
             commands::maa_status,
             commands::maa_test_connection,
             commands::pick_emulator_directory,

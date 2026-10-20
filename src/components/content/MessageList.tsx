@@ -13,7 +13,7 @@
 import { memo, useMemo, useRef, useEffect, useCallback, useState } from "react";
 import type { Attachment, SessionEvent } from "../../types";
 import type { CompactionMeta } from "../../types";
-import { deriveTextSegments, isMetaEvent, splitTurnByUserBoundary, stripReminderBlock } from "../../projection";
+import { deriveTextSegments, isMetaEvent, isErrorOnlyTurn, splitTurnByUserBoundary, stripReminderBlock } from "../../projection";
 import { AttachmentStrip } from "./AttachmentStrip";
 import type { TextSegment } from "../../projection";
 import { EventBadge } from "./EventBadge";
@@ -34,6 +34,8 @@ type DisplayItem =
     }
   | { type: "events"; events: SessionEvent[]; interactive: boolean }
   | { type: "welcome" }
+  // 首部连续错误轮的折叠记录（数据保留；首次正常轮后只显露一条摘要）
+  | { type: "preflight"; count: number; errors: string[] }
   // 插话 pending（待注入气泡；点击取消）
   | { type: "pending"; id: string; text: string }
   // 模块 D：压缩点本地提示卡（非 LLM 消息——derive/展示派生忽略，仅列表呈现）
@@ -75,6 +77,39 @@ function CompactionNotice({
         <pre className={styles.compactionSummary} data-compaction-summary>
           {summary}
         </pre>
+      )}
+    </div>
+  );
+}
+
+/** 首部连续错误轮的折叠记录（不删除数据，只是不再占据对话首屏）。 */
+function PreflightNotice({
+  count,
+  errors,
+}: {
+  count: number;
+  errors: string[];
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.preflightCard} data-preflight-card>
+      <button
+        type="button"
+        className={styles.preflightHeader}
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span>启动阶段失败 {count} 次 · 已恢复</span>
+        <span className={styles.compactionChevron} aria-hidden>
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div className={styles.preflightErrors}>
+          {errors.map((message, index) => (
+            <div key={index}>{message}</div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -204,6 +239,24 @@ function archivedItemsForTurn(events: SessionEvent[]): DisplayItem[] {
   return items;
 }
 
+/** 首部连续错误轮：只有后面出现过完成轮时才折叠；全是错误则继续原样显示。 */
+function leadingErrorSummary(
+  turns: SessionEvent[][]
+): { count: number; errors: string[] } | null {
+  const errors: string[] = [];
+  let firstKept = 0;
+  while (firstKept < turns.length && isErrorOnlyTurn(turns[firstKept])) {
+    const errorEvent = turns[firstKept].find((event) => event.type === "error");
+    if (errorEvent?.type === "error") errors.push(errorEvent.message);
+    firstKept += 1;
+  }
+  if (firstKept === 0) return null;
+  const hasCompletedTurn = turns
+    .slice(firstKept)
+    .some((turn) => turn.some((event) => event.type === "assistant/message"));
+  return hasCompletedTurn ? { count: firstKept, errors } : null;
+}
+
 /** 归档部分（turns + 压缩点卡）。只在 turns / compaction / showWelcome 变化时重算。 */
 function buildArchivedItems(
   turns: SessionEvent[][],
@@ -213,7 +266,16 @@ function buildArchivedItems(
   if (showWelcome) return [{ type: "welcome" }];
 
   const items: DisplayItem[] = [];
-  for (let i = 0; i < turns.length; i++) {
+  const preflight = leadingErrorSummary(turns);
+  if (preflight) {
+    items.push({
+      type: "preflight",
+      count: preflight.count,
+      errors: preflight.errors,
+    });
+  }
+  const firstKept = preflight?.count ?? 0;
+  for (let i = firstKept; i < turns.length; i++) {
     // 模块 D：压缩点提示卡插在保留段第一轮之前（折叠轮与新轮之间）——
     // retainedFrom=0（无可折叠/异常）不插卡
     if (compaction && compaction.retainedFrom > 0 && i === compaction.retainedFrom) {
@@ -278,6 +340,7 @@ const MessageRow = memo(function MessageRow({
         <EventBadge
           events={item.events}
           interactive={item.interactive}
+          showApprovalControls={false}
           className={styles.row}
         />
       );
@@ -337,6 +400,8 @@ const MessageRow = memo(function MessageRow({
           {item.text}
         </button>
       );
+    case "preflight":
+      return <PreflightNotice count={item.count} errors={item.errors} />;
     case "compaction":
       return (
         <CompactionNotice
