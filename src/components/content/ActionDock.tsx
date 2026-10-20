@@ -104,6 +104,7 @@ function progressPercent(status: UpdateStatus): number | null {
 function errorTitleFor(stage: UpdateStatus["errorStage"]): string {
   if (stage === "check") return "检查更新失败";
   if (stage === "download") return "下载更新失败";
+  if (stage === "disk") return "磁盘空间不足";
   if (stage === "install") return "安装没有完成";
   return "更新失败";
 }
@@ -472,7 +473,9 @@ function UpdateDock({
       ? "没能连接到更新源"
       : errorStage === "download"
         ? "更新没有下载完成"
-        : "更新没有完成";
+        : errorStage === "disk"
+          ? "磁盘剩余空间不足"
+          : "更新没有完成";
   const retryLabel = errorStage === "download" ? "重新下载" : "重新检查";
 
   return (
@@ -557,6 +560,11 @@ function UpdateDock({
                   稍后会自动重试，也可以在关于页手动检查。
                 </div>
               )}
+              {errorStage === "disk" && (
+                <div className={styles.meta}>
+                  释放安装目录所在磁盘空间后重新检查。
+                </div>
+              )}
             </>
           )}
         </div>
@@ -602,7 +610,7 @@ function UpdateDock({
               <button className={styles.btn} onClick={dismiss} type="button">
                 关闭
               </button>
-              {manualUrl && (
+              {manualUrl && errorStage !== "disk" && (
                 <button
                   className={styles.btn}
                   onClick={() => {

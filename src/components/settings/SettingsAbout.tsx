@@ -96,9 +96,11 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
           ? "检查更新失败"
           : updater.errorStage === "download"
             ? "下载更新失败"
-            : updater.errorStage === "install"
-              ? "安装没有完成"
-              : "更新失败";
+            : updater.errorStage === "disk"
+              ? "磁盘空间不足"
+              : updater.errorStage === "install"
+                ? "安装没有完成"
+                : "更新失败";
       default:
         return "尚未检查更新";
     }

@@ -390,7 +390,7 @@ export type UpdatePhase =
   | "dev";
 
 /** 更新失败发生阶段；启动检查失败不应显示成“安装没有完成” */
-export type UpdateErrorStage = "check" | "download" | "install";
+export type UpdateErrorStage = "check" | "download" | "disk" | "install";
 
 export interface UpdateSourceInfo {
   id: string;

@@ -103,6 +103,12 @@ const CHECK_ERROR: UpdateStatus = {
   errorStage: "check",
 };
 
+const DISK_ERROR: UpdateStatus = {
+  ...CHECK_ERROR,
+  error: "磁盘剩余空间不足：V:\\PRTSTest 至少需要 256 MB，当前 209 MB",
+  errorStage: "disk",
+};
+
 beforeEach(() => {
   __invokeMock.mockReset();
   __invokeMock.mockImplementation((cmd: string) => {
@@ -176,6 +182,18 @@ describe("Action Dock · 优先级与阻塞", () => {
     expect(dock.text()).toContain("检查更新失败");
     expect(dock.text()).toContain("没能连接到更新源");
     expect(dock.text()).not.toContain("更新没有完成");
+    dock.unmount();
+  });
+
+  it("磁盘不足显示磁盘标题与重新检查，不提供重新下载", () => {
+    useUpdaterStore.setState({ status: DISK_ERROR });
+    const dock = renderDock();
+
+    expect(dock.text()).toContain("磁盘空间不足");
+    expect(dock.text()).toContain("磁盘剩余空间不足");
+    expect(dock.text()).toContain("释放安装目录所在磁盘空间后重新检查");
+    expect(dock.text()).toContain("重新检查");
+    expect(dock.text()).not.toContain("重新下载");
     dock.unmount();
   });
 

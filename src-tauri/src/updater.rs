@@ -51,6 +51,7 @@ pub enum UpdatePhase {
 pub enum UpdateErrorStage {
     Check,
     Download,
+    Disk,
     Install,
 }
 
@@ -730,7 +731,7 @@ async fn download_internal(
     }
 
     if let Err(message) = ensure_disk_space() {
-        service.fail(app, message.clone(), UpdateErrorStage::Download);
+        service.fail(app, message.clone(), UpdateErrorStage::Disk);
         return Err(message);
     }
 
@@ -879,7 +880,7 @@ async fn install_internal(
     }
     if let Err(message) = ensure_disk_space() {
         append_update_log(&format!("install blocked: {message}"));
-        service.fail(app, message.clone(), UpdateErrorStage::Install);
+        service.fail(app, message.clone(), UpdateErrorStage::Disk);
         return Err(message);
     }
 
@@ -1058,6 +1059,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&UpdateErrorStage::Check).unwrap(),
             "\"check\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UpdateErrorStage::Disk).unwrap(),
+            "\"disk\""
         );
     }
 
