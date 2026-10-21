@@ -9,10 +9,20 @@
 // 滚动交给内容区——不用整窗浮层（旧版浮层固定在窗口上，会出现高过整个界面的
 // 内容页）。打开时把视野滚到视图顶端。
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
 import { SectionNote } from "./ui/SettingsSection";
+import {
+  MemoryViewFrame,
+  PROFILE_NAME,
+  LONGTERM_MAX_CHARS,
+  charCount,
+  parseTags,
+  fmtDate,
+} from "./memoryViewShared";
+
+export type { MemView } from "./memoryViewShared";
 import type {
   MemoryDetail,
   MemoryExperienceItem,
@@ -21,68 +31,6 @@ import type {
   MemorySetLongtermResult,
 } from "../../types";
 import styles from "./SettingsMemory.module.css";
-
-/** 当前打开的二级视图（null＝主列表） */
-export type MemView =
-  | { kind: "growth"; name: string }
-  | { kind: "growthNew" }
-  | { kind: "compiled" }
-  | { kind: "library" }
-  | null;
-
-/** 「关于博士」页名（固定键；删除＝复位） */
-const PROFILE_NAME = "关于博士";
-
-/** 「先前」（长期记忆）字数上限：与后端硬闸同源（orchestrator::memory::MAX_LONGTERM_CHARS） */
-const LONGTERM_MAX_CHARS = 600;
-
-/** Unicode 码点数（对齐后端 chars().count()；不用 String.length） */
-function charCount(s: string): number {
-  return [...s].length;
-}
-
-/** 标签文本 → 数组（、/逗号分隔） */
-function parseTags(text: string): string[] {
-  return text
-    .split(/[、,，]/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0);
-}
-
-/** unix 毫秒 → YYYY-MM-DD（本地时区） */
-function fmtDate(ts: number): string {
-  const d = new Date(ts);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-/** 视图框架：返回 + 标题 + 内容 */
-export function MemoryViewFrame({
-  title,
-  onBack,
-  children,
-}: {
-  title: string;
-  onBack: () => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    // 打开视图时把视野滚到视图顶端（内容区是滚动容器；无该 API 的环境跳过）
-    ref.current?.scrollIntoView?.({ block: "start" });
-  }, []);
-  return (
-    <div className={styles.view} ref={ref}>
-      <div className={styles.viewHeader}>
-        <button className={styles.backBtn} type="button" onClick={onBack}>
-          ← 返回
-        </button>
-        <span className={styles.viewTitle}>{title}</span>
-      </div>
-      <div className={styles.viewBody}>{children}</div>
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════
 // 成长页阅读 / 编辑
