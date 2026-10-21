@@ -237,7 +237,7 @@ fn path_to_slash(rel: &Path) -> String {
 /// 知识库目录解析（随包只读资源）。
 ///
 /// 收口于 [`crate::config::bundled_knowledge_dir`]：开发构建 = 源码树
-/// `src/knowledge`；发布构建 = 程序目录下 `resources/knowledge`。
+/// `content/knowledge`；发布构建 = 程序目录下 `resources/knowledge`。
 /// **不做存在性探测**——"哪条路存在走哪条"会让开发机上的安装版偷读源码目录。
 pub fn knowledge_dir() -> PathBuf {
     crate::config::bundled_knowledge_dir()
@@ -438,7 +438,7 @@ mod tests {
         // 真实知识库全量回归：每个条目文件必须解析成功进入索引。
         // 防条目格式被外部编辑写坏（实测：key_points 批量写入时一批文件
         // 转为 CRLF，旧解析器仅认 LF 导致静默跳过——此测试锁定该回归）。
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/knowledge");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("content/knowledge");
         let idx = KnowledgeIndex::load(&root).expect("真实知识库加载失败");
 
         // 统计全部条目文件数（.md，除 _index.md），应全部进入索引

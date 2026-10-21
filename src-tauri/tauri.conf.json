@@ -58,9 +58,9 @@
     "publisher": "AirsonVind",
     "resources": {
       "resources/arknights.db": "./",
-      "src/knowledge/": "resources/knowledge/",
-      "src/skills/": "resources/skills/",
-      "src/docs/": "resources/docs/",
+      "content/knowledge/": "resources/knowledge/",
+      "content/skills/": "resources/skills/",
+      "content/docs/": "resources/docs/",
       "../LICENSE": "./LICENSE"
     },
     "externalBin": [

@@ -150,10 +150,10 @@ pub fn resolve_db_path() -> PathBuf {
 
 /// 知识库目录（随包只读资源）。
 ///
-/// 开发构建 = `src-tauri/src/knowledge`；发布构建 = 程序目录下 `resources/knowledge`。
+/// 开发构建 = `src-tauri/content/knowledge`；发布构建 = 程序目录下 `resources/knowledge`。
 pub fn bundled_knowledge_dir() -> PathBuf {
     if is_dev() {
-        resource_root().join("src").join("knowledge")
+        resource_root().join("content").join("knowledge")
     } else {
         resource_root().join("resources").join("knowledge")
     }
@@ -161,10 +161,10 @@ pub fn bundled_knowledge_dir() -> PathBuf {
 
 /// 内置技能源目录（随包只读资源；启动时同步进数据根运行根）。
 ///
-/// 开发构建 = `src-tauri/src/skills`；发布构建 = 程序目录下 `resources/skills`。
+/// 开发构建 = `src-tauri/content/skills`；发布构建 = 程序目录下 `resources/skills`。
 pub fn bundled_skills_dir() -> PathBuf {
     if is_dev() {
-        resource_root().join("src").join("skills")
+        resource_root().join("content").join("skills")
     } else {
         resource_root().join("resources").join("skills")
     }
@@ -172,10 +172,10 @@ pub fn bundled_skills_dir() -> PathBuf {
 
 /// 使用说明文档目录（随包只读资源）。
 ///
-/// 开发构建 = `src-tauri/src/docs`；发布构建 = 程序目录下 `resources/docs`。
+/// 开发构建 = `src-tauri/content/docs`；发布构建 = 程序目录下 `resources/docs`。
 pub fn bundled_docs_dir() -> PathBuf {
     if is_dev() {
-        resource_root().join("src").join("docs")
+        resource_root().join("content").join("docs")
     } else {
         resource_root().join("resources").join("docs")
     }
@@ -266,8 +266,8 @@ mod tests {
             // 开发构建：源码树相对路径，且基准目录即源码树
             assert_eq!(root, PathBuf::from(env!("CARGO_MANIFEST_DIR")));
             assert_eq!(db, root.join("resources").join("arknights.db"));
-            assert_eq!(kb, root.join("src").join("knowledge"));
-            assert_eq!(skills, root.join("src").join("skills"));
+            assert_eq!(kb, root.join("content").join("knowledge"));
+            assert_eq!(skills, root.join("content").join("skills"));
         } else {
             // 发布构建：程序目录相对路径
             assert_eq!(db, root.join("arknights.db"));

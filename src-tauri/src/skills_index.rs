@@ -9,7 +9,7 @@
 //! 目录模型（2026-10-03 定案：单目录混装）：
 //! - 运行根 [`skills_dir`] = `data_dir()/skills`——唯一读写根；用户可写，
 //!   内置技能经 [`sync_bundled_skills`] 于启动时同步进入；
-//! - 内置源 [`bundled_skills_dir`] = dev `src/skills` / 打包 `resources/skills`；
+//! - 内置源 [`bundled_skills_dir`] = dev `content/skills` / 打包 `resources/skills`；
 //! - 同步语义：源为准、覆盖式；用户条目只增不删（内置被删 / 改 → 下次启动
 //!   恢复），内置退役条目清理（版本间改名 / 改形态时旧副本退场）；
 //!   同步失败由调用方记日志、不阻断启动。
@@ -212,9 +212,9 @@ pub fn skills_dir() -> PathBuf {
 
 /// 内置技能源目录解析（随包只读资源）。
 ///
-/// 收口于 [`crate::config::bundled_skills_dir`]：开发构建 = 源码树 `src/skills`；
+/// 收口于 [`crate::config::bundled_skills_dir`]：开发构建 = 源码树 `content/skills`；
 /// 发布构建 = 程序目录下 `resources/skills`（由 tauri.conf bundle.resources
-/// 从 `src/skills/` 铺入）。**不做存在性探测**。
+/// 从 `content/skills/` 铺入）。**不做存在性探测**。
 pub fn bundled_skills_dir() -> PathBuf {
     crate::config::bundled_skills_dir()
 }
