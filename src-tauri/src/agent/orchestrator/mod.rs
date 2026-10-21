@@ -43,6 +43,7 @@ mod turn_loop;
 mod llm_call;
 mod tool_loop;
 mod prompt_registry;
+mod memory_prompt;
 mod token_estimate;
 mod events;
 

@@ -35,13 +35,16 @@ use crate::llm::{ChatMessage, LlmClient, LlmConfig};
 use crate::memory::schema::now_ms;
 use crate::memory::store::{Fingerprint, MemoryOp, MemoryStore};
 use crate::turn_registry::AbortSignal;
+use super::memory_prompt::{
+    build_extract_system, build_extract_user, build_repair_user, compress_system_prompt,
+};
 
 // ── 参数常量（成本纪律：小模型 / 增量 / 小输出）──
 
 /// 攒够多少轮才提炼（轮末/切换/补偿触发时，增量不足此数直接 no-op）。
 pub const INCREMENTAL_TURNS: usize = 6;
 /// 提炼材料最大字符数（防超长对话）。
-const MAX_MATERIAL_CHARS: usize = 24_000;
+pub(super) const MAX_MATERIAL_CHARS: usize = 24_000;
 /// 提炼输出 token 上限。
 const EXTRACT_MAX_TOKENS: u32 = 1_500;
 /// 单次提炼超时。
@@ -59,7 +62,7 @@ const COMPRESS_MAX_TOKENS: u32 = 600;
 const COMPRESS_TIMEOUT: Duration = Duration::from_secs(90);
 /// 长期记忆字数：提示词目标 [LONGTERM_TARGET_CHARS]，代码硬闸 [MAX_LONGTERM_CHARS]。
 /// 硬闸超限 → 先让模型缩短重写一次，仍超限则拒收（保留旧版，条目不吸收）。
-const LONGTERM_TARGET_CHARS: usize = 400;
+pub(super) const LONGTERM_TARGET_CHARS: usize = 400;
 pub const MAX_LONGTERM_CHARS: usize = 600;
 /// 整轮报废后的冷却时长（下次不再立刻重试）。
 const FAILURE_COOLDOWN_MS: u64 = 5 * 60 * 1000;
@@ -418,58 +421,6 @@ fn numbered_count(numbered_text: &str) -> usize {
     numbered_text.lines().filter(|l| l.trim_start().starts_with('[')).count()
 }
 
-fn build_extract_system() -> String {
-    r#"你是记忆整理器。你会收到两部分输入：
-① 增量——自上次整理以来新增的对话记录；
-② 近期条目——已记录的工作单元（分「可重写」与「已封存」两组）。
-
-请把增量整理为操作清单，只输出一个 JSON 数组，不要任何解释、思考过程或其他文字。
-
-每个元素：
-{"target": null 或 编号, "title": "短标题", "summary": "状态句", "tags": ["标签"]}
-
-## 切分：一条一个单元
-
-- 每个条目只记一个可以独立回顾的工作单元：一次讨论的结论、一个决定、一段推进、一个阶段变化、一个未完成项。
-- 增量中有几个独立事项，就产出几条；不得把不同事项糅进一条。
-  反例（禁止）：一条写"方案定稿、开始实现、卡在数据源、其后修复完成"。
-  正例：拆为"方案定稿"、"实现完成"、"数据源：卡点定位"、"数据源：修复完成"。
-- 同一件事的细碎步骤合为一条；没有实质进展的内容不产出条目。
-
-## 字段
-
-- title：≤20 字。
-- summary：单行、一句话（不得包含两个完整句子），≤150 字；直陈当前状态——结论、决定、卡点、未落项；不要重复标题。
-- tags：2~5 个有辨识度的关键词。
-
-## 重写与新建
-
-- 重写：当增量内容与「可重写」组中某条内容相近（讲的是同一件事的延续）时，可重写该条——target 填该编号：summary 覆盖为最新状态（并入新进展），title、tags 可微调。
-- 其余（含拿不准的）一律新建（target 填 null）。
-- 「已封存」组：一律不可重写；同题再有新进展，一律另起新条目。
-- 重写只做状态更新与必要合并：不得加入材料里没有的信息，不得凭空扩写。
-
-## 其他
-
-- 只能引用给定编号；不要编造编号。
-- 涉及游戏机制与数值的内容：只记「做过什么／结论」，不复制具体数值。
-- 若增量没有任何值得保留的工作内容，输出 []。"#
-        .to_string()
-}
-
-fn build_extract_user(delta_text: &str, rewritable_text: &str, sealed_text: &str) -> String {
-    let delta: String = delta_text.chars().take(MAX_MATERIAL_CHARS).collect();
-    format!(
-        "增量：\n{delta}\n\n近期条目（可重写）：\n{rewritable_text}\n\n近期条目（已封存）：\n{sealed_text}\n\n请输出操作清单 JSON 数组："
-    )
-}
-
-fn build_repair_user(bad: &str, err: &str) -> String {
-    format!(
-        "你上一步的输出无法解析为要求的 JSON 数组。\n\n错误：{err}\n\n上一步输出：\n{bad}\n\n请只输出修正后的 JSON 数组（结构同上），不要任何其它文字："
-    )
-}
-
 /// 解析并校验模型输出为操作清单。
 fn parse_ops(raw: &str, recent_count: usize) -> Result<ExtractOutcome, String> {
     let text = preprocess(raw);
@@ -588,31 +539,6 @@ fn resolve_op(op: RawOp, recent: &[(String, Fingerprint, String)]) -> Option<Mem
 ///
 /// 写法参照 Hanako 的 longterm 编译提示词（硬上限放首句、保留/剔除双层清单、
 /// 超长时优先概括旧内容）；内容判据换成 PRTS 的工作经历口径。
-fn compress_system_prompt() -> String {
-    format!(
-        r#"请综合「上一份长期情况」和「新沉淀内容」，重写成一份新的长期情况。必须控制在 {target} 字以内。
-
-长期情况不是工作日志。这一层只保留「以后再回看仍然有助于理解这段长期工作」的内容：
-- 在推进的长期方向与它们当前的状态
-- 已经稳定下来的结论、约定与偏好
-- 反复出现的问题、已知的坑
-
-去掉这些单次性内容：
-- 某次任务的具体步骤、参数、数值、命令与工具调用
-- 某次的失败与重试、来回修改、被打断又恢复
-- 逐条任务的流水账
-
-处理方式：
-- 不要追加，不要把旧内容和新内容分开复述
-- 必须做取舍、抽象、合并：同一方向的多次往返归并为一件事，过细信息压成更高层概括
-- 如果上一份长期情况已经很长，优先概括旧内容，再吸收真正重要的新内容
-- 细节不必留在这一层——经历库可检索
-
-只输出正文本身，不要 Markdown 标题，不要以 #、##、### 开头，不要解释或代码围栏。"#,
-        target = LONGTERM_TARGET_CHARS
-    )
-}
-
 async fn compress_longterm(
     llm: &dyn LlmClient,
     config: &LlmConfig,
