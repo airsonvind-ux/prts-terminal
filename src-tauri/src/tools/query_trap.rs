@@ -25,7 +25,6 @@
 //! 含 `=` 为**状态指定**：键限 等级 一种（纯数字，`级` 后缀可选）。
 //! 不含 `=` 的项报错并指路键=值形式；旧裸写语法（`精N`、`满潜`、`一技能` 等）不再解析。
 
-use crate::db::{Database, Filter, FilterOp};
 use crate::tools::common::{self, Target};
 use crate::tools::common_fmt::{
     collect_attr_names, find_bounding_keyframes, format_skill_expanded,
@@ -116,8 +115,8 @@ impl Tool for QueryTrap {
             }
 
             let row = match target {
-                Target::Id(id) => query_trap_by_id(db, id, &all_fields)?,
-                Target::Name(name) => query_trap_by_name(db, name, &all_fields)?,
+                Target::Id(id) => common::query_by_id(db, "traps", "装置ID", id, &all_fields)?,
+                Target::Name(name) => common::query_by_name(db, "traps", name, &all_fields)?,
             };
 
             match row {
@@ -331,51 +330,6 @@ fn parse_trap_level_status(value: &str, cfg: &mut TrapExtraConfig) {
 // 数据库查询
 // ═══════════════════════════════════════════════════════
 
-fn query_trap_by_name(
-    db: &Database,
-    name: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("traps", fields, &[Filter::new("名称", FilterOp::Eq, name)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if !result.rows.is_empty() {
-        return Ok(result.rows.into_iter().next());
-    }
-
-    let candidates = db
-        .query_filtered(
-            "traps",
-            fields,
-            &[Filter::new("名称", FilterOp::Like, name)],
-            0,
-        )
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if candidates.rows.is_empty() {
-        return Ok(None);
-    }
-
-    let best = candidates
-        .rows
-        .into_iter()
-        .min_by_key(|row| row.get("名称").map(|s| s.len()).unwrap_or(usize::MAX))
-        .expect("candidates 非空");
-
-    Ok(Some(best))
-}
-
-fn query_trap_by_id(
-    db: &Database,
-    id: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("traps", fields, &[Filter::new("装置ID", FilterOp::Eq, id)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-    Ok(result.rows.into_iter().next())
-}
 // ═══════════════════════════════════════════════════════
 
 /// traps 专属：纯精英化插值（装置仅精0 一层）。
@@ -412,6 +366,7 @@ fn compute_trap_stats(phase: &ElitePhase, level: u32) -> ComputedStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
     use std::path::PathBuf;
     use std::sync::Arc;
 

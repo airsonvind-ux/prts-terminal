@@ -27,7 +27,6 @@
 //! 属性与天赋随之重算。不含 `=` 的项报错并指路键=值形式；
 //! 旧裸写语法（`精一20级`、`满潜`、`3级一技能`、`逐级技能数据`）不再解析。
 
-use crate::db::{Database, Filter, FilterOp};
 use crate::tools::common::{self, Target};
 use crate::tools::common_fmt::{
     collect_attr_names, find_bounding_keyframes, format_skill_expanded,
@@ -118,8 +117,8 @@ impl Tool for QueryToken {
             }
 
             let row = match target {
-                Target::Id(id) => query_token_by_id(db, id, &all_fields)?,
-                Target::Name(name) => query_token_by_name(db, name, &all_fields)?,
+                Target::Id(id) => common::query_by_id(db, "tokens", "tokenID", id, &all_fields)?,
+                Target::Name(name) => common::query_by_name(db, "tokens", name, &all_fields)?,
             };
 
             match row {
@@ -435,51 +434,6 @@ fn parse_token_skill_status(value: &str, cfg: &mut TokenExtraConfig) {
 // 数据库查询
 // ═══════════════════════════════════════════════════════
 
-fn query_token_by_name(
-    db: &Database,
-    name: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("tokens", fields, &[Filter::new("名称", FilterOp::Eq, name)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if !result.rows.is_empty() {
-        return Ok(result.rows.into_iter().next());
-    }
-
-    let candidates = db
-        .query_filtered(
-            "tokens",
-            fields,
-            &[Filter::new("名称", FilterOp::Like, name)],
-            0,
-        )
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if candidates.rows.is_empty() {
-        return Ok(None);
-    }
-
-    let best = candidates
-        .rows
-        .into_iter()
-        .min_by_key(|row| row.get("名称").map(|s| s.len()).unwrap_or(usize::MAX))
-        .expect("candidates 非空");
-
-    Ok(Some(best))
-}
-
-fn query_token_by_id(
-    db: &Database,
-    id: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("tokens", fields, &[Filter::new("tokenID", FilterOp::Eq, id)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-    Ok(result.rows.into_iter().next())
-}
 // ═══════════════════════════════════════════════════════
 
 /// tokens 专属：纯精英化插值，无信赖/潜能/模组。
@@ -516,6 +470,7 @@ fn compute_token_stats(phase: &ElitePhase, level: u32) -> ComputedStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
     use std::path::PathBuf;
     use std::sync::Arc;
 

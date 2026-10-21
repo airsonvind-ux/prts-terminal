@@ -5,6 +5,8 @@
 
 use serde_json::Value;
 
+use crate::db::{Database, Filter, FilterOp};
+
 use super::ToolError;
 
 /// 查询目标：ID 精确匹配 或 名称模糊匹配。
@@ -62,4 +64,50 @@ pub(crate) fn parse_targets(v: &Value) -> Result<Vec<Target>, ToolError> {
     }
 
     Ok(targets)
+}
+
+/// 按名称查询单条：精确优先，未命中时 LIKE 取名称最短的一条。
+pub(crate) fn query_by_name(
+    db: &Database,
+    table: &str,
+    name: &str,
+    fields: &[String],
+) -> Result<Option<std::collections::HashMap<String, String>>, ToolError> {
+    let result = db
+        .query_filtered(table, fields, &[Filter::new("名称", FilterOp::Eq, name)], 1)
+        .map_err(ToolError::Execution)?;
+
+    if !result.rows.is_empty() {
+        return Ok(result.rows.into_iter().next());
+    }
+
+    let candidates = db
+        .query_filtered(table, fields, &[Filter::new("名称", FilterOp::Like, name)], 0)
+        .map_err(ToolError::Execution)?;
+
+    if candidates.rows.is_empty() {
+        return Ok(None);
+    }
+
+    let best = candidates
+        .rows
+        .into_iter()
+        .min_by_key(|row| row.get("名称").map(|s| s.len()).unwrap_or(usize::MAX))
+        .expect("candidates 非空");
+
+    Ok(Some(best))
+}
+
+/// 按主键精确查询单条。
+pub(crate) fn query_by_id(
+    db: &Database,
+    table: &str,
+    id_column: &str,
+    id: &str,
+    fields: &[String],
+) -> Result<Option<std::collections::HashMap<String, String>>, ToolError> {
+    let result = db
+        .query_filtered(table, fields, &[Filter::new(id_column, FilterOp::Eq, id)], 1)
+        .map_err(ToolError::Execution)?;
+    Ok(result.rows.into_iter().next())
 }

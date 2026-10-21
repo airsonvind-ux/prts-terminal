@@ -51,7 +51,6 @@
 //! | 潜能提升   | JSON 字符串数组       | 编号列表           |
 //! | 关联token | JSON `["id"]` 或 null | "、"拼接 / "无"   |
 
-use crate::db::{Database, Filter, FilterOp};
 use crate::tools::common::{self, Target};
 use crate::tools::common_fmt::{
     find_bounding_keyframes, format_skill_expanded, format_talents, parse_json, ComputedStats,
@@ -153,8 +152,8 @@ impl Tool for QueryOperator {
             }
 
             let row = match target {
-                Target::Id(id) => query_by_id(db, id, &all_fields)?,
-                Target::Name(name) => query_by_name(db, name, &all_fields)?,
+                Target::Id(id) => common::query_by_id(db, "operators", "干员ID", id, &all_fields)?,
+                Target::Name(name) => common::query_by_name(db, "operators", name, &all_fields)?,
             };
 
             match row {
@@ -753,53 +752,6 @@ fn parse_chinese_or_digit(s: &str) -> Option<u32> {
 // 数据库查询
 // ═══════════════════════════════════════════════════════
 
-fn query_by_name(
-    db: &Database,
-    name: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("operators", fields, &[Filter::new("名称", FilterOp::Eq, name)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if !result.rows.is_empty() {
-        return Ok(result.rows.into_iter().next());
-    }
-
-    let candidates = db
-        .query_filtered(
-            "operators",
-            fields,
-            &[Filter::new("名称", FilterOp::Like, name)],
-            0,
-        )
-        .map_err(|e| ToolError::Execution(e))?;
-
-    if candidates.rows.is_empty() {
-        return Ok(None);
-    }
-
-    let best = candidates
-        .rows
-        .into_iter()
-        .min_by_key(|row| row.get("名称").map(|s| s.len()).unwrap_or(usize::MAX))
-        .expect("candidates 非空");
-
-    Ok(Some(best))
-}
-
-/// 按 ID 精确查询干员。
-fn query_by_id(
-    db: &Database,
-    id: &str,
-    fields: &[String],
-) -> Result<Option<HashMap<String, String>>, ToolError> {
-    let result = db
-        .query_filtered("operators", fields, &[Filter::new("干员ID", FilterOp::Eq, id)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
-    Ok(result.rows.into_iter().next())
-}
-
 // ═══════════════════════════════════════════════════════
 // 数值计算
 // ═══════════════════════════════════════════════════════
@@ -1150,6 +1102,7 @@ fn ordinal_cn(n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
     use std::path::PathBuf;
     use std::sync::Arc;
 
