@@ -5,20 +5,24 @@ mod agent;
 mod compaction;
 mod conversation;
 mod files;
+mod interaction;
 mod memory;
 mod prelude;
 mod settings;
 mod skills;
 mod system;
+mod workspace;
 
 pub use agent::*;
 pub use compaction::*;
 pub use conversation::*;
 pub use files::*;
+pub use interaction::*;
 pub use memory::*;
 pub use settings::*;
 pub use skills::*;
 pub use system::*;
+pub use workspace::*;
 
 #[cfg(test)]
 use compaction::refresh_frozen_snapshots;
@@ -32,338 +36,14 @@ use memory::{experience_list_rows, validate_longterm};
 #[cfg(test)]
 use settings::{guard_config_write, CONFIG_WRITE_GUARD_MSG};
 
+#[cfg(test)]
+use workspace::{
+    list_dir_entries, resolve_workspace_target, search_workspace_entries,
+    WORKSPACE_SEARCH_LIMIT,
+};
+
 use prelude::*;
 
-
-// ═══════════════════════════════════════════════════════
-// 命令执行模式（M3-A §4.2）——已并入 settings.json exec 段
-// （get_exec_settings / set_exec_settings 由 get_settings / set_settings
-// 的 exec patch 取代，2026-09 设置页扩展批 A）
-// ═══════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════
-// 中止当前对话轮（M3-B §2.1）
-// ═══════════════════════════════════════════════════════
-
-/// 中止一次活动对话轮次（幂等）。
-///
-/// - `Ok(true)` = 找到活动 turn 并已置位中止（进程经取消点收敛退出）；
-/// - `Ok(false)` = 无该 session 的活动 turn（前端幂等处理，非错误）。
-///
-/// 命令**只置标志**，不碰 approvals/进程——清理收敛在 orchestrator::process
-/// 的 Aborted 出口（clear_session + turn/end(aborted) emit），避免双头清理。
-/// 置位后 busy 仍保持（快照未删），直到 process 返回、命令层 unregister。
-#[tauri::command]
-pub fn abort_turn(
-    turn_registry: State<'_, Arc<TurnRegistry>>,
-    session_id: String,
-) -> Result<bool, String> {
-    // 中止语义（2026-09-25 修订）：中止 = 立断当前段；插话队列不再清空——
-    // 未交付条目由 agent_process 收尾置保留态，同对话下一轮领取交付
-    // （中止不丢字；前端 pending 气泡留存、可点击取消）。
-    Ok(turn_registry.abort(&session_id))
-}
-
-// ═══════════════════════════════════════════════════════
-// 插话（steer）——生成中入队（设计定稿）
-// ═══════════════════════════════════════════════════════
-
-/// 生成中提交插话：入队待注入（不打断当前段）。
-///
-/// - 仅该 session 有活动 turn 时可入队；空闲返回明确拒绝（前端据拒绝文案
-///   走「关窗降级」= 退化为普通发送，见 ChatView.handleSteer 同步口径）；
-/// - 返回条目定位 id（cancel_steer / 前端 pending 气泡取消用）；
-/// - 队列消费（2026-09-25 修订）：dispatch 循环每个 step 的请求发出前领取
-///   队首注入为轮内下一条 user 消息（步边界领取——工具步之间不再等回答段
-///   收尾）；assistant 段收尾出口复查队列，有留存则续跑、空才发 turn/end。
-///   同轮 streaming 不断，turn/end 只在队列空时发一次；
-/// - 拒绝文案「当前没有处理中的对话，请等待处理结束后直接发送」是前端
-///   关窗降级的判定标记，改动需同步（ChatView.handleSteer）。
-#[tauri::command]
-pub fn steer_message(
-    steer_queue: State<'_, Arc<SteerQueue>>,
-    turn_registry: State<'_, Arc<TurnRegistry>>,
-    session_id: String,
-    text: String,
-) -> Result<String, String> {
-    if text.trim().is_empty() {
-        return Err("插话内容不能为空".into());
-    }
-    if !turn_registry.is_active(&session_id) {
-        return Err("当前没有处理中的对话，请等待处理结束后直接发送".into());
-    }
-    steer_queue
-        .enqueue(&session_id, &text)
-        .ok_or_else(|| "插话入队失败（内容为空）".into())
-}
-
-/// 取消一条待注入插话（pending 气泡点击取消）。
-///
-/// Ok(true) = 已移除；Ok(false) = 无此条目（已注入 / 已取消 / 会话无队列）——
-/// 前端幂等处理（气泡消失即反馈，不回填输入）。
-#[tauri::command]
-pub fn cancel_steer(
-    steer_queue: State<'_, Arc<SteerQueue>>,
-    session_id: String,
-    entry_id: String,
-) -> Result<bool, String> {
-    Ok(steer_queue.cancel(&session_id, &entry_id))
-}
-
-// ═══════════════════════════════════════════════════════
-// 审批决策回传（M3-A §4.3/§5.2：确认卡 → 后端决策通道）
-// ═══════════════════════════════════════════════════════
-
-/// 前端确认卡按钮的决策载荷（invoke resolve_tool_approval）。
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApprovalResolutionRequest {
-    pub session_id: String,
-    pub call_id: String,
-    /// "approved" | "rejected"（其余值命令层拒绝）
-    pub decision: String,
-}
-
-/// 用户对一次工具审批的决策回传。
-///
-/// 返回 true = 决策已送达等待方（agent turn 继续）；false = 无此 pending
-/// （已超时 / 已决 / 会话已结束）——前端应幂等处理（按事件终态收起卡片）。
-#[tauri::command]
-pub fn resolve_tool_approval(
-    approval_registry: State<'_, Arc<crate::approval::ApprovalRegistry>>,
-    request: ApprovalResolutionRequest,
-) -> Result<bool, String> {
-    let decision = match request.decision.as_str() {
-        "approved" => crate::approval::UserDecision::Approved,
-        "rejected" => crate::approval::UserDecision::Rejected,
-        other => return Err(format!("decision 仅支持 approved/rejected，got: {other}")),
-    };
-    Ok(approval_registry.resolve(&request.session_id, &request.call_id, decision))
-}
-
-// ═══════════════════════════════════════════════════════
-// 空间页 · 工作区查看（目录树 / 按名搜索 / 资源管理器）
-// ═══════════════════════════════════════════════════════
-//
-// 定位：让用户能“舒服地查看当前的工作目录”。树按需逐层读取（点开哪级读哪级）；
-// 搜索递归按名匹配并跳过隐藏项与依赖/构建目录。两侧口径有意不同：树照实列
-// （＝真实目录，也与 list_dir 一致），搜索降噪（结果才有用）。
-
-/// 树节点 DTO（list_workspace_dir 返回）。
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceEntry {
-    pub name: String,
-    pub is_dir: bool,
-    /// 绝对路径（普通形式，非 canonical）
-    pub path: String,
-}
-
-/// 搜索命中 DTO（search_workspace_files 返回）。
-///
-/// 为什么要带 `path` 与 `ancestorDirs`：前端不拼路径（与 FileLink 同口径）——
-/// 命中后要在树里展开祖先并选中，展开链由后端给出，前端只做状态合并。
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceSearchHit {
-    pub name: String,
-    /// 绝对路径（点击打开 / 树选中定位）
-    pub path: String,
-    /// 相对工作区根，'/' 分隔（展示）
-    pub relative_path: String,
-    /// 相对根的父目录（根级命中 = 空串；展示 + 兜底）
-    pub parent_subdir: String,
-    /// 从根下一级到命中项所在目录的绝对路径链（展开用，根级命中为空）
-    pub ancestor_dirs: Vec<String>,
-    pub is_dir: bool,
-}
-
-/// 搜索跳过的目录名（隐藏项另按 '.' 前缀跳过）。
-const WORKSPACE_SEARCH_SKIP_DIRS: &[&str] = &[
-    "node_modules",
-    "target",
-    "dist",
-    "build",
-    "out",
-    "vendor",
-    "__pycache__",
-];
-
-/// 搜索结果上限（照 Hanako 工作台的 WORKSPACE_SEARCH_LIMIT = 80）。
-const WORKSPACE_SEARCH_LIMIT: usize = 80;
-/// 搜索递归深度上限（根 = 0）。
-const WORKSPACE_SEARCH_MAX_DEPTH: usize = 12;
-/// 搜索扫描条目预算（防超大目录树把界面拖住）。
-const WORKSPACE_SEARCH_SCAN_BUDGET: usize = 20_000;
-
-/// 解析工作区内的目标路径。
-///
-/// `requested` 为空 → 根自身；非空必须是绝对路径，且（canonical 化后）落在
-/// 工作区根内——越界一律拒绝。返回值保持传入口径（非 canonical），供前端回用。
-fn resolve_workspace_target(
-    root: &std::path::Path,
-    requested: Option<&str>,
-) -> Result<std::path::PathBuf, String> {
-    let target = match requested.map(str::trim).filter(|p| !p.is_empty()) {
-        None => root.to_path_buf(),
-        Some(p) => {
-            let pb = std::path::PathBuf::from(p);
-            if !pb.is_absolute() {
-                return Err(format!("需要绝对路径：{p}"));
-            }
-            pb
-        }
-    };
-    let canon_root = root
-        .canonicalize()
-        .map_err(|e| format!("工作区根不可访问：{e}"))?;
-    let canon_target = target
-        .canonicalize()
-        .map_err(|e| format!("路径不可访问：{e}"))?;
-    if !canon_target.starts_with(&canon_root) {
-        return Err("路径不在工作区内".to_string());
-    }
-    Ok(target)
-}
-
-/// 列一层目录：目录在前，各自按名排序（大小写不敏感，末位比原串保确定）。
-fn list_dir_entries(dir: &std::path::Path) -> Result<Vec<WorkspaceEntry>, String> {
-    let rd = std::fs::read_dir(dir).map_err(|e| format!("读取目录失败：{e}"))?;
-    let mut out = Vec::new();
-    for entry in rd.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        out.push(WorkspaceEntry {
-            name,
-            is_dir,
-            path: entry.path().to_string_lossy().into_owned(),
-        });
-    }
-    out.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    Ok(out)
-}
-
-/// 递归按名搜索（大小写不敏感子串）。
-///
-/// 跳过点开头项与依赖/构建目录；深度 ≤ MAX_DEPTH；扫描条目 ≤ BUDGET；
-/// 命中数达上限即停。结果按相对路径排序（确定序）。
-fn search_workspace_entries(root: &std::path::Path, query: &str) -> Vec<WorkspaceSearchHit> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let mut hits: Vec<WorkspaceSearchHit> = Vec::new();
-    let mut budget = WORKSPACE_SEARCH_SCAN_BUDGET;
-    let mut stack: Vec<(std::path::PathBuf, String, Vec<String>, usize)> =
-        vec![(root.to_path_buf(), String::new(), Vec::new(), 0)];
-    'outer: while let Some((dir, rel, chain, depth)) = stack.pop() {
-        if depth > WORKSPACE_SEARCH_MAX_DEPTH {
-            continue;
-        }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        let mut subdirs: Vec<(std::path::PathBuf, String, Vec<String>, usize)> = Vec::new();
-        for entry in rd.flatten() {
-            if budget == 0 {
-                break 'outer;
-            }
-            budget -= 1;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
-                continue;
-            }
-            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let child_rel = if rel.is_empty() {
-                name.clone()
-            } else {
-                format!("{rel}/{name}")
-            };
-            let child_abs = entry.path().to_string_lossy().into_owned();
-            if name.to_lowercase().contains(&needle) {
-                hits.push(WorkspaceSearchHit {
-                    name: name.clone(),
-                    path: child_abs.clone(),
-                    relative_path: child_rel.clone(),
-                    parent_subdir: rel.clone(),
-                    ancestor_dirs: chain.clone(),
-                    is_dir,
-                });
-                if hits.len() >= WORKSPACE_SEARCH_LIMIT {
-                    break 'outer;
-                }
-            }
-            if is_dir && !WORKSPACE_SEARCH_SKIP_DIRS.contains(&name.to_lowercase().as_str()) {
-                let mut child_chain = chain.clone();
-                child_chain.push(child_abs);
-                subdirs.push((entry.path(), child_rel, child_chain, depth + 1));
-            }
-        }
-        for item in subdirs.into_iter().rev() {
-            stack.push(item);
-        }
-    }
-    hits.sort_by(|a, b| {
-        a.relative_path
-            .to_lowercase()
-            .cmp(&b.relative_path.to_lowercase())
-            .then_with(|| a.relative_path.cmp(&b.relative_path))
-    });
-    hits
-}
-
-/// 列出工作区内一层目录（path 省略 = 根）。
-#[tauri::command]
-pub fn list_workspace_dir(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-    path: Option<String>,
-) -> Result<Vec<WorkspaceEntry>, String> {
-    let root = {
-        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
-        st.workspace_root()
-    };
-    let dir = resolve_workspace_target(&root, path.as_deref())?;
-    list_dir_entries(&dir)
-}
-
-/// 在工作区内按名字递归搜索（跳过隐藏项与依赖/构建目录）。
-#[tauri::command]
-pub fn search_workspace_files(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-    query: String,
-) -> Result<Vec<WorkspaceSearchHit>, String> {
-    let root = {
-        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
-        st.workspace_root()
-    };
-    Ok(search_workspace_entries(&root, &query))
-}
-
-/// 用系统文件管理器打开工作区根。
-///
-/// 目录不能走 open_path（那里只放行文件），故单开一条命令；目标固定为工作区根、
-/// 不经前端传参，边界最清楚。
-#[tauri::command]
-pub fn open_workspace_in_explorer(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-) -> Result<(), String> {
-    let root = {
-        let st = store.lock().map_err(|e| format!("设置锁获取失败：{e}"))?;
-        st.workspace_root()
-    };
-    let dir = resolve_workspace_target(&root, None)?;
-    #[cfg(target_os = "windows")]
-    let spawned = std::process::Command::new("explorer").arg(&dir).spawn();
-    #[cfg(target_os = "macos")]
-    let spawned = std::process::Command::new("open").arg(&dir).spawn();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let spawned = std::process::Command::new("xdg-open").arg(&dir).spawn();
-    spawned.map_err(|e| format!("打开文件管理器失败：{e}"))?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
