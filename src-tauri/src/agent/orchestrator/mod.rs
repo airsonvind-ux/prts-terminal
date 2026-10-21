@@ -44,6 +44,7 @@ mod llm_call;
 mod tool_loop;
 mod prompt_registry;
 mod memory_prompt;
+mod memory_parse;
 mod token_estimate;
 mod events;
 
