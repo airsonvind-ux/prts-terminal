@@ -27,7 +27,7 @@ import {
   WING_AMPLITUDE_DEFAULT,
   WING_AMPLITUDE_MIN,
 } from "./animationMapping";
-import { computeTailPath } from "../components/shell/tailAnimation";
+import { computeTailPath } from "../app/shell/tailAnimation";
 import type { Mood, MoodIntensity } from "../types";
 
 // ═══════════════════════════════════════════════

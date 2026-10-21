@@ -12,7 +12,7 @@
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-import { GUIDE_ITEMS, type GuideSurface } from "../components/guide/guideContent";
+import { GUIDE_ITEMS, type GuideSurface } from "../features/guide/guideContent";
 
 interface GuideState {
   /** 键集是否已从后端拉到。未拉到一律不展示——宁可不弹，也不误弹。 */

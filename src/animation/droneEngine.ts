@@ -26,7 +26,7 @@ import {
   type MoodAction,
   type ThermalState,
 } from "./animationMapping";
-import { computeTailPath } from "../components/shell/tailAnimation";
+import { computeTailPath } from "../app/shell/tailAnimation";
 
 /** 引擎操作的 DOM 元素集（DroneShellScene 通过 ref 提供） */
 export interface EngineElements {

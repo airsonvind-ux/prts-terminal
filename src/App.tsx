@@ -9,12 +9,12 @@
 
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DroneShellScene } from "./components/shell/DroneShellScene";
-import { ChatView } from "./components/content/ChatView";
-import { GuideHost } from "./components/guide/GuideHost";
-import { ContextMenuHost } from "./components/overlay/ContextMenuHost";
-import { OverlayContainer } from "./components/overlay/OverlayContainer";
-import { ToastHost } from "./components/overlay/ToastHost";
+import { DroneShellScene } from "./app/shell/DroneShellScene";
+import { ChatView } from "./features/chat/ChatView";
+import { GuideHost } from "./features/guide/GuideHost";
+import { ContextMenuHost } from "./features/overlays/ContextMenuHost";
+import { OverlayContainer } from "./features/overlays/OverlayContainer";
+import { ToastHost } from "./features/overlays/ToastHost";
 import { useDrag } from "./hooks/useDrag";
 import { useResize } from "./hooks/useResize";
 import { useAnimationMapping } from "./hooks/useAnimationMapping";

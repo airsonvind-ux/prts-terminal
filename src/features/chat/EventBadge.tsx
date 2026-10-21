@@ -38,7 +38,7 @@ import type {
   ToolDisplay,
 } from "../../types";
 import { toolAction } from "../../toolDisplay";
-import { FileLink } from "../ui/FileLink";
+import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./EventBadge.module.css";
 
 // ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案 ──

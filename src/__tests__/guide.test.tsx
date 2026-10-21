@@ -6,9 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { GuideHost } from "../components/guide/GuideHost";
-import { SettingsPanel } from "../components/settings/SettingsPanel";
-import { GUIDE_ITEMS, SETTINGS_TAB_GUIDE, WELCOME_TOUR } from "../components/guide/guideContent";
+import { GuideHost } from "../features/guide/GuideHost";
+import { SettingsPanel } from "../features/settings/SettingsPanel";
+import { GUIDE_ITEMS, SETTINGS_TAB_GUIDE, WELCOME_TOUR } from "../features/guide/guideContent";
 import { useGuideStore } from "../stores/useGuideStore";
 import { useUIStore } from "../stores/useUIStore";
 

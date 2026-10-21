@@ -8,7 +8,7 @@
 import { useState } from "react";
 import type { SkillEntry } from "../../types";
 import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
-import { FileLink } from "../ui/FileLink";
+import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./SettingsSkills.module.css";
 
 export interface SettingsSkillsProps {

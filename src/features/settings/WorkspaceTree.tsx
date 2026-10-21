@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
-import { FileLink } from "../ui/FileLink";
+import { FileLink } from "../../shared/ui/FileLink";
 import type { WorkspaceEntry, WorkspaceSearchHit } from "../../types";
 import styles from "./WorkspaceTree.module.css";
 
