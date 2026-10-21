@@ -32,6 +32,7 @@
 
 // use std::collections::HashMap; // 已注释（2026-08：ActiveContext 移除）
 use crate::llm::ChatMessage;
+#[cfg(test)]
 use super::prompt::{SYSTEM_PROMPT, UI_PROMPT};
 use super::prompt_registry::builtin_registry;
 

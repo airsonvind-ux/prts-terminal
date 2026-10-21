@@ -51,9 +51,6 @@ mod events;
 pub use retry::{is_retryable, RetryPolicy};
 use turn::TurnState;
 use turn_loop::dispatch_turn_with_memory;
-use llm_call::{
-    call_llm_with_retry, handle_stream_event, prepare_request_images, NO_VISION_NOTICE,
-};
 use tool_loop::{execute_tools_and_append, preflight_tool_calls};
 use events::EventSink;
 
@@ -453,6 +450,9 @@ fn switch_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::llm_call::{
+        call_llm_with_retry, handle_stream_event, prepare_request_images, NO_VISION_NOTICE,
+    };
     use std::collections::VecDeque;
 
     /// 文本模型看不到图时，必须被明确告知「图没进去」——否则会当自己看过了。

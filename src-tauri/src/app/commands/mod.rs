@@ -42,6 +42,7 @@ use workspace::{
     WORKSPACE_SEARCH_LIMIT,
 };
 
+#[cfg(test)]
 use prelude::*;
 
 

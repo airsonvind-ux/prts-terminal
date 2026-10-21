@@ -1,4 +1,5 @@
 use super::*;
+use super::llm_call::{call_llm_with_retry, prepare_request_images};
 
 /// 调度循环：turn 内反复执行 step（调 LLM → 判断是否需要工具 → 执行工具 → 继续），
 /// 直到 LLM 不再请求工具或停滞检测触发。
