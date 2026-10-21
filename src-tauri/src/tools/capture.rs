@@ -703,7 +703,7 @@ mod tests {
 
     /// 模拟器通道：adb 取一帧。
     #[test]
-    #[ignore]
+    #[ignore = "实机验证：需要真实模拟器在运行"]
     fn live_capture_emulator() {
         let output = CaptureGameScreen
             .execute(&ToolContext::new(), r#"{"target":"emulator"}"#)
@@ -714,7 +714,7 @@ mod tests {
 
     /// PC 端通道：WGC 取一帧（含标题栏裁剪）。
     #[test]
-    #[ignore]
+    #[ignore = "实机验证：需要真实 PC 游戏窗口在运行"]
     fn live_capture_pc() {
         let output = CaptureGameScreen
             .execute(&ToolContext::new(), r#"{"target":"pc"}"#)

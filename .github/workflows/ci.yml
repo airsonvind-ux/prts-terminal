@@ -34,8 +34,8 @@ jobs:
         run: cargo clippy --tests --lib --manifest-path src-tauri/Cargo.toml -- -D warnings
       - name: Check backend
         run: cargo check --lib --manifest-path src-tauri/Cargo.toml
-      - name: Compile tests
-        run: cargo test --lib --no-run --manifest-path src-tauri/Cargo.toml
+      - name: Test unit suite
+        run: cargo test --lib --manifest-path src-tauri/Cargo.toml
       - name: Compile data-contract tests
         run: cargo test --lib --no-run --manifest-path src-tauri/Cargo.toml --features data-contract
 

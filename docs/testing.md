@@ -53,7 +53,7 @@ cargo test --manifest-path bridge/Cargo.toml
 cargo test --lib --manifest-path src-tauri/Cargo.toml --features data-contract
 ```
 
-CI 覆盖前端测试/构建、Rust 编译和两种 feature 的测试编译；当前 CI **不执行** Rust 单元测试，也不执行数据契约套件，因为真实数据库未进入仓库。
+CI 覆盖前端测试/构建、Rust 默认单元测试与两种 feature 的测试编译；CI **不执行**数据契约套件，因为真实数据库未进入仓库。
 
 ## 当前实际分层（2026-10-21）
 
