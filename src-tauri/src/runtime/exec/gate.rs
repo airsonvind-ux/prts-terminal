@@ -322,9 +322,7 @@ pub(crate) fn scan_tokens(command: &str) -> ScanResult {
 
 /// 重定向目标读取：跳过前导空白后读一个 token（引号分组语义同参数），
 /// 返回剥离引号后的值；未闭合引号 / 目标内出现 OUT 字符 / 空 → None。
-fn read_target(
-    it: &mut std::iter::Peekable<std::str::Chars>,
-) -> Option<String> {
+fn read_target(it: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
     while matches!(it.peek(), Some(c) if c.is_whitespace()) {
         it.next();
     }
@@ -463,11 +461,19 @@ struct Classified {
 
 impl Classified {
     fn new(kind: OpKind, mode: TargetMode) -> Self {
-        Self { kind, mode, fixed_ask: None }
+        Self {
+            kind,
+            mode,
+            fixed_ask: None,
+        }
     }
 
     fn ask(kind: OpKind, reason: &'static str) -> Self {
-        Self { kind, mode: TargetMode::None, fixed_ask: Some(reason) }
+        Self {
+            kind,
+            mode: TargetMode::None,
+            fixed_ask: Some(reason),
+        }
     }
 }
 
@@ -542,9 +548,7 @@ fn classify_git(tokens: &[Token]) -> Classified {
         }
         "rm" => Classified::ask(OpKind::FileDeleteOp, "delete-always-ask"),
         "add" | "mv" => Classified::new(OpKind::FileWriteOp, TargetMode::GitPaths),
-        "commit" | "merge" | "tag" => {
-            Classified::new(OpKind::FileWriteOp, TargetMode::None)
-        }
+        "commit" | "merge" | "tag" => Classified::new(OpKind::FileWriteOp, TargetMode::None),
         "stash" => {
             let sub2 = tokens.get(2).map(|t| t.norm_name()).unwrap_or_default();
             match sub2.as_str() {
@@ -602,9 +606,7 @@ fn classify_interpreter(name: &str, tokens: &[Token]) -> Option<Classified> {
                 "-c" => Classified::ask(OpKind::CodeExecOp, "code-exec"),
                 "-m" => Classified::ask(OpKind::UnknownOp, "unlisted-option"),
                 "" => Classified::ask(OpKind::CodeExecOp, "code-exec"), // REPL
-                s if s.starts_with('-') => {
-                    Classified::ask(OpKind::UnknownOp, "unlisted-option")
-                }
+                s if s.starts_with('-') => Classified::ask(OpKind::UnknownOp, "unlisted-option"),
                 _ => Classified::new(OpKind::RunProgramOp, TargetMode::Script),
             };
             Some(c)
@@ -616,9 +618,7 @@ fn classify_interpreter(name: &str, tokens: &[Token]) -> Option<Classified> {
                 "-file" | "-f" => Classified::new(OpKind::RunProgramOp, TargetMode::Script),
                 "-?" | "/?" => Classified::new(OpKind::SystemQueryOp, TargetMode::None),
                 "" => Classified::ask(OpKind::CodeExecOp, "code-exec"), // 交互会话
-                s if s.starts_with('-') => {
-                    Classified::ask(OpKind::UnknownOp, "unlisted-option")
-                }
+                s if s.starts_with('-') => Classified::ask(OpKind::UnknownOp, "unlisted-option"),
                 _ => Classified::new(OpKind::RunProgramOp, TargetMode::Script),
             };
             Some(c)
@@ -638,9 +638,7 @@ fn classify_interpreter(name: &str, tokens: &[Token]) -> Option<Classified> {
             let c = match second.as_str() {
                 "-c" => Classified::ask(OpKind::CodeExecOp, "code-exec"),
                 "" => Classified::ask(OpKind::CodeExecOp, "code-exec"), // 交互
-                s if s.starts_with('-') => {
-                    Classified::ask(OpKind::UnknownOp, "unlisted-option")
-                }
+                s if s.starts_with('-') => Classified::ask(OpKind::UnknownOp, "unlisted-option"),
                 _ => Classified::new(OpKind::RunProgramOp, TargetMode::Script),
             };
             Some(c)
@@ -653,9 +651,7 @@ fn classify_interpreter(name: &str, tokens: &[Token]) -> Option<Classified> {
                 "run" if name == "deno" || name == "bun" => {
                     Classified::new(OpKind::RunProgramOp, TargetMode::Script)
                 }
-                s if s.starts_with('-') => {
-                    Classified::ask(OpKind::UnknownOp, "unlisted-option")
-                }
+                s if s.starts_with('-') => Classified::ask(OpKind::UnknownOp, "unlisted-option"),
                 _ => Classified::new(OpKind::RunProgramOp, TargetMode::Script),
             };
             Some(c)
@@ -685,11 +681,13 @@ fn classify_program(tokens: &[Token]) -> Classified {
             return c;
         }
     }
-    if let Some(spec) = risk::classify_program_spec(&name) {        let mode = match (spec.kind, spec.path_rule) {
+    if let Some(spec) = risk::classify_program_spec(&name) {
+        let mode = match (spec.kind, spec.path_rule) {
             (OpKind::SystemQueryOp, _)
-            | (OpKind::NetworkOp | OpKind::InstallOp | OpKind::ProcessControlOp | OpKind::ConfigOp, _) => {
-                TargetMode::None
-            }
+            | (
+                OpKind::NetworkOp | OpKind::InstallOp | OpKind::ProcessControlOp | OpKind::ConfigOp,
+                _,
+            ) => TargetMode::None,
             (_, PathRule::NoPaths) => TargetMode::None,
             (_, PathRule::PositionalAll) => TargetMode::AllPositional,
             (_, PathRule::PositionalFirstTwo) => TargetMode::FirstTwoPositional,
@@ -711,7 +709,10 @@ fn extract_targets(cls: &Classified, tokens: &[Token]) -> Result<Vec<String>, &'
         TargetMode::None => Ok(Vec::new()),
         TargetMode::AllPositional | TargetMode::FirstTwoPositional => {
             let spec = risk::classify_program_spec(&tokens[0].norm_name());
-            let lenient = matches!(spec.map(|s| s.option_policy), Some(risk::OptionPolicy::Lenient));
+            let lenient = matches!(
+                spec.map(|s| s.option_policy),
+                Some(risk::OptionPolicy::Lenient)
+            );
             let limit = if cls.mode == TargetMode::FirstTwoPositional {
                 2
             } else {

@@ -67,7 +67,7 @@ impl Tool for CaptureGameScreen {
             "截取《明日方舟》当前的游戏画面，返回一张图片。\n",
             "\n",
             "模拟器与 PC 端均适用；PC 端要求游戏窗口未最小化。PC 端通常一秒内返回；",
-        "模拟器端要经 adb 取设备帧，慢一些，设备还没挂到 adb 上时首次调用会再多花几秒。\n",
+            "模拟器端要经 adb 取设备帧，慢一些，设备还没挂到 adb 上时首次调用会再多花几秒。\n",
             "\n参数：\n",
             "  target：可选，\"emulator\" | \"pc\"；省略时自动选择，两端都在时需指定。"
         )
@@ -184,12 +184,12 @@ fn decide(requested: Option<Target>, emulator_ok: bool, pc_ok: bool) -> Result<T
     match (emulator_ok, pc_ok) {
         (true, false) => Ok(Target::Emulator),
         (false, true) => Ok(Target::Pc),
-        (true, true) => Err(
-            "模拟器与 PC 端都在运行，请指定 target：\"emulator\" 或 \"pc\"。".to_string(),
-        ),
-        (false, false) => Err(
-            "没有找到可以截取的画面：没有检测到模拟器设备，PC 端游戏也未启动。".to_string(),
-        ),
+        (true, true) => {
+            Err("模拟器与 PC 端都在运行，请指定 target：\"emulator\" 或 \"pc\"。".to_string())
+        }
+        (false, false) => {
+            Err("没有找到可以截取的画面：没有检测到模拟器设备，PC 端游戏也未启动。".to_string())
+        }
     }
 }
 
@@ -314,9 +314,7 @@ fn pick_device(listed: Result<Vec<String>, String>) -> Result<Option<String>, St
     match devices.len() {
         0 => Ok(None),
         1 => Ok(Some(devices[0].clone())),
-        n => Err(format!(
-            "检测到 {n} 台在线设备，请只保留一台运行后重试。"
-        )),
+        n => Err(format!("检测到 {n} 台在线设备，请只保留一台运行后重试。")),
     }
 }
 
@@ -394,11 +392,8 @@ fn capture_emulator(adb: &Path, serial: &str, out: &Path) -> Result<(), String> 
         command.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("启动 adb 失败：{e}"))?;
-    let mut file =
-        std::fs::File::create(out).map_err(|e| format!("创建截图文件失败：{e}"))?;
+    let mut child = command.spawn().map_err(|e| format!("启动 adb 失败：{e}"))?;
+    let mut file = std::fs::File::create(out).map_err(|e| format!("创建截图文件失败：{e}"))?;
     {
         let mut stdout = child
             .stdout
@@ -474,9 +469,9 @@ mod pc {
     use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
 
+    use windows::core::w;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, IsIconic};
-    use windows::core::w;
     use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
     use windows_capture::encoder::ImageFormat;
     use windows_capture::frame::Frame;
@@ -492,8 +487,7 @@ mod pc {
 
     /// 按标题 + 类名找窗口（不读进程名：受保护进程会被拒）。
     pub fn find_window() -> Result<HWND, String> {
-        let hwnd = unsafe { FindWindowW(w!("UnityWndClass"), w!("明日方舟")) }
-            .unwrap_or_default();
+        let hwnd = unsafe { FindWindowW(w!("UnityWndClass"), w!("明日方舟")) }.unwrap_or_default();
         if hwnd.is_invalid() {
             return Err("PC 端游戏未启动。".to_string());
         }
@@ -574,7 +568,9 @@ mod pc {
         }
 
         fn on_closed(&mut self) -> Result<(), Self::Error> {
-            let _ = self.done.send(Err("PC 端取帧失败：窗口已关闭。".to_string()));
+            let _ = self
+                .done
+                .send(Err("PC 端取帧失败：窗口已关闭。".to_string()));
             Ok(())
         }
     }
@@ -588,7 +584,10 @@ mod tests {
     fn parse_target_maps_and_rejects() {
         assert_eq!(parse_target("").unwrap(), None);
         assert_eq!(parse_target("{}").unwrap(), None);
-        assert_eq!(parse_target(r#"{"target":"pc"}"#).unwrap(), Some(Target::Pc));
+        assert_eq!(
+            parse_target(r#"{"target":"pc"}"#).unwrap(),
+            Some(Target::Pc)
+        );
         assert_eq!(
             parse_target(r#"{"target":"emulator"}"#).unwrap(),
             Some(Target::Emulator)

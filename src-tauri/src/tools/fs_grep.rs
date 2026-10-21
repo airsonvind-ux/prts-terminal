@@ -120,7 +120,10 @@ fn parse_rule(base: &Path, line: &str) -> Option<IgnoreRule> {
 
 /// 解析 .gitignore 文件内容 → 规则列表（逐行容错）。
 fn parse_gitignore(base: &Path, content: &str) -> Vec<IgnoreRule> {
-    content.lines().filter_map(|l| parse_rule(base, l)).collect()
+    content
+        .lines()
+        .filter_map(|l| parse_rule(base, l))
+        .collect()
 }
 
 /// 读目录级 .gitignore（best-effort：不存在 / 非 UTF-8 → 空规则集）。
@@ -465,7 +468,11 @@ impl Tool for GrepTool {
             return ToolDisplay::default();
         };
         // 仅搜索词（目录起点与命中不展示）
-        match v.get("pattern").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+        match v
+            .get("pattern")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        {
             Some(p) => ToolDisplay::info(p),
             None => ToolDisplay::default(),
         }
@@ -498,9 +505,9 @@ impl Tool for GrepTool {
         let limit = match v.get("limit") {
             None | Some(serde_json::Value::Null) => DEFAULT_GREP_LIMIT,
             Some(n) => {
-                let n = n.as_u64().ok_or_else(|| {
-                    ToolError::Parse("参数 limit 必须是正整数".into())
-                })?;
+                let n = n
+                    .as_u64()
+                    .ok_or_else(|| ToolError::Parse("参数 limit 必须是正整数".into()))?;
                 if n == 0 {
                     return Err(ToolError::Parse("参数 limit 必须是正整数".into()));
                 }
@@ -529,20 +536,23 @@ impl Tool for GrepTool {
 
         // ── 3. 目标解析：省略 → 工作区根；给出 → resolve_read（BLOCKED 拒）──
         let (target, single_file) = match v.get("path") {
-            None | Some(serde_json::Value::Null) => (self.policy.workspace_root().canonical(), false),
+            None | Some(serde_json::Value::Null) => {
+                (self.policy.workspace_root().canonical(), false)
+            }
             Some(p) => {
                 let raw = p
                     .as_str()
                     .ok_or_else(|| ToolError::Parse("参数 path 必须是字符串".into()))?;
-                let resolved = path_guard::resolve_read(&self.policy, raw).map_err(|e| match e {
-                    path_guard::PathGuardError::Io(_) => {
-                        ToolError::Execution(format!("路径不存在：{raw}"))
-                    }
-                    path_guard::PathGuardError::Blocked(_) => {
-                        ToolError::Execution(format!("路径不可读（受保护路径）：{raw}"))
-                    }
-                    _ => ToolError::Execution(format!("路径不可读：{raw}")),
-                })?;
+                let resolved =
+                    path_guard::resolve_read(&self.policy, raw).map_err(|e| match e {
+                        path_guard::PathGuardError::Io(_) => {
+                            ToolError::Execution(format!("路径不存在：{raw}"))
+                        }
+                        path_guard::PathGuardError::Blocked(_) => {
+                            ToolError::Execution(format!("路径不可读（受保护路径）：{raw}"))
+                        }
+                        _ => ToolError::Execution(format!("路径不可读：{raw}")),
+                    })?;
                 let meta = std::fs::metadata(&resolved)
                     .map_err(|_| ToolError::Execution(format!("路径不存在：{raw}")))?;
                 if meta.is_dir() {
@@ -550,9 +560,7 @@ impl Tool for GrepTool {
                 } else if meta.is_file() {
                     (resolved, true)
                 } else {
-                    return Err(ToolError::Execution(format!(
-                        "不是普通文件或目录：{raw}"
-                    )));
+                    return Err(ToolError::Execution(format!("不是普通文件或目录：{raw}")));
                 }
             }
         };
@@ -598,7 +606,8 @@ impl Tool for GrepTool {
             ));
         }
         if state.output_truncated {
-            footers.push("结果文本超过约 48KB，已截断，请细化 pattern 或缩小 path 范围".to_string());
+            footers
+                .push("结果文本超过约 48KB，已截断，请细化 pattern 或缩小 path 范围".to_string());
         }
         let mut skip_parts: Vec<String> = Vec::new();
         if state.binary_skipped > 0 {
@@ -667,10 +676,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-grep-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-grep-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -702,10 +709,7 @@ mod tests {
     #[test]
     fn rule_comments_and_blank_lines_ignored() {
         let root = unique_temp_dir("r-comment");
-        let rules = parse_gitignore(
-            &root,
-            "# 注释\n\n  # 带缩进注释\na.txt\n   \n",
-        );
+        let rules = parse_gitignore(&root, "# 注释\n\n  # 带缩进注释\na.txt\n   \n");
         assert_eq!(rules.len(), 1, "注释/空行不应生成规则");
         assert!(ignores(&rules, &root.join("a.txt"), false));
         assert!(!ignores(&rules, &root.join("b.txt"), false));
@@ -730,7 +734,10 @@ mod tests {
         let root = unique_temp_dir("r-anchor");
         let rules = vec![rule(&root, "/build")];
 
-        assert!(ignores(&rules, &root.join("build"), true), "根级 build 命中");
+        assert!(
+            ignores(&rules, &root.join("build"), true),
+            "根级 build 命中"
+        );
         assert!(
             !ignores(&rules, &root.join("sub/build"), true),
             "含 / 锚定所在目录：sub/build 不命中"
@@ -744,7 +751,10 @@ mod tests {
         let root = unique_temp_dir("r-dironly");
         let rules = vec![rule(&root, "cache/")];
 
-        assert!(ignores(&rules, &root.join("cache"), true), "目录 cache 忽略");
+        assert!(
+            ignores(&rules, &root.join("cache"), true),
+            "目录 cache 忽略"
+        );
         assert!(
             !ignores(&rules, &root.join("cache"), false),
             "尾 / 仅目录：同名文件不忽略"
@@ -770,7 +780,11 @@ mod tests {
     #[test]
     fn rule_glob_star_question_bracket() {
         let root = unique_temp_dir("r-glob");
-        let rules = vec![rule(&root, "*.rs"), rule(&root, "file?.txt"), rule(&root, "[ab].md")];
+        let rules = vec![
+            rule(&root, "*.rs"),
+            rule(&root, "file?.txt"),
+            rule(&root, "[ab].md"),
+        ];
 
         assert!(ignores(&rules, &root.join("main.rs"), false));
         assert!(!ignores(&rules, &root.join("main.txt"), false));
@@ -788,19 +802,43 @@ mod tests {
         // logs/**/debug.log：任意中间层（含零层）
         let r1 = rule(&root, "logs/**/debug.log");
         assert!(ignores(&[r1], &root.join("logs/debug.log"), false));
-        assert!(ignores(&[rule(&root, "logs/**/debug.log")], &root.join("logs/a/debug.log"), false));
+        assert!(ignores(
+            &[rule(&root, "logs/**/debug.log")],
+            &root.join("logs/a/debug.log"),
+            false
+        ));
         assert!(ignores(
             &[rule(&root, "logs/**/debug.log")],
             &root.join("logs/a/b/debug.log"),
             false
         ));
         // **/vendor：任意层（含零层）
-        assert!(ignores(&[rule(&root, "**/vendor")], &root.join("vendor"), true));
-        assert!(ignores(&[rule(&root, "**/vendor")], &root.join("a/b/vendor"), true));
+        assert!(ignores(
+            &[rule(&root, "**/vendor")],
+            &root.join("vendor"),
+            true
+        ));
+        assert!(ignores(
+            &[rule(&root, "**/vendor")],
+            &root.join("a/b/vendor"),
+            true
+        ));
         // assets/**：子树全部（不含 assets 自身）
-        assert!(ignores(&[rule(&root, "assets/**")], &root.join("assets/x"), false));
-        assert!(ignores(&[rule(&root, "assets/**")], &root.join("assets/a/b"), true));
-        assert!(!ignores(&[rule(&root, "assets/**")], &root.join("assets"), true));
+        assert!(ignores(
+            &[rule(&root, "assets/**")],
+            &root.join("assets/x"),
+            false
+        ));
+        assert!(ignores(
+            &[rule(&root, "assets/**")],
+            &root.join("assets/a/b"),
+            true
+        ));
+        assert!(!ignores(
+            &[rule(&root, "assets/**")],
+            &root.join("assets"),
+            true
+        ));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -828,8 +866,14 @@ mod tests {
         let rules = parse_gitignore(&root, "#file.txt\n\\#keep.txt\n");
 
         assert_eq!(rules.len(), 1);
-        assert!(ignores(&rules, &root.join("#keep.txt"), false), "转义 # 命中字面文件");
-        assert!(!ignores(&rules, &root.join("file.txt"), false), "注释行不忽略");
+        assert!(
+            ignores(&rules, &root.join("#keep.txt"), false),
+            "转义 # 命中字面文件"
+        );
+        assert!(
+            !ignores(&rules, &root.join("file.txt"), false),
+            "注释行不忽略"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -842,7 +886,10 @@ mod tests {
         let rules = parse_gitignore(&root, "a.txt\n[unclosed\n");
         assert_eq!(rules.len(), 2);
         assert!(ignores(&rules, &root.join("a.txt"), false));
-        assert!(ignores(&rules, &root.join("[unclosed"), false), "未闭合类退化字面匹配");
+        assert!(
+            ignores(&rules, &root.join("[unclosed"), false),
+            "未闭合类退化字面匹配"
+        );
         assert!(!ignores(&rules, &root.join("b.txt"), false));
 
         let _ = std::fs::remove_dir_all(&root);
@@ -859,7 +906,10 @@ mod tests {
         let tool = grep_tool(&root);
 
         let out = tool
-            .execute(&ToolContext::new(), r#"{"pattern":"API_KEY","path":".env"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"pattern":"API_KEY","path":".env"}"#,
+            )
             .unwrap();
         assert!(out.summary.contains(".env:1: API_KEY=secret"));
         assert_eq!(out.canonical["totalMatches"], 1);
@@ -877,7 +927,11 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"pattern":"grep","path":"sub"}"#)
             .unwrap();
-        assert!(out.summary.contains("sub/b.txt:1: hello grep"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("sub/b.txt:1: hello grep"),
+            "got: {}",
+            out.summary
+        );
         assert!(out.summary.contains("（共 1 处匹配）"));
         assert_eq!(out.canonical["matches"][0]["line"], 1);
         // canonical.path 为 canonicalize 后的绝对路径
@@ -902,12 +956,10 @@ mod tests {
         assert!(out.summary.contains("a.txt:1: hit"));
         assert!(out.summary.contains("d/c.txt:1: hit"));
         assert_eq!(out.canonical["totalMatches"], 2);
-        assert!(
-            out.canonical["path"]
-                .as_str()
-                .unwrap()
-                .contains(root.canonicalize().unwrap().to_string_lossy().as_ref())
-        );
+        assert!(out.canonical["path"]
+            .as_str()
+            .unwrap()
+            .contains(root.canonicalize().unwrap().to_string_lossy().as_ref()));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -946,7 +998,10 @@ mod tests {
         assert_eq!(out.canonical["totalMatches"], 0);
         // ignore_case=true
         let out2 = tool
-            .execute(&ToolContext::new(), r#"{"pattern":"apple","ignore_case":true}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"pattern":"apple","ignore_case":true}"#,
+            )
             .unwrap();
         assert_eq!(out2.canonical["totalMatches"], 1);
         assert_eq!(out2.canonical["ignoreCase"], true);
@@ -1052,7 +1107,10 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"pattern":"secret"}"#)
             .unwrap();
-        assert_eq!(out.canonical["totalMatches"], 0, "父目录被剪枝，子规则不可达");
+        assert_eq!(
+            out.canonical["totalMatches"], 0,
+            "父目录被剪枝，子规则不可达"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1086,7 +1144,11 @@ mod tests {
             .unwrap();
         assert_eq!(out.canonical["totalMatches"], 1);
         assert_eq!(out.canonical["binarySkipped"], 1);
-        assert!(out.summary.contains("（1 个二进制已跳过）"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("（1 个二进制已跳过）"),
+            "got: {}",
+            out.summary
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1103,7 +1165,11 @@ mod tests {
             .unwrap();
         assert_eq!(out.canonical["totalMatches"], 0);
         assert_eq!(out.canonical["nonUtf8Skipped"], 1);
-        assert!(out.summary.contains("（1 个非 UTF-8已跳过）"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("（1 个非 UTF-8已跳过）"),
+            "got: {}",
+            out.summary
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1122,7 +1188,11 @@ mod tests {
             .unwrap();
         assert_eq!(out.canonical["totalMatches"], 0);
         assert_eq!(out.canonical["tooLargeSkipped"], 1);
-        assert!(out.summary.contains("（1 个超大文件已跳过）"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("（1 个超大文件已跳过）"),
+            "got: {}",
+            out.summary
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1130,17 +1200,24 @@ mod tests {
     #[test]
     fn grep_limit_reached_with_footer() {
         let root = unique_temp_dir("g-limit");
-        let content = (1..=120).map(|i| format!("hit line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (1..=120)
+            .map(|i| format!("hit line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         std::fs::write(root.join("many.txt"), content).unwrap();
         let tool = grep_tool(&root);
 
         let out = tool
             .execute(&ToolContext::new(), r#"{"pattern":"hit"}"#)
             .unwrap();
-        assert_eq!(out.canonical["totalMatches"], 100, "默认 limit=100 提前停止");
+        assert_eq!(
+            out.canonical["totalMatches"], 100,
+            "默认 limit=100 提前停止"
+        );
         assert_eq!(out.canonical["limitReached"], true);
         assert!(
-            out.summary.contains("（达到 100 条上限，可增大 limit（≤500）或细化 pattern）"),
+            out.summary
+                .contains("（达到 100 条上限，可增大 limit（≤500）或细化 pattern）"),
             "got: {}",
             out.summary
         );
@@ -1174,7 +1251,8 @@ mod tests {
         assert!(text.ends_with(LINE_TRUNC_MARKER));
         assert_eq!(out.canonical["linesTruncated"], true);
         assert!(
-            out.summary.contains("部分匹配行超 500 字符已截断，用 read_file 查看全文"),
+            out.summary
+                .contains("部分匹配行超 500 字符已截断，用 read_file 查看全文"),
             "got: {}",
             out.summary
         );
@@ -1198,9 +1276,16 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"pattern":"x$","limit":500}"#)
             .unwrap();
-        assert_eq!(out.canonical["outputTruncated"], true, "200 行长行应超 48KB 预算");
+        assert_eq!(
+            out.canonical["outputTruncated"], true,
+            "200 行长行应超 48KB 预算"
+        );
         assert!(out.canonical["totalMatches"].as_u64().unwrap() < 200);
-        assert!(out.summary.contains("（结果文本超过约 48KB，已截断"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("（结果文本超过约 48KB，已截断"),
+            "got: {}",
+            out.summary
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1303,7 +1388,10 @@ mod tests {
         let tool = GrepTool::new(make_blocked_policy(&root));
 
         let err = tool
-            .execute(&ToolContext::new(), r#"{"pattern":"secret","path":"secret.txt"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"pattern":"secret","path":"secret.txt"}"#,
+            )
             .unwrap_err();
         assert!(
             matches!(&err, ToolError::Execution(m) if m.contains("路径不可读（受保护路径）")),

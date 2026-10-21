@@ -251,7 +251,11 @@ pub(super) fn handle_stream_event(
             ));
         }
 
-        StreamEvent::ToolCall { id, name, arguments } => {
+        StreamEvent::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
             // Phase 切换
             switch_phase(phase_state, AgentPhase::Executing, session_id, sink);
             // 展示切片：在此（tool/call 发出前）解析——用户于调用发起时即见对象/

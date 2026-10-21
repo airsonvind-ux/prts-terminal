@@ -15,7 +15,9 @@ use super::prelude::*;
 pub fn list_conversations(
     store: State<'_, Arc<Mutex<SessionStore>>>,
 ) -> Result<Vec<ConversationMeta>, String> {
-    let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.list()
 }
 
@@ -33,7 +35,9 @@ pub fn get_conversation(
     store: State<'_, Arc<Mutex<SessionStore>>>,
     conversation_id: String,
 ) -> Result<ConversationRecord, String> {
-    let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.get_coalesced(&conversation_id)
 }
 
@@ -64,7 +68,9 @@ pub fn append_turn(
         last_notice_seq,
         usage_deltas,
     };
-    let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.append_turn(&req)
 }
 
@@ -103,7 +109,9 @@ pub fn update_conversation_meta(
         last_notice_seq_clear: clear_notice_seq.unwrap_or(false),
         usage_deltas: usage_deltas.unwrap_or_default(),
     };
-    let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     s.update_meta(&conversation_id, &patch)
 }
 
@@ -155,10 +163,14 @@ pub async fn generate_conversation_title(
         Some(t) => t,
         None => return Ok(()), // 失败静默降级（保留默认标题）
     };
-    let title_usage = title_result.usage.map(|u| usage_stat(&u, llm_config.api_type));
+    let title_usage = title_result
+        .usage
+        .map(|u| usage_stat(&u, llm_config.api_type));
 
     let outcome = {
-        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         s.try_set_title_if_expected(&conversation_id, &title, &expected_title)
     };
 
@@ -211,7 +223,9 @@ pub fn delete_conversation(
     // 先删会话（失败上抛，不静默）；再清 sidecar（冻结快照同生共死；
     // 裁决 1：先写快照后归档 → 孤儿在删除侧清扫）。
     {
-        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         s.delete(&conversation_id)?;
     }
     {

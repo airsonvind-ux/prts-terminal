@@ -11,8 +11,8 @@
 //! - SSE：event: response.output_text.delta / function_call_arguments.delta
 
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -20,9 +20,8 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
-    ModelRegistry,
-    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, StreamEvent,
+    StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -152,9 +151,8 @@ impl OpenAIResponsesClient {
 
         if !tools.is_empty() {
             // Responses API 使用与 Chat Completions 相同的工具格式
-            body["tools"] = serde_json::to_value(tools).map_err(|e| {
-                LlmError::Parse(format!("工具列表序列化失败: {e}"))
-            })?;
+            body["tools"] = serde_json::to_value(tools)
+                .map_err(|e| LlmError::Parse(format!("工具列表序列化失败: {e}")))?;
         }
 
         // 思考强度注入（设置页思考强度；None = 不干预——已设档才进 responses wire）。
@@ -192,10 +190,7 @@ impl OpenAIResponsesClient {
             .json(body);
 
         if !config.api_key.is_empty() {
-            req = req.header(
-                header::AUTHORIZATION,
-                format!("Bearer {}", config.api_key),
-            );
+            req = req.header(header::AUTHORIZATION, format!("Bearer {}", config.api_key));
         }
 
         Ok(req)
@@ -272,7 +267,11 @@ impl OpenAIResponsesClient {
         };
 
         let usage = body.get("usage").and_then(Self::extract_usage);
-        Ok(LlmResponse { text, tool_calls, usage })
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            usage,
+        })
     }
 
     // ── Usage ──
@@ -320,9 +319,10 @@ impl LlmClient for OpenAIResponsesClient {
             })?;
 
             let status = response.status();
-            let body: Value = response.json().await.map_err(|e| {
-                LlmError::Parse(format!("响应 JSON 解析失败: {e}"))
-            })?;
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
                 let err_msg = body
@@ -406,10 +406,20 @@ impl LlmClient for OpenAIResponsesClient {
 /// ```
 #[derive(Debug)]
 enum ResponsesSseEvent {
-    TextDelta { content: String },
-    ReasoningDelta { content: String },
-    FunctionCallDelta { call_id: String, name: Option<String>, arguments_delta: String },
-    Completed { usage: Option<Value> },
+    TextDelta {
+        content: String,
+    },
+    ReasoningDelta {
+        content: String,
+    },
+    FunctionCallDelta {
+        call_id: String,
+        name: Option<String>,
+        arguments_delta: String,
+    },
+    Completed {
+        usage: Option<Value>,
+    },
 }
 
 /// 解析 Responses API SSE 字节流。
@@ -574,10 +584,7 @@ fn parse_responses_frame(frame: &str) -> Option<ResponsesSseEvent> {
             })
         }
         "response.completed" => {
-            let usage = data
-                .get("response")
-                .and_then(|r| r.get("usage"))
-                .cloned();
+            let usage = data.get("response").and_then(|r| r.get("usage")).cloned();
             Some(ResponsesSseEvent::Completed { usage })
         }
         _ => None,
@@ -601,16 +608,12 @@ mod tests {
     ) -> impl futures_util::Stream<Item = Result<Vec<u8>, &'a str>> {
         let chunks: Vec<Result<Vec<u8>, &str>> = frames
             .iter()
-            .map(|(ev, data)| {
-                Ok(format!("event: {}\ndata: {}\n\n", ev, data).into_bytes())
-            })
+            .map(|(ev, data)| Ok(format!("event: {}\ndata: {}\n\n", ev, data).into_bytes()))
             .collect();
         stream::iter(chunks)
     }
 
-    async fn collect_events(
-        frames: &[(&str, &str)],
-    ) -> (Vec<StreamEvent>, StreamResult) {
+    async fn collect_events(frames: &[(&str, &str)]) -> (Vec<StreamEvent>, StreamResult) {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_c = events.clone();
         let on_event = move |e: StreamEvent| {
@@ -628,10 +631,7 @@ mod tests {
 
     #[test]
     fn extract_instructions_from_system() {
-        let msgs = vec![
-            ChatMessage::system("规则 A"),
-            ChatMessage::user("你好"),
-        ];
+        let msgs = vec![ChatMessage::system("规则 A"), ChatMessage::user("你好")];
         let inst = OpenAIResponsesClient::extract_instructions(&msgs);
         assert_eq!(inst, Some("规则 A".into()));
     }
@@ -738,9 +738,18 @@ mod tests {
     #[tokio::test]
     async fn pure_text_stream() {
         let frames = &[
-            ("response.output_text.delta", r#"{"type":"response.output_text.delta","delta":"你好"}"#),
-            ("response.output_text.delta", r#"{"type":"response.output_text.delta","delta":"博士"}"#),
-            ("response.completed", r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5}}}"#),
+            (
+                "response.output_text.delta",
+                r#"{"type":"response.output_text.delta","delta":"你好"}"#,
+            ),
+            (
+                "response.output_text.delta",
+                r#"{"type":"response.output_text.delta","delta":"博士"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            ),
         ];
         let (events, result) = collect_events(frames).await;
 
@@ -758,18 +767,29 @@ mod tests {
     #[tokio::test]
     async fn function_call_stream() {
         let frames = &[
-            ("response.function_call_arguments.delta", r#"{"type":"response.function_call_arguments.delta","call_id":"fc_1","name":"echo","delta":"{\"mess"}"#),
-            ("response.function_call_arguments.delta", r#"{"type":"response.function_call_arguments.delta","call_id":"fc_1","delta":"age\":\"hi\"}"}"#),
-            ("response.completed", r#"{"type":"response.completed","response":{"usage":{"input_tokens":8,"output_tokens":6}}}"#),
+            (
+                "response.function_call_arguments.delta",
+                r#"{"type":"response.function_call_arguments.delta","call_id":"fc_1","name":"echo","delta":"{\"mess"}"#,
+            ),
+            (
+                "response.function_call_arguments.delta",
+                r#"{"type":"response.function_call_arguments.delta","call_id":"fc_1","delta":"age\":\"hi\"}"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":8,"output_tokens":6}}}"#,
+            ),
         ];
         let (events, result) = collect_events(frames).await;
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
-            if id == "fc_1"
-            && name == "echo"
-            && arguments == r#"{"message":"hi"}"#
-        ));
+        assert!(
+            matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
+                if id == "fc_1"
+                && name == "echo"
+                && arguments == r#"{"message":"hi"}"#
+            )
+        );
         assert_eq!(result.tool_calls.len(), 1);
         // 契约不变量 I2/I5：arguments 端到端 raw（分片累积后原样直通）
         super::super::assert_stream_contract(&events, &result);
@@ -778,10 +798,22 @@ mod tests {
     #[tokio::test]
     async fn reasoning_stream() {
         let frames = &[
-            ("response.reasoning_text.delta", r#"{"type":"response.reasoning_text.delta","delta":"需要查询"}"#),
-            ("response.reasoning_text.delta", r#"{"type":"response.reasoning_text.delta","delta":"数据库"}"#),
-            ("response.output_text.delta", r#"{"type":"response.output_text.delta","delta":"结果"}"#),
-            ("response.completed", r#"{"type":"response.completed","response":{"usage":{"input_tokens":5,"output_tokens":3}}}"#),
+            (
+                "response.reasoning_text.delta",
+                r#"{"type":"response.reasoning_text.delta","delta":"需要查询"}"#,
+            ),
+            (
+                "response.reasoning_text.delta",
+                r#"{"type":"response.reasoning_text.delta","delta":"数据库"}"#,
+            ),
+            (
+                "response.output_text.delta",
+                r#"{"type":"response.output_text.delta","delta":"结果"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"usage":{"input_tokens":5,"output_tokens":3}}}"#,
+            ),
         ];
         let (events, result) = collect_events(frames).await;
 

@@ -43,10 +43,7 @@ impl SkillIndex {
     /// - dir 不存在或不可读 → Err（描述性信息）
     pub fn load(dir: &Path) -> Result<Self, String> {
         if !dir.is_dir() {
-            return Err(format!(
-                "Skill 目录不存在或不可读：{}",
-                dir.display()
-            ));
+            return Err(format!("Skill 目录不存在或不可读：{}", dir.display()));
         }
 
         let mut skills: HashMap<String, SkillMeta> = HashMap::new();
@@ -100,7 +97,11 @@ impl SkillIndex {
             }
         }
 
-        Ok(Self { skills, bodies, paths })
+        Ok(Self {
+            skills,
+            bodies,
+            paths,
+        })
     }
 
     /// 降级空索引（空表）：索引加载失败时使用，激活恒未命中。
@@ -359,10 +360,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-skills-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-skills-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -414,14 +413,14 @@ mod tests {
 
         // body：剥掉 frontmatter 区，不含分隔线；frontmatter 首行 `---` 也已剥离
         let body = idx.body("阿尔法").unwrap();
-        assert!(!body.contains("---"), "body 不应含 frontmatter 分隔线：{body}");
+        assert!(
+            !body.contains("---"),
+            "body 不应含 frontmatter 分隔线：{body}"
+        );
         assert_eq!(idx.body("不存在"), None);
 
         // catalog_text 按 name 排序（贝塔 < 阿尔法，与文件名顺序相反）且行格式正确
-        assert_eq!(
-            idx.catalog_text(),
-            "- 贝塔：条目 B\n- 阿尔法：条目 A"
-        );
+        assert_eq!(idx.catalog_text(), "- 贝塔：条目 B\n- 阿尔法：条目 A");
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -503,12 +502,7 @@ mod tests {
                 if p.is_dir() {
                     queue.push_back(p);
                 } else {
-                    out.push(
-                        p.strip_prefix(root)
-                            .unwrap()
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
+                    out.push(p.strip_prefix(root).unwrap().to_string_lossy().into_owned());
                 }
             }
         }
@@ -589,7 +583,11 @@ mod tests {
 
         sync_bundled_skills(&src, &dst).unwrap();
         let r2 = sync_bundled_skills(&src, &dst).unwrap();
-        assert!(r2.changed.is_empty(), "二次同步不应有写入：{:?}", r2.changed);
+        assert!(
+            r2.changed.is_empty(),
+            "二次同步不应有写入：{:?}",
+            r2.changed
+        );
         assert_eq!(r2.unchanged, 2);
 
         let _ = std::fs::remove_dir_all(&src);
@@ -633,8 +631,7 @@ mod tests {
     #[test]
     fn sync_missing_source_returns_err() {
         let dst = unique_temp_dir("sync-nosrc");
-        let err = sync_bundled_skills(Path::new("Z:/definitely/not/a/dir/xyz"), &dst)
-            .unwrap_err();
+        let err = sync_bundled_skills(Path::new("Z:/definitely/not/a/dir/xyz"), &dst).unwrap_err();
         assert!(!err.is_empty(), "错误信息应为描述性信息");
         // 源缺失时不产生部分效果（目标目录保持空）
         assert_eq!(std::fs::read_dir(&dst).unwrap().count(), 0);
@@ -668,7 +665,10 @@ mod tests {
         let idx = SkillIndex::load(&root).unwrap();
         assert_eq!(idx.names(), vec!["散装", "黑话小抄"]);
         assert!(idx.path("黑话小抄").unwrap().ends_with("SKILL.md"));
-        assert!(idx.resolve("不该出现").is_none(), "包内资源不应成为独立技能");
+        assert!(
+            idx.resolve("不该出现").is_none(),
+            "包内资源不应成为独立技能"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -746,7 +746,10 @@ mod tests {
 
         let r = sync_bundled_skills(&src, &dst).unwrap();
         assert!(!dst.join("数值计算.md").exists(), "旧形态内置应退役");
-        assert!(dst.join("数值计算").join("SKILL.md").is_file(), "新形态已同步");
+        assert!(
+            dst.join("数值计算").join("SKILL.md").is_file(),
+            "新形态已同步"
+        );
         assert!(dst.join("用户.md").exists(), "用户条目不动");
         assert!(dst.join("用户包").exists(), "用户包不动");
         assert!(dst.join(".tmp-残留").exists(), "隐藏残留不动");

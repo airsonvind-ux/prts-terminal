@@ -13,13 +13,12 @@
 //! 第 n 次 chat() / chat_stream() 回放第 n 组预设。
 //! 调用次数超出预设数量时返回错误。
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
-    StreamEvent, StreamResult, ToolDef,
+    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, StreamEvent, StreamResult, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -96,7 +95,9 @@ impl MockLlmClient {
     pub fn simple_reply(text: impl Into<String>) -> Self {
         let text = text.into();
         Self::new(vec![MockResponse {
-            events: vec![StreamEvent::TextDelta { content: text.clone() }],
+            events: vec![StreamEvent::TextDelta {
+                content: text.clone(),
+            }],
             result: StreamResult {
                 text,
                 tool_calls: vec![],
@@ -112,16 +113,13 @@ impl MockLlmClient {
     /// 超出数量时返回错误。
     fn take_response(&self) -> Result<(usize, &MockResponse), LlmError> {
         let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
-        self.responses
-            .get(idx)
-            .map(|r| (idx, r))
-            .ok_or_else(|| {
-                LlmError::Api(format!(
-                    "Mock 预设不足：第 {} 次调用，但只有 {} 组预设",
-                    idx + 1,
-                    self.responses.len()
-                ))
-            })
+        self.responses.get(idx).map(|r| (idx, r)).ok_or_else(|| {
+            LlmError::Api(format!(
+                "Mock 预设不足：第 {} 次调用，但只有 {} 组预设",
+                idx + 1,
+                self.responses.len()
+            ))
+        })
     }
 }
 
@@ -151,7 +149,11 @@ impl LlmClient for MockLlmClient {
                 Some(response.result.tool_calls.clone())
             };
 
-            Ok(LlmResponse { text, tool_calls, usage: None })
+            Ok(LlmResponse {
+                text,
+                tool_calls,
+                usage: None,
+            })
         })
     }
 
@@ -226,7 +228,9 @@ mod tests {
         let mock = MockLlmClient::new(vec![
             MockResponse {
                 events: vec![
-                    StreamEvent::ReasoningDelta { content: "需要查询".into() },
+                    StreamEvent::ReasoningDelta {
+                        content: "需要查询".into(),
+                    },
                     StreamEvent::ToolCall {
                         id: "c1".into(),
                         name: "echo".into(),
@@ -238,16 +242,19 @@ mod tests {
                     tool_calls: vec![ToolCall {
                         id: "c1".into(),
                         call_type: "function".into(),
-                        function: ToolCallFunction { name: "echo".into(), arguments: "{\"x\":1}".into() },
+                        function: ToolCallFunction {
+                            name: "echo".into(),
+                            arguments: "{\"x\":1}".into(),
+                        },
                     }],
                     reasoning: Some("需要查询".into()),
                     usage: None,
                 },
             },
             MockResponse {
-                events: vec![
-                    StreamEvent::TextDelta { content: "结果: x=1".into() },
-                ],
+                events: vec![StreamEvent::TextDelta {
+                    content: "结果: x=1".into(),
+                }],
                 result: StreamResult {
                     text: "结果: x=1".into(),
                     tool_calls: vec![],
@@ -264,7 +271,12 @@ mod tests {
         let events_1 = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_1_c = events_1.clone();
         let r1 = mock
-            .chat_stream(&config, &msgs, &tools, Box::new(move |e| events_1_c.lock().unwrap().push(e)))
+            .chat_stream(
+                &config,
+                &msgs,
+                &tools,
+                Box::new(move |e| events_1_c.lock().unwrap().push(e)),
+            )
             .await
             .unwrap();
 
@@ -280,7 +292,12 @@ mod tests {
         let events_2 = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_2_c = events_2.clone();
         let r2 = mock
-            .chat_stream(&config, &msgs, &tools, Box::new(move |e| events_2_c.lock().unwrap().push(e)))
+            .chat_stream(
+                &config,
+                &msgs,
+                &tools,
+                Box::new(move |e| events_2_c.lock().unwrap().push(e)),
+            )
             .await
             .unwrap();
 
@@ -303,10 +320,7 @@ mod tests {
             },
         }]);
 
-        let r = mock
-            .chat(&LlmConfig::default(), &[], &[])
-            .await
-            .unwrap();
+        let r = mock.chat(&LlmConfig::default(), &[], &[]).await.unwrap();
 
         assert_eq!(r.text, Some("直接回答".into()));
         assert!(r.tool_calls.is_none());
@@ -331,8 +345,12 @@ mod tests {
         let mock = MockLlmClient::new_with_hang(
             vec![MockResponse {
                 events: vec![
-                    StreamEvent::TextDelta { content: "半截一".into() },
-                    StreamEvent::TextDelta { content: "半截二".into() },
+                    StreamEvent::TextDelta {
+                        content: "半截一".into(),
+                    },
+                    StreamEvent::TextDelta {
+                        content: "半截二".into(),
+                    },
                 ],
                 result: StreamResult {
                     text: "半截一半截二".into(),
@@ -362,11 +380,7 @@ mod tests {
         drop(events);
 
         // 挂起中：任务不完成（timeout 证明仍在跑）
-        let pending = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            task,
-        )
-        .await;
+        let pending = tokio::time::timeout(std::time::Duration::from_millis(100), task).await;
         assert!(pending.is_err(), "挂起的 chat_stream 不应自行完成");
         // 放弃任务（drop 取消挂起 future，无泄漏）——cancel 安全
     }

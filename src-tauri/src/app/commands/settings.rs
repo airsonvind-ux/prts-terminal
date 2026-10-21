@@ -69,10 +69,7 @@ pub async fn pick_emulator_directory(
         }
     }
     builder.pick_folder(move |picked| {
-        let value = picked.and_then(|fp| {
-            fp.as_path()
-                .map(|p| p.to_string_lossy().into_owned())
-        });
+        let value = picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
         let _ = tx.send(value);
     });
     rx.await.map_err(|e| format!("目录选择失败: {e}"))
@@ -88,10 +85,8 @@ pub async fn pick_adb_file(app: AppHandle) -> Result<Option<String>, String> {
         .set_title("选择 adb 可执行文件")
         .add_filter("adb", &["exe"])
         .pick_file(move |picked| {
-            let value = picked.and_then(|fp| {
-                fp.as_path()
-                    .map(|p| p.to_string_lossy().into_owned())
-            });
+            let value =
+                picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
             let _ = tx.send(value);
         });
     rx.await.map_err(|e| format!("文件选择失败: {e}"))
@@ -123,9 +118,7 @@ pub fn get_settings(
 
 /// 引导「已看过」键集（界面态，只读；不设闸）。见 `settings::UiSection`。
 #[tauri::command]
-pub fn get_guide_seen(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-) -> Result<Vec<String>, String> {
+pub fn get_guide_seen(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<Vec<String>, String> {
     let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
     Ok(s.guide_seen())
 }
@@ -435,9 +428,7 @@ pub struct AppMeta {
 }
 
 #[tauri::command]
-pub fn get_app_meta(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-) -> Result<AppMeta, String> {
+pub fn get_app_meta(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<AppMeta, String> {
     let st = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
     Ok(AppMeta {
         version: env!("CARGO_PKG_VERSION"),
@@ -445,7 +436,9 @@ pub fn get_app_meta(
         default_workspace_root: crate::config::default_workspace_path()
             .to_string_lossy()
             .into_owned(),
-        db_path: crate::config::resolve_db_path().to_string_lossy().into_owned(),
+        db_path: crate::config::resolve_db_path()
+            .to_string_lossy()
+            .into_owned(),
         knowledge_dir: crate::knowledge::index::knowledge_dir()
             .to_string_lossy()
             .into_owned(),

@@ -74,12 +74,12 @@ pub fn is_private_ip(ip: &IpAddr) -> bool {
 fn is_private_ipv4(v4: Ipv4Addr) -> bool {
     let o = v4.octets();
     match o[0] {
-        127 => true,            // 回环 127.0.0.0/8
-        0 => true,              // 未指定 0.0.0.0/8（含 0.0.0.0）
-        10 => true,             // RFC1918 10.0.0.0/8
+        127 => true,                      // 回环 127.0.0.0/8
+        0 => true,                        // 未指定 0.0.0.0/8（含 0.0.0.0）
+        10 => true,                       // RFC1918 10.0.0.0/8
         172 => (16..=31).contains(&o[1]), // RFC1918 172.16.0.0/12
-        192 => o[1] == 168,     // RFC1918 192.168.0.0/16
-        169 => o[1] == 254,     // 链路本地 169.254.0.0/16
+        192 => o[1] == 168,               // RFC1918 192.168.0.0/16
+        169 => o[1] == 254,               // 链路本地 169.254.0.0/16
         _ => false,
     }
 }
@@ -181,7 +181,9 @@ pub fn absolutize_markdown_links(md: &str, base: &reqwest::Url) -> String {
         if pre.starts_with('!') {
             String::new()
         } else {
-            pre.trim_start_matches('[').trim_end_matches(']').to_string()
+            pre.trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string()
         }
     })
     .into_owned()
@@ -235,24 +237,39 @@ mod tests {
     fn private_ip_table() {
         let private = [
             // IPv4 回环 /8（127.0.0.0~127.255.255.255）
-            "127.0.0.1", "127.255.255.255", "127.8.9.10",
+            "127.0.0.1",
+            "127.255.255.255",
+            "127.8.9.10",
             // 未指定
             "0.0.0.0",
             // RFC1918
-            "10.0.0.1", "10.255.255.255",
-            "172.16.0.1", "172.31.255.255",
-            "192.168.1.1", "192.168.255.254",
+            "10.0.0.1",
+            "10.255.255.255",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "192.168.255.254",
             // 链路本地
-            "169.254.169.254", "169.254.0.1",
+            "169.254.169.254",
+            "169.254.0.1",
             // IPv6 回环 / 未指定
-            "::1", "0:0:0:0:0:0:0:1", "::",
+            "::1",
+            "0:0:0:0:0:0:0:1",
+            "::",
             // IPv6 链路本地 fe80::/10（fe80~febf）
-            "fe80::1", "febf::abcd",
+            "fe80::1",
+            "febf::abcd",
             // IPv6 ULA fc00::/7（fc00~fdff）
-            "fc00::1", "fd12:3456:789a::1", "fdff::ffff",
+            "fc00::1",
+            "fd12:3456:789a::1",
+            "fdff::ffff",
             // v4 映射 v6 内嵌私有（绕过形态）
-            "::ffff:127.0.0.1", "::ffff:10.1.2.3", "::ffff:192.168.0.1",
-            "::ffff:169.254.1.1", "::ffff:172.20.0.1", "::ffff:0.0.0.0",
+            "::ffff:127.0.0.1",
+            "::ffff:10.1.2.3",
+            "::ffff:192.168.0.1",
+            "::ffff:169.254.1.1",
+            "::ffff:172.20.0.1",
+            "::ffff:0.0.0.0",
         ];
         for s in private {
             assert!(is_private_ip(&ip(s)), "应判定私有: {s}");
@@ -263,13 +280,21 @@ mod tests {
     fn public_ip_table() {
         let public = [
             // 公网 v4
-            "8.8.8.8", "1.1.1.1", "114.114.114.114", "203.0.113.9",
+            "8.8.8.8",
+            "1.1.1.1",
+            "114.114.114.114",
+            "203.0.113.9",
             // RFC1918 边界外
-            "172.15.0.1", "172.32.0.1", "172.32.0.0",
+            "172.15.0.1",
+            "172.32.0.1",
+            "172.32.0.0",
             // 公网 v6
-            "2001:4860:4860::8888", "2606:4700:4700::1111", "2400:3200::1",
+            "2001:4860:4860::8888",
+            "2606:4700:4700::1111",
+            "2400:3200::1",
             // v4 映射 v6 内嵌公网
-            "::ffff:8.8.8.8", "::ffff:1.1.1.1",
+            "::ffff:8.8.8.8",
+            "::ffff:1.1.1.1",
         ];
         for s in public {
             assert!(!is_private_ip(&ip(s)), "应判定公网: {s}");
@@ -329,7 +354,11 @@ mod tests {
         let empty: Vec<String> = vec![];
         // 全公网 → 放
         assert!(!host_is_blocked("pub.example.com", &empty, mock_resolve));
-        assert!(!host_is_blocked("ipv6-only.example.com", &empty, mock_resolve));
+        assert!(!host_is_blocked(
+            "ipv6-only.example.com",
+            &empty,
+            mock_resolve
+        ));
         // 任一私有（部分 A/AAAA 指向内网）→ 拒
         assert!(host_is_blocked("mixed.example.com", &empty, mock_resolve));
         // localhost 经 DNS 解析命中回环 → 拒
@@ -406,7 +435,8 @@ mod tests {
 
     #[test]
     fn absolutize_strips_dangerous_schemes_to_plain_text() {
-        let md = "点击[这里](javascript:alert(1))、[甲](data:text/html,<script>)与[乙](mailto:a@b.c)。";
+        let md =
+            "点击[这里](javascript:alert(1))、[甲](data:text/html,<script>)与[乙](mailto:a@b.c)。";
         let out = absolutize_markdown_links(md, &base("https://prts.wiki/"));
         assert!(!out.contains("javascript:"), "got: {out}");
         assert!(!out.contains("data:text"), "got: {out}");
@@ -420,7 +450,10 @@ mod tests {
         let md = "![头像](data:image/png;base64,AAAA) 后文 ![logo](https://prts.wiki/logo.png)";
         let out = absolutize_markdown_links(md, &base("https://prts.wiki/"));
         assert!(!out.contains("data:"), "got: {out}");
-        assert!(out.contains("![logo](https://prts.wiki/logo.png)"), "got: {out}");
+        assert!(
+            out.contains("![logo](https://prts.wiki/logo.png)"),
+            "got: {out}"
+        );
         // javascript: 图 → 丢弃（含 alt 不回退为文本）
         let out = absolutize_markdown_links("![x](javascript:void 0)", &base("https://prts.wiki/"));
         assert_eq!(out.trim(), "");

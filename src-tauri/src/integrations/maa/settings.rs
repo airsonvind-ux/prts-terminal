@@ -160,7 +160,11 @@ mod tests {
         s.emulator = "MuMu 12".to_string();
         let o = s.overrides();
         assert_eq!(o.emulator.as_deref(), Some("MuMu 12"));
-        assert_eq!(o.adb_path.as_deref(), Some("D:\\mumu\\shell\\adb.exe"), "首尾空白去掉");
+        assert_eq!(
+            o.adb_path.as_deref(),
+            Some("D:\\mumu\\shell\\adb.exe"),
+            "首尾空白去掉"
+        );
         assert_eq!(
             MaaSettings {
                 auto_detect: false,

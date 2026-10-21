@@ -127,7 +127,9 @@ pub(super) fn search_workspace_entries(
         if depth > WORKSPACE_SEARCH_MAX_DEPTH {
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut subdirs: Vec<(std::path::PathBuf, String, Vec<String>, usize)> = Vec::new();
         for entry in rd.flatten() {
             if budget == 0 {

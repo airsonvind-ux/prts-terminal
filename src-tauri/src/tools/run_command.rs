@@ -104,7 +104,11 @@ impl Tool for RunCommandTool {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(params) else {
             return ToolDisplay::default();
         };
-        let cmd = v.get("command").and_then(|x| x.as_str()).unwrap_or("").trim();
+        let cmd = v
+            .get("command")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .trim();
         if cmd.is_empty() {
             return ToolDisplay::default();
         }
@@ -137,7 +141,9 @@ impl Tool for RunCommandTool {
 
         let cwd = match value.get("cwd") {
             Some(v) => {
-                let raw = v.as_str().ok_or_else(|| ToolError::Parse("参数类型错误: cwd 应为字符串".into()))?;
+                let raw = v
+                    .as_str()
+                    .ok_or_else(|| ToolError::Parse("参数类型错误: cwd 应为字符串".into()))?;
                 let p = PathBuf::from(raw);
                 let resolved = if p.is_absolute() {
                     p
@@ -158,16 +164,21 @@ impl Tool for RunCommandTool {
         let shell = match value.get("shell") {
             None => ShellKind::Auto,
             Some(v) => {
-                let raw = v.as_str().ok_or_else(|| ToolError::Parse("参数类型错误: shell 应为字符串".into()))?;
-                ShellKind::from_str(raw)
-                    .ok_or_else(|| ToolError::Parse(format!("shell 仅支持 auto/powershell/cmd，got: {raw}")))?
+                let raw = v
+                    .as_str()
+                    .ok_or_else(|| ToolError::Parse("参数类型错误: shell 应为字符串".into()))?;
+                ShellKind::from_str(raw).ok_or_else(|| {
+                    ToolError::Parse(format!("shell 仅支持 auto/powershell/cmd，got: {raw}"))
+                })?
             }
         };
 
         let timeout = match value.get("timeout") {
             None => self.timeout().expect("run_command timeout 必有默认值"),
             Some(v) => {
-                let secs = v.as_i64().ok_or_else(|| ToolError::Parse("参数类型错误: timeout 应为整数".into()))?;
+                let secs = v
+                    .as_i64()
+                    .ok_or_else(|| ToolError::Parse("参数类型错误: timeout 应为整数".into()))?;
                 if secs < 1 {
                     return Err(ToolError::Parse("timeout 必须 ≥ 1 秒".into()));
                 }
@@ -490,11 +501,11 @@ fn render_output(
             msg.push_str(&notice);
             Err(ToolError::CommandFailed(msg))
         }
-        Outcome::Killed => Err(ToolError::CommandFailed(
-            "命令已被终止".to_string(),
-        )),
+        Outcome::Killed => Err(ToolError::CommandFailed("命令已被终止".to_string())),
         Outcome::SpawnError => Err(ToolError::CommandFailed(
-            out.spawn_error.clone().unwrap_or_else(|| "命令无法启动".into()),
+            out.spawn_error
+                .clone()
+                .unwrap_or_else(|| "命令无法启动".into()),
         )),
     }
 }
@@ -521,10 +532,7 @@ mod tests {
         assert_eq!(d.full.as_deref(), Some(long.as_str()));
 
         // permission=full → 标注完整权限
-        let d = tool.display(
-            &ctx,
-            r#"{"command":"npm install","permission":"full"}"#,
-        );
+        let d = tool.display(&ctx, r#"{"command":"npm install","permission":"full"}"#);
         assert!(d.text.starts_with("npm install"));
         assert!(d.text.ends_with("（完整权限）"), "got {}", d.text);
 
@@ -573,7 +581,9 @@ mod tests {
     fn execute_rejects_missing_command() {
         let ws = unique_temp_dir("missing-cmd");
         let t = tool(&ws);
-        let err = t.execute(&ToolContext::new(), r#"{"cwd":"x"}"#).unwrap_err();
+        let err = t
+            .execute(&ToolContext::new(), r#"{"cwd":"x"}"#)
+            .unwrap_err();
         assert!(err.to_string().contains("command"), "got: {err}");
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -583,7 +593,10 @@ mod tests {
         let ws = unique_temp_dir("bad-params");
         let t = tool(&ws);
         let e1 = t
-            .execute(&ToolContext::new(), r#"{"command":"echo hi","shell":"bash"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"echo hi","shell":"bash"}"#,
+            )
             .unwrap_err();
         assert!(matches!(e1, ToolError::Parse(_)), "got: {e1}");
         let e2 = t
@@ -591,7 +604,10 @@ mod tests {
             .unwrap_err();
         assert!(matches!(e2, ToolError::Parse(_)), "got: {e2}");
         let e3 = t
-            .execute(&ToolContext::new(), r#"{"command":"echo hi","cwd":"C:/not-exist-dir-xyz"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"echo hi","cwd":"C:/not-exist-dir-xyz"}"#,
+            )
             .unwrap_err();
         assert!(matches!(e3, ToolError::Parse(_)), "got: {e3}");
         let _ = std::fs::remove_dir_all(&ws);
@@ -604,7 +620,11 @@ mod tests {
         let out = t
             .execute(&ToolContext::new(), r#"{"command":"echo m3a-echo-ok"}"#)
             .expect("echo 应成功");
-        assert!(out.summary.contains("m3a-echo-ok"), "summary: {}", out.summary);
+        assert!(
+            out.summary.contains("m3a-echo-ok"),
+            "summary: {}",
+            out.summary
+        );
         assert_eq!(out.canonical["ok"], serde_json::json!(true));
         assert_eq!(out.canonical["exit_code"], serde_json::json!(0));
         let _ = std::fs::remove_dir_all(&ws);
@@ -646,7 +666,10 @@ mod tests {
                 let err_at = msg.find("[stderr]").unwrap();
                 let out_at = msg.find("[stdout]").unwrap();
                 assert!(err_at < out_at, "失败时 stderr 段应在前: {msg}");
-                assert!(msg.contains("err-line") && msg.contains("out-line"), "got: {msg}");
+                assert!(
+                    msg.contains("err-line") && msg.contains("out-line"),
+                    "got: {msg}"
+                );
             }
             other => panic!("应 CommandFailed，got {other:?}"),
         }
@@ -697,7 +720,10 @@ mod tests {
                 assert!(msg.contains("e3000"), "尾部应保留最后一行");
                 assert!(!msg.contains("e1000"), "被裁的行不应出现");
                 assert!(msg.contains("read_file"), "截断应给落盘指引: {msg}");
-                assert!(!msg.contains("\\\\?\\"), "提示里的路径应为普通形式（剥 verbatim 前缀）");
+                assert!(
+                    !msg.contains("\\\\?\\"),
+                    "提示里的路径应为普通形式（剥 verbatim 前缀）"
+                );
                 let path = msg
                     .split("完整输出：")
                     .nth(1)
@@ -728,8 +754,14 @@ mod tests {
                 assert!(msg.contains("o1500"), "stdout 应保留尾部");
                 assert!(!msg.contains("o1000"), "stdout 被裁部分不应出现");
                 assert!(msg.contains("（stdout）"), "仅被裁通道需落盘: {msg}");
-                assert!(!msg.contains("（stderr）"), "未截断通道不落盘（内容已在正文）");
-                assert!(!msg.contains("\\\\?\\"), "提示里的路径应为普通形式（剥 verbatim 前缀）");
+                assert!(
+                    !msg.contains("（stderr）"),
+                    "未截断通道不落盘（内容已在正文）"
+                );
+                assert!(
+                    !msg.contains("\\\\?\\"),
+                    "提示里的路径应为普通形式（剥 verbatim 前缀）"
+                );
                 let path = msg
                     .split("完整输出：")
                     .nth(1)
@@ -770,9 +802,16 @@ mod tests {
         std::fs::write(ws.join("probe.txt"), "m3a-cwd-ok").unwrap();
         let t = tool(&ws);
         let out = t
-            .execute(&ToolContext::new(), r#"{"command":"Get-Content probe.txt","cwd":"."}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"command":"Get-Content probe.txt","cwd":"."}"#,
+            )
             .expect("相对 cwd 应解析到 workspace");
-        assert!(out.summary.contains("m3a-cwd-ok"), "summary: {}", out.summary);
+        assert!(
+            out.summary.contains("m3a-cwd-ok"),
+            "summary: {}",
+            out.summary
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -787,13 +826,22 @@ mod tests {
             )
             .expect("成功输出但截断");
         assert!(out.canonical["truncated"] == serde_json::json!(true));
-        assert!(out.summary.contains("read_file"), "应含 read_file 指引: {}", out.summary);
-        let full = out.canonical["full_stdout_path"].as_str().expect("应有全文路径");
+        assert!(
+            out.summary.contains("read_file"),
+            "应含 read_file 指引: {}",
+            out.summary
+        );
+        let full = out.canonical["full_stdout_path"]
+            .as_str()
+            .expect("应有全文路径");
         assert!(
             full.contains(".prts-exec-output"),
             "全文应在 workspace/.prts-exec-output: {full}"
         );
-        assert!(std::path::Path::new(full).exists(), "全文文件应存在: {full}");
+        assert!(
+            std::path::Path::new(full).exists(),
+            "全文文件应存在: {full}"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 }

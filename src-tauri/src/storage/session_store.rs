@@ -345,8 +345,8 @@ impl SessionStore {
                 created_at,
                 title: title.clone(),
             };
-            let header_json = serde_json::to_string(&header)
-                .map_err(|e| format!("header 序列化失败: {e}"))?;
+            let header_json =
+                serde_json::to_string(&header).map_err(|e| format!("header 序列化失败: {e}"))?;
             let content = format!("{header_json}\n{events_line}");
             std::fs::write(&path, content)
                 .map_err(|e| format!("会话文件创建失败（{}）：{e}", path.display()))?;
@@ -436,11 +436,7 @@ impl SessionStore {
     /// 更新会话元数据（rename / contextTokens / lastNoticeSeq；只更新非 None 字段，
     /// 更新 updatedAt）。文件不存在 → Err。index 写失败 eprintln 不抛（下轮 append
     /// 或后续操作会带最新值重写）。
-    pub fn update_meta(
-        &mut self,
-        conversation_id: &str,
-        patch: &MetaPatch,
-    ) -> Result<(), String> {
+    pub fn update_meta(&mut self, conversation_id: &str, patch: &MetaPatch) -> Result<(), String> {
         let path = self.file_path(conversation_id)?;
         let mut index = self.load_or_rebuild()?;
         if !path.exists() {
@@ -539,9 +535,9 @@ impl SessionStore {
             }
             None => {
                 // index 缺条目：以 header 创建快照兜底比较后插入
-                let header = self.read_header(&path).map_err(|e| {
-                    format!("会话文件损坏（{}）：{e}", path.display())
-                })?;
+                let header = self
+                    .read_header(&path)
+                    .map_err(|e| format!("会话文件损坏（{}）：{e}", path.display()))?;
                 if header.title != expected_title {
                     return Ok(TitleWriteOutcome::TitleChanged);
                 }
@@ -592,9 +588,7 @@ impl SessionStore {
         sessions.retain(|m| {
             let path = self.dir.join(format!("{}.jsonl", m.id));
             let valid = match self.read_header(&path) {
-                Ok(h) => {
-                    h.conversation_id == m.id && h.schema_version <= SCHEMA_VERSION
-                }
+                Ok(h) => h.conversation_id == m.id && h.schema_version <= SCHEMA_VERSION,
                 Err(_) => false,
             };
             if !valid {
@@ -626,10 +620,7 @@ impl SessionStore {
     /// 两遍路径（read_turns + coalesce_chunks_line）**逐字节一致**：未合并行
     /// 保留原文、合并行输出紧凑序列化、坏行跳过并留痕（等价性测试在 tests）。
     /// **落盘原文不动**——历史冻结语义不变。
-    pub fn get_coalesced(
-        &mut self,
-        conversation_id: &str,
-    ) -> Result<ConversationRecord, String> {
+    pub fn get_coalesced(&mut self, conversation_id: &str) -> Result<ConversationRecord, String> {
         self.get_inner(conversation_id, true)
     }
 
@@ -639,9 +630,9 @@ impl SessionStore {
         coalesce: bool,
     ) -> Result<ConversationRecord, String> {
         let path = self.file_path(conversation_id)?;
-        let header = self.read_header(&path).map_err(|e| {
-            format!("会话不存在或文件损坏（{conversation_id}）：{e}")
-        })?;
+        let header = self
+            .read_header(&path)
+            .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
         if header.conversation_id != conversation_id {
             return Err(format!(
                 "会话文件归属不符（{conversation_id}）：header conversationId 不一致"
@@ -682,15 +673,16 @@ impl SessionStore {
 
     fn file_path(&self, id: &str) -> Result<PathBuf, String> {
         if !Self::valid_id(id) {
-            return Err(format!("conversationId 非法（仅允许字母数字与 - _）：{id:?}"));
+            return Err(format!(
+                "conversationId 非法（仅允许字母数字与 - _）：{id:?}"
+            ));
         }
         Ok(self.dir.join(format!("{id}.jsonl")))
     }
 
     /// 读内容文件 header（首行）。文件缺失/为空/首行非合法 header 行 → Err。
     fn read_header(&self, path: &Path) -> Result<SessionHeader, String> {
-        let file =
-            std::fs::File::open(path).map_err(|e| format!("打开会话文件失败: {e}"))?;
+        let file = std::fs::File::open(path).map_err(|e| format!("打开会话文件失败: {e}"))?;
         let mut lines = BufReader::new(file).lines();
         let first = lines
             .next()
@@ -709,8 +701,7 @@ impl SessionStore {
 
     /// 读轮行原文（跳过首行 header 与空行；坏行跳过不整体失败）。
     fn read_turns(&self, path: &Path) -> Result<Vec<String>, String> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| format!("读取会话文件失败: {e}"))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| format!("读取会话文件失败: {e}"))?;
         let mut turns = Vec::new();
         for (i, line) in raw.split('\n').enumerate() {
             if i == 0 {
@@ -740,8 +731,7 @@ impl SessionStore {
     /// JSON 行保留原文。输出与「read_turns + coalesce_chunks_line」两遍路径
     /// 逐字节一致（等价性测试见 tests 模块）。
     fn read_turns_coalesced(&self, path: &Path) -> Result<Vec<String>, String> {
-        let raw = std::fs::read_to_string(path)
-            .map_err(|e| format!("读取会话文件失败: {e}"))?;
+        let raw = std::fs::read_to_string(path).map_err(|e| format!("读取会话文件失败: {e}"))?;
         let mut turns = Vec::new();
         for (i, line) in raw.split('\n').enumerate() {
             if i == 0 {
@@ -882,10 +872,7 @@ impl SessionStore {
                     sessions.push(meta_from_header(h));
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[session_store] 跳过无效会话文件 {}：{e}",
-                        path.display()
-                    );
+                    eprintln!("[session_store] 跳过无效会话文件 {}：{e}", path.display());
                 }
             }
         }
@@ -909,11 +896,17 @@ impl SessionStore {
         let target = self.dir.join(INDEX_FILE);
         let tmp = self.dir.join(INDEX_TMP);
         if let Err(e) = std::fs::write(&tmp, json) {
-            eprintln!("[session_store] index 临时文件写入失败（{}）：{e}", tmp.display());
+            eprintln!(
+                "[session_store] index 临时文件写入失败（{}）：{e}",
+                tmp.display()
+            );
             return;
         }
         if let Err(e) = std::fs::rename(&tmp, &target) {
-            eprintln!("[session_store] index 原子替换失败（{}）：{e}", target.display());
+            eprintln!(
+                "[session_store] index 原子替换失败（{}）：{e}",
+                target.display()
+            );
             let _ = std::fs::remove_file(&tmp);
         }
     }
@@ -1028,7 +1021,11 @@ mod tests {
             {"type":"assistant/chunk","kind":"text","content":"完"}]"#;
         let out = coalesce_chunks_line(line).expect("应发生合并");
         let evs: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
-        assert_eq!(evs.len(), 5, "reasoning 两条合 1；被 tool/call 隔开的 text 不合并");
+        assert_eq!(
+            evs.len(),
+            5,
+            "reasoning 两条合 1；被 tool/call 隔开的 text 不合并"
+        );
         assert_eq!(evs[1]["kind"], "reasoning");
         assert_eq!(evs[1]["content"], "想一下");
         assert_eq!(evs[4]["content"], "完");
@@ -1123,7 +1120,11 @@ mod tests {
             writeln!(f, "坏行不是 JSON").unwrap();
         }
         assert_eq!(s.get("c1").unwrap().turns.len(), 3);
-        assert_eq!(s.count_turns("c1").unwrap(), 4, "坏行计入（偏多，方向保守）");
+        assert_eq!(
+            s.count_turns("c1").unwrap(),
+            4,
+            "坏行计入（偏多，方向保守）"
+        );
 
         // 缺失文件 → Err（调用方 continue 跳过）
         assert!(s.count_turns("nope").is_err());
@@ -1135,10 +1136,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-sess-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-sess-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1216,8 +1215,8 @@ mod tests {
     }
 
     fn read_lines(dir: &Path, id: &str) -> Vec<String> {
-        let raw = std::fs::read_to_string(dir.join("sessions").join(format!("{id}.jsonl")))
-            .unwrap();
+        let raw =
+            std::fs::read_to_string(dir.join("sessions").join(format!("{id}.jsonl"))).unwrap();
         raw.split('\n')
             .map(|l| l.trim_end_matches('\r').to_string())
             .filter(|l| !l.is_empty())
@@ -1225,8 +1224,7 @@ mod tests {
     }
 
     fn read_index_value(dir: &Path) -> serde_json::Value {
-        let raw =
-            std::fs::read_to_string(dir.join("sessions").join(INDEX_FILE)).unwrap();
+        let raw = std::fs::read_to_string(dir.join("sessions").join(INDEX_FILE)).unwrap();
         serde_json::from_str(&raw).unwrap()
     }
 
@@ -1491,7 +1489,10 @@ mod tests {
 
         // 幂等：重复删除（文件与条目都已不在）→ Ok
         assert!(s.delete("a").is_ok());
-        assert!(!dir.join("sessions").join("a.jsonl").exists(), "不应复活文件");
+        assert!(
+            !dir.join("sessions").join("a.jsonl").exists(),
+            "不应复活文件"
+        );
 
         s.delete("b").unwrap();
         assert!(s.list().unwrap().is_empty());
@@ -1616,7 +1617,8 @@ mod tests {
         assert_eq!(r.last_notice_seq, Some(3));
 
         // null → None；缺失可选字段 → None（serde default）
-        let json2 = r#"{"conversationId":"c2","eventsJson":"[]","title":null,"contextTokens":null}"#;
+        let json2 =
+            r#"{"conversationId":"c2","eventsJson":"[]","title":null,"contextTokens":null}"#;
         let r2: AppendTurnReq = serde_json::from_str(json2).unwrap();
         assert_eq!(r2.conversation_id, "c2");
         assert_eq!(r2.title, None);
@@ -1704,7 +1706,10 @@ mod tests {
         // header 不改（rename 不回写 header——自愈用创建快照；未传 title 回退默认）
         let lines = read_lines(&dir, "c12");
         let h: SessionHeader = serde_json::from_str(&lines[0]).unwrap();
-        assert_eq!(h.title, "新对话", "header title 保持创建时回退值，rename 不回写");
+        assert_eq!(
+            h.title, "新对话",
+            "header title 保持创建时回退值，rename 不回写"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1771,8 +1776,14 @@ mod tests {
         // 盘上 index 原文应含 camelCase 键（serde 契约；write_index 用 pretty 格式）
         let raw = std::fs::read_to_string(dir.join("sessions").join("index.json")).unwrap();
         assert!(raw.contains("\"compaction\""), "index 应含 compaction 键");
-        assert!(raw.contains("\"retainedFrom\": 3"), "retainedFrom camelCase");
-        assert!(raw.contains("\"tokensBefore\": 1234"), "tokensBefore camelCase");
+        assert!(
+            raw.contains("\"retainedFrom\": 3"),
+            "retainedFrom camelCase"
+        );
+        assert!(
+            raw.contains("\"tokensBefore\": 1234"),
+            "tokensBefore camelCase"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1824,12 +1835,15 @@ mod tests {
             cache_miss_tokens: None,
         });
         s.append_turn(&r).unwrap();
-        assert_eq!(s.list().unwrap()[0].context_tokens, Some(TokenUsage {
-            input_tokens: 22_000,
-            output_tokens: 500,
-            cache_hit_tokens: None,
-            cache_miss_tokens: None,
-        }));
+        assert_eq!(
+            s.list().unwrap()[0].context_tokens,
+            Some(TokenUsage {
+                input_tokens: 22_000,
+                output_tokens: 500,
+                cache_hit_tokens: None,
+                cache_miss_tokens: None,
+            })
+        );
 
         // 显式清空（压缩完成时随 compaction 一并提交）
         s.update_meta(
@@ -1855,13 +1869,19 @@ mod tests {
         // 重新打开（模拟重启 hydration 读盘）→ contextTokens 保持 null
         let mut s2 = SessionStore::new(&dir);
         let list = s2.list().unwrap();
-        assert_eq!(list[0].context_tokens, None, "清空应持久化（重启后环保持归零）");
+        assert_eq!(
+            list[0].context_tokens, None,
+            "清空应持久化（重启后环保持归零）"
+        );
         assert_eq!(list[0].compaction.as_ref().unwrap().retained_from, 3);
 
         // 之后普通轮无 usage（None）不得复活旧值（保持 None）
         s2.append_turn(&req("c-clr", &ev_user("继续"))).unwrap();
         let list = s2.list().unwrap();
-        assert_eq!(list[0].context_tokens, None, "None 不覆盖语义保持：清空后无新 usage 仍是 null");
+        assert_eq!(
+            list[0].context_tokens, None,
+            "None 不覆盖语义保持：清空后无新 usage 仍是 null"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1876,7 +1896,9 @@ mod tests {
         r.title = Some("查源石虫".into());
         s.append_turn(&r).unwrap();
 
-        let out = s.try_set_title_if_expected("t1", "源石虫数值", "查源石虫").unwrap();
+        let out = s
+            .try_set_title_if_expected("t1", "源石虫数值", "查源石虫")
+            .unwrap();
         assert_eq!(out, TitleWriteOutcome::Written);
         assert_eq!(s.list().unwrap()[0].title, "源石虫数值");
 
@@ -1900,9 +1922,15 @@ mod tests {
         )
         .unwrap();
 
-        let out = s.try_set_title_if_expected("t2", "源石虫数值", "查源石虫").unwrap();
+        let out = s
+            .try_set_title_if_expected("t2", "源石虫数值", "查源石虫")
+            .unwrap();
         assert_eq!(out, TitleWriteOutcome::TitleChanged);
-        assert_eq!(s.list().unwrap()[0].title, "我的标题", "CAS 失败不得覆盖用户标题");
+        assert_eq!(
+            s.list().unwrap()[0].title,
+            "我的标题",
+            "CAS 失败不得覆盖用户标题"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use crate::path_guard;
 use crate::policy::Policy;
-use crate::tools::fs_write::MAX_FILE_BYTES;
 use crate::tools::display::file_link;
+use crate::tools::fs_write::MAX_FILE_BYTES;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 // ═══════════════════════════════════════════════════════
@@ -103,7 +103,9 @@ impl Tool for ReadFileTool {
                     ToolError::Parse("参数 offset 必须是正整数（1-based 起始行）".into())
                 })?;
                 if n == 0 {
-                    return Err(ToolError::Parse("参数 offset 必须是正整数（1-based 起始行）".into()));
+                    return Err(ToolError::Parse(
+                        "参数 offset 必须是正整数（1-based 起始行）".into(),
+                    ));
                 }
                 n as usize
             }
@@ -111,9 +113,9 @@ impl Tool for ReadFileTool {
         let limit = match v.get("limit") {
             None | Some(serde_json::Value::Null) => 1000usize,
             Some(n) => {
-                let n = n.as_u64().ok_or_else(|| {
-                    ToolError::Parse("参数 limit 必须是正整数".into())
-                })?;
+                let n = n
+                    .as_u64()
+                    .ok_or_else(|| ToolError::Parse("参数 limit 必须是正整数".into()))?;
                 if n == 0 {
                     return Err(ToolError::Parse("参数 limit 必须是正整数".into()));
                 }
@@ -129,9 +131,7 @@ impl Tool for ReadFileTool {
         // 面向用户说明受保护；其余变体（写路径拒绝）读路径理论上不出现，
         // 防御性映射。守卫内部消息不回填，避免双重包装。
         let resolved = path_guard::resolve_read(&self.policy, raw).map_err(|e| match e {
-            path_guard::PathGuardError::Io(_) => {
-                ToolError::Execution(format!("文件不存在：{raw}"))
-            }
+            path_guard::PathGuardError::Io(_) => ToolError::Execution(format!("文件不存在：{raw}")),
             path_guard::PathGuardError::Blocked(_) => {
                 ToolError::Execution(format!("文件不可读（受保护路径）：{raw}"))
             }
@@ -172,9 +172,7 @@ impl Tool for ReadFileTool {
                     total_lines += 1;
                     if total_lines >= offset && window.len() < limit {
                         // 去换行符（\n 与 \r\n）
-                        let mut text = line
-                            .trim_end_matches(['\n', '\r'])
-                            .to_string();
+                        let mut text = line.trim_end_matches(['\n', '\r']).to_string();
                         // ── 5. 单行截断：超过 2000 字符 → 截断并追加标记 ──
                         if text.chars().count() > 2000 {
                             text = text.chars().take(2000).collect::<String>();
@@ -348,13 +346,7 @@ impl Tool for ListDirTool {
         } else {
             entries
                 .iter()
-                .map(|(n, d)| {
-                    if *d {
-                        format!("{n}/")
-                    } else {
-                        n.clone()
-                    }
-                })
+                .map(|(n, d)| if *d { format!("{n}/") } else { n.clone() })
                 .collect::<Vec<_>>()
                 .join("\n")
         };
@@ -391,10 +383,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-fs-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-fs-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -497,7 +487,10 @@ mod tests {
         assert!(out.summary.contains("（共 3 行，offset=1，已返回 3 行）"));
         // canonical：path 为 canonicalize 后的绝对路径（守卫返回同基准）
         let canon_path = root.join("a.txt").canonicalize().unwrap();
-        assert_eq!(out.canonical["path"], canon_path.to_string_lossy().to_string());
+        assert_eq!(
+            out.canonical["path"],
+            canon_path.to_string_lossy().to_string()
+        );
         assert_eq!(out.canonical["totalLines"], 3);
         assert_eq!(out.canonical["lines"].as_array().unwrap().len(), 3);
         assert_eq!(out.canonical["truncated"], false);
@@ -558,7 +551,9 @@ mod tests {
                 &serde_json::json!({ "path": kb_file.to_string_lossy() }).to_string(),
             )
             .unwrap();
-        let total = out.canonical["totalLines"].as_u64().expect("应返回 totalLines");
+        let total = out.canonical["totalLines"]
+            .as_u64()
+            .expect("应返回 totalLines");
         assert!(total > 0, "知识库条目应有内容：{}", kb_file.display());
         assert!(out.summary.contains("（共"), "应成功读取知识库条目");
 
@@ -656,7 +651,10 @@ mod tests {
         let err = tool
             .execute(&ToolContext::new(), r#"{"path":"sub"}"#)
             .unwrap_err();
-        assert!(matches!(&err, ToolError::Execution(m) if m.contains("不是普通文件：sub")), "got: {err}");
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("不是普通文件：sub")),
+            "got: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -739,12 +737,18 @@ mod tests {
         let err = tool
             .execute(&ToolContext::new(), r#"{"path":"a.txt","offset":0}"#)
             .unwrap_err();
-        assert!(matches!(&err, ToolError::Parse(m) if m.contains("正整数")), "got: {err}");
+        assert!(
+            matches!(&err, ToolError::Parse(m) if m.contains("正整数")),
+            "got: {err}"
+        );
 
         let err = tool
             .execute(&ToolContext::new(), r#"{"path":"a.txt","limit":5000}"#)
             .unwrap_err();
-        assert!(matches!(&err, ToolError::Parse(m) if m.contains("上限 2000")), "got: {err}");
+        assert!(
+            matches!(&err, ToolError::Parse(m) if m.contains("上限 2000")),
+            "got: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -158,10 +158,11 @@ mod tests {
     fn normal_text_passes_through() {
         let mut guard = ProtocolGuard::new();
         assert_eq!(
-            guard.push(StreamEvent::TextDelta {
-                content: "好".into()
-            })
-            .len(),
+            guard
+                .push(StreamEvent::TextDelta {
+                    content: "好".into()
+                })
+                .len(),
             1
         );
     }

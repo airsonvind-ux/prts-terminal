@@ -32,27 +32,27 @@
 //! "计划"是对话历史中的文本，不是 Rust 数据结构。
 //! 调度循环为 RePlan 提供了"多轮交互"的先决条件，但它本身不包含任何规划逻辑。
 
-pub mod prompt;
-pub mod context;
 pub mod compaction;
-pub mod title;
+pub mod context;
+mod events;
+mod llm_call;
 pub mod memory;
+mod memory_parse;
+mod memory_prompt;
+pub mod prompt;
+mod prompt_registry;
 mod retry;
+pub mod title;
+mod token_estimate;
+mod tool_loop;
 mod turn;
 mod turn_loop;
-mod llm_call;
-mod tool_loop;
-mod prompt_registry;
-mod memory_prompt;
-mod memory_parse;
-mod token_estimate;
-mod events;
 
+use events::EventSink;
 pub use retry::{is_retryable, RetryPolicy};
+use tool_loop::{execute_tools_and_append, preflight_tool_calls};
 use turn::TurnState;
 use turn_loop::dispatch_turn_with_memory;
-use tool_loop::{execute_tools_and_append, preflight_tool_calls};
-use events::EventSink;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -71,8 +71,8 @@ use crate::llm::TokenUsage;
 use crate::events::{AgentPhase, FrontendMessage, IpcEvent};
 use crate::exec_settings::ExecutionMode;
 use crate::llm::{
-    ChatMessage, ClientRegistry, LlmClient, LlmConfig, LlmError, ModelRegistry, ReasoningPolicy,
-    StreamEvent, StreamResult, UsageStat, usage_stat,
+    usage_stat, ChatMessage, ClientRegistry, LlmClient, LlmConfig, LlmError, ModelRegistry,
+    ReasoningPolicy, StreamEvent, StreamResult, UsageStat,
 };
 use crate::session::{
     ApprovalDecision, ApprovalPrivilege, ApprovalRejectReason, ApprovalRisk, ChunkKind,
@@ -234,14 +234,12 @@ pub async fn process_with_memory(
     tool_defs: Vec<crate::llm::ToolDef>,
 ) -> Result<(), OrchestratorError> {
     // ── 0. 按 ApiType 选择适配器 ──
-    let llm = registry
-        .select(&config.api_type)
-        .ok_or_else(|| {
-            OrchestratorError::Llm(LlmError::Config(format!(
-                "协议 {:?} 暂未支持",
-                config.api_type
-            )))
-        })?;
+    let llm = registry.select(&config.api_type).ok_or_else(|| {
+        OrchestratorError::Llm(LlmError::Config(format!(
+            "协议 {:?} 暂未支持",
+            config.api_type
+        )))
+    })?;
     let llm: &dyn crate::llm::LlmClient = &**llm;
 
     // ── 1. 效果层 compat → reasoning 回传策略（缺陷 1 应用点）──
@@ -260,15 +258,15 @@ pub async fn process_with_memory(
     // 本轮对话：轮内激活、轮末随 ActiveContext 自动卸载，跨轮按需重新激活）。
     // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
     // 加载失败降级为空索引（激活工具恒未命中），不阻断本轮处理。
-    let skill_index = Arc::new(match crate::skills_index::SkillIndex::load(
-        &crate::skills_index::skills_dir(),
-    ) {
-        Ok(idx) => idx,
-        Err(e) => {
-            eprintln!("[orchestrator] Skill 索引加载失败（Skill 目录将为空）：{e}");
-            crate::skills_index::SkillIndex::empty()
-        }
-    });
+    let skill_index = Arc::new(
+        match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
+            Ok(idx) => idx,
+            Err(e) => {
+                eprintln!("[orchestrator] Skill 索引加载失败（Skill 目录将为空）：{e}");
+                crate::skills_index::SkillIndex::empty()
+            }
+        },
+    );
     // 上下文管理修正（2026-08）：Active/Reference 动态层已移除，无状态容器。
     // 动态内容（skill 正文等）一律以工具结果消息进历史，不再进 system prompt。
     {
@@ -449,10 +447,10 @@ fn switch_phase(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::llm_call::{
         call_llm_with_retry, handle_stream_event, prepare_request_images, NO_VISION_NOTICE,
     };
+    use super::*;
     use std::collections::VecDeque;
 
     /// 文本模型看不到图时，必须被明确告知「图没进去」——否则会当自己看过了。
@@ -509,7 +507,9 @@ mod tests {
 
         handle_stream_event(
             "s1",
-            StreamEvent::TextDelta { content: "你好".into() },
+            StreamEvent::TextDelta {
+                content: "你好".into(),
+            },
             &phase,
             &sink,
             &ToolRegistry::new(),
@@ -544,7 +544,11 @@ mod tests {
 
         handle_stream_event(
             "s1",
-            StreamEvent::ToolCall { id: "c1".into(), name: "echo".into(), arguments: "{}".into() },
+            StreamEvent::ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            },
             &phase,
             &sink,
             &ToolRegistry::new(),
@@ -634,7 +638,9 @@ mod tests {
 
         handle_stream_event(
             "s1",
-            StreamEvent::TextDelta { content: "第一段".into() },
+            StreamEvent::TextDelta {
+                content: "第一段".into(),
+            },
             &phase,
             &sink,
             &ToolRegistry::new(),
@@ -642,7 +648,9 @@ mod tests {
         );
         handle_stream_event(
             "s1",
-            StreamEvent::TextDelta { content: "第二段".into() },
+            StreamEvent::TextDelta {
+                content: "第二段".into(),
+            },
             &phase,
             &sink,
             &ToolRegistry::new(),
@@ -652,7 +660,8 @@ mod tests {
         let emitted: Vec<_> = events.lock().unwrap().drain(..).collect();
         // Phase(generating) + chunk + chunk = 3 个事件（Phase 不重复）
         assert_eq!(emitted.len(), 3);
-        let phase_count = emitted.iter()
+        let phase_count = emitted
+            .iter()
             .filter(|e| matches!(e, IpcEvent::Agent(AgentEvent::Phase { .. })))
             .count();
         assert_eq!(phase_count, 1);
@@ -779,9 +788,7 @@ mod tests {
 
     #[test]
     fn appends_assistant_and_tool_messages() {
-        let mut messages: Vec<ChatMessage> = vec![
-            ChatMessage::user("测试"),
-        ];
+        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("测试")];
         let tools = {
             let mut reg = ToolRegistry::new();
             reg.register(Box::new(crate::tools::EchoTool)).unwrap();
@@ -790,16 +797,14 @@ mod tests {
         let ctx = ToolContext::new();
         let (sink, events, log) = test_sink();
 
-        let tool_calls = vec![
-            crate::llm::ToolCall {
-                id: "call_1".into(),
-                call_type: "function".into(),
-                function: crate::llm::ToolCallFunction {
-                    name: "echo".into(),
-                    arguments: r#"{"message":"hello"}"#.into(),
-                },
+        let tool_calls = vec![crate::llm::ToolCall {
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "echo".into(),
+                arguments: r#"{"message":"hello"}"#.into(),
             },
-        ];
+        }];
 
         let result = StreamResult {
             text: String::new(),
@@ -825,11 +830,23 @@ mod tests {
 
         // 应该追加了两条消息：assistant（含 tool_calls + reasoning）+ tool_result
         assert_eq!(messages.len(), initial_len + 2);
-        assert_eq!(messages[initial_len].role, crate::llm::MessageRole::Assistant);
+        assert_eq!(
+            messages[initial_len].role,
+            crate::llm::MessageRole::Assistant
+        );
         assert!(messages[initial_len].tool_calls.is_some());
-        assert_eq!(messages[initial_len].reasoning_content.as_deref(), Some("让我试试echo工具"));
-        assert_eq!(messages[initial_len + 1].role, crate::llm::MessageRole::Tool);
-        assert_eq!(messages[initial_len + 1].tool_call_id, Some("call_1".into()));
+        assert_eq!(
+            messages[initial_len].reasoning_content.as_deref(),
+            Some("让我试试echo工具")
+        );
+        assert_eq!(
+            messages[initial_len + 1].role,
+            crate::llm::MessageRole::Tool
+        );
+        assert_eq!(
+            messages[initial_len + 1].tool_call_id,
+            Some("call_1".into())
+        );
 
         // 确认指纹已记录
         assert_eq!(state.fingerprint_window.len(), 1);
@@ -864,16 +881,14 @@ mod tests {
         let ctx = ToolContext::new();
         let (sink, events, log) = test_sink();
 
-        let tool_calls = vec![
-            crate::llm::ToolCall {
-                id: "call_1".into(),
-                call_type: "function".into(),
-                function: crate::llm::ToolCallFunction {
-                    name: "nonexistent".into(),
-                    arguments: "{}".into(),
-                },
+        let tool_calls = vec![crate::llm::ToolCall {
+            id: "call_1".into(),
+            call_type: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "nonexistent".into(),
+                arguments: "{}".into(),
             },
-        ];
+        }];
         let result = StreamResult {
             text: String::new(),
             tool_calls,
@@ -898,8 +913,16 @@ mod tests {
         // 工具失败不中断：tool 消息携带错误文本（= ToolError::Display，
         // 无双前缀——双前缀修正（M3-A 子步 3）后 Err 分支 format!("{err}")）
         assert_eq!(messages.len(), 3);
-        assert!(messages[2].content.contains("未注册"), "got: {}", messages[2].content);
-        assert!(!messages[2].content.contains("工具执行失败：工具执行失败"), "不应双前缀: {}", messages[2].content);
+        assert!(
+            messages[2].content.contains("未注册"),
+            "got: {}",
+            messages[2].content
+        );
+        assert!(
+            !messages[2].content.contains("工具执行失败：工具执行失败"),
+            "不应双前缀: {}",
+            messages[2].content
+        );
         let _ = events;
 
         // log 中 tool/result 标记 ok=false
@@ -969,8 +992,14 @@ mod tests {
         assert_eq!(results.len(), 3);
         for (i, e) in results.iter().enumerate() {
             match e {
-                SessionEvent::ToolResult { call_id, ok: true, .. } => {
-                    assert_eq!(call_id, &format!("call_{i}"), "tool/result 顺序应与调用顺序一致");
+                SessionEvent::ToolResult {
+                    call_id, ok: true, ..
+                } => {
+                    assert_eq!(
+                        call_id,
+                        &format!("call_{i}"),
+                        "tool/result 顺序应与调用顺序一致"
+                    );
                 }
                 _ => panic!("期望成功结果"),
             }
@@ -981,7 +1010,14 @@ mod tests {
         let types: Vec<&str> = log.events().iter().map(event_type).collect();
         assert_eq!(
             types,
-            vec!["tool/call", "tool/call", "tool/call", "tool/result", "tool/result", "tool/result"],
+            vec![
+                "tool/call",
+                "tool/call",
+                "tool/call",
+                "tool/result",
+                "tool/result",
+                "tool/result"
+            ],
             "并行执行后 log 顺序仍按调用顺序"
         );
     }
@@ -1422,7 +1458,9 @@ mod tests {
         let mock = Arc::new(MockLlmClient::new(vec![
             MockResponse {
                 events: vec![
-                    StreamEvent::ReasoningDelta { content: "让我查一下".into() },
+                    StreamEvent::ReasoningDelta {
+                        content: "让我查一下".into(),
+                    },
                     StreamEvent::ToolCall {
                         id: "call_1".into(),
                         name: "echo".into(),
@@ -1449,7 +1487,9 @@ mod tests {
                 },
             },
             MockResponse {
-                events: vec![StreamEvent::TextDelta { content: "查到了".into() }],
+                events: vec![StreamEvent::TextDelta {
+                    content: "查到了".into(),
+                }],
                 result: StreamResult {
                     text: "查到了".into(),
                     tool_calls: vec![],
@@ -1468,7 +1508,9 @@ mod tests {
         client_registry.register(ApiType::OpenAiCompletions, mock);
 
         let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(Box::new(crate::tools::EchoTool)).unwrap();
+        tool_registry
+            .register(Box::new(crate::tools::EchoTool))
+            .unwrap();
         let tool_defs = tool_registry.list_defs();
         let tool_registry = Arc::new(tool_registry);
         // 会话日志（与 process() 相同的初始化序列）
@@ -1494,12 +1536,12 @@ mod tests {
             );
         }
 
-        let derived = log.lock().unwrap().derive_messages(ReasoningPolicy::Preserve);
-        let mut messages = crate::orchestrator::context::build_context(
-            &derived,
-            tool_defs.len(),
-            "",
-        );
+        let derived = log
+            .lock()
+            .unwrap()
+            .derive_messages(ReasoningPolicy::Preserve);
+        let mut messages =
+            crate::orchestrator::context::build_context(&derived, tool_defs.len(), "");
 
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_clone = events.clone();
@@ -1541,10 +1583,10 @@ mod tests {
                 "user/message",
                 "request/header",
                 "step/start",
-                "assistant/chunk",   // 推理链
+                "assistant/chunk", // 推理链
                 "tool/call",
                 "tool/result",
-                "step/end",          // step 1：LLM 调用 + 工具执行后闭合
+                "step/end", // step 1：LLM 调用 + 工具执行后闭合
                 "step/start",
                 "assistant/chunk",   // 最终回答
                 "assistant/message", // 聚合事件
@@ -1555,7 +1597,10 @@ mod tests {
         );
         assert!(matches!(
             log.events().last().unwrap(),
-            SessionEvent::TurnEnd { reason: TurnEndReason::Completed, .. }
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Completed,
+                ..
+            }
         ));
         // step/end 记录各自调用快照（总成本账本）
         let usages: Vec<Option<TokenUsage>> = log
@@ -1566,30 +1611,44 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(usages, vec![
-            Some(TokenUsage {
-                input_tokens: 1000,
-                output_tokens: 50,
-                cache_hit_tokens: None,
-                cache_miss_tokens: None,
-            }),
-            Some(TokenUsage {
-                input_tokens: 1500,
-                output_tokens: 30,
-                cache_hit_tokens: None,
-                cache_miss_tokens: None,
-            }),
-        ]);
+        assert_eq!(
+            usages,
+            vec![
+                Some(TokenUsage {
+                    input_tokens: 1000,
+                    output_tokens: 50,
+                    cache_hit_tokens: None,
+                    cache_miss_tokens: None,
+                }),
+                Some(TokenUsage {
+                    input_tokens: 1500,
+                    output_tokens: 30,
+                    cache_hit_tokens: None,
+                    cache_miss_tokens: None,
+                }),
+            ]
+        );
 
         // ── 派生一致性：messages[1..] == derive(log)（双写验证可重放）──
         let derived_final = log.derive_messages(ReasoningPolicy::Preserve);
-        assert_eq!(derived_final.len(), 4, "user + assistant(tools) + tool + assistant(final)");
-        assert_eq!(messages.len(), derived_final.len() + 1, "system 头 + 派生消息");
+        assert_eq!(
+            derived_final.len(),
+            4,
+            "user + assistant(tools) + tool + assistant(final)"
+        );
+        assert_eq!(
+            messages.len(),
+            derived_final.len() + 1,
+            "system 头 + 派生消息"
+        );
         for (i, m) in derived_final.iter().enumerate() {
             let live = &messages[i + 1];
             assert_eq!(live.role, m.role, "消息 {i} role 不一致");
             assert_eq!(live.content, m.content, "消息 {i} content 不一致");
-            assert_eq!(live.reasoning_content, m.reasoning_content, "消息 {i} reasoning 不一致");
+            assert_eq!(
+                live.reasoning_content, m.reasoning_content,
+                "消息 {i} reasoning 不一致"
+            );
             assert_eq!(
                 live.tool_calls.as_ref().map(|v| v.len()),
                 m.tool_calls.as_ref().map(|v| v.len()),
@@ -1597,7 +1656,10 @@ mod tests {
             );
         }
         // 具体断言：工具轮 assistant 消息携带推理与工具调用
-        assert_eq!(derived_final[1].reasoning_content.as_deref(), Some("让我查一下"));
+        assert_eq!(
+            derived_final[1].reasoning_content.as_deref(),
+            Some("让我查一下")
+        );
         assert!(derived_final[1].tool_calls.is_some());
         assert_eq!(derived_final[3].content, "查到了");
 
@@ -1618,14 +1680,20 @@ mod tests {
         // 前端归档触发点：turn/end(completed) 推送到 IPC
         assert!(ipc_sessions.iter().any(|e| matches!(
             e,
-            SessionEvent::TurnEnd { reason: TurnEndReason::Completed, .. }
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Completed,
+                ..
+            }
         )));
         // 实时上下文水位：两个 step 的 step/end 都必须推 IPC（不能只写 log）
         let ipc_step_ends = ipc_sessions
             .iter()
             .filter(|e| matches!(e, SessionEvent::StepEnd { .. }))
             .count();
-        assert_eq!(ipc_step_ends, 2, "step/end 必须推送 IPC，供前端实时更新上下文圆环");
+        assert_eq!(
+            ipc_step_ends, 2,
+            "step/end 必须推送 IPC，供前端实时更新上下文圆环"
+        );
     }
 
     /// 工具步正文回填（2026-09 修复）：工具步的正文必须进入后续上下文。
@@ -1681,9 +1749,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -1751,7 +1817,9 @@ mod tests {
         client_registry.register(ApiType::OpenAiCompletions, mock);
 
         let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(Box::new(crate::tools::EchoTool)).unwrap();
+        tool_registry
+            .register(Box::new(crate::tools::EchoTool))
+            .unwrap();
         let tool_defs = tool_registry.list_defs();
         let tool_registry = Arc::new(tool_registry);
         let log = Arc::new(Mutex::new(SessionLog::new()));
@@ -1760,12 +1828,12 @@ mod tests {
             log.append(SessionEvent::turn_start("s1"));
             log.seed_from_history("s1", vec![]);
         }
-        let derived = log.lock().unwrap().derive_messages(ReasoningPolicy::Preserve);
-        let mut messages = crate::orchestrator::context::build_context(
-            &derived,
-            tool_defs.len(),
-            "",
-        );
+        let derived = log
+            .lock()
+            .unwrap()
+            .derive_messages(ReasoningPolicy::Preserve);
+        let mut messages =
+            crate::orchestrator::context::build_context(&derived, tool_defs.len(), "");
 
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_clone = events.clone();
@@ -1799,22 +1867,40 @@ mod tests {
         assert_eq!(outcome, TurnOutcome::Stagnation);
 
         let log = log.lock().unwrap();
-        assert!(matches!(
-            log.events().last().unwrap(),
-            SessionEvent::TurnEnd { reason: TurnEndReason::Stagnation, .. }
-        ), "停滞应写 turn/end reason=stagnation");
+        assert!(
+            matches!(
+                log.events().last().unwrap(),
+                SessionEvent::TurnEnd {
+                    reason: TurnEndReason::Stagnation,
+                    ..
+                }
+            ),
+            "停滞应写 turn/end reason=stagnation"
+        );
 
         // IPC 侧：error 事件（recoverable=false 终止）+ turn/end(stagnation)
         let emitted = events.lock().unwrap();
         let ipc_sessions = session_events(&emitted);
-        assert!(ipc_sessions.iter().any(|e| matches!(
-            e,
-            SessionEvent::Error { recoverable: false, .. }
-        )), "应推送 error 事件");
-        assert!(ipc_sessions.iter().any(|e| matches!(
-            e,
-            SessionEvent::TurnEnd { reason: TurnEndReason::Stagnation, .. }
-        )), "应推送 turn/end(stagnation) 供前端归档");
+        assert!(
+            ipc_sessions.iter().any(|e| matches!(
+                e,
+                SessionEvent::Error {
+                    recoverable: false,
+                    ..
+                }
+            )),
+            "应推送 error 事件"
+        );
+        assert!(
+            ipc_sessions.iter().any(|e| matches!(
+                e,
+                SessionEvent::TurnEnd {
+                    reason: TurnEndReason::Stagnation,
+                    ..
+                }
+            )),
+            "应推送 turn/end(stagnation) 供前端归档"
+        );
     }
 
     // ── Reference 重组挂钩集成测试（ScriptedClient 驱动 dispatch_turn）──
@@ -2247,11 +2333,17 @@ mod tests {
         // 超时恒可重试
         assert!(is_retryable(&LlmError::Timeout("连接超时".into())));
         // 429 限流 / 5xx 服务端可重试
-        assert!(is_retryable(&LlmError::Api("HTTP 429: rate limited".into())));
+        assert!(is_retryable(&LlmError::Api(
+            "HTTP 429: rate limited".into()
+        )));
         assert!(is_retryable(&LlmError::Api("HTTP 503: unavailable".into())));
-        assert!(is_retryable(&LlmError::Api("HTTP 500: internal error".into())));
+        assert!(is_retryable(&LlmError::Api(
+            "HTTP 500: internal error".into()
+        )));
         // 客户端错误 / 配置 / 解析不重试
-        assert!(!is_retryable(&LlmError::Api("HTTP 401: unauthorized".into())));
+        assert!(!is_retryable(&LlmError::Api(
+            "HTTP 401: unauthorized".into()
+        )));
         assert!(!is_retryable(&LlmError::Api("HTTP 404: not found".into())));
         assert!(!is_retryable(&LlmError::Config("缺少 api_key".into())));
         assert!(!is_retryable(&LlmError::Parse("bad json".into())));
@@ -2298,7 +2390,9 @@ mod tests {
                         .store(remaining - 1, std::sync::atomic::Ordering::SeqCst);
                     return Err(LlmError::Timeout("模拟连接超时".into()));
                 }
-                self.inner.chat_stream(config, messages, tools, on_event).await
+                self.inner
+                    .chat_stream(config, messages, tools, on_event)
+                    .await
             })
         }
     }
@@ -2343,7 +2437,9 @@ mod tests {
     fn make_simple_mock() -> Arc<crate::llm::mock::MockLlmClient> {
         use crate::llm::mock::{MockLlmClient, MockResponse};
         Arc::new(MockLlmClient::new(vec![MockResponse {
-            events: vec![StreamEvent::TextDelta { content: "重试成功".into() }],
+            events: vec![StreamEvent::TextDelta {
+                content: "重试成功".into(),
+            }],
             result: StreamResult {
                 text: "重试成功".into(),
                 tool_calls: vec![],
@@ -2490,12 +2586,16 @@ mod tests {
             .lock()
             .unwrap()
             .derive_messages(ReasoningPolicy::Preserve);
-        let messages = crate::orchestrator::context::build_context(
-            &derived,
-            tool_defs.len(),
-            "",
-        );
-        (sink, events, log, messages, tool_defs, client_registry, tools)
+        let messages = crate::orchestrator::context::build_context(&derived, tool_defs.len(), "");
+        (
+            sink,
+            events,
+            log,
+            messages,
+            tool_defs,
+            client_registry,
+            tools,
+        )
     }
 
     fn user_msg(content: &str) -> FrontendMessage {
@@ -2512,7 +2612,9 @@ mod tests {
     fn mock_echo_response(text: &str) -> crate::llm::mock::MockResponse {
         use crate::llm::mock::MockResponse;
         MockResponse {
-            events: vec![StreamEvent::TextDelta { content: text.into() }],
+            events: vec![StreamEvent::TextDelta {
+                content: text.into(),
+            }],
             result: StreamResult {
                 text: text.into(),
                 tool_calls: vec![],
@@ -2551,7 +2653,11 @@ mod tests {
         fn parameters(&self) -> serde_json::Value {
             serde_json::json!({ "type": "object" })
         }
-        fn execute(&self, ctx: &ToolContext, _params: &str) -> Result<crate::tools::ToolOutput, ToolError> {
+        fn execute(
+            &self,
+            ctx: &ToolContext,
+            _params: &str,
+        ) -> Result<crate::tools::ToolOutput, ToolError> {
             loop {
                 if self.release.load(std::sync::atomic::Ordering::SeqCst) {
                     break;
@@ -2582,7 +2688,11 @@ mod tests {
         fn is_concurrency_safe(&self) -> bool {
             false
         }
-        fn execute(&self, ctx: &ToolContext, _params: &str) -> Result<crate::tools::ToolOutput, ToolError> {
+        fn execute(
+            &self,
+            ctx: &ToolContext,
+            _params: &str,
+        ) -> Result<crate::tools::ToolOutput, ToolError> {
             loop {
                 if ctx.abort.as_ref().is_some_and(|a| a.is_aborted()) {
                     break;
@@ -2635,7 +2745,9 @@ mod tests {
         let mock = Arc::new(MockLlmClient::new_with_hang(
             vec![{
                 let mut r = mock_echo_response("半截回答");
-                r.events.push(StreamEvent::TextDelta { content: "（未完）".into() });
+                r.events.push(StreamEvent::TextDelta {
+                    content: "（未完）".into(),
+                });
                 r
             }],
             0,
@@ -2650,11 +2762,9 @@ mod tests {
 
         // 观察端：见 chunk → abort（挂起点必在 select 内，chunk 已双写入 log）
         let steer_queue = SteerQueue::new(); // 插话队列空（默认零行为）前提
-        let observer = tokio::spawn(abort_when(
-            Arc::clone(&events),
-            signal.clone(),
-            |evs| ipc_has(evs, |s| matches!(s, SessionEvent::AssistantChunk { .. })),
-        ));
+        let observer = tokio::spawn(abort_when(Arc::clone(&events), signal.clone(), |evs| {
+            ipc_has(evs, |s| matches!(s, SessionEvent::AssistantChunk { .. }))
+        }));
 
         let outcome = dispatch_turn(
             "s1",
@@ -2680,7 +2790,10 @@ mod tests {
             observer.await.unwrap(),
             "观察超时：未等到 chunk（Mock 挂起点未达）"
         );
-        assert!(matches!(outcome, TurnOutcome::Aborted(_)), "LLM 段中止 → Aborted");
+        assert!(
+            matches!(outcome, TurnOutcome::Aborted(_)),
+            "LLM 段中止 → Aborted"
+        );
 
         // 已产出 chunk 保留（log 双写）；无 step/end（中止出口不闭合边界）
         let log = log.lock().unwrap();
@@ -2746,10 +2859,8 @@ mod tests {
         client_registry.register(ApiType::OpenAiCompletions, mock);
         let client_registry = Arc::new(client_registry);
         let model_registry = Arc::new(
-            crate::llm::ModelRegistry::from_json(
-                include_str!("../../../resources/models.json"),
-            )
-            .unwrap(),
+            crate::llm::ModelRegistry::from_json(include_str!("../../../resources/models.json"))
+                .unwrap(),
         );
         let approvals = Arc::new(ApprovalRegistry::new());
         let signal = Arc::new(AbortSignal::new());
@@ -2789,7 +2900,9 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         loop {
             let snapshot: Vec<IpcEvent> = events.lock().unwrap().clone();
-            if ipc_has(&snapshot, |s| matches!(s, SessionEvent::ToolApprovalRequest { .. })) {
+            if ipc_has(&snapshot, |s| {
+                matches!(s, SessionEvent::ToolApprovalRequest { .. })
+            }) {
                 signal.abort();
                 break;
             }
@@ -2830,7 +2943,13 @@ mod tests {
         // ② turn/end(aborted) 双写 IPC（前端归档唯一轮结束信号）
         assert!(
             ipc_has(&snapshot, |s| {
-                matches!(s, SessionEvent::TurnEnd { reason: TurnEndReason::Aborted, .. })
+                matches!(
+                    s,
+                    SessionEvent::TurnEnd {
+                        reason: TurnEndReason::Aborted,
+                        ..
+                    }
+                )
             }),
             "应推送 turn/end(aborted)"
         );
@@ -2840,7 +2959,11 @@ mod tests {
             "中止不触发 error 事件"
         );
         // ④ process Aborted 出口 clear_session 兑底清 pending
-        assert_eq!(approvals.pending_count(), 0, "process 出口应清空 pending sender");
+        assert_eq!(
+            approvals.pending_count(),
+            0,
+            "process 出口应清空 pending sender"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -2907,7 +3030,11 @@ mod tests {
                         })
                     {
                         // 重试至送达（register 与事件 emit 相邻，消除注册竞态）
-                        if approvals.resolve("s1", "call_rc", crate::approval::UserDecision::Approved) {
+                        if approvals.resolve(
+                            "s1",
+                            "call_rc",
+                            crate::approval::UserDecision::Approved,
+                        ) {
                             resolved = true;
                         }
                     }
@@ -2968,7 +3095,9 @@ mod tests {
             .collect();
         assert_eq!(results.len(), 1, "应有 1 条 tool/result");
         match results[0] {
-            SessionEvent::ToolResult { ok: false, summary, .. } => {
+            SessionEvent::ToolResult {
+                ok: false, summary, ..
+            } => {
                 assert!(summary.contains("已被终止"), "got: {summary}");
             }
             other => panic!("期望被杀命令的失败 result，got {other:?}"),
@@ -3067,7 +3196,15 @@ mod tests {
             .collect();
         assert_eq!(results.len(), 2, "两槽位都应补 result（配对不变量）");
         match (&results[0], &results[1]) {
-            (SessionEvent::ToolResult { ok: true, .. }, SessionEvent::ToolResult { ok: false, summary, call_id, .. }) => {
+            (
+                SessionEvent::ToolResult { ok: true, .. },
+                SessionEvent::ToolResult {
+                    ok: false,
+                    summary,
+                    call_id,
+                    ..
+                },
+            ) => {
                 assert_eq!(call_id, "call_ser1");
                 assert!(summary.contains("处理已中止，工具未执行"), "got: {summary}");
             }
@@ -3164,7 +3301,10 @@ mod tests {
         let log = log.lock().unwrap();
         assert!(matches!(
             log.events().last().unwrap(),
-            SessionEvent::TurnEnd { reason: TurnEndReason::Stagnation, .. }
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Stagnation,
+                ..
+            }
         ));
         let _ = events;
     }
@@ -3246,11 +3386,20 @@ mod tests {
         .await
         .unwrap();
         aborter.await.unwrap();
-        assert!(matches!(outcome, TurnOutcome::Aborted(_)), "停滞与中止并发 → 中止优先");
+        assert!(
+            matches!(outcome, TurnOutcome::Aborted(_)),
+            "停滞与中止并发 → 中止优先"
+        );
         // 中止出口不写 turn/end（process 补）；无 error 事件
         let log = log.lock().unwrap();
-        assert!(!log.events().iter().any(|e| matches!(e, SessionEvent::TurnEnd { .. })));
-        assert!(!log.events().iter().any(|e| matches!(e, SessionEvent::Error { .. })));
+        assert!(!log
+            .events()
+            .iter()
+            .any(|e| matches!(e, SessionEvent::TurnEnd { .. })));
+        assert!(!log
+            .events()
+            .iter()
+            .any(|e| matches!(e, SessionEvent::Error { .. })));
     }
 
     // ── process 级：Aborted 出口（clear_session + turn/end 双写 + Ok 返回）──
@@ -3268,10 +3417,8 @@ mod tests {
         client_registry.register(crate::llm::ApiType::OpenAiCompletions, mock);
         let client_registry = Arc::new(client_registry);
         let model_registry = Arc::new(
-            crate::llm::ModelRegistry::from_json(
-                include_str!("../../../resources/models.json"),
-            )
-            .unwrap(),
+            crate::llm::ModelRegistry::from_json(include_str!("../../../resources/models.json"))
+                .unwrap(),
         );
         let approvals = Arc::new(ApprovalRegistry::new());
         approvals.register("s1", "ghost_call");
@@ -3312,7 +3459,9 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
         loop {
             let snapshot: Vec<IpcEvent> = events.lock().unwrap().clone();
-            if ipc_has(&snapshot, |s| matches!(s, SessionEvent::AssistantChunk { .. })) {
+            if ipc_has(&snapshot, |s| {
+                matches!(s, SessionEvent::AssistantChunk { .. })
+            }) {
                 signal.abort();
                 break;
             }
@@ -3332,13 +3481,26 @@ mod tests {
         // turn/end(aborted) 已双写 IPC；无 error；chunk 保留；滞留审批被清
         let snapshot: Vec<IpcEvent> = events.lock().unwrap().clone();
         assert!(ipc_has(&snapshot, |s| {
-            matches!(s, SessionEvent::TurnEnd { reason: TurnEndReason::Aborted, .. })
+            matches!(
+                s,
+                SessionEvent::TurnEnd {
+                    reason: TurnEndReason::Aborted,
+                    ..
+                }
+            )
         }));
-        assert!(!ipc_has(&snapshot, |s| matches!(s, SessionEvent::Error { .. })));
+        assert!(!ipc_has(&snapshot, |s| matches!(
+            s,
+            SessionEvent::Error { .. }
+        )));
         assert!(ipc_has(&snapshot, |s| {
             matches!(s, SessionEvent::AssistantChunk { content, .. } if content.contains("半截回答"))
         }));
-        assert_eq!(approvals.pending_count(), 0, "process 出口 clear_session 应兑底清滞留审批");
+        assert_eq!(
+            approvals.pending_count(),
+            0,
+            "process 出口 clear_session 应兑底清滞留审批"
+        );
     }
 
     // ═══════════════════════════════════════════════════════
@@ -3493,12 +3655,18 @@ mod tests {
             true,
         )
         .await;
-        assert!(approved, "预期弹卡并批准（未等到 request 或 resolve 未送达）");
+        assert!(
+            approved,
+            "预期弹卡并批准（未等到 request 或 resolve 未送达）"
+        );
         assert!(
             has_request_full(&snapshot, "user-level cache"),
             "request 应带 privilege=full + justification"
         );
-        assert!(has_approved_full(&snapshot), "批准 result 应带 privilege=full");
+        assert!(
+            has_approved_full(&snapshot),
+            "批准 result 应带 privilege=full"
+        );
         assert!(
             has_tool_result(&snapshot, true, "full-run-ok"),
             "full 批准后应真实执行成功"
@@ -3516,7 +3684,10 @@ mod tests {
         )
         .await;
         assert!(approved, "Auto 模式 full 也应弹卡询问（非直放）");
-        assert!(has_request_full(&snapshot, "dev tool"), "request 应 privilege=full");
+        assert!(
+            has_request_full(&snapshot, "dev tool"),
+            "request 应 privilege=full"
+        );
         assert!(has_approved_full(&snapshot), "批准 result privilege=full");
         assert!(
             has_tool_result(&snapshot, true, "auto-full-ok"),
@@ -3651,9 +3822,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -3688,11 +3857,7 @@ mod tests {
             })
             .collect();
         assert_eq!(injected_users, vec!["插话一", "插话二"], "FIFO 注入顺序");
-        assert_eq!(
-            steer_queue.len("s1"),
-            0,
-            "注入后队列清空（分区移除）"
-        );
+        assert_eq!(steer_queue.len("s1"), 0, "注入后队列清空（分区移除）");
 
         // turn/end 恰一次（队列空才收尾）
         let turn_ends = log
@@ -3703,7 +3868,10 @@ mod tests {
         assert_eq!(turn_ends, 1, "turn/end 只在队列空时发一次");
         assert!(matches!(
             log.events().last().unwrap(),
-            SessionEvent::TurnEnd { reason: TurnEndReason::Completed, .. }
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Completed,
+                ..
+            }
         ));
 
         // 每段一次 assistant/message 聚合；顺序 = 回答 → 注入 → 回答 …
@@ -3734,7 +3902,10 @@ mod tests {
         let snapshots = snapshots.lock().unwrap();
         assert_eq!(snapshots.len(), 3, "应恰好三次 LLM 调用（三段回答）");
         assert_eq!(snapshots[1].last().unwrap().content, "插话一");
-        assert_eq!(snapshots[1].last().unwrap().role, crate::llm::MessageRole::User);
+        assert_eq!(
+            snapshots[1].last().unwrap().role,
+            crate::llm::MessageRole::User
+        );
         assert_eq!(snapshots[2].last().unwrap().content, "插话二");
         assert_eq!(
             messages.last().unwrap().content,
@@ -3781,9 +3952,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -3798,7 +3967,11 @@ mod tests {
         assert_eq!(outcome, TurnOutcome::Completed);
 
         let snapshots = snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 1, "恰一次 LLM 调用（首步请求即领取剩余插话）");
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "恰一次 LLM 调用（首步请求即领取剩余插话）"
+        );
         assert_eq!(snapshots[0].last().unwrap().content, "保留的插话");
         drop(snapshots);
 
@@ -3857,9 +4030,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -3960,9 +4131,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -3984,9 +4153,7 @@ mod tests {
             "两次调用：工具步 + 领取后的收尾步（旧语义需三次）"
         );
         assert!(
-            !snapshots[0]
-                .iter()
-                .any(|m| m.content == "工具步中插话"),
+            !snapshots[0].iter().any(|m| m.content == "工具步中插话"),
             "请求 0（工具步）不应含插话"
         );
         assert_eq!(
@@ -4045,9 +4212,7 @@ mod tests {
             &Arc::new(crate::skills_index::SkillIndex::empty()),
             &tools,
             &tool_defs,
-            &**client_registry
-                .select(&ApiType::OpenAiCompletions)
-                .unwrap(),
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
             &LlmConfig::default(),
             None,
             ReasoningPolicy::Preserve,
@@ -4071,4 +4236,3 @@ mod tests {
         );
     }
 }
-

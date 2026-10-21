@@ -1,4 +1,4 @@
-﻿//! query_stage —— 关卡查询工具
+//! query_stage —— 关卡查询工具
 //!
 //! 语义：输入名称或编号 → 返回关卡属性。
 //! 与 search_entities 互为逆操作：
@@ -36,9 +36,9 @@
 //! | 解锁条件 | JSON `[{stageId,completeState}]`     | 编号列表 + 中文状态         |
 
 use crate::db::{Database, Filter, FilterOp};
-use crate::tools::wiki;
 use crate::tools::common::{self, Target};
 use crate::tools::display::{array_summary, targets_summary};
+use crate::tools::wiki;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 use serde::Deserialize;
@@ -46,14 +46,33 @@ use std::collections::HashMap;
 
 /// stages 表完整列名（附加列识别与查询字段共用）。
 const ALL_COLUMNS: &[&str] = &[
-    "关卡ID", "关卡名", "关卡描述", "关卡编号", "关卡类型", "解锁条件", "levelId",
-    "推荐等级", "理智消耗", "部署上限", "初始费用", "费用上限", "目标点耐久",
-    "敌人列表", "情报", "待处理目标数量",
+    "关卡ID",
+    "关卡名",
+    "关卡描述",
+    "关卡编号",
+    "关卡类型",
+    "解锁条件",
+    "levelId",
+    "推荐等级",
+    "理智消耗",
+    "部署上限",
+    "初始费用",
+    "费用上限",
+    "目标点耐久",
+    "敌人列表",
+    "情报",
+    "待处理目标数量",
 ];
 
 /// 默认 7 列：附加列中重复指定时忽略（不重复输出、不报错）。
 const DEFAULT_COLUMNS: &[&str] = &[
-    "关卡ID", "关卡名", "关卡编号", "关卡描述", "关卡类型", "情报", "levelId",
+    "关卡ID",
+    "关卡名",
+    "关卡编号",
+    "关卡描述",
+    "关卡类型",
+    "情报",
+    "levelId",
 ];
 
 pub struct QueryStage;
@@ -117,9 +136,10 @@ impl Tool for QueryStage {
         // ── 2. 解析 extra（仅附加列，无状态键）──
         let extra = parse_extra(&v["extra"]);
 
-        let db = ctx.db.as_ref().ok_or_else(|| {
-            ToolError::Execution("数据库未连接".into())
-        })?;
+        let db = ctx
+            .db
+            .as_ref()
+            .ok_or_else(|| ToolError::Execution("数据库未连接".into()))?;
 
         // ── 3. 固定查询完整列（不裁剪）──
         let query_fields: Vec<String> = ALL_COLUMNS.iter().map(|s| s.to_string()).collect();
@@ -176,7 +196,12 @@ fn query_stage_by_id(
     query_fields: &[String],
 ) -> Result<Vec<HashMap<String, String>>, ToolError> {
     let result = db
-        .query_filtered("stages", query_fields, &[Filter::new("关卡ID", FilterOp::Eq, id)], 5)
+        .query_filtered(
+            "stages",
+            query_fields,
+            &[Filter::new("关卡ID", FilterOp::Eq, id)],
+            5,
+        )
         .map_err(|e| ToolError::Execution(e))?;
     Ok(result.rows)
 }
@@ -188,19 +213,43 @@ fn query_stage_by_name(
     query_fields: &[String],
 ) -> Result<Vec<HashMap<String, String>>, ToolError> {
     // 1. 关卡名精确
-    let r = db.query_filtered("stages", query_fields, &[Filter::new("关卡名", FilterOp::Eq, name)], 5)
+    let r = db
+        .query_filtered(
+            "stages",
+            query_fields,
+            &[Filter::new("关卡名", FilterOp::Eq, name)],
+            5,
+        )
         .map_err(|e| ToolError::Execution(e))?;
-    if !r.rows.is_empty() { return Ok(r.rows); }
+    if !r.rows.is_empty() {
+        return Ok(r.rows);
+    }
 
     // 2. 关卡编号精确
-    let r = db.query_filtered("stages", query_fields, &[Filter::new("关卡编号", FilterOp::Eq, name)], 5)
+    let r = db
+        .query_filtered(
+            "stages",
+            query_fields,
+            &[Filter::new("关卡编号", FilterOp::Eq, name)],
+            5,
+        )
         .map_err(|e| ToolError::Execution(e))?;
-    if !r.rows.is_empty() { return Ok(r.rows); }
+    if !r.rows.is_empty() {
+        return Ok(r.rows);
+    }
 
     // 3. 关卡名 LIKE 取最短
-    let r = db.query_filtered("stages", query_fields, &[Filter::new("关卡名", FilterOp::Like, name)], 0)
+    let r = db
+        .query_filtered(
+            "stages",
+            query_fields,
+            &[Filter::new("关卡名", FilterOp::Like, name)],
+            0,
+        )
         .map_err(|e| ToolError::Execution(e))?;
-    let best = r.rows.into_iter()
+    let best = r
+        .rows
+        .into_iter()
         .min_by_key(|row| row.get("关卡名").map(|s| s.len()).unwrap_or(usize::MAX));
     Ok(best.into_iter().collect())
 }
@@ -278,7 +327,11 @@ fn format_one_stage(
     let level_id = row.get("levelId").map(|s| s.as_str()).unwrap_or("?");
 
     if total > 1 {
-        out.push_str(&format!("━━━ {stage_name}（{}/{} | {stage_id}）━━━\n", idx + 1, total));
+        out.push_str(&format!(
+            "━━━ {stage_name}（{}/{} | {stage_id}）━━━\n",
+            idx + 1,
+            total
+        ));
     } else {
         out.push_str(&format!("━━━ {stage_name}（{stage_id}）━━━\n"));
     }
@@ -310,14 +363,12 @@ fn format_one_stage(
         match field.as_str() {
             "敌人列表" => format_enemy_list(row, out),
             "解锁条件" => format_unlock(row, out),
-            _ => {
-                match row.get(field) {
-                    Some(raw) if !raw.is_empty() && raw != "null" => {
-                        out.push_str(&format!("{field}: {raw}\n"));
-                    }
-                    _ => out.push_str(&format!("{field}: 无\n")),
+            _ => match row.get(field) {
+                Some(raw) if !raw.is_empty() && raw != "null" => {
+                    out.push_str(&format!("{field}: {raw}\n"));
                 }
-            }
+                _ => out.push_str(&format!("{field}: 无\n")),
+            },
         }
     }
 
@@ -502,7 +553,8 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["暴君"],"extra":["理智消耗"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("暴君"), "应包含关卡名\n结果: {result}");
         assert!(result.contains("1-7"), "应包含关卡编号\n结果: {result}");
@@ -518,10 +570,17 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["暴君"],"extra":["理智消耗"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
-        assert!(result.contains("main_01-07"), "应包含普通版\n结果: {result}");
-        assert!(result.contains("main_01-07#f#"), "应包含磨难版\n结果: {result}");
+        assert!(
+            result.contains("main_01-07"),
+            "应包含普通版\n结果: {result}"
+        );
+        assert!(
+            result.contains("main_01-07#f#"),
+            "应包含磨难版\n结果: {result}"
+        );
         assert!(result.contains("1/2"), "多行应有计数");
         assert!(result.contains("2/2"), "多行应有计数");
     }
@@ -533,9 +592,7 @@ mod tests {
         // 用户输入 "1-7"，关卡名是 "暴君"
         let ctx = make_ctx();
         let tool = QueryStage;
-        let result = tool
-            .execute(&ctx, r#"{"names":["1-7"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["1-7"]}"#).unwrap().summary;
 
         assert!(result.contains("暴君"), "应找到关卡名\n结果: {result}");
         assert!(result.contains("1-7"), "应包含编号\n结果: {result}");
@@ -548,9 +605,7 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryStage;
         // "暴君" 是关卡名=暴君，编号=1-7。用 "暴" 模糊匹配应命中它
-        let result = tool
-            .execute(&ctx, r#"{"names":["暴"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["暴"]}"#).unwrap().summary;
 
         assert!(result.contains("暴君"), "应模糊匹配到暴君\n结果: {result}");
     }
@@ -561,7 +616,8 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["绝对不存在的关卡xyz"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("未找到"), "空结果应有提示\n结果: {result}");
     }
@@ -574,7 +630,8 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["1-7"],"extra":["敌人列表"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("敌人列表"), "应有列名\n结果: {result}");
         assert!(result.contains("暴徒"), "应包含敌人名\n结果: {result}");
@@ -589,23 +646,27 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["TR-1"],"extra":["敌人列表"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("覆写"), "应显示覆写属性\n结果: {result}");
-        assert!(result.contains("防御力") || result.contains("最大生命值"),
-            "应包含覆写的属性名\n结果: {result}");
+        assert!(
+            result.contains("防御力") || result.contains("最大生命值"),
+            "应包含覆写的属性名\n结果: {result}"
+        );
     }
 
     #[test]
     fn description_with_newlines() {
         let ctx = make_ctx();
         let tool = QueryStage;
-        let result = tool
-            .execute(&ctx, r#"{"names":["0-1"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["0-1"]}"#).unwrap().summary;
 
         assert!(result.contains("关卡描述"), "应有列名\n结果: {result}");
-        assert!(result.contains("附加条件"), "应保留描述内容\n结果: {result}");
+        assert!(
+            result.contains("附加条件"),
+            "应保留描述内容\n结果: {result}"
+        );
     }
 
     #[test]
@@ -613,9 +674,7 @@ mod tests {
         // SS-8 情报含 {{ruby}} 和 {{简易折叠}}
         let ctx = make_ctx();
         let tool = QueryStage;
-        let result = tool
-            .execute(&ctx, r#"{"names":["SS-8"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["SS-8"]}"#).unwrap().summary;
 
         assert!(!result.contains("{{ruby}}"), "ruby 应已清洗");
         assert!(!result.contains("{{简易折叠}}"), "简易折叠应已展开");
@@ -627,12 +686,15 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["0-1"],"extra":["解锁条件"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         // 0-1 有解锁条件（至少一行有）
         let has_unlock = result.contains("通关") || result.contains("三星通关");
-        assert!(has_unlock || result.contains("解锁条件"),
-            "应有解锁条件或列名\n结果: {result}");
+        assert!(
+            has_unlock || result.contains("解锁条件"),
+            "应有解锁条件或列名\n结果: {result}"
+        );
     }
 
     // ── 多字段查询 ──
@@ -642,8 +704,12 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryStage;
         let result = tool
-            .execute(&ctx, r#"{"names":["1-7"],"extra":["理智消耗","推荐等级","部署上限"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["1-7"],"extra":["理智消耗","推荐等级","部署上限"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("理智消耗"), "结果: {result}");
         assert!(result.contains("推荐等级"), "结果: {result}");
@@ -657,9 +723,7 @@ mod tests {
         // 默认 7 列：关卡ID、关卡名（header）、关卡编号、关卡描述、关卡类型、情报、levelId
         let ctx = make_ctx();
         let tool = QueryStage;
-        let result = tool
-            .execute(&ctx, r#"{"names":["1-7"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["1-7"]}"#).unwrap().summary;
 
         assert!(result.contains("暴君"), "header 应含关卡名\n结果: {result}");
         assert!(result.contains("关卡ID"), "结果: {result}");
@@ -700,10 +764,18 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["H7-4"],"extra":["关卡描述"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
-        assert!(!result.contains("✗"), "默认列重复指定不应报错\n结果: {result}");
-        assert_eq!(result.matches("关卡描述:").count(), 1, "默认列不应重复输出\n结果: {result}");
+        assert!(
+            !result.contains("✗"),
+            "默认列重复指定不应报错\n结果: {result}"
+        );
+        assert_eq!(
+            result.matches("关卡描述:").count(),
+            1,
+            "默认列不应重复输出\n结果: {result}"
+        );
     }
 
     #[test]
@@ -732,7 +804,8 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["TR-1"],"extra":["敌人列表"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("敌人列表"), "空列表也应显示列名");
     }
@@ -755,12 +828,22 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["暴君"],"extra":["等级=1"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("✗"), "应有报错\n结果: {result}");
-        assert!(result.contains("状态指定 '等级=1' 不支持"), "应含状态指定文案\n结果: {result}");
-        assert!(result.contains("《关卡表结构》"), "应指路知识库\n结果: {result}");
-        assert!(result.contains("暴君"), "正文仍应有有效结果\n结果: {result}");
+        assert!(
+            result.contains("状态指定 '等级=1' 不支持"),
+            "应含状态指定文案\n结果: {result}"
+        );
+        assert!(
+            result.contains("《关卡表结构》"),
+            "应指路知识库\n结果: {result}"
+        );
+        assert!(
+            result.contains("暴君"),
+            "正文仍应有有效结果\n结果: {result}"
+        );
     }
 
     #[test]
@@ -770,11 +853,18 @@ mod tests {
         let tool = QueryStage;
         let result = tool
             .execute(&ctx, r#"{"names":["暴君"],"extra":["不存在的列"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("✗"), "应有报错\n结果: {result}");
-        assert!(result.contains("无法识别的 extra 项 '不存在的列'"), "应含未识别文案\n结果: {result}");
-        assert!(result.contains("《关卡表结构》"), "应指路知识库\n结果: {result}");
+        assert!(
+            result.contains("无法识别的 extra 项 '不存在的列'"),
+            "应含未识别文案\n结果: {result}"
+        );
+        assert!(
+            result.contains("《关卡表结构》"),
+            "应指路知识库\n结果: {result}"
+        );
     }
 
     #[test]
@@ -793,9 +883,7 @@ mod tests {
         // H7-4 只有一条记录，无 #f# 变体
         let ctx = make_ctx();
         let tool = QueryStage;
-        let result = tool
-            .execute(&ctx, r#"{"names":["H7-4"]}"#)
-            .unwrap().summary;
+        let result = tool.execute(&ctx, r#"{"names":["H7-4"]}"#).unwrap().summary;
 
         assert!(result.contains("星火行动"), "结果: {result}");
         assert!(!result.contains("1/"), "单行不应有计数");
@@ -824,9 +912,15 @@ mod tests {
         // 支持环境变量交互：PRTS_NAME / PRTS_EXTRA（逗号分隔，空串 → 空数组）
         if let Ok(name) = std::env::var("PRTS_NAME") {
             let evec: Option<Vec<String>> = std::env::var("PRTS_EXTRA").ok().map(|s| {
-                if s.is_empty() { vec![] } else { s.split(',').map(|x| x.trim().to_string()).collect() }
+                if s.is_empty() {
+                    vec![]
+                } else {
+                    s.split(',').map(|x| x.trim().to_string()).collect()
+                }
             });
-            let extra_ref: Option<Vec<&str>> = evec.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+            let extra_ref: Option<Vec<&str>> = evec
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect());
             println!("{}  extra={:?}", name, extra_ref);
             println!("{}", call(&ctx, &name, extra_ref.as_deref()));
             return;
@@ -835,9 +929,17 @@ mod tests {
         let cases: &[(&str, &str, Option<&[&str]>)] = &[
             ("1. 暴君 · 默认（7 列，多难度多条）", "暴君", None),
             ("2. 1-7 · 关卡编号检索", "1-7", None),
-            ("3. 暴君 · 敌人列表 + 部署上限", "暴君", Some(&["敌人列表", "部署上限"])),
+            (
+                "3. 暴君 · 敌人列表 + 部署上限",
+                "暴君",
+                Some(&["敌人列表", "部署上限"]),
+            ),
             ("4. 暴君 · 等级=1 报错指路", "暴君", Some(&["等级=1"])),
-            ("5. 暴君 · 不存在的列 报错指路", "暴君", Some(&["不存在的列"])),
+            (
+                "5. 暴君 · 不存在的列 报错指路",
+                "暴君",
+                Some(&["不存在的列"]),
+            ),
         ];
         for (label, name, extra) in cases {
             println!("========== {label} ==========");

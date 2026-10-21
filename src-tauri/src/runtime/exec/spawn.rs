@@ -116,9 +116,14 @@ pub(crate) fn spawn_command(
     if full {
         #[cfg(windows)]
         {
-            let mut child = crate::exec::spawn_win32::spawn_full(program, args, cwd, workspace_root)?;
-            let stdout = child.stdout_file().map(|f| -> Box<dyn Read + Send> { Box::new(f) });
-            let stderr = child.stderr_file().map(|f| -> Box<dyn Read + Send> { Box::new(f) });
+            let mut child =
+                crate::exec::spawn_win32::spawn_full(program, args, cwd, workspace_root)?;
+            let stdout = child
+                .stdout_file()
+                .map(|f| -> Box<dyn Read + Send> { Box::new(f) });
+            let stderr = child
+                .stderr_file()
+                .map(|f| -> Box<dyn Read + Send> { Box::new(f) });
             return Ok(Spawned {
                 inner: SpawnedInner::Win(child),
                 stdout,
@@ -133,9 +138,14 @@ pub(crate) fn spawn_command(
     if restricted_enabled() {
         #[cfg(windows)]
         {
-            let mut child = crate::exec::spawn_win32::spawn_restricted(program, args, cwd, workspace_root)?;
-            let stdout = child.stdout_file().map(|f| -> Box<dyn Read + Send> { Box::new(f) });
-            let stderr = child.stderr_file().map(|f| -> Box<dyn Read + Send> { Box::new(f) });
+            let mut child =
+                crate::exec::spawn_win32::spawn_restricted(program, args, cwd, workspace_root)?;
+            let stdout = child
+                .stdout_file()
+                .map(|f| -> Box<dyn Read + Send> { Box::new(f) });
+            let stderr = child
+                .stderr_file()
+                .map(|f| -> Box<dyn Read + Send> { Box::new(f) });
             return Ok(Spawned {
                 inner: SpawnedInner::Win(child),
                 stdout,
@@ -173,4 +183,3 @@ fn spawn_std(program: &str, args: &[String], cwd: &Path) -> io::Result<Spawned> 
         stderr,
     })
 }
-

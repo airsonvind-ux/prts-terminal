@@ -72,8 +72,7 @@ pub fn sync(
 
     // 原子替换：临时文件 → rename。
     let tmp = tmp_path(runtime);
-    std::fs::copy(seed, &tmp)
-        .map_err(|e| format!("写临时文件失败（{}）：{e}", tmp.display()))?;
+    std::fs::copy(seed, &tmp).map_err(|e| format!("写临时文件失败（{}）：{e}", tmp.display()))?;
     std::fs::rename(&tmp, runtime)
         .map_err(|e| format!("替换运行时副本失败（{}）：{e}", runtime.display()))?;
     write_marker(marker, app_version)?;
@@ -151,10 +150,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-dbseed-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-dbseed-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -189,7 +186,10 @@ mod tests {
 
         let out = sync(&seed, &runtime, &marker, "1.0.0").unwrap();
         assert_eq!(out, SyncOutcome::UpToDate);
-        assert_eq!(std::fs::read_to_string(&runtime).unwrap(), "runtime-用户数据");
+        assert_eq!(
+            std::fs::read_to_string(&runtime).unwrap(),
+            "runtime-用户数据"
+        );
     }
 
     #[test]

@@ -23,8 +23,8 @@
 //! `HashMap<usize, ToolCallAccumulator>` 按 index 累积，`[DONE]` 时统一 emit。
 
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -34,10 +34,9 @@ use serde_json::Value;
 use crate::debug;
 
 use super::{
-    AuthMode, ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
-    ModelRegistry, ResolvedCompat,
-    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
-    default_base_url,
+    default_base_url, AuthMode, ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
+    ModelRegistry, ResolvedCompat, StreamEvent, StreamResult, TokenUsage, ToolCall,
+    ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -131,11 +130,9 @@ impl OpenAiCompatibleClient {
         }
 
         // ── 解析 compat：声明层合并 + 效果层计算 ──
-        let compat = self.registry.get_resolved_compat(
-            &config.provider,
-            &config.model,
-            config.api_type,
-        );
+        let compat =
+            self.registry
+                .get_resolved_compat(&config.provider, &config.model, config.api_type);
 
         // 序列化 messages（此时 reasoning_content 字段由 ChatMessage 的
         // #[serde(skip_serializing_if)] 控制——None 时自动省略）。
@@ -156,9 +153,8 @@ impl OpenAiCompatibleClient {
         });
 
         if !tools.is_empty() {
-            body["tools"] = serde_json::to_value(tools).map_err(|e| {
-                LlmError::Parse(format!("工具列表序列化失败: {e}"))
-            })?;
+            body["tools"] = serde_json::to_value(tools)
+                .map_err(|e| LlmError::Parse(format!("工具列表序列化失败: {e}")))?;
         }
 
         // 思考强度注入（裁决②：未设置 thinking_level = 完全不注入 thinking
@@ -206,26 +202,23 @@ impl OpenAiCompatibleClient {
         body: &Value,
     ) -> Result<reqwest::RequestBuilder, LlmError> {
         let url = Self::build_url(config)?;
-        let mut req = self.http
+        let mut req = self
+            .http
             .post(&url)
             .header(header::CONTENT_TYPE, "application/json")
             .json(body);
 
         // compat 驱动认证：auth = "none" 时不发送 Authorization（Ollama 等）
-        let compat = self.registry.get_resolved_compat(
-            &config.provider,
-            &config.model,
-            config.api_type,
-        );
+        let compat =
+            self.registry
+                .get_resolved_compat(&config.provider, &config.model, config.api_type);
         if compat.auth != Some(AuthMode::None) {
             req = req.header(header::AUTHORIZATION, format!("Bearer {}", config.api_key));
         }
 
         // 自定义 Headers（JSON 字符串解析）
         if let Some(ref headers_str) = config.headers {
-            if let Ok(json) =
-                serde_json::from_str::<Value>(headers_str)
-            {
+            if let Ok(json) = serde_json::from_str::<Value>(headers_str) {
                 if let Some(obj) = json.as_object() {
                     for (k, v) in obj {
                         if let Some(val) = v.as_str() {
@@ -296,12 +289,17 @@ impl OpenAiCompatibleClient {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
-        let tool_calls = msg.get("tool_calls").and_then(|v| {
-            serde_json::from_value::<Vec<ToolCall>>(v.clone()).ok()
-        }).filter(|tc| !tc.is_empty());
+        let tool_calls = msg
+            .get("tool_calls")
+            .and_then(|v| serde_json::from_value::<Vec<ToolCall>>(v.clone()).ok())
+            .filter(|tc| !tc.is_empty());
 
         let usage = body.get("usage").and_then(Self::extract_usage);
-        Ok(LlmResponse { text, tool_calls, usage })
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            usage,
+        })
     }
 }
 
@@ -329,9 +327,10 @@ impl LlmClient for OpenAiCompatibleClient {
             })?;
 
             let status = response.status();
-            let body: Value = response.json().await.map_err(|e| {
-                LlmError::Parse(format!("响应 JSON 解析失败: {e}"))
-            })?;
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
                 let err_msg = body
@@ -339,7 +338,10 @@ impl LlmClient for OpenAiCompatibleClient {
                     .and_then(|e| e.get("message"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("未知错误");
-                return Err(LlmError::Api(format!("HTTP {}: {err_msg}", status.as_u16())));
+                return Err(LlmError::Api(format!(
+                    "HTTP {}: {err_msg}",
+                    status.as_u16()
+                )));
             }
 
             OpenAiCompatibleClient::parse_chat_response(&body)
@@ -355,7 +357,10 @@ impl LlmClient for OpenAiCompatibleClient {
     ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
         Box::pin(async move {
             // 尝试主请求（含 stream_options）
-            match self.do_chat_stream(config, messages, tools, true, &*on_event).await {
+            match self
+                .do_chat_stream(config, messages, tools, true, &*on_event)
+                .await
+            {
                 Ok(result) => return Ok(result),
                 Err(LlmError::Api(msg)) if msg.contains("stream_options") => {
                     // 降级：移除 stream_options 重试
@@ -365,7 +370,8 @@ impl LlmClient for OpenAiCompatibleClient {
             }
 
             // 降级请求（不含 stream_options）
-            self.do_chat_stream(config, messages, tools, false, &*on_event).await
+            self.do_chat_stream(config, messages, tools, false, &*on_event)
+                .await
         })
     }
 }
@@ -401,7 +407,10 @@ impl OpenAiCompatibleClient {
             messages.len(),
             with_stream_options,
         );
-        log::trace!("[LLM] 请求体：{}", serde_json::to_string(&body).unwrap_or_default());
+        log::trace!(
+            "[LLM] 请求体：{}",
+            serde_json::to_string(&body).unwrap_or_default()
+        );
 
         let response = req.send().await.map_err(|e| {
             if e.is_timeout() {
@@ -432,7 +441,10 @@ impl OpenAiCompatibleClient {
                     })
                     .unwrap_or(err_text)
             };
-            return Err(LlmError::Api(format!("HTTP {}: {err_msg}", status.as_u16())));
+            return Err(LlmError::Api(format!(
+                "HTTP {}: {err_msg}",
+                status.as_u16()
+            )));
         }
 
         // 将 reqwest 的 Bytes 流转换为 Vec<u8> 流，交给通用 SSE 解析器
@@ -492,8 +504,8 @@ where
     E: std::fmt::Display,
 {
     // ── 累积状态 ──
-    let mut text = String::new();              // content delta 累积
-    let mut reasoning = String::new();         // reasoning delta 累积
+    let mut text = String::new(); // content delta 累积
+    let mut reasoning = String::new(); // reasoning delta 累积
     let mut tool_call_acc: HashMap<usize, ToolCallAccumulator> = HashMap::new();
     let mut usage: Option<TokenUsage> = None;
 
@@ -550,8 +562,12 @@ where
 
     Ok(StreamResult {
         text,
-        tool_calls,  // orchestrator 据此判断是否需要继续循环
-        reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
+        tool_calls, // orchestrator 据此判断是否需要继续循环
+        reasoning: if reasoning.is_empty() {
+            None
+        } else {
+            Some(reasoning)
+        },
         usage,
     })
 }
@@ -633,7 +649,9 @@ fn process_sse_chunk(
     }
 
     for choice in choices {
-        let Some(delta) = choice.get("delta") else { continue };
+        let Some(delta) = choice.get("delta") else {
+            continue;
+        };
 
         // reasoning_content（DeepSeek）或 reasoning（Ollama）
         // 双键兼容，priority: reasoning_content > reasoning
@@ -651,7 +669,11 @@ fn process_sse_chunk(
         }
 
         // text delta
-        if let Some(ct) = delta.get("content").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if let Some(ct) = delta
+            .get("content")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
             text_acc.push_str(ct);
             on_event(StreamEvent::TextDelta {
                 content: ct.to_string(),
@@ -661,7 +683,9 @@ fn process_sse_chunk(
         // tool_calls delta（按 index 累积）
         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for tc in tcs {
-                let Some(index) = tc.get("index").and_then(|v| v.as_u64()) else { continue };
+                let Some(index) = tc.get("index").and_then(|v| v.as_u64()) else {
+                    continue;
+                };
                 let idx = index as usize;
 
                 let acc = tool_call_acc.entry(idx).or_default();
@@ -704,9 +728,7 @@ mod tests {
     }
 
     /// 运行 SSE 解析并收集事件。
-    async fn collect_events<'a>(
-        lines: &'a [String],
-    ) -> (Vec<StreamEvent>, StreamResult) {
+    async fn collect_events<'a>(lines: &'a [String]) -> (Vec<StreamEvent>, StreamResult) {
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_c = events.clone();
         let on_event = move |e: StreamEvent| {
@@ -783,14 +805,13 @@ mod tests {
 
     #[tokio::test]
     async fn reasoning_delta_deepseek() {
-        let lines = vec![
-            reasoning_delta_line("需要查询数据库"),
-            done_line(),
-        ];
+        let lines = vec![reasoning_delta_line("需要查询数据库"), done_line()];
         let (events, result) = collect_events(&lines).await;
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "需要查询数据库"));
+        assert!(
+            matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "需要查询数据库")
+        );
 
         assert_eq!(result.reasoning, Some("需要查询数据库".into()));
     }
@@ -798,14 +819,13 @@ mod tests {
     #[tokio::test]
     async fn reasoning_delta_ollama_field_name() {
         // Ollama 使用 "reasoning" 字段名而非 "reasoning_content"
-        let lines = vec![
-            ollama_reasoning_line("分析中"),
-            done_line(),
-        ];
+        let lines = vec![ollama_reasoning_line("分析中"), done_line()];
         let (events, result) = collect_events(&lines).await;
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "分析中"));
+        assert!(
+            matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "分析中")
+        );
 
         assert_eq!(result.reasoning, Some("分析中".into()));
         // 契约不变量 I1~I5（模块 4 P1）
@@ -826,11 +846,13 @@ mod tests {
 
         // 两个 chunk 的 tool_call 按 index 累积，[DONE] 时统一 emit
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
-            if id == "call_1"
-            && name == "echo"
-            && arguments == r#"{"message":"hi"}"#
-        ));
+        assert!(
+            matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
+                if id == "call_1"
+                && name == "echo"
+                && arguments == r#"{"message":"hi"}"#
+            )
+        );
 
         // [DONE] 后 tool_calls 被 emit 为事件，同时也在 StreamResult 中提供
         // 供 orchestrator 判断是否需要继续调度循环

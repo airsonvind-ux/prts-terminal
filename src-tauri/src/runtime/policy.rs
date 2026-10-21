@@ -78,7 +78,10 @@ impl Policy {
             // 随包种子另列（安装在程序目录，不在数据根内）。
             canonicalize_opt(config::db_seed_path()),
         ];
-        let read_only = vec![canonicalize_opt(knowledge_dir()), canonicalize_opt(skills_dir())];
+        let read_only = vec![
+            canonicalize_opt(knowledge_dir()),
+            canonicalize_opt(skills_dir()),
+        ];
         Self {
             workspace_root: ws,
             blocked,
@@ -142,7 +145,9 @@ impl Policy {
 
     /// 是否命中写保护（当前工作根下的 `.git`，按当前根实时派生）。
     pub fn is_protected(&self, p: &Path) -> bool {
-        p.starts_with(canonicalize_opt(self.workspace_root.canonical().join(".git")))
+        p.starts_with(canonicalize_opt(
+            self.workspace_root.canonical().join(".git"),
+        ))
     }
 }
 
@@ -160,10 +165,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-pol-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-pol-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -353,9 +356,15 @@ mod tests {
 
         policy.workspace_root().set(ws_b.clone());
 
-        assert!(policy.is_in_workspace(&b.join("x.txt")), "换根后新根应立即生效");
+        assert!(
+            policy.is_in_workspace(&b.join("x.txt")),
+            "换根后新根应立即生效"
+        );
         assert!(policy.check_write(&b.join("new.txt")));
-        assert!(!policy.is_in_workspace(&a.join("x.txt")), "换根后旧根应失效");
+        assert!(
+            !policy.is_in_workspace(&a.join("x.txt")),
+            "换根后旧根应失效"
+        );
         assert!(!policy.check_write(&a.join("new.txt")));
         // `.git` 保护随根迁移（若按构造时快照实现，新根的 .git 会漏保护）
         assert!(policy.is_protected(&b.join(".git").join("config")));
@@ -373,7 +382,10 @@ mod tests {
         let ws = ws_fixture("shape");
         let policy = Policy::new(ws.clone());
         let db = config::db_seed_path().canonicalize().unwrap();
-        assert!(policy.blocked.iter().any(|b| b == &db), "blocked 应含种子路径");
+        assert!(
+            policy.blocked.iter().any(|b| b == &db),
+            "blocked 应含种子路径"
+        );
         // read_only 含知识库与技能运行根（运行根可不存在，兜底口径比较）
         let kb = knowledge_dir().canonicalize().unwrap();
         assert!(policy.read_only.iter().any(|b| b == &kb));
@@ -384,7 +396,10 @@ mod tests {
         let canon_ws = ws.canonicalize().unwrap();
         let git = canon_ws.join(".git");
         assert!(policy.is_protected(&git), ".git 自身应写保护");
-        assert!(policy.is_protected(&git.join("config")), ".git 子路径应写保护");
+        assert!(
+            policy.is_protected(&git.join("config")),
+            ".git 子路径应写保护"
+        );
         assert!(
             !policy.is_protected(&canon_ws.join("sub")),
             "非 .git 不写保护"

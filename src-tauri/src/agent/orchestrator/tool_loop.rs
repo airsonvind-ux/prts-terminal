@@ -464,7 +464,11 @@ pub(super) fn execute_tools_and_append(
                     }
                 }
                 // 录指纹：同一工具+同一参数+同一结果 → 同一哈希
-                state.record_fingerprint(&tc.function.name, &tc.function.arguments, &output.summary);
+                state.record_fingerprint(
+                    &tc.function.name,
+                    &tc.function.arguments,
+                    &output.summary,
+                );
             }
             Some(Err(err)) => {
                 let err_msg = format!("{err}");
@@ -492,12 +496,11 @@ pub(super) fn execute_tools_and_append(
                 // 中止后剩余槽位按「未执行」型补（M3-B 责任表⑤）——
                 // 保证 tool/call ↔ tool/result 配对不变量。
                 let (summary, reason_code) = match verdicts.and_then(|v| v.get(idx)) {
-                    Some(ToolVerdict::Denied { summary, reason_code }) => {
-                        (summary.clone(), *reason_code)
-                    }
-                    _ if abort.is_aborted() => {
-                        ("处理已中止，工具未执行".to_string(), "aborted")
-                    }
+                    Some(ToolVerdict::Denied {
+                        summary,
+                        reason_code,
+                    }) => (summary.clone(), *reason_code),
+                    _ if abort.is_aborted() => ("处理已中止，工具未执行".to_string(), "aborted"),
                     _ => ("工具调用未执行".to_string(), "not_executed"),
                 };
                 debug!(

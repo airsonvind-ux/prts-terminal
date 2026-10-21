@@ -135,8 +135,7 @@ impl SnapshotStore {
                 continue;
             }
             // 有主：会话内容文件存在 → 保留；否则删除
-            if !self.dir.join(format!("{id}.jsonl")).exists()
-                && std::fs::remove_file(&path).is_ok()
+            if !self.dir.join(format!("{id}.jsonl")).exists() && std::fs::remove_file(&path).is_ok()
             {
                 removed += 1;
             }
@@ -216,7 +215,9 @@ mod tests {
         let data = temp_dir("restart");
         let sessions = data.join("sessions");
         let mut store = MemoryStore::load(&data).unwrap();
-        store.growth_create("伤害计算", "暴击与减伤", "正文", vec![], SOURCE_SYSTEM).unwrap();
+        store
+            .growth_create("伤害计算", "暴击与减伤", "正文", vec![], SOURCE_SYSTEM)
+            .unwrap();
 
         let before = {
             let mut snaps = SnapshotStore::new(&sessions);
@@ -224,7 +225,9 @@ mod tests {
         };
 
         // 模拟重启：进程内缓存清空、记忆已变化，但同对话读回 sidecar
-        store.growth_update("伤害计算", Some("改动后的正文"), None, None, SOURCE_SYSTEM).unwrap();
+        store
+            .growth_update("伤害计算", Some("改动后的正文"), None, None, SOURCE_SYSTEM)
+            .unwrap();
         let mut fresh = SnapshotStore::new(&sessions);
         let after = fresh.get_or_assemble(Some("c9"), &store);
         assert_eq!(after, before, "重启后同对话记忆区逐字一致");
@@ -239,7 +242,10 @@ mod tests {
         let mut snaps = SnapshotStore::new(&sessions);
         let block = snaps.get_or_assemble(Some("c3"), &store);
         assert_eq!(block, "");
-        assert!(sessions.join("c3.memory.txt").exists(), "空块也落盘（冻结）");
+        assert!(
+            sessions.join("c3.memory.txt").exists(),
+            "空块也落盘（冻结）"
+        );
         let _ = std::fs::remove_dir_all(&data);
     }
 
@@ -248,13 +254,18 @@ mod tests {
         let data = temp_dir("none");
         let sessions = data.join("sessions");
         let mut store = MemoryStore::load(&data).unwrap();
-        store.growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_SYSTEM).unwrap();
+        store
+            .growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_SYSTEM)
+            .unwrap();
         let mut snaps = SnapshotStore::new(&sessions);
         let block = snaps.get_or_assemble(None, &store);
         assert!(block.contains("画像"), "仍返回组装结果");
         // 不落盘、不缓存
         assert!(!snaps.is_frozen("x"));
-        let entries: Vec<_> = std::fs::read_dir(&sessions).unwrap().filter_map(|e| e.ok()).collect();
+        let entries: Vec<_> = std::fs::read_dir(&sessions)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
         assert!(entries.is_empty(), "sessions/ 不应产生任何文件");
         let _ = std::fs::remove_dir_all(&data);
     }

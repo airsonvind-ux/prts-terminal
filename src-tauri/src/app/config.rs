@@ -216,7 +216,10 @@ mod tests {
         assert!(root.starts_with(home_dir()), "数据根必须在主目录下");
         // 与 identifier / 旧落点解耦（改名不回头）
         let text = root.to_string_lossy();
-        assert!(!text.contains("com.tauri-app"), "不得再用 identifier 当目录名");
+        assert!(
+            !text.contains("com.tauri-app"),
+            "不得再用 identifier 当目录名"
+        );
         assert!(!text.contains("prts-workspace"), "旧兜底目录名不得复现");
         assert!(!text.contains("AppData"), "数据根不再落在 AppData");
     }
@@ -254,7 +257,11 @@ mod tests {
 
         // 三者都在资源基准目录之下（同一构建只有一条路）
         for p in [&db, &kb, &skills] {
-            assert!(p.starts_with(&root), "资源必须落在基准目录下：{}", p.display());
+            assert!(
+                p.starts_with(&root),
+                "资源必须落在基准目录下：{}",
+                p.display()
+            );
         }
 
         // 运行时副本与种子是两份路径：前者在数据根，后者在资源目录
@@ -318,10 +325,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-ws-ensure-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-ws-ensure-{}-{nanos}", std::process::id()));
         let nested = dir.join("a").join("b");
         assert!(!nested.exists());
         ensure_workspace_dir(&nested).unwrap();

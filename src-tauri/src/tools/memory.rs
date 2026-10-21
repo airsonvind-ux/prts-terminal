@@ -122,7 +122,11 @@ impl Tool for MemoryExperienceTool {
                         )
                     })
                     .collect();
-                let summary = format!("经历检索结果（共 {} 条）：\n{}", hits.len(), lines.join("\n"));
+                let summary = format!(
+                    "经历检索结果（共 {} 条）：\n{}",
+                    hits.len(),
+                    lines.join("\n")
+                );
                 Ok(ToolOutput::json(
                     serde_json::json!({
                         "count": hits.len(),
@@ -134,7 +138,10 @@ impl Tool for MemoryExperienceTool {
                 ))
             }
             "read" => {
-                let id = v.get("id").and_then(|x| x.as_str()).filter(|s| !s.trim().is_empty());
+                let id = v
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.trim().is_empty());
                 let title = v
                     .get("title")
                     .and_then(|x| x.as_str())
@@ -334,7 +341,9 @@ impl Tool for MemoryGrowthTool {
                     Some(_) => Some(parse_tags(&v)?),
                 };
                 if body.is_none() && brief.is_none() && tags.is_none() {
-                    return Err(ToolError::Parse("update 至少需要 body / brief / tags 之一".into()));
+                    return Err(ToolError::Parse(
+                        "update 至少需要 body / brief / tags 之一".into(),
+                    ));
                 }
                 // 篇幅闸（兜底）：按写入后的正文长度校验（body 缺席 = 保持原正文）
                 let cap = if name == PROFILE_NAME {
@@ -343,9 +352,9 @@ impl Tool for MemoryGrowthTool {
                     MAX_TOPIC_CHARS
                 };
                 {
-                    let page = store.growth_get(name).ok_or_else(|| {
-                        ToolError::Execution(format!("成长页「{name}」不存在"))
-                    })?;
+                    let page = store
+                        .growth_get(name)
+                        .ok_or_else(|| ToolError::Execution(format!("成长页「{name}」不存在")))?;
                     let len = body
                         .map(|b| b.chars().count())
                         .unwrap_or_else(|| page.body.chars().count());
@@ -360,7 +369,9 @@ impl Tool for MemoryGrowthTool {
                     .map_err(ToolError::Execution)?;
                 if !changed {
                     // 内容逐字相同 → 未写盘：不发提醒，结果如实说明“没变”
-                    return Ok(ToolOutput::text(format!("「{name}」内容与当前一致，未写入")));
+                    return Ok(ToolOutput::text(format!(
+                        "「{name}」内容与当前一致，未写入"
+                    )));
                 }
                 if name == PROFILE_NAME {
                     // 「关于博士」：提醒带新版全文（快照冻结不再更新，靠提醒同步）
@@ -438,7 +449,13 @@ mod tests {
     use super::*;
     use crate::notices::Notices;
 
-    fn temp_store(tag: &str) -> (Arc<Mutex<MemoryStore>>, Arc<Mutex<Notices>>, std::path::PathBuf) {
+    fn temp_store(
+        tag: &str,
+    ) -> (
+        Arc<Mutex<MemoryStore>>,
+        Arc<Mutex<Notices>>,
+        std::path::PathBuf,
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -463,7 +480,9 @@ mod tests {
         let tool = MemoryGrowthTool::new(store.clone(), ledger.clone());
         let ctx = ToolContext::new();
 
-        let out = tool.execute(&ctx, r#"{"action":"read","name":"关于博士"}"#).unwrap();
+        let out = tool
+            .execute(&ctx, r#"{"action":"read","name":"关于博士"}"#)
+            .unwrap();
         assert!(out.summary.contains("（尚无内容）"));
 
         let out = tool
@@ -477,11 +496,20 @@ mod tests {
         let err = tool
             .execute(&ctx, r#"{"action":"create","name":"伤害计算","body":"x"}"#)
             .unwrap_err();
-        assert!(matches!(&err, ToolError::Execution(m) if m.contains("已存在")), "got: {err}");
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("已存在")),
+            "got: {err}"
+        );
 
-        tool.execute(&ctx, r#"{"action":"update","name":"伤害计算","body":"新正文内容"}"#)
-            .unwrap();
-        assert_eq!(store.lock().unwrap().growth_get("伤害计算").unwrap().body, "新正文内容");
+        tool.execute(
+            &ctx,
+            r#"{"action":"update","name":"伤害计算","body":"新正文内容"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            store.lock().unwrap().growth_get("伤害计算").unwrap().body,
+            "新正文内容"
+        );
         // 写入方盖章：工具写入 → 「工具」（create 与 update 均章）
         assert_eq!(
             store.lock().unwrap().growth_get("伤害计算").unwrap().source,
@@ -491,7 +519,10 @@ mod tests {
         let err = tool
             .execute(&ctx, r#"{"action":"update","name":"不存在","body":"x"}"#)
             .unwrap_err();
-        assert!(matches!(&err, ToolError::Execution(m) if m.contains("不存在")), "got: {err}");
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("不存在")),
+            "got: {err}"
+        );
 
         // 成长写已入提醒事件（作用域内取锁，断言后立即释放——防后续重锁死锁）
         {
@@ -502,7 +533,8 @@ mod tests {
             assert_eq!(events[1].detail, "更新成长页「伤害计算：暴击与减伤」");
         }
 
-        tool.execute(&ctx, r#"{"action":"delete","name":"伤害计算"}"#).unwrap();
+        tool.execute(&ctx, r#"{"action":"delete","name":"伤害计算"}"#)
+            .unwrap();
         assert!(store.lock().unwrap().growth_get("伤害计算").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -530,34 +562,55 @@ mod tests {
         let tool = MemoryExperienceTool::new(store.clone());
         let ctx = ToolContext::new();
 
-        let out = tool.execute(&ctx, r#"{"action":"search","query":"暴击"}"#).unwrap();
+        let out = tool
+            .execute(&ctx, r#"{"action":"search","query":"暴击"}"#)
+            .unwrap();
         assert!(out.summary.contains("e1"));
         assert!(out
             .summary
             .contains(&crate::memory::prompt::ymd_local(1_700_000_000_000)));
 
         // read by id（输出＝id＋本地日期 标题：状态句＋来源行）
-        let out = tool.execute(&ctx, r#"{"action":"read","id":"e1"}"#).unwrap();
+        let out = tool
+            .execute(&ctx, r#"{"action":"read","id":"e1"}"#)
+            .unwrap();
         assert!(out.summary.contains("确认暴击与减伤相乘"));
-        assert!(out.summary.contains("来源：对话 c1 · 轮次 0-1"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("来源：对话 c1 · 轮次 0-1"),
+            "got: {}",
+            out.summary
+        );
         // read by unique title fallback
-        let out = tool.execute(&ctx, r#"{"action":"read","title":"伤害公式"}"#).unwrap();
+        let out = tool
+            .execute(&ctx, r#"{"action":"read","title":"伤害公式"}"#)
+            .unwrap();
         assert!(out.summary.contains("确认暴击与减伤相乘"));
         // read by unknown title
-        let err = tool.execute(&ctx, r#"{"action":"read","title":"nope"}"#).unwrap_err();
-        assert!(matches!(&err, ToolError::Execution(m) if m.contains("没有标题")), "got: {err}");
+        let err = tool
+            .execute(&ctx, r#"{"action":"read","title":"nope"}"#)
+            .unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("没有标题")),
+            "got: {err}"
+        );
 
-        let out = tool.execute(&ctx, r#"{"action":"search","query":"不存在xyz"}"#).unwrap();
+        let out = tool
+            .execute(&ctx, r#"{"action":"search","query":"不存在xyz"}"#)
+            .unwrap();
         assert!(out.summary.contains("没有匹配"));
 
         for act in ["write", "add", "delete", "update"] {
-            let err = tool.execute(&ctx, &format!(r#"{{"action":"{act}","id":"e1"}}"#)).unwrap_err();
+            let err = tool
+                .execute(&ctx, &format!(r#"{{"action":"{act}","id":"e1"}}"#))
+                .unwrap_err();
             assert!(
                 matches!(&err, ToolError::Execution(m) if m.contains("只由管线写")),
                 "action {act}: got {err}"
             );
         }
-        let err = tool.execute(&ctx, r#"{"action":"frobnicate"}"#).unwrap_err();
+        let err = tool
+            .execute(&ctx, r#"{"action":"frobnicate"}"#)
+            .unwrap_err();
         assert!(matches!(err, ToolError::Parse(_)));
         let _ = std::fs::remove_dir_all(&dir);
         drop(ledger);
@@ -577,9 +630,17 @@ mod tests {
             .execute(&ctx, r#"{"action":"read","name":"伤害计算"}"#)
             .unwrap();
         // 头行（含 brief）+ 元数据行 + 正文
-        assert!(out.summary.starts_with("伤害计算（暴击与减伤）\n创建 "), "got: {}", out.summary);
+        assert!(
+            out.summary.starts_with("伤害计算（暴击与减伤）\n创建 "),
+            "got: {}",
+            out.summary
+        );
         assert!(out.summary.contains(" · 更新 "), "got: {}", out.summary);
-        assert!(out.summary.contains(" · 来源 工具\n"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains(" · 来源 工具\n"),
+            "got: {}",
+            out.summary
+        );
         assert!(out.summary.ends_with("\n正文内容"), "got: {}", out.summary);
         // 空 brief：头行不带括号
         tool.execute(&ctx, r#"{"action":"create","name":"无简述","body":"x"}"#)
@@ -587,7 +648,11 @@ mod tests {
         let out = tool
             .execute(&ctx, r#"{"action":"read","name":"无简述"}"#)
             .unwrap();
-        assert!(out.summary.starts_with("无简述\n创建 "), "got: {}", out.summary);
+        assert!(
+            out.summary.starts_with("无简述\n创建 "),
+            "got: {}",
+            out.summary
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -600,7 +665,10 @@ mod tests {
         // 专题页：超限拒绝、不落盘
         let long = "字".repeat(MAX_TOPIC_CHARS + 1);
         let err = tool
-            .execute(&ctx, &format!(r#"{{"action":"create","name":"超长页","body":"{long}"}}"#))
+            .execute(
+                &ctx,
+                &format!(r#"{{"action":"create","name":"超长页","body":"{long}"}}"#),
+            )
             .unwrap_err();
         assert!(
             matches!(&err, ToolError::Execution(m) if m.contains("超过专题页上限")),
@@ -627,7 +695,14 @@ mod tests {
             "got: {err}"
         );
         assert_eq!(
-            store.lock().unwrap().growth_get("合规页").unwrap().body.chars().count(),
+            store
+                .lock()
+                .unwrap()
+                .growth_get("合规页")
+                .unwrap()
+                .body
+                .chars()
+                .count(),
             MAX_TOPIC_CHARS,
             "拒绝后页面保持原样"
         );
@@ -662,7 +737,10 @@ mod tests {
         assert_eq!(gro.name(), "memory_growth");
         assert!(!exp.is_concurrency_safe());
         assert!(!gro.is_concurrency_safe());
-        assert_eq!(exp.parameters()["properties"]["action"]["enum"][0], "search");
+        assert_eq!(
+            exp.parameters()["properties"]["action"]["enum"][0],
+            "search"
+        );
         assert_eq!(gro.parameters()["properties"]["action"]["enum"][0], "read");
         let _ = std::fs::remove_dir_all(&dir);
     }

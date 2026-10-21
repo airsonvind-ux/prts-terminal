@@ -52,27 +52,69 @@
 //! | 关联敌人  | JSON `["a"]` 或 null      | "、"拼接 / "无"       |
 
 use crate::db::{Database, Filter, FilterOp};
-use crate::tools::wiki;
 use crate::tools::common::{self, Target};
 use crate::tools::display::{array_summary, targets_summary};
+use crate::tools::wiki;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 use std::collections::{HashMap, HashSet};
 
 /// enemies 表完整列名（附加列识别与查询字段共用）。
 const ALL_COLUMNS: &[&str] = &[
-    "敌人ID", "名称", "级别", "描述", "地位", "能力列表", "种类", "关联敌人",
-    "攻击方式", "伤害类型", "行动方式", "攻击半径", "目标价值", "不计入敌人总数",
-    "numOfExtraDrops", "viewRadius", "最大生命值", "攻击力", "防御力", "法术抗性",
-    "移动速度", "攻击速度", "攻击间隔", "生命自回速度", "重量", "基础嘲讽等级",
-    "损伤抗性", "元素抗性", "异常抗性", "天赋文本", "技能文本", "备注",
+    "敌人ID",
+    "名称",
+    "级别",
+    "描述",
+    "地位",
+    "能力列表",
+    "种类",
+    "关联敌人",
+    "攻击方式",
+    "伤害类型",
+    "行动方式",
+    "攻击半径",
+    "目标价值",
+    "不计入敌人总数",
+    "numOfExtraDrops",
+    "viewRadius",
+    "最大生命值",
+    "攻击力",
+    "防御力",
+    "法术抗性",
+    "移动速度",
+    "攻击速度",
+    "攻击间隔",
+    "生命自回速度",
+    "重量",
+    "基础嘲讽等级",
+    "损伤抗性",
+    "元素抗性",
+    "异常抗性",
+    "天赋文本",
+    "技能文本",
+    "备注",
 ];
 
 /// 默认结果已包含的列：附加列中重复指定时忽略（不重复输出、不报错）。
 const DEFAULT_COLUMNS: &[&str] = &[
-    "名称", "级别", "描述", "地位", "种类", "能力列表",
-    "攻击方式", "伤害类型", "行动方式", "最大生命值", "攻击力", "防御力",
-    "法术抗性", "移动速度", "攻击间隔", "重量", "异常抗性", "备注",
+    "名称",
+    "级别",
+    "描述",
+    "地位",
+    "种类",
+    "能力列表",
+    "攻击方式",
+    "伤害类型",
+    "行动方式",
+    "最大生命值",
+    "攻击力",
+    "防御力",
+    "法术抗性",
+    "移动速度",
+    "攻击间隔",
+    "重量",
+    "异常抗性",
+    "备注",
 ];
 
 pub struct QueryEnemy;
@@ -227,9 +269,9 @@ fn parse_extra(extra_val: &serde_json::Value) -> ExtraConfig {
             let value = &s[eq + 1..];
             match key {
                 "级别" => parse_level_status(value, &mut cfg),
-                _ => cfg.errors.push(format!(
-                    "状态键 '{key}' 不支持：仅限 级别，请用 键=值 形式"
-                )),
+                _ => cfg
+                    .errors
+                    .push(format!("状态键 '{key}' 不支持：仅限 级别，请用 键=值 形式")),
             }
             continue;
         }
@@ -432,8 +474,13 @@ fn format_skill_text(raw: &str) -> String {
             }
         }
 
-        lines.push(format!("  [{name}]{}",
-            if meta_parts.is_empty() { String::new() } else { format!(" {}", meta_parts.join(" / ")) }
+        lines.push(format!(
+            "  [{name}]{}",
+            if meta_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", meta_parts.join(" / "))
+            }
         ));
 
         // 效果（清洗 wiki 标记）
@@ -672,7 +719,10 @@ mod tests {
     fn tool_metadata() {
         let tool = QueryEnemy;
         assert_eq!(tool.name(), "query_enemy");
-        assert!(tool.description().contains("默认级别"), "描述应说明默认级别");
+        assert!(
+            tool.description().contains("默认级别"),
+            "描述应说明默认级别"
+        );
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
         assert!(
@@ -704,14 +754,35 @@ mod tests {
 
         assert!(result.contains("源石虫"), "应包含敌人名称\n结果: {result}");
         for col in [
-            "名称", "级别", "描述", "地位", "种类", "能力列表", "攻击方式", "伤害类型",
-            "行动方式", "最大生命值", "攻击力", "防御力", "法术抗性", "移动速度",
-            "攻击间隔", "重量", "异常抗性", "备注",
+            "名称",
+            "级别",
+            "描述",
+            "地位",
+            "种类",
+            "能力列表",
+            "攻击方式",
+            "伤害类型",
+            "行动方式",
+            "最大生命值",
+            "攻击力",
+            "防御力",
+            "法术抗性",
+            "移动速度",
+            "攻击间隔",
+            "重量",
+            "异常抗性",
+            "备注",
         ] {
-            assert!(result.contains(col), "默认输出应包含列 {col}\n结果: {result}");
+            assert!(
+                result.contains(col),
+                "默认输出应包含列 {col}\n结果: {result}"
+            );
         }
         // 源石虫（enemy_1007_slime）有 0/1 两级变体
-        assert!(result.contains("共 2 级变体"), "应标注级别变体数\n结果: {result}");
+        assert!(
+            result.contains("共 2 级变体"),
+            "应标注级别变体数\n结果: {result}"
+        );
     }
 
     #[test]
@@ -726,7 +797,10 @@ mod tests {
         // 精确匹配 → 单条结果
         assert!(result.contains("源石虫"), "应包含敌人名称\n结果: {result}");
         assert!(!result.contains("源石虫·α"), "不应包含变种\n结果: {result}");
-        assert!(result.contains("攻击力"), "默认输出应含攻击力\n结果: {result}");
+        assert!(
+            result.contains("攻击力"),
+            "默认输出应含攻击力\n结果: {result}"
+        );
     }
 
     #[test]
@@ -741,8 +815,14 @@ mod tests {
             .unwrap()
             .summary;
 
-        assert!(result.contains("浆果磐蟹"), "应按图鉴名查到\n结果: {result}");
-        assert!(result.contains("图鉴名"), "应注明图鉴名与表内名称不同\n结果: {result}");
+        assert!(
+            result.contains("浆果磐蟹"),
+            "应按图鉴名查到\n结果: {result}"
+        );
+        assert!(
+            result.contains("图鉴名"),
+            "应注明图鉴名与表内名称不同\n结果: {result}"
+        );
         assert!(
             result.contains("带果壳的磐蟹"),
             "应给出表内记录的数据名\n结果: {result}"
@@ -760,7 +840,10 @@ mod tests {
             .summary;
 
         // "酸液源石虫"比"酸液源石虫·α"更短，应命中前者
-        assert!(result.contains("酸液源石虫"), "应命中最短匹配\n结果: {result}");
+        assert!(
+            result.contains("酸液源石虫"),
+            "应命中最短匹配\n结果: {result}"
+        );
         assert!(!result.contains("·α"), "不应包含更长变种\n结果: {result}");
     }
 
@@ -787,8 +870,10 @@ mod tests {
 
         assert!(result.contains("能力列表"), "应包含列名");
         // 碎骨有能力列表（至少"未被阻挡时会发射榴弹"）
-        assert!(result.contains("未被阻挡") || result.contains("榴弹"),
-            "应包含能力描述\n结果: {result}");
+        assert!(
+            result.contains("未被阻挡") || result.contains("榴弹"),
+            "应包含能力描述\n结果: {result}"
+        );
     }
 
     #[test]
@@ -843,7 +928,10 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryEnemy;
         // 异常抗性在默认列中
-        let result = tool.execute(&ctx, r#"{"names":["浆果虫"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["浆果虫"]}"#)
+            .unwrap()
+            .summary;
 
         assert!(result.contains("晕眩"), "应包含异常类型\n结果: {result}");
         assert!(result.contains("沉默"), "应包含异常类型\n结果: {result}");
@@ -858,7 +946,10 @@ mod tests {
 
         assert!(result.contains("化物"), "应包含种类\n结果: {result}");
         // 应该用顿号而非 JSON 格式
-        assert!(!result.contains("[\""), "不应包含 JSON 方括号\n结果: {result}");
+        assert!(
+            !result.contains("[\""),
+            "不应包含 JSON 方括号\n结果: {result}"
+        );
     }
 
     #[test]
@@ -914,7 +1005,10 @@ mod tests {
             .summary;
 
         assert!(result.contains("级别 2"), "应查询级别2\n结果: {result}");
-        assert!(result.contains("共 3 级变体"), "级别切换后变体数标注不变\n结果: {result}");
+        assert!(
+            result.contains("共 3 级变体"),
+            "级别切换后变体数标注不变\n结果: {result}"
+        );
     }
 
     #[test]
@@ -927,8 +1021,14 @@ mod tests {
             .unwrap()
             .summary;
 
-        assert!(result.contains("级别 0"), "后写级别=0 应生效\n结果: {result}");
-        assert!(!result.contains("级别 1"), "前写级别=1 应被覆盖\n结果: {result}");
+        assert!(
+            result.contains("级别 0"),
+            "后写级别=0 应生效\n结果: {result}"
+        );
+        assert!(
+            !result.contains("级别 1"),
+            "前写级别=1 应被覆盖\n结果: {result}"
+        );
     }
 
     #[test]
@@ -969,8 +1069,14 @@ mod tests {
             .unwrap()
             .summary;
 
-        assert!(result.contains("✗"), "旧语法 '级别1' 应报错\n结果: {result}");
-        assert!(result.contains("键=值"), "旧语法 '级别1' 应指路键=值\n结果: {result}");
+        assert!(
+            result.contains("✗"),
+            "旧语法 '级别1' 应报错\n结果: {result}"
+        );
+        assert!(
+            result.contains("键=值"),
+            "旧语法 '级别1' 应指路键=值\n结果: {result}"
+        );
     }
 
     // ── 附加列（不含 =）──
@@ -989,12 +1095,20 @@ mod tests {
             .summary;
 
         for col in [
-            "天赋文本", "技能文本", "基础嘲讽等级", "目标价值", "损伤抗性", "元素抗性",
+            "天赋文本",
+            "技能文本",
+            "基础嘲讽等级",
+            "目标价值",
+            "损伤抗性",
+            "元素抗性",
         ] {
             assert!(result.contains(col), "应输出附加列 {col}\n结果: {result}");
         }
         // 碎骨目标价值为 2
-        assert!(result.contains("目标价值: 2"), "目标价值应有值\n结果: {result}");
+        assert!(
+            result.contains("目标价值: 2"),
+            "目标价值应有值\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1022,7 +1136,10 @@ mod tests {
             .unwrap()
             .summary;
 
-        assert!(result.contains("敌人ID: enemy_1007_slime"), "应输出敌人ID\n结果: {result}");
+        assert!(
+            result.contains("敌人ID: enemy_1007_slime"),
+            "应输出敌人ID\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1037,7 +1154,10 @@ mod tests {
 
         assert!(result.contains("✗"), "未命中应报错\n结果: {result}");
         assert!(result.contains("键=值"), "应指路键=值\n结果: {result}");
-        assert!(result.contains("知识库"), "应指路知识库列名\n结果: {result}");
+        assert!(
+            result.contains("知识库"),
+            "应指路知识库列名\n结果: {result}"
+        );
     }
 
     // ── 错误处理 ──
@@ -1163,7 +1283,10 @@ mod tests {
             .summary;
         assert!(result.contains("源石虫"));
         assert!(!result.contains("源石虫·α"));
-        assert!(result.contains("共 2 级变体"), "ID 查询也应标注变体数\n结果: {result}");
+        assert!(
+            result.contains("共 2 级变体"),
+            "ID 查询也应标注变体数\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1209,8 +1332,7 @@ mod tests {
     fn ids_and_names_mutex_error() {
         let ctx = make_ctx();
         let tool = QueryEnemy;
-        let result = tool
-            .execute(&ctx, r#"{"ids":["enemy_1007_slime"],"names":["源石虫"]}"#);
+        let result = tool.execute(&ctx, r#"{"ids":["enemy_1007_slime"],"names":["源石虫"]}"#);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("互斥"));
     }
@@ -1252,9 +1374,15 @@ mod tests {
         // 支持环境变量交互：PRTS_NAME / PRTS_EXTRA（逗号分隔）
         if let Ok(name) = std::env::var("PRTS_NAME") {
             let evec: Option<Vec<String>> = std::env::var("PRTS_EXTRA").ok().map(|s| {
-                if s.is_empty() { vec![] } else { s.split(',').map(|x| x.trim().to_string()).collect() }
+                if s.is_empty() {
+                    vec![]
+                } else {
+                    s.split(',').map(|x| x.trim().to_string()).collect()
+                }
             });
-            let extra_ref: Option<Vec<&str>> = evec.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+            let extra_ref: Option<Vec<&str>> = evec
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect());
             println!("{}  extra={:?}", name, extra_ref);
             println!("{}", call(&ctx, &name, extra_ref.as_deref()));
             return;
@@ -1263,9 +1391,17 @@ mod tests {
         let cases: &[(&str, &str, Option<&[&str]>)] = &[
             ("1. 源石虫 · 默认（级别 0）", "源石虫", None),
             ("2. 碎骨 · 级别=1 切换变体", "碎骨", Some(&["级别=1"])),
-            ("3. 火龙 · 附加列 技能文本+天赋文本", "火龙", Some(&["技能文本", "天赋文本"])),
+            (
+                "3. 火龙 · 附加列 技能文本+天赋文本",
+                "火龙",
+                Some(&["技能文本", "天赋文本"]),
+            ),
             ("4. 源石虫 · 级别=abc 非法值", "源石虫", Some(&["级别=abc"])),
-            ("5. 源石虫 · 旧裸写 级别1 报错示例", "源石虫", Some(&["级别1"])),
+            (
+                "5. 源石虫 · 旧裸写 级别1 报错示例",
+                "源石虫",
+                Some(&["级别1"]),
+            ),
         ];
         for (label, name, extra) in cases {
             println!("========== {label} ==========");

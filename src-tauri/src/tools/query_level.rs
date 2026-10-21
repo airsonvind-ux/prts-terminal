@@ -1,4 +1,4 @@
-﻿//! query_level —— 关卡深入查询工具
+//! query_level —— 关卡深入查询工具
 //!
 //! 语义：输入 levelId → 返回三部分结构化信息。
 //! levelId 由 query_stage 获取，单次只查一个关卡。
@@ -38,10 +38,10 @@ struct MapData {
 
 #[derive(Deserialize)]
 struct TileEntry(
-    String,     // tileKey
-    i64,        // heightType: 0=低地 1=高台
-    i64,        // buildableType: 0=不可 1=近战 2=远程 3=全部
-    i64,        // passableMask: 0=不可 2=仅飞行 3=全部
+    String, // tileKey
+    i64,    // heightType: 0=低地 1=高台
+    i64,    // buildableType: 0=不可 1=近战 2=远程 3=全部
+    i64,    // passableMask: 0=不可 2=仅飞行 3=全部
 );
 
 #[derive(Deserialize)]
@@ -125,29 +125,18 @@ const ACTION_TYPE_NAMES: &[(&str, &str)] = &[
     ("13", "空占位"),
 ];
 
-const MOTION_MODE_NAMES: &[(&str, &str)] = &[
-    ("0", "WALK"),
-    ("1", "FLY"),
-    ("2", "E_NUM"),
-];
+const MOTION_MODE_NAMES: &[(&str, &str)] = &[("0", "WALK"), ("1", "FLY"), ("2", "E_NUM")];
 
-const PHASE_NAMES: &[(&str, &str)] = &[
-    ("0", "精英0"),
-    ("1", "精英1"),
-    ("2", "精英2"),
-];
+const PHASE_NAMES: &[(&str, &str)] = &[("0", "精英0"), ("1", "精英1"), ("2", "精英2")];
 
-const DIRECTION_NAMES: &[(&str, &str)] = &[
-    ("0", "上"),
-    ("1", "右"),
-    ("2", "下"),
-    ("3", "左"),
-];
+const DIRECTION_NAMES: &[(&str, &str)] = &[("0", "上"), ("1", "右"), ("2", "下"), ("3", "左")];
 
 fn action_type_name(t: i64) -> String {
     let s = t.to_string();
     for (k, v) in ACTION_TYPE_NAMES {
-        if *k == s { return v.to_string(); }
+        if *k == s {
+            return v.to_string();
+        }
     }
     format!("类型{t}")
 }
@@ -155,7 +144,9 @@ fn action_type_name(t: i64) -> String {
 fn motion_mode_name(m: i64) -> String {
     let s = m.to_string();
     for (k, v) in MOTION_MODE_NAMES {
-        if *k == s { return v.to_string(); }
+        if *k == s {
+            return v.to_string();
+        }
     }
     format!("mode{m}")
 }
@@ -163,7 +154,9 @@ fn motion_mode_name(m: i64) -> String {
 fn phase_name(p: i64) -> String {
     let s = p.to_string();
     for (k, v) in PHASE_NAMES {
-        if *k == s { return v.to_string(); }
+        if *k == s {
+            return v.to_string();
+        }
     }
     format!("阶段{p}")
 }
@@ -171,7 +164,9 @@ fn phase_name(p: i64) -> String {
 fn direction_name(d: i64) -> String {
     let s = d.to_string();
     for (k, v) in DIRECTION_NAMES {
-        if *k == s { return v.to_string(); }
+        if *k == s {
+            return v.to_string();
+        }
     }
     format!("朝向{d}")
 }
@@ -222,7 +217,8 @@ fn inst_equip_ids(arr: &[serde_json::Value], idx: usize) -> Vec<String> {
     arr.get(idx)
         .and_then(|v| v.as_array())
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(|x| x.as_str().map(String::from))
                 .collect()
         })
@@ -263,12 +259,7 @@ fn build_key_translations(db: &Database) -> HashMap<String, String> {
     }
 
     // traps: 装置ID → 名称
-    if let Ok(result) = db.query_filtered(
-        "traps",
-        &["装置ID".into(), "名称".into()],
-        &[],
-        0,
-    ) {
+    if let Ok(result) = db.query_filtered("traps", &["装置ID".into(), "名称".into()], &[], 0) {
         for row in result.rows {
             if let (Some(id), Some(name)) = (row.get("装置ID"), row.get("名称")) {
                 if !id.is_empty() {
@@ -279,12 +270,8 @@ fn build_key_translations(db: &Database) -> HashMap<String, String> {
     }
 
     // operators: 干员ID → 名称
-    if let Ok(result) = db.query_filtered(
-        "operators",
-        &["干员ID".into(), "名称".into()],
-        &[],
-        0,
-    ) {
+    if let Ok(result) = db.query_filtered("operators", &["干员ID".into(), "名称".into()], &[], 0)
+    {
         for row in result.rows {
             if let (Some(id), Some(name)) = (row.get("干员ID"), row.get("名称")) {
                 if !id.is_empty() {
@@ -295,12 +282,7 @@ fn build_key_translations(db: &Database) -> HashMap<String, String> {
     }
 
     // tokens: tokenID → 名称
-    if let Ok(result) = db.query_filtered(
-        "tokens",
-        &["tokenID".into(), "名称".into()],
-        &[],
-        0,
-    ) {
+    if let Ok(result) = db.query_filtered("tokens", &["tokenID".into(), "名称".into()], &[], 0) {
         for row in result.rows {
             if let (Some(id), Some(name)) = (row.get("tokenID"), row.get("名称")) {
                 if !id.is_empty() {
@@ -422,9 +404,10 @@ impl Tool for QueryLevel {
         let show_waves = fields.iter().any(|f| *f == "波次");
 
         // ── 2. 查询数据库 ──
-        let db = ctx.db.as_ref().ok_or_else(|| {
-            ToolError::Execution("数据库未连接".into())
-        })?;
+        let db = ctx
+            .db
+            .as_ref()
+            .ok_or_else(|| ToolError::Execution("数据库未连接".into()))?;
 
         let result = db
             .query_filtered(
@@ -444,9 +427,11 @@ impl Tool for QueryLevel {
             )
             .map_err(|e| ToolError::Execution(e))?;
 
-        let row = result.rows.into_iter().next().ok_or_else(|| {
-            ToolError::Execution(format!("未找到关卡: {level_id}"))
-        })?;
+        let row = result
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| ToolError::Execution(format!("未找到关卡: {level_id}")))?;
 
         // ── 3. 构建 key 翻译缓存（需要时）──
         let key_cache = if show_predefines || show_waves {
@@ -493,8 +478,15 @@ impl Tool for QueryLevel {
 /// 近战单位，可以通行"）。白名单外类型均附加描述文本（地穴、冰面、
 /// 化境地块等特殊效果地块）。
 const NO_DESC_WHITELIST: &[&str] = &[
-    "侵入点", "空袭侵入点", "保护目标", "通道入口", "通道出口",
-    "不可放置位", "禁入区", "平地", "高台",
+    "侵入点",
+    "空袭侵入点",
+    "保护目标",
+    "通道入口",
+    "通道出口",
+    "不可放置位",
+    "禁入区",
+    "平地",
+    "高台",
 ];
 
 /// tile 信息缓存：tileKey → (中文名, 描述文本)。编译期嵌入，一次解析。
@@ -638,7 +630,12 @@ fn format_map(map_data: &MapData) -> String {
     }
     for g in &groups {
         if name_counts[g.name.as_str()] > 1 {
-            lines.push(format!("{}({}): {}", g.name, g.attrs, fmt_coord_group(&g.coords)));
+            lines.push(format!(
+                "{}({}): {}",
+                g.name,
+                g.attrs,
+                fmt_coord_group(&g.coords)
+            ));
         } else {
             lines.push(format!("{}: {}", g.name, fmt_coord_group(&g.coords)));
         }
@@ -679,7 +676,9 @@ fn format_predefines_section(
     let mut lines = Vec::new();
     lines.push("══════ 预置单位 ══════".to_string());
     lines.push(String::new());
-    let predefines_str = row.get("预置单位").filter(|s| !s.is_empty() && *s != "null");
+    let predefines_str = row
+        .get("预置单位")
+        .filter(|s| !s.is_empty() && *s != "null");
     if let Some(raw) = predefines_str {
         let key_cache = key_cache.ok_or_else(|| ToolError::Execution("缓存未初始化".into()))?;
         lines.push(format_predefines(raw, key_cache));
@@ -716,7 +715,8 @@ fn parse_json_field<T: serde::de::DeserializeOwned>(
     if raw == "null" {
         return Err(ToolError::Execution(format!("字段 {} 为 null", field)));
     }
-    serde_json::from_str(raw).map_err(|e| ToolError::Execution(format!("解析 {} 失败: {}", field, e)))
+    serde_json::from_str(raw)
+        .map_err(|e| ToolError::Execution(format!("解析 {} 失败: {}", field, e)))
 }
 
 // ── 预置单位 ──
@@ -762,7 +762,11 @@ fn format_predefines(raw: &str, key_cache: &HashMap<String, String>) -> String {
         }
     }
 
-    if lines.is_empty() { "无".to_string() } else { lines.join("\n") }
+    if lines.is_empty() {
+        "无".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
 fn format_token_inst(inst: &[serde_json::Value], cache: &HashMap<String, String>) -> String {
@@ -778,13 +782,19 @@ fn format_token_inst(inst: &[serde_json::Value], cache: &HashMap<String, String>
 
     let name = translate_key(key, cache);
     let mut out = format!("  {name}");
-    if let Some(a) = alias { if !a.is_empty() { out.push_str(&format!("\n    别名: {a}")); } }
+    if let Some(a) = alias {
+        if !a.is_empty() {
+            out.push_str(&format!("\n    别名: {a}"));
+        }
+    }
     // trap 类装置无精英化阶段与技能概念，省略阶段/技能；非 trap（干员/召唤物）全字段
     let is_trap = key.starts_with("trap_");
     if is_trap {
         out.push_str(&format!("\n    等级: {level}"));
     } else {
-        out.push_str(&format!("\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"));
+        out.push_str(&format!(
+            "\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"
+        ));
     }
     if !equip_ids.is_empty() {
         out.push_str(&format!("\n    模组: {}", equip_ids.join(", ")));
@@ -810,13 +820,19 @@ fn format_token_card(card: &[serde_json::Value], cache: &HashMap<String, String>
 
     let name = translate_key(key, cache);
     let mut out = format!("  {name}");
-    if let Some(a) = alias { if !a.is_empty() { out.push_str(&format!("\n    别名: {a}")); } }
+    if let Some(a) = alias {
+        if !a.is_empty() {
+            out.push_str(&format!("\n    别名: {a}"));
+        }
+    }
     // trap 类装置无精英化阶段与技能概念，省略阶段/技能；非 trap（干员/召唤物）全字段
     let is_trap = key.starts_with("trap_");
     if is_trap {
         out.push_str(&format!("\n    等级: {level}"));
     } else {
-        out.push_str(&format!("\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"));
+        out.push_str(&format!(
+            "\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"
+        ));
     }
     if !equip_ids.is_empty() {
         out.push_str(&format!("\n    模组: {}", equip_ids.join(", ")));
@@ -836,8 +852,14 @@ fn format_char_card(card: &[serde_json::Value], cache: &HashMap<String, String>)
 
     let name = translate_key(key, cache);
     let mut out = format!("  {name}");
-    if let Some(a) = alias { if !a.is_empty() { out.push_str(&format!("\n    别名: {a}")); } }
-    out.push_str(&format!("\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"));
+    if let Some(a) = alias {
+        if !a.is_empty() {
+            out.push_str(&format!("\n    别名: {a}"));
+        }
+    }
+    out.push_str(&format!(
+        "\n    等级: {level}  阶段: {phase}  技能: #{skill_idx} Lv.{skill_lvl}"
+    ));
     if !equip_ids.is_empty() {
         out.push_str(&format!("\n    模组: {}", equip_ids.join(", ")));
     }
@@ -890,48 +912,78 @@ fn format_runes(raw: &str) -> Result<String, ToolError> {
         }
     }
 
-    Ok(if lines.is_empty() { "无".to_string() } else { lines.join("\n") })
+    Ok(if lines.is_empty() {
+        "无".to_string()
+    } else {
+        lines.join("\n")
+    })
 }
 
 fn format_one_rune(rune: &serde_json::Value, lines: &mut Vec<String>) {
-    let entry: RuneEntry = serde_json::from_value(rune.clone())
-        .unwrap_or_else(|_| RuneEntry {
-            key: "?".into(),
-            professionMask: serde_json::Value::Null,
-            buildableMask: serde_json::Value::Null,
-            blackboard: vec![],
-        });
+    let entry: RuneEntry = serde_json::from_value(rune.clone()).unwrap_or_else(|_| RuneEntry {
+        key: "?".into(),
+        professionMask: serde_json::Value::Null,
+        buildableMask: serde_json::Value::Null,
+        blackboard: vec![],
+    });
     let prof = format_prof_mask(&entry.professionMask);
     let bm = format_buildable_mask(&entry.buildableMask);
     let bb = format_blackboard(&entry.blackboard);
-    lines.push(format!("    {}  职业: {prof}  部署: {bm}  {{{bb}}}", entry.key));
+    lines.push(format!(
+        "    {}  职业: {prof}  部署: {bm}  {{{bb}}}",
+        entry.key
+    ));
 }
 
 fn format_prof_mask(val: &serde_json::Value) -> String {
     match val {
         serde_json::Value::String(s) => {
             let map: &[(&str, &str)] = &[
-                ("CASTER", "术士"), ("MEDIC", "医疗"), ("PIONEER", "先锋"),
-                ("SNIPER", "狙击"), ("SPECIAL", "特种"), ("SUPPORT", "辅助"),
-                ("TANK", "重装"), ("TRAP", "装置"), ("WARRIOR", "近卫"),
+                ("CASTER", "术士"),
+                ("MEDIC", "医疗"),
+                ("PIONEER", "先锋"),
+                ("SNIPER", "狙击"),
+                ("SPECIAL", "特种"),
+                ("SUPPORT", "辅助"),
+                ("TANK", "重装"),
+                ("TRAP", "装置"),
+                ("WARRIOR", "近卫"),
                 ("NONE", "无"),
             ];
-            for (k, v) in map { if *k == s.as_str() { return v.to_string(); } }
+            for (k, v) in map {
+                if *k == s.as_str() {
+                    return v.to_string();
+                }
+            }
             s.clone()
         }
         serde_json::Value::Number(n) => {
             let v = n.as_i64().unwrap_or(0);
-            if v == 1023 { return "全部职业".to_string(); }
+            if v == 1023 {
+                return "全部职业".to_string();
+            }
             let bits: &[(i64, &str)] = &[
-                (1, "近卫"), (2, "狙击"), (4, "重装"), (8, "医疗"),
-                (16, "辅助"), (32, "术士"), (64, "特种"), (128, "召唤物"),
-                (256, "装置"), (512, "先锋"),
+                (1, "近卫"),
+                (2, "狙击"),
+                (4, "重装"),
+                (8, "医疗"),
+                (16, "辅助"),
+                (32, "术士"),
+                (64, "特种"),
+                (128, "召唤物"),
+                (256, "装置"),
+                (512, "先锋"),
             ];
-            let parts: Vec<&str> = bits.iter()
+            let parts: Vec<&str> = bits
+                .iter()
                 .filter(|(b, _)| (v & b) != 0)
                 .map(|(_, name)| *name)
                 .collect();
-            if parts.is_empty() { v.to_string() } else { parts.join("、") }
+            if parts.is_empty() {
+                v.to_string()
+            } else {
+                parts.join("、")
+            }
         }
         _ => "无".to_string(),
     }
@@ -941,10 +993,16 @@ fn format_buildable_mask(val: &serde_json::Value) -> String {
     match val {
         serde_json::Value::String(s) => {
             let map: &[(&str, &str)] = &[
-                ("ALL", "全部单位"), ("MELEE", "近战单位"), ("RANGED", "远程单位"),
+                ("ALL", "全部单位"),
+                ("MELEE", "近战单位"),
+                ("RANGED", "远程单位"),
                 ("NONE", "无"),
             ];
-            for (k, v) in map { if *k == s.as_str() { return v.to_string(); } }
+            for (k, v) in map {
+                if *k == s.as_str() {
+                    return v.to_string();
+                }
+            }
             s.clone()
         }
         serde_json::Value::Number(n) => {
@@ -961,15 +1019,20 @@ fn format_buildable_mask(val: &serde_json::Value) -> String {
 }
 
 fn format_blackboard(entries: &[BlackboardItem]) -> String {
-    if entries.is_empty() { return String::new(); }
-    let parts: Vec<String> = entries.iter().map(|e| {
-        if let Some(vs) = &e.valueStr {
-            if (e.value - 0.0).abs() < f64::EPSILON && !vs.is_empty() {
-                return format!("{}={}", e.key, vs);
+    if entries.is_empty() {
+        return String::new();
+    }
+    let parts: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            if let Some(vs) = &e.valueStr {
+                if (e.value - 0.0).abs() < f64::EPSILON && !vs.is_empty() {
+                    return format!("{}={}", e.key, vs);
+                }
             }
-        }
-        format!("{}={}", e.key, fmt_float(e.value))
-    }).collect();
+            format!("{}={}", e.key, fmt_float(e.value))
+        })
+        .collect();
     parts.join(", ")
 }
 
@@ -979,7 +1042,9 @@ fn format_blackboard(entries: &[BlackboardItem]) -> String {
 
 fn format_routes_section(row: &HashMap<String, String>) -> Result<String, ToolError> {
     let routes: Vec<serde_json::Value> = parse_json_field(row, "路线")?;
-    let extra_str = row.get("额外路线").filter(|s| !s.is_empty() && *s != "null");
+    let extra_str = row
+        .get("额外路线")
+        .filter(|s| !s.is_empty() && *s != "null");
     let extra: Vec<serde_json::Value> = if let Some(s) = extra_str {
         serde_json::from_str(s).unwrap_or_default()
     } else {
@@ -1036,7 +1101,8 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
     let (end_row, end_col) = pos_from_json(arr.get(2));
     let spawn_random = offset_from_json(arr.get(3));
     let spawn_offset = offset_from_json(arr.get(4));
-    let checkpoints: &[serde_json::Value] = arr.get(5)
+    let checkpoints: &[serde_json::Value] = arr
+        .get(5)
         .and_then(|v| v.as_array())
         .map(|a| a.as_slice())
         .unwrap_or(&[]);
@@ -1046,15 +1112,26 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
     // 起点
     let mut start_extras = Vec::new();
     if !is_zero_offset(&spawn_offset) {
-        start_extras.push(format!("spawnOffset=({},{})", fmt_float(spawn_offset.0), fmt_float(spawn_offset.1)));
+        start_extras.push(format!(
+            "spawnOffset=({},{})",
+            fmt_float(spawn_offset.0),
+            fmt_float(spawn_offset.1)
+        ));
     }
     if !is_zero_offset(&spawn_random) {
-        start_extras.push(format!("spawnRandomRange=({},{})", fmt_float(spawn_random.0), fmt_float(spawn_random.1)));
+        start_extras.push(format!(
+            "spawnRandomRange=({},{})",
+            fmt_float(spawn_random.0),
+            fmt_float(spawn_random.1)
+        ));
     }
     if start_extras.is_empty() {
         parts.push(format!("[({start_col},{start_row})]"));
     } else {
-        parts.push(format!("[({start_col},{start_row}),{}]", start_extras.join(",")));
+        parts.push(format!(
+            "[({start_col},{start_row}),{}]",
+            start_extras.join(",")
+        ));
     }
 
     // 中间路径点
@@ -1068,8 +1145,8 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
         let (cp_row, cp_col) = pos_from_json(cp_arr.get(2));
         let cp_offset = offset_from_json(cp_arr.get(3));
 
-        let is_default = cp_type == 0 && (cp_time - 0.0).abs() < f64::EPSILON
-            && is_zero_offset(&cp_offset);
+        let is_default =
+            cp_type == 0 && (cp_time - 0.0).abs() < f64::EPSILON && is_zero_offset(&cp_offset);
 
         if is_default {
             parts.push(format!("({cp_col},{cp_row})"));
@@ -1085,7 +1162,11 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
                 extras.push(format!("{}s", fmt_float(cp_time)));
             }
             if !is_zero_offset(&cp_offset) {
-                extras.push(format!("offset=({},{})", fmt_float(cp_offset.0), fmt_float(cp_offset.1)));
+                extras.push(format!(
+                    "offset=({},{})",
+                    fmt_float(cp_offset.0),
+                    fmt_float(cp_offset.1)
+                ));
             }
             let cp_str = if omit_coord {
                 // 纯语义形式，如 [停驻·计时,20.0s]
@@ -1136,12 +1217,23 @@ fn is_zero_offset(off: &(f64, f64)) -> bool {
 
 fn checkpoint_type_name(t: i64) -> String {
     let map: &[(i64, &str)] = &[
-        (0, "移动"), (1, "停驻·计时"), (2, "停驻·全局计时"),
-        (3, "停驻·段计时"), (4, "停驻·波计时"), (5, "进入传送"),
-        (6, "离开传送"), (7, "警报"), (8, "巡逻"),
-        (9, "引航者试炼休整"), (10, "地图偏移移动"),
+        (0, "移动"),
+        (1, "停驻·计时"),
+        (2, "停驻·全局计时"),
+        (3, "停驻·段计时"),
+        (4, "停驻·波计时"),
+        (5, "进入传送"),
+        (6, "离开传送"),
+        (7, "警报"),
+        (8, "巡逻"),
+        (9, "引航者试炼休整"),
+        (10, "地图偏移移动"),
     ];
-    for (k, v) in map { if *k == t { return v.to_string(); } }
+    for (k, v) in map {
+        if *k == t {
+            return v.to_string();
+        }
+    }
     format!("type{t}")
 }
 
@@ -1188,11 +1280,12 @@ fn format_waves_section(
     }
 
     // 分支信息
-    let branches_str = row.get("分支").filter(|s| *s != "null" && !s.trim().is_empty());
+    let branches_str = row
+        .get("分支")
+        .filter(|s| *s != "null" && !s.trim().is_empty());
     if let Some(raw) = branches_str {
-        let branches: HashMap<String, BranchValue> =
-            serde_json::from_str(raw)
-                .map_err(|e| ToolError::Execution(format!("解析分支数据: {e}")))?;
+        let branches: HashMap<String, BranchValue> = serde_json::from_str(raw)
+            .map_err(|e| ToolError::Execution(format!("解析分支数据: {e}")))?;
         if !branches.is_empty() {
             lines.push("══════ 分支信息 ══════".to_string());
             lines.push(String::new());
@@ -1227,7 +1320,10 @@ fn format_fragment_actions(
     // group_key → Vec<action_index>
     let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
     for (ai, act_val) in actions.iter().enumerate() {
-        let arr = match act_val.as_array() { Some(a) => a, None => continue };
+        let arr = match act_val.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
         if let Some(grp) = act_str(arr, 6) {
             if !grp.is_empty() {
                 groups.entry(grp.to_string()).or_default().push(ai);
@@ -1237,15 +1333,23 @@ fn format_fragment_actions(
 
     // 对有 packKey 但无 groupKey 的 action，拉入同 packKey 的组
     for (ai, act_val) in actions.iter().enumerate() {
-        let arr = match act_val.as_array() { Some(a) => a, None => continue };
+        let arr = match act_val.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
         let pck = act_str(arr, 7);
         let grp = act_str(arr, 6);
         if let Some(pck) = pck {
             if !pck.is_empty() && grp.map_or(true, |g| g.is_empty()) {
                 // 找同 packKey 且有 groupKey 的 action
                 for (aj, act_val2) in actions.iter().enumerate() {
-                    if ai == aj { continue; }
-                    let arr2 = match act_val2.as_array() { Some(a) => a, None => continue };
+                    if ai == aj {
+                        continue;
+                    }
+                    let arr2 = match act_val2.as_array() {
+                        Some(a) => a,
+                        None => continue,
+                    };
                     if act_str(arr2, 7) == Some(pck) {
                         if let Some(g2) = act_str(arr2, 6) {
                             if !g2.is_empty() {
@@ -1271,7 +1375,10 @@ fn format_fragment_actions(
     let mut outputted_groups: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (ai, act_val) in actions.iter().enumerate() {
-        let arr = match act_val.as_array() { Some(a) => a, None => continue };
+        let arr = match act_val.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
         let grp = act_str(arr, 6).filter(|s| !s.is_empty());
 
         if let Some(g) = grp {
@@ -1314,8 +1421,13 @@ fn format_random_group(
     // 按 packKey 分组
     let mut pack_dict: HashMap<Option<String>, Vec<&[serde_json::Value]>> = HashMap::new();
     for &ai in &indices {
-        let arr = match actions[ai].as_array() { Some(a) => a, None => continue };
-        let pck = act_str(arr, 7).map(|s| s.to_string()).filter(|s| !s.is_empty());
+        let arr = match actions[ai].as_array() {
+            Some(a) => a,
+            None => continue,
+        };
+        let pck = act_str(arr, 7)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
         pack_dict.entry(pck).or_default().push(arr);
     }
 
@@ -1327,7 +1439,9 @@ fn format_random_group(
     if has_multiple_packs {
         // 每个 packKey 是一个 option（包）
         for pck_opt in distinct_keys {
-            if pck_opt.is_none() { continue; }
+            if pck_opt.is_none() {
+                continue;
+            }
             let pck = pck_opt.as_ref().unwrap();
             let pack_acts = &pack_dict[pck_opt];
             // 找该包内带 groupKey 的 action 的 weight
@@ -1335,7 +1449,10 @@ fn format_random_group(
             for act in pack_acts {
                 if act_str(*act, 6) == Some(group_key) {
                     let w = act_i64(*act, 8);
-                    if w > 0 { wt = w; break; }
+                    if w > 0 {
+                        wt = w;
+                        break;
+                    }
                 }
             }
             lines.push(format!("      权重 {wt}  包 {pck}"));
@@ -1375,7 +1492,10 @@ fn format_random_group(
                 // 跟随的同 packKey 无 groupKey 的 action
                 let pck = act_str(*act, 7);
                 for act2 in &indices {
-                    let arr2 = match actions[*act2].as_array() { Some(a) => a, None => continue };
+                    let arr2 = match actions[*act2].as_array() {
+                        Some(a) => a,
+                        None => continue,
+                    };
                     if act_str(arr2, 6).map_or(true, |s| s.is_empty()) && act_str(arr2, 7) == pck {
                         format_action_line(arr2, key_cache, lines, 8);
                     }
@@ -1405,7 +1525,11 @@ fn format_action_line(
     // ── 特殊类型：仅 [hiddenGroup] [preDelay] 类型名 ──
     if is_special_action_type(action_type) {
         let mut parts = Vec::new();
-        if let Some(hg) = hidden_group { if !hg.is_empty() { parts.push(format!("[hiddenGroup: {hg}]")); } }
+        if let Some(hg) = hidden_group {
+            if !hg.is_empty() {
+                parts.push(format!("[hiddenGroup: {hg}]"));
+            }
+        }
         parts.push(format!("[preDelay: {}s]", fmt_float(pre_delay)));
         parts.push(type_name);
         lines.push(format!("{prefix}{}", parts.join("  ")));
@@ -1415,7 +1539,11 @@ fn format_action_line(
     // ── 未知类型（3/12 等）：按特殊处理 ──
     if !is_default_action_type(action_type) {
         let mut parts = Vec::new();
-        if let Some(hg) = hidden_group { if !hg.is_empty() { parts.push(format!("[hiddenGroup: {hg}]")); } }
+        if let Some(hg) = hidden_group {
+            if !hg.is_empty() {
+                parts.push(format!("[hiddenGroup: {hg}]"));
+            }
+        }
         parts.push(format!("[preDelay: {}s]", fmt_float(pre_delay)));
         parts.push(type_name);
         lines.push(format!("{prefix}{}", parts.join("  ")));
@@ -1489,20 +1617,36 @@ mod tests {
         let tool = QueryLevel;
         let result = tool
             .execute(&ctx, r#"{"levelId":"level_main_01-07","fields":["地图"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         // 地图：尺寸 + 坐标分组 + 属性表
-        assert!(result.contains("【地图】"), "应包含地图尺寸\n结果: {result}");
-        assert!(result.contains("【地块坐标】"), "应包含地块坐标\n结果: {result}");
-        assert!(result.contains("【地块属性表】"), "应包含地块属性表\n结果: {result}");
+        assert!(
+            result.contains("【地图】"),
+            "应包含地图尺寸\n结果: {result}"
+        );
+        assert!(
+            result.contains("【地块坐标】"),
+            "应包含地块坐标\n结果: {result}"
+        );
+        assert!(
+            result.contains("【地块属性表】"),
+            "应包含地块属性表\n结果: {result}"
+        );
 
         // 坐标显式输出（非网格），区间压缩用 ~ 连接
         assert!(result.contains("(0,0)"), "坐标应显式输出\n结果: {result}");
         assert!(result.contains("~"), "应包含区间压缩符~\n结果: {result}");
 
         // 地图独立于预置单位与符文（拆分后不再夹带）
-        assert!(!result.contains("预置单位"), "地图不应含预置单位\n结果: {result}");
-        assert!(!result.contains("关卡符文"), "地图不应含关卡符文\n结果: {result}");
+        assert!(
+            !result.contains("预置单位"),
+            "地图不应含预置单位\n结果: {result}"
+        );
+        assert!(
+            !result.contains("关卡符文"),
+            "地图不应含关卡符文\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1511,8 +1655,12 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryLevel;
         let result = tool
-            .execute(&ctx, r#"{"levelId":"level_act6d5_04","fields":["预置单位"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_act6d5_04","fields":["预置单位"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("预置单位"), "应包含预置单位标题");
         assert!(
@@ -1531,11 +1679,18 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryLevel;
         let result = tool
-            .execute(&ctx, r#"{"levelId":"level_main_01-07","fields":["预置单位"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_main_01-07","fields":["预置单位"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("预置单位"), "应包含预置单位标题");
-        assert!(!result.contains("【地块坐标】"), "预置单位不应含地图内容\n结果: {result}");
+        assert!(
+            !result.contains("【地块坐标】"),
+            "预置单位不应含地图内容\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1560,9 +1715,19 @@ mod tests {
         assert_eq!(
             road.coords,
             vec![
-                (0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0),
-                (0, 1), (2, 1), (3, 1),
-                (0, 2), (1, 2), (2, 2), (3, 2),
+                (0, 0),
+                (1, 0),
+                (2, 0),
+                (3, 0),
+                (4, 0),
+                (5, 0),
+                (0, 1),
+                (2, 1),
+                (3, 1),
+                (0, 2),
+                (1, 2),
+                (2, 2),
+                (3, 2),
             ]
         );
         assert_eq!(
@@ -1571,7 +1736,10 @@ mod tests {
         );
         // 地穴：y2 x4-5, y1 x1 + x4-5（跨行不合并）
         let hole = groups.iter().find(|g| g.name == "地穴").unwrap();
-        assert_eq!(fmt_coord_group(&hole.coords), "(1,1), (4,1)~(5,1), (4,2)~(5,2)");
+        assert_eq!(
+            fmt_coord_group(&hole.coords),
+            "(1,1), (4,1)~(5,1), (4,2)~(5,2)"
+        );
     }
 
     #[test]
@@ -1644,7 +1812,8 @@ mod tests {
         let tool = QueryLevel;
         let result = tool
             .execute(&ctx, r#"{"levelId":"level_main_01-07","fields":["路线"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("路线列表"), "应包含路线列表");
         assert!(result.contains("WALK"), "应包含 WALK 模式");
@@ -1658,11 +1827,18 @@ mod tests {
         let tool = QueryLevel;
         // level_act12mini_04 routes[2] 为 visitEveryCheckPoint=true
         let result = tool
-            .execute(&ctx, r#"{"levelId":"level_act12mini_04","fields":["路线"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_act12mini_04","fields":["路线"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("路线列表"), "应包含路线列表");
-        assert!(result.contains("[visitEveryCheckPoint]"), "应标注 visitEveryCheckPoint\n结果: {result}");
+        assert!(
+            result.contains("[visitEveryCheckPoint]"),
+            "应标注 visitEveryCheckPoint\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1672,9 +1848,13 @@ mod tests {
         // level_main_01-07 无 visitEveryCheckPoint=true 路线
         let result = tool
             .execute(&ctx, r#"{"levelId":"level_main_01-07","fields":["路线"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
-        assert!(!result.contains("visitEveryCheckPoint"), "不应出现 visit 标注\n结果: {result}");
+        assert!(
+            !result.contains("visitEveryCheckPoint"),
+            "不应出现 visit 标注\n结果: {result}"
+        );
     }
 
     // ── 波次信息 ──
@@ -1685,7 +1865,8 @@ mod tests {
         let tool = QueryLevel;
         let result = tool
             .execute(&ctx, r#"{"levelId":"level_main_01-07","fields":["波次"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("波次信息"), "应包含波次标题");
         assert!(result.contains("波 0"), "应包含波次编号");
@@ -1761,8 +1942,12 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryLevel;
         let result = tool
-            .execute(&ctx, r#"{"levelId":"level_act1arcade_m1_01","fields":["波次"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_act1arcade_m1_01","fields":["波次"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("随机组"), "应包含随机组\n结果: {result}");
     }
@@ -1774,8 +1959,12 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryLevel;
         let result = tool
-            .execute(&ctx, r#"{"levelId":"level_act12mini_06","fields":["波次"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_act12mini_06","fields":["波次"]}"#,
+            )
+            .unwrap()
+            .summary;
 
         assert!(result.contains("分支信息"), "应包含分支\n结果: {result}");
         assert!(result.contains("line_"), "应包含分支名\n结果: {result}");
@@ -1814,7 +2003,10 @@ mod tests {
 
         for id in ["level_main_01-07", "level_rogue5_4-3"] {
             println!("========== {id} ==========");
-            println!("{}", call(&ctx, &serde_json::json!({ "levelId": id }).to_string()));
+            println!(
+                "{}",
+                call(&ctx, &serde_json::json!({ "levelId": id }).to_string())
+            );
             println!();
         }
     }

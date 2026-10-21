@@ -24,10 +24,7 @@ fn unique_temp_dir(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "prts-gate-{tag}-{}-{nanos}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("prts-gate-{tag}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -190,7 +187,9 @@ fn scan_out_syntax_forms() {
 #[test]
 fn scan_pipes_and_compound_out() {
     // 单 & 后台、|、;、( 等任意位置 OUT
-    for cmd in ["a & b", "a | b", "a; b", "a && b", "a || b", "echo (x)", "echo a)b"] {
+    for cmd in [
+        "a & b", "a | b", "a; b", "a && b", "a || b", "echo (x)", "echo a)b",
+    ] {
         assert!(!scan(cmd).ok, "应 OUT: {cmd}");
     }
 }
@@ -267,11 +266,23 @@ fn delete_gate_always_ask() {
 fn delete_gate_git_rm_and_robocopy_flags() {
     let ws = ws_fixture("del2");
     assert_ask(&eval("git rm a.txt", None, &ws), "delete-always-ask");
-    assert_ask(&eval(r"robocopy ws\src ws\dst /mir", None, &ws), "delete-flag-option");
-    assert_ask(&eval(r"robocopy ws\src ws\dst /purge /s", None, &ws), "delete-flag-option");
+    assert_ask(
+        &eval(r"robocopy ws\src ws\dst /mir", None, &ws),
+        "delete-flag-option",
+    );
+    assert_ask(
+        &eval(r"robocopy ws\src ws\dst /purge /s", None, &ws),
+        "delete-flag-option",
+    );
     // robocopy 无删除开关：区内 AUTO（§5/§11）
-    assert_auto(&eval(r"robocopy ws\src ws\dst", None, &ws), "no-risk-family");
-    assert_auto(&eval(r"robocopy .\src .\dst /e /nfl", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval(r"robocopy ws\src ws\dst", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval(r"robocopy .\src .\dst /e /nfl", None, &ws),
+        "no-risk-family",
+    );
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -287,7 +298,10 @@ fn region_inside_auto() {
     assert_auto(&eval("Get-Content sub\\x.txt", None, &ws), "no-risk-family");
     assert_auto(&eval("echo hi > a.txt", None, &ws), "no-risk-family");
     assert_auto(&eval("echo hi > sub\\new.txt", None, &ws), "no-risk-family");
-    assert_auto(&eval("copy x.txt sub\\new.txt", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("copy x.txt sub\\new.txt", None, &ws),
+        "no-risk-family",
+    );
     assert_auto(&eval("mkdir newdir", None, &ws), "no-risk-family");
     assert_auto(&eval("move a.txt sub\\b.txt", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
@@ -299,11 +313,26 @@ fn region_outside_ask() {
     let outside = outside_fixture("out-x");
     let o = outside.join("a.txt");
     let o = o.to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("copy {o} b.txt"), None, &ws), "no-risk-family");
-    assert_auto(&eval(r"type C:\Windows\win.ini", None, &ws), "no-risk-family");
-    assert_auto(&eval(r"Get-Content ..\..\etc\x", None, &ws), "no-risk-family");
-    assert_auto(&eval(&format!("echo hi > {o}"), None, &ws), "no-risk-family");
-    assert_auto(&eval("copy x.txt C:\\outside\\new.txt", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval(&format!("copy {o} b.txt"), None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval(r"type C:\Windows\win.ini", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval(r"Get-Content ..\..\etc\x", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval(&format!("echo hi > {o}"), None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval("copy x.txt C:\\outside\\new.txt", None, &ws),
+        "no-risk-family",
+    );
     // 区外目标应置 touched_external
     let v = eval(&format!("copy {o} b.txt"), None, &ws);
     assert!(v.touched_external, "区外触及应置位");
@@ -347,7 +376,10 @@ fn region_cwd_inside_subdir_resolves_relative() {
     let ws = ws_fixture("cwdsub");
     let sub = ws.join("sub");
     // 相对路径按 cwd（sub）解析：sub 下新建 out.txt 区内
-    assert_auto(&eval("copy x.txt out.txt", Some(&sub), &ws), "no-risk-family");
+    assert_auto(
+        &eval("copy x.txt out.txt", Some(&sub), &ws),
+        "no-risk-family",
+    );
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -382,7 +414,12 @@ fn region_symlink_escape_ask() {
     if let Ok(()) = created {
         let cmd = format!("type {}\\a.txt", link.to_string_lossy());
         let v = eval(&cmd, None, &ws);
-        assert_eq!(v.decision, GateDecision::Auto, "symlink 逃逸不再拦: {:?}", v);
+        assert_eq!(
+            v.decision,
+            GateDecision::Auto,
+            "symlink 逃逸不再拦: {:?}",
+            v
+        );
         assert_eq!(v.reason, "no-risk-family");
     }
     let _ = std::fs::remove_dir_all(&ws);
@@ -394,9 +431,19 @@ fn region_write_nonexistent_paths() {
     let ws = ws_fixture("ne");
     let outside = outside_fixture("ne-x");
     // 不存在目标：区内 / 区外都放行（祖先上溯 + 词法拼接仍在，只记审计位）
-    assert_auto(&eval("copy a.txt deep\\new\\file.txt", None, &ws), "no-risk-family");
-    let o = outside.join("new").join("file.txt").to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("copy a.txt {o}"), None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("copy a.txt deep\\new\\file.txt", None, &ws),
+        "no-risk-family",
+    );
+    let o = outside
+        .join("new")
+        .join("file.txt")
+        .to_string_lossy()
+        .into_owned();
+    assert_auto(
+        &eval(&format!("copy a.txt {o}"), None, &ws),
+        "no-risk-family",
+    );
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -412,7 +459,10 @@ fn run_inside_program_auto() {
     assert_auto(&eval("python script.py", None, &ws), "no-risk-family");
     assert_auto(&eval(r#"python "script.py""#, None, &ws), "no-risk-family");
     // 脚本后的选项不影响目标判定
-    assert_auto(&eval("python script.py --flag arg", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("python script.py --flag arg", None, &ws),
+        "no-risk-family",
+    );
     // 路径形态命令名：区内程序 → AUTO
     let myexe = ws.join("tools").join("my.exe");
     let myexe = myexe.to_string_lossy().into_owned();
@@ -428,7 +478,10 @@ fn run_outside_program_ask() {
     let ws = ws_fixture("runx");
     let outside = outside_fixture("runx-o");
     let script = outside.join("script.py").to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("python {script}"), None, &ws), "no-risk-family");
+    assert_auto(
+        &eval(&format!("python {script}"), None, &ws),
+        "no-risk-family",
+    );
     let myexe = outside.join("my.exe").to_string_lossy().into_owned();
     assert_auto(&eval(&format!("{myexe}"), None, &ws), "no-risk-family");
     let v = eval(&format!("python {script}"), None, &ws);
@@ -443,12 +496,18 @@ fn unknown_program_rules() {
     // 无参未知程序 → 放行（换轴：不认识不再等于必须问）
     assert_auto(&eval("some-custom-tool", None, &ws), "no-risk-family");
     // 全选项无位置参数 → 同
-    assert_auto(&eval("some-custom-tool --do-thing", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("some-custom-tool --do-thing", None, &ws),
+        "no-risk-family",
+    );
     // 首个非选项参数 = 运行目标候选：区内 / 区外都放行
     assert_auto(&eval("some-custom-tool a.txt", None, &ws), "no-risk-family");
     let outside = outside_fixture("unk-o");
     let o = outside.join("a.txt").to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("some-custom-tool {o}"), None, &ws), "no-risk-family");
+    assert_auto(
+        &eval(&format!("some-custom-tool {o}"), None, &ws),
+        "no-risk-family",
+    );
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -473,7 +532,10 @@ fn code_exec_forms_ask() {
     // python -m 模块 → 白名单外形态 → unlisted-option
     assert_ask(&eval("python -m http.server", None, &ws), "unlisted-option");
     // powershell 未列开关 → unlisted-option
-    assert_ask(&eval(r"powershell -NoProfile -File x.ps1", None, &ws), "unlisted-option");
+    assert_ask(
+        &eval(r"powershell -NoProfile -File x.ps1", None, &ws),
+        "unlisted-option",
+    );
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -481,28 +543,55 @@ fn code_exec_forms_ask() {
 fn network_install_process_config_ask() {
     let ws = ws_fixture("ask");
     assert_ask(&eval("curl -o out.txt https://x", None, &ws), "network-op");
-    assert_ask(&eval("curl.exe https://example.com", None, &ws), "network-op");
+    assert_ask(
+        &eval("curl.exe https://example.com", None, &ws),
+        "network-op",
+    );
     assert_ask(&eval("wget https://x/file.zip", None, &ws), "network-op");
     assert_ask(&eval("winget install vlc", None, &ws), "install-op");
     assert_ask(&eval("pip install requests", None, &ws), "install-op");
     assert_ask(&eval("npm install", None, &ws), "install-op");
-    assert_ask(&eval("taskkill /IM notepad.exe", None, &ws), "process-control");
+    assert_ask(
+        &eval("taskkill /IM notepad.exe", None, &ws),
+        "process-control",
+    );
     assert_ask(&eval("stop-process -Name x", None, &ws), "process-control");
     // 关机/注销/重启/启动进程：原先落在未知程序 Auto，属危险漏档
     assert_ask(&eval("shutdown /s /t 0", None, &ws), "process-control");
     assert_ask(&eval("logoff", None, &ws), "process-control");
     assert_ask(&eval("Stop-Computer", None, &ws), "process-control");
-    assert_ask(&eval("Restart-Computer -Force", None, &ws), "process-control");
+    assert_ask(
+        &eval("Restart-Computer -Force", None, &ws),
+        "process-control",
+    );
     assert_ask(&eval("Start-Process notepad", None, &ws), "process-control");
     // 代码宿主与配置写入：不能再落到未知程序 Auto
     assert_ask(&eval("Invoke-Expression 'calc'", None, &ws), "code-exec");
-    assert_ask(&eval("Add-Type -TypeDefinition 'x'", None, &ws), "code-exec");
-    assert_ask(&eval("rundll32 shell32.dll,Control_RunDLL", None, &ws), "code-exec");
+    assert_ask(
+        &eval("Add-Type -TypeDefinition 'x'", None, &ws),
+        "code-exec",
+    );
+    assert_ask(
+        &eval("rundll32 shell32.dll,Control_RunDLL", None, &ws),
+        "code-exec",
+    );
     assert_ask(&eval("Set-ExecutionPolicy Bypass", None, &ws), "config-op");
-    assert_ask(&eval("Clear-RecycleBin -Force", None, &ws), "delete-always-ask");
-    assert_ask(&eval("netsh interface set interface eth0 disabled", None, &ws), "config-op");
-    assert_ask(&eval("net use Z: \\\\server\\share", None, &ws), "config-op");
-    assert_ask(&eval("route add 10.0.0.0 mask 255.0.0.0 10.0.0.1", None, &ws), "config-op");
+    assert_ask(
+        &eval("Clear-RecycleBin -Force", None, &ws),
+        "delete-always-ask",
+    );
+    assert_ask(
+        &eval("netsh interface set interface eth0 disabled", None, &ws),
+        "config-op",
+    );
+    assert_ask(
+        &eval("net use Z: \\\\server\\share", None, &ws),
+        "config-op",
+    );
+    assert_ask(
+        &eval("route add 10.0.0.0 mask 255.0.0.0 10.0.0.1", None, &ws),
+        "config-op",
+    );
     // 网络/安装族无区内豁免（即使目标区内）
     assert_ask(&eval("curl -o a.txt https://x", None, &ws), "network-op");
     let _ = std::fs::remove_dir_all(&ws);
@@ -556,7 +645,10 @@ fn git_write_family_region() {
     let ws = ws_fixture("git");
     assert_auto(&eval("git add a.txt", None, &ws), "no-risk-family");
     assert_auto(&eval("git add .", None, &ws), "no-risk-family");
-    assert_auto(&eval("git add sub\\x.txt sub\\y.txt", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("git add sub\\x.txt sub\\y.txt", None, &ws),
+        "no-risk-family",
+    );
     assert_auto(&eval("git commit -m msg", None, &ws), "no-risk-family");
     assert_auto(&eval("git commit -am msg", None, &ws), "no-risk-family");
     assert_auto(&eval("git checkout main", None, &ws), "no-risk-family");
@@ -588,8 +680,14 @@ fn git_undo_network_ask() {
     assert_ask(&eval("git push origin main", None, &ws), "network-op");
     assert_ask(&eval("git fetch origin", None, &ws), "network-op");
     assert_ask(&eval("git pull", None, &ws), "network-op");
-    assert_ask(&eval("git clone https://x/repo.git", None, &ws), "network-op");
-    assert_ask(&eval("git remote add origin https://x", None, &ws), "network-op");
+    assert_ask(
+        &eval("git clone https://x/repo.git", None, &ws),
+        "network-op",
+    );
+    assert_ask(
+        &eval("git remote add origin https://x", None, &ws),
+        "network-op",
+    );
     assert_ask(&eval("git rebase main", None, &ws), "git-undo");
     assert_ask(&eval("git stash drop", None, &ws), "git-undo");
     let _ = std::fs::remove_dir_all(&ws);
@@ -603,11 +701,20 @@ fn git_undo_network_ask() {
 fn priority_crit_before_delete_before_syntax() {
     let ws = ws_fixture("prio");
     // crit 先于删除门：递归删除 → Blocked（即使删除门也会 Ask）
-    assert_blocked(&eval("del /s C:\\ws\\x", None, &ws), "crit-recursive-delete");
+    assert_blocked(
+        &eval("del /s C:\\ws\\x", None, &ws),
+        "crit-recursive-delete",
+    );
     // crit 先于语法：含管道等 OUT 形态的 crit 动词仍恒拦
-    assert_blocked(&eval("del /s C:\\x | more", None, &ws), "crit-recursive-delete");
+    assert_blocked(
+        &eval("del /s C:\\x | more", None, &ws),
+        "crit-recursive-delete",
+    );
     assert_blocked(&eval("format D: /q", None, &ws), "crit-format-drive");
-    assert_blocked(&eval("reg delete HKCU\\X /v Y", None, &ws), "crit-registry-write");
+    assert_blocked(
+        &eval("reg delete HKCU\\X /v Y", None, &ws),
+        "crit-registry-write",
+    );
     // 删除门先于分类：非递归 del → delete-always-ask（不落 FileDeleteOp 地域面）
     assert_ask(&eval("del C:\\ws\\a.txt", None, &ws), "delete-always-ask");
     // 换轴：$ 使整条 OUT，但原始文本的删除词扫描补上删除门 → 仍 ASK
@@ -646,18 +753,39 @@ fn priority_crit_set_unchanged_from_risk_migration() {
 fn named_option_whitelist() {
     let ws = ws_fixture("opt");
     // 路径值选项参与判定：区内 → AUTO
-    assert_auto(&eval("Get-Content -Path a.txt", None, &ws), "no-risk-family");
-    assert_auto(&eval("Get-Content -LiteralPath .\\a.txt", None, &ws), "no-risk-family");
-    assert_auto(&eval("copy a.txt -Destination sub\\b.txt", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("Get-Content -Path a.txt", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval("Get-Content -LiteralPath .\\a.txt", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(
+        &eval("copy a.txt -Destination sub\\b.txt", None, &ws),
+        "no-risk-family",
+    );
     // 路径值选项值在区外 → 放行
     let outside = outside_fixture("opt-o");
     let o = outside.join("x.txt").to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("Get-Content -Path {o}"), None, &ws), "no-risk-family");
+    assert_auto(
+        &eval(&format!("Get-Content -Path {o}"), None, &ws),
+        "no-risk-family",
+    );
     // -filter 值跳过不判
-    assert_auto(&eval("Get-Content sub -Filter *.txt", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("Get-Content sub -Filter *.txt", None, &ws),
+        "no-risk-family",
+    );
     // 白名单外 -x（strict cmdlet 面）→ 放行（换轴：提取不了不再等于必须问）
-    assert_auto(&eval("Get-ChildItem -Recurse", None, &ws), "target-unresolved");
-    assert_auto(&eval("Get-Content -Raw a.txt", None, &ws), "target-unresolved");
+    assert_auto(
+        &eval("Get-ChildItem -Recurse", None, &ws),
+        "target-unresolved",
+    );
+    assert_auto(
+        &eval("Get-Content -Raw a.txt", None, &ws),
+        "target-unresolved",
+    );
     let _ = std::fs::remove_dir_all(&ws);
     let _ = std::fs::remove_dir_all(&outside);
 }
@@ -686,23 +814,53 @@ fn decompose_scan_is_delete_classify() {
     assert_eq!(git("git add a.txt").kind, OpKind::FileWriteOp);
     assert_eq!(git("git reset --hard").fixed_ask, Some("git-undo"));
     // 解释器面
-    assert_eq!(classify_program(&scan("python s.py").tokens).kind, OpKind::RunProgramOp);
-    assert_eq!(classify_program(&scan("python -c x").tokens).fixed_ask, Some("code-exec"));
-    assert_eq!(classify_program(&scan("python -m x").tokens).fixed_ask, Some("unlisted-option"));
-    assert_eq!(classify_program(&scan("cmd /c x").tokens).fixed_ask, Some("code-exec"));
-    assert_eq!(classify_program(&scan("powershell -File x.ps1").tokens).kind, OpKind::RunProgramOp);
+    assert_eq!(
+        classify_program(&scan("python s.py").tokens).kind,
+        OpKind::RunProgramOp
+    );
+    assert_eq!(
+        classify_program(&scan("python -c x").tokens).fixed_ask,
+        Some("code-exec")
+    );
+    assert_eq!(
+        classify_program(&scan("python -m x").tokens).fixed_ask,
+        Some("unlisted-option")
+    );
+    assert_eq!(
+        classify_program(&scan("cmd /c x").tokens).fixed_ask,
+        Some("code-exec")
+    );
+    assert_eq!(
+        classify_program(&scan("powershell -File x.ps1").tokens).kind,
+        OpKind::RunProgramOp
+    );
     // 网络/安装/进程/配置族
-    assert_eq!(classify_program(&scan("curl https://x").tokens).kind, OpKind::NetworkOp);
-    assert_eq!(classify_program(&scan("winget install vlc").tokens).kind, OpKind::InstallOp);
-    assert_eq!(classify_program(&scan("taskkill /im x").tokens).kind, OpKind::ProcessControlOp);
-    assert_eq!(classify_program(&scan("netsh show x").tokens).kind, OpKind::ConfigOp);
+    assert_eq!(
+        classify_program(&scan("curl https://x").tokens).kind,
+        OpKind::NetworkOp
+    );
+    assert_eq!(
+        classify_program(&scan("winget install vlc").tokens).kind,
+        OpKind::InstallOp
+    );
+    assert_eq!(
+        classify_program(&scan("taskkill /im x").tokens).kind,
+        OpKind::ProcessControlOp
+    );
+    assert_eq!(
+        classify_program(&scan("netsh show x").tokens).kind,
+        OpKind::ConfigOp
+    );
     // 路径形态程序
     assert_eq!(
         classify_program(&scan(r"C:\ws\tools\my.exe").tokens).kind,
         OpKind::RunProgramOp
     );
     // 表外未知程序
-    assert_eq!(classify_program(&scan("my-tool x").tokens).kind, OpKind::UnknownOp);
+    assert_eq!(
+        classify_program(&scan("my-tool x").tokens).kind,
+        OpKind::UnknownOp
+    );
     let _ = std::fs::remove_dir_all(&ws);
 }
 
@@ -713,7 +871,10 @@ fn decompose_extract_targets() {
     let cls = |cmd: &str| classify_program(&s(cmd).tokens);
     // AllPositional：非选项位置
     let c = cls("copy a.txt b.txt");
-    assert_eq!(extract_targets(&c, &s("copy a.txt b.txt").tokens).unwrap(), vec!["a.txt", "b.txt"]);
+    assert_eq!(
+        extract_targets(&c, &s("copy a.txt b.txt").tokens).unwrap(),
+        vec!["a.txt", "b.txt"]
+    );
     // 选项跳过：-x 与 -- 后位置
     let c = cls("Get-Content a.txt");
     assert_eq!(
@@ -740,12 +901,21 @@ fn decompose_extract_targets() {
     );
     // git add：sub 后路径
     let c = cls("git add a.txt");
-    assert_eq!(extract_targets(&c, &s("git add a.txt b.txt").tokens).unwrap(), vec!["a.txt", "b.txt"]);
+    assert_eq!(
+        extract_targets(&c, &s("git add a.txt b.txt").tokens).unwrap(),
+        vec!["a.txt", "b.txt"]
+    );
     let c = cls("git add -- a.txt");
-    assert_eq!(extract_targets(&c, &s("git add -- a.txt").tokens).unwrap(), vec!["a.txt"]);
+    assert_eq!(
+        extract_targets(&c, &s("git add -- a.txt").tokens).unwrap(),
+        vec!["a.txt"]
+    );
     // git commit 无目标
     let c = cls("git commit -m msg");
-    assert_eq!(extract_targets(&c, &s("git commit -m msg").tokens).unwrap(), Vec::<String>::new());
+    assert_eq!(
+        extract_targets(&c, &s("git commit -m msg").tokens).unwrap(),
+        Vec::<String>::new()
+    );
     // Script：命令名即目标（路径形态程序）
     let c = cls(r"C:\ws\tools\my.exe");
     assert_eq!(
@@ -811,13 +981,29 @@ fn reason_code_table_complete_for_ask_auto() {
     let cases: &[(&str, &str, &str)] = &[
         ("ls | more", "syntax-unproven", "syntax-unproven"),
         ("del a.txt", "delete-always-ask", "delete-always-ask"),
-        (r"robocopy s d /mir", "delete-flag-option", "delete-flag-option"),
+        (
+            r"robocopy s d /mir",
+            "delete-flag-option",
+            "delete-flag-option",
+        ),
         (&region_cmd, "outside-recorded", "no-risk-family"),
         (&cwd_out_cmd, "cwd-out", "no-risk-family"),
-        ("python C:\\tools\\s.py", "run-external-program", "no-risk-family"),
+        (
+            "python C:\\tools\\s.py",
+            "run-external-program",
+            "no-risk-family",
+        ),
         (r#"python -c "x""#, "code-exec", "code-exec"),
-        ("Get-ChildItem -Recurse", "unlisted-option", "target-unresolved"),
-        ("some-custom-tool", "unknown-program-no-target", "no-risk-family"),
+        (
+            "Get-ChildItem -Recurse",
+            "unlisted-option",
+            "target-unresolved",
+        ),
+        (
+            "some-custom-tool",
+            "unknown-program-no-target",
+            "no-risk-family",
+        ),
         ("curl https://x", "network-op", "network-op"),
         ("winget install vlc", "install-op", "install-op"),
         ("taskkill /im x", "process-control", "process-control"),
@@ -845,7 +1031,10 @@ fn risk_data_consistency() {
     assert!(risk::classify_program_spec("robocopy").is_some());
     assert_eq!(risk::classify_program_spec("python"), None);
     assert!(risk::is_delete_word("del"));
-    assert!(!risk::is_delete_word("move"), "move 不是删除语义（FileWriteOp）");
+    assert!(
+        !risk::is_delete_word("move"),
+        "move 不是删除语义（FileWriteOp）"
+    );
 }
 
 /// 换轴验收（2026-10-07）：昨日真机上触发过授权的 PowerShell 脚本串，

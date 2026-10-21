@@ -1,4 +1,4 @@
-﻿//! search_entities —— 跨表条件筛选工具
+//! search_entities —— 跨表条件筛选工具
 //!
 //! 语义：输入表名 + 条件 → 返回满足条件的实体名称列表或计数。
 //! 与名称查询工具（query_enemy 等）互为逆操作：
@@ -143,9 +143,10 @@ impl Tool for SearchEntities {
         let filters = parse_filters(&v["filters"])?;
 
         // ── 3. 获取数据库 ──
-        let db = ctx.db.as_ref().ok_or_else(|| {
-            ToolError::Execution("数据库未连接".into())
-        })?;
+        let db = ctx
+            .db
+            .as_ref()
+            .ok_or_else(|| ToolError::Execution("数据库未连接".into()))?;
 
         // ── 4. 获取名称列和 ID 列 ──
         let name_col = name_column_for(table)?;
@@ -249,9 +250,7 @@ fn parse_filters(arr: &serde_json::Value) -> Result<Vec<Filter>, ToolError> {
                 .as_str()
                 .ok_or_else(|| ToolError::Parse("filter 缺少 value".into()))?;
 
-            let op: FilterOp = op_str
-                .parse()
-                .map_err(|e: String| ToolError::Parse(e))?;
+            let op: FilterOp = op_str.parse().map_err(|e: String| ToolError::Parse(e))?;
 
             Ok(Filter::new(field, op, value))
         })
@@ -310,9 +309,14 @@ mod tests {
         assert!(result.contains("敌人"));
         assert!(result.contains("条结果"));
         // 验证包含某个领袖级敌人名和 ID
-        assert!(result.contains("大鲍勃") || result.contains("特雷西斯") || result.contains("碎骨"));
+        assert!(
+            result.contains("大鲍勃") || result.contains("特雷西斯") || result.contains("碎骨")
+        );
         // 输出格式包含 ID
-        assert!(result.contains("（") && result.contains("）"), "应包含ID: {result}");
+        assert!(
+            result.contains("（") && result.contains("）"),
+            "应包含ID: {result}"
+        );
     }
 
     #[test]
@@ -341,7 +345,8 @@ mod tests {
                 &ctx,
                 r#"{"table":"enemies","filters":[{"field":"法术抗性","op":">","value":"90"}]}"#,
             )
-            .unwrap().summary;
+            .unwrap()
+            .summary;
 
         assert!(result.contains("条结果"));
     }
@@ -383,11 +388,9 @@ mod tests {
         let tool = SearchEntities;
 
         let result = tool
-            .execute(
-                &ctx,
-                r#"{"table":"tokens","filters":[],"mode":"list"}"#,
-            )
-            .unwrap().summary;
+            .execute(&ctx, r#"{"table":"tokens","filters":[],"mode":"list"}"#)
+            .unwrap()
+            .summary;
 
         assert!(result.contains("召唤物"));
     }

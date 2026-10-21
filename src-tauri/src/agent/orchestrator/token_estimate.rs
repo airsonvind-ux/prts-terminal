@@ -38,8 +38,7 @@ pub fn estimate_tokens(text: &str) -> usize {
     }
 
     // 整数计数 → 一次性浮点乘法，避免循环累加误差
-    let tokens = (ascii_count as f64 * TOKEN_PER_ASCII
-        + non_ascii_count as f64 * TOKEN_PER_CJK)
+    let tokens = (ascii_count as f64 * TOKEN_PER_ASCII + non_ascii_count as f64 * TOKEN_PER_CJK)
         .ceil() as usize;
 
     tokens.max(1)

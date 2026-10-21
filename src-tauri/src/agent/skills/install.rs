@@ -54,8 +54,8 @@ pub fn install_skill(source: &Path, skills_root: &Path) -> Result<InstalledSkill
         return Err("所选文件 / 文件夹已在技能目录中".into());
     }
 
-    let meta = std::fs::metadata(&src)
-        .map_err(|e| format!("读取安装源失败（{}）：{e}", src.display()))?;
+    let meta =
+        std::fs::metadata(&src).map_err(|e| format!("读取安装源失败（{}）：{e}", src.display()))?;
     if meta.is_dir() {
         install_folder(&src, skills_root)
     } else {
@@ -81,8 +81,8 @@ fn install_single_file(source: &Path, skills_root: &Path) -> Result<InstalledSki
             "文件过大（{size} 字节，上限 {MAX_SINGLE_FILE_BYTES}）：请确认选中的是技能文本"
         ));
     }
-    let text = std::fs::read_to_string(source)
-        .map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
+    let text =
+        std::fs::read_to_string(source).map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
     let (name, description, source_tag) = validate_meta(&text)?;
     let target = prepare_target(skills_root, &name, false)?;
     atomic_write(&target, &text).map_err(|e| format!("写入技能文件失败：{e}"))?;
@@ -142,8 +142,8 @@ pub fn remove_skill(file_path: &Path, skills_root: &Path) -> Result<String, Stri
     if entry.parent() != Some(root_c.as_path()) {
         return Err("只能移除技能目录直属的条目（深层文件请经由其条目操作）".into());
     }
-    let text = std::fs::read_to_string(&path_c)
-        .map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
+    let text =
+        std::fs::read_to_string(&path_c).map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
     let meta = parse_skill_frontmatter(&text)
         .ok_or_else(|| "无法解析 frontmatter，拒绝移除".to_string())?;
     if meta.source.as_deref() == Some("builtin") {
@@ -188,10 +188,9 @@ fn validate_skill_name(raw: &str) -> Result<String, String> {
     if name.starts_with('.') {
         return Err(format!("技能名不能以「.」开头：{name}"));
     }
-    if name
-        .chars()
-        .any(|c| c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-    {
+    if name.chars().any(|c| {
+        c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+    }) {
         return Err(format!(
             "技能名含非法字符（路径分隔符 / Windows 保留字符 / 控制字符）：{name}"
         ));
@@ -312,8 +311,7 @@ fn copy_dir_into(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// 递归复制目录树（普通文件 / 目录；符号链接在入口已拒绝）。
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst)
-        .map_err(|e| format!("创建目录失败（{}）：{e}", dst.display()))?;
+    std::fs::create_dir_all(dst).map_err(|e| format!("创建目录失败（{}）：{e}", dst.display()))?;
     let rd =
         std::fs::read_dir(src).map_err(|e| format!("读取目录失败（{}）：{e}", src.display()))?;
     for entry in rd {
@@ -371,7 +369,10 @@ mod tests {
         let out = install_skill(&file, &root).unwrap();
         assert_eq!(out.name, "黑话小抄");
         assert_eq!(out.description, "术语对照");
-        assert!(root.join("黑话小抄.md").is_file(), "落盘名 = frontmatter name");
+        assert!(
+            root.join("黑话小抄.md").is_file(),
+            "落盘名 = frontmatter name"
+        );
         assert!(out.file_path.ends_with("黑话小抄.md"));
         // 字节一致（不改写内容）
         let src_bytes = std::fs::read(&file).unwrap();
@@ -392,7 +393,9 @@ mod tests {
 
         // 不存在
         let missing = src.join("no-such.md");
-        assert!(install_skill(&missing, &root).unwrap_err().contains("不存在"));
+        assert!(install_skill(&missing, &root)
+            .unwrap_err()
+            .contains("不存在"));
 
         // 非 .md
         let txt = src.join("note.txt");
@@ -402,16 +405,22 @@ mod tests {
         // 无 name / 无 desc
         let no_name = src.join("noname.md");
         std::fs::write(&no_name, "---\ndescription: d\n---\n\n## x").unwrap();
-        assert!(install_skill(&no_name, &root).unwrap_err().contains("frontmatter"));
+        assert!(install_skill(&no_name, &root)
+            .unwrap_err()
+            .contains("frontmatter"));
 
         let no_desc = src.join("nodesc.md");
         std::fs::write(&no_desc, "---\nname: 测试\n---\n\n## x").unwrap();
-        assert!(install_skill(&no_desc, &root).unwrap_err().contains("description"));
+        assert!(install_skill(&no_desc, &root)
+            .unwrap_err()
+            .contains("description"));
 
         // 非法名（路径分隔符）
         let bad_name = src.join("badname.md");
         std::fs::write(&bad_name, "---\nname: a/b\ndescription: d\n---\n\n## x").unwrap();
-        assert!(install_skill(&bad_name, &root).unwrap_err().contains("非法字符"));
+        assert!(install_skill(&bad_name, &root)
+            .unwrap_err()
+            .contains("非法字符"));
 
         // 过大
         let big = src.join("big.md");
@@ -444,7 +453,10 @@ mod tests {
         assert_eq!(out.name, "黑话小抄");
         assert!(root.join("黑话小抄").join("SKILL.md").is_file());
         assert!(
-            root.join("黑话小抄").join("references").join("terms.md").is_file(),
+            root.join("黑话小抄")
+                .join("references")
+                .join("terms.md")
+                .is_file(),
             "资源应一并复制"
         );
         assert!(out.file_path.ends_with("SKILL.md"));

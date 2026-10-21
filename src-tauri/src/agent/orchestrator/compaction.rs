@@ -32,7 +32,10 @@ use std::sync::Arc;
 
 use crate::debug;
 use crate::events::FrontendMessage;
-use crate::llm::{ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, ToolDef, TokenUsage};
+use crate::llm::{
+    ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, TokenUsage,
+    ToolDef,
+};
 use crate::session::SessionLog;
 use crate::turn_registry::AbortSignal;
 
@@ -353,8 +356,8 @@ async fn call_summary_llm(
 
 #[cfg(test)]
 mod tests {
+    use super::super::context::assemble_system_prompt_with_memory as asm_system;
     use super::*;
-use super::super::context::assemble_system_prompt_with_memory as asm_system;
     use crate::events::FrontendMessage;
     use crate::llm::mock::{MockLlmClient, MockResponse};
     use crate::llm::{LlmError, StreamResult, ToolCall, ToolCallFunction};
@@ -375,9 +378,19 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
             _messages: &'a [ChatMessage],
             _tools: &'a [crate::llm::ToolDef],
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<crate::llm::LlmResponse, LlmError>> + Send + 'a>,
+            Box<
+                dyn std::future::Future<Output = Result<crate::llm::LlmResponse, LlmError>>
+                    + Send
+                    + 'a,
+            >,
         > {
-            Box::pin(async move { Ok(crate::llm::LlmResponse { text: None, tool_calls: None, usage: None }) })
+            Box::pin(async move {
+                Ok(crate::llm::LlmResponse {
+                    text: None,
+                    tool_calls: None,
+                    usage: None,
+                })
+            })
         }
 
         fn chat_stream<'a>(
@@ -453,9 +466,17 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
     #[tokio::test]
     async fn run_summary_returns_llm_checkpoint_text() {
         let mock = MockLlmClient::simple_reply("## Goal\n达成");
-        let out = run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &fresh_abort())
-            .await
-            .unwrap();
+        let out = run_summary(
+            &mock,
+            &cfg(),
+            simple_folded(),
+            65_536,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
         assert_eq!(out.summary, "## Goal\n达成");
         assert!(!out.degraded);
         assert!(out.tokens_before.unwrap() > 0);
@@ -464,9 +485,17 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
     #[tokio::test]
     async fn summary_input_is_system_plus_folded_plus_instruction() {
         let client = CaptureClient::new();
-        let out = run_summary(&client, &cfg(), simple_folded(), 65_536, &sys(), &[], &fresh_abort())
-            .await
-            .unwrap();
+        let out = run_summary(
+            &client,
+            &cfg(),
+            simple_folded(),
+            65_536,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
         assert!(!out.degraded);
         let captured = client.last_messages.lock().unwrap().clone();
         assert!(captured.len() >= 3, "system + 折叠消息 + 指令");
@@ -582,10 +611,7 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
             "触发条件应成立：含推理 {} 应超预算 6000",
             stripped_total + reasoning_tok
         );
-        assert!(
-            stripped_total <= 6000,
-            "剥后应落在预算内：{stripped_total}"
-        );
+        assert!(stripped_total <= 6000, "剥后应落在预算内：{stripped_total}");
         for msg in &captured {
             assert!(msg.reasoning_content.is_none(), "降级后不应携带推理链");
         }
@@ -596,12 +622,23 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
         // 无预设 Mock：若误走 LLM 会返回 Err("预设不足")——degraded 必须不调
         let mock = MockLlmClient::new(vec![]);
         let long = "长文本".repeat(2_000);
-        let out = run_summary(&mock, &cfg(), vec![fm("user", &long)], 100, &sys(), &[], &fresh_abort())
-            .await
-            .unwrap();
+        let out = run_summary(
+            &mock,
+            &cfg(),
+            vec![fm("user", &long)],
+            100,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
         assert!(out.degraded, "极端超窗应规则降级");
         assert!(out.summary.contains("规则生成"), "降级摘要应自带标记");
-        assert!(out.summary.contains("## Goal"), "降级产物仍为 checkpoint 骨架");
+        assert!(
+            out.summary.contains("## Goal"),
+            "降级产物仍为 checkpoint 骨架"
+        );
     }
 
     #[test]
@@ -640,15 +677,18 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
 
     #[tokio::test]
     async fn aborted_summary_returns_cancel_message() {
-        let mock = MockLlmClient::new_with_hang(vec![MockResponse {
-            events: vec![],
-            result: StreamResult {
-                text: String::new(),
-                tool_calls: vec![],
-                reasoning: None,
-                usage: None,
-            },
-        }], 0);
+        let mock = MockLlmClient::new_with_hang(
+            vec![MockResponse {
+                events: vec![],
+                result: StreamResult {
+                    text: String::new(),
+                    tool_calls: vec![],
+                    reasoning: None,
+                    usage: None,
+                },
+            }],
+            0,
+        );
         let abort = AbortSignal::new();
         abort.abort(); // 预置：wait_abort 立即返回
         let err = run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &abort)
@@ -660,21 +700,24 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
     #[tokio::test]
     async fn abort_mid_stream_cancels() {
         // 挂起 client：推完事件不返回 → 中止经 select 退出
-        let mock = MockLlmClient::new_with_hang(vec![MockResponse {
-            events: vec![StreamEvent::TextDelta { content: "半截".into() }],
-            result: StreamResult {
-                text: "半截".into(),
-                tool_calls: vec![],
-                reasoning: None,
-                usage: None,
-            },
-        }], 0);
+        let mock = MockLlmClient::new_with_hang(
+            vec![MockResponse {
+                events: vec![StreamEvent::TextDelta {
+                    content: "半截".into(),
+                }],
+                result: StreamResult {
+                    text: "半截".into(),
+                    tool_calls: vec![],
+                    reasoning: None,
+                    usage: None,
+                },
+            }],
+            0,
+        );
         let abort = AbortSignal::new();
         let handle = tokio::spawn({
             let abort = abort.clone();
-            async move {
-                run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &abort).await
-            }
+            async move { run_summary(&mock, &cfg(), simple_folded(), 65_536, &sys(), &[], &abort).await }
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         abort.abort();
@@ -706,7 +749,9 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
         .unwrap();
         let captured = client.last_messages.lock().unwrap().clone();
         assert!(
-            captured.iter().any(|msg| msg.reasoning_content == Some("短推理".into())),
+            captured
+                .iter()
+                .any(|msg| msg.reasoning_content == Some("短推理".into())),
             "预算内 Preserve：推理链应保留（与主对话一致）"
         );
     }

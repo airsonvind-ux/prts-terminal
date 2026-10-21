@@ -108,7 +108,8 @@ impl SkillSnapshotStore {
             eprintln!("[skills] 快照刷新落盘失败（{}）：{e}", path.display());
             return false;
         }
-        self.cache.insert(conversation_id.to_string(), live.to_string());
+        self.cache
+            .insert(conversation_id.to_string(), live.to_string());
         true
     }
 
@@ -148,8 +149,7 @@ impl SkillSnapshotStore {
                 continue;
             }
             // 有主：会话内容文件存在 → 保留；否则删除
-            if !self.dir.join(format!("{id}.jsonl")).exists()
-                && std::fs::remove_file(&path).is_ok()
+            if !self.dir.join(format!("{id}.jsonl")).exists() && std::fs::remove_file(&path).is_ok()
             {
                 removed += 1;
             }
@@ -201,7 +201,10 @@ mod tests {
         let first = snaps.get_or_freeze(Some("c1"), Some("- 数值计算：计算规则"));
         assert_eq!(first, "- 数值计算：计算规则");
         assert!(snaps.is_frozen("c1"));
-        assert!(sessions.join("c1.skills.txt").exists(), "首见冻结应落盘 sidecar");
+        assert!(
+            sessions.join("c1.skills.txt").exists(),
+            "首见冻结应落盘 sidecar"
+        );
 
         // 活体变化后，同一对话仍返回旧快照（冻结）
         let again = snaps.get_or_freeze(Some("c1"), Some("- 新技能：新目录"));

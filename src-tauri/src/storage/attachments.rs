@@ -153,10 +153,7 @@ pub fn copy_into(src: &Path, dir: &Path) -> Result<Attachment, String> {
         .map(sanitize_file_name)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "file".into());
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
     let base = Path::new(&name)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -217,7 +214,11 @@ pub fn write_blob_into(
     std::fs::write(&dest, &bytes).map_err(|e| format!("写入失败: {e}"))?;
     Ok(Attachment {
         path: dest.to_string_lossy().into_owned(),
-        name: if clean.is_empty() { "blob".into() } else { clean },
+        name: if clean.is_empty() {
+            "blob".into()
+        } else {
+            clean
+        },
         mime_type: mime_type.to_string(),
         size: bytes.len() as u64,
     })
@@ -239,7 +240,10 @@ fn encode_image(path: &Path) -> Result<ImagePart, String> {
     let mime = mime_for_path(path);
     let b64 = base64_encode(&bytes);
     if b64.len() <= TARGET_BASE64_CHARS {
-        return Ok(ImagePart { data: b64, mime_type: mime });
+        return Ok(ImagePart {
+            data: b64,
+            mime_type: mime,
+        });
     }
     if !is_allowed_image_mime(&mime) {
         return Err("非可压缩图片且超过体积上限".into());
@@ -255,7 +259,10 @@ fn encode_image(path: &Path) -> Result<ImagePart, String> {
             if let Ok(buf) = encode_jpeg(&resized, quality) {
                 let b64 = base64_encode(&buf);
                 if b64.len() <= TARGET_BASE64_CHARS {
-                    return Ok(ImagePart { data: b64, mime_type: "image/jpeg".into() });
+                    return Ok(ImagePart {
+                        data: b64,
+                        mime_type: "image/jpeg".into(),
+                    });
                 }
             }
         }
@@ -296,8 +303,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(T[((n >> 18) & 63) as usize] as char);
         out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -403,7 +418,10 @@ mod tests {
     fn mime_by_extension() {
         assert_eq!(mime_for_path(Path::new("x.PNG")), "image/png");
         assert_eq!(mime_for_path(Path::new("x.jpeg")), "image/jpeg");
-        assert_eq!(mime_for_path(Path::new("x.bin")), "application/octet-stream");
+        assert_eq!(
+            mime_for_path(Path::new("x.bin")),
+            "application/octet-stream"
+        );
     }
 
     #[test]
@@ -429,9 +447,19 @@ mod tests {
 
     #[test]
     fn attachment_is_image_by_mime() {
-        let a = Attachment { path: "p".into(), name: "n".into(), mime_type: "image/png".into(), size: 1 };
+        let a = Attachment {
+            path: "p".into(),
+            name: "n".into(),
+            mime_type: "image/png".into(),
+            size: 1,
+        };
         assert!(a.is_image());
-        let b = Attachment { path: "p".into(), name: "n".into(), mime_type: "application/pdf".into(), size: 1 };
+        let b = Attachment {
+            path: "p".into(),
+            name: "n".into(),
+            mime_type: "application/pdf".into(),
+            size: 1,
+        };
         assert!(!b.is_image());
     }
 }

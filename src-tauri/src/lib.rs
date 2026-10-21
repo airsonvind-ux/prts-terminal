@@ -15,7 +15,10 @@ mod storage;
 mod tools;
 
 // 分组后的兼容出口：调用方仍使用 crate::session、crate::settings 等路径。
-pub use agent::{knowledge, memory, orchestrator, prefix_snapshot, skills, skills_index, skills_install, skills_snapshot};
+pub use agent::{
+    knowledge, memory, orchestrator, prefix_snapshot, skills, skills_index, skills_install,
+    skills_snapshot,
+};
 pub use app::{commands, config, db_seed, events, workspace};
 pub use integrations::maa;
 pub use platform::{machine, notices, observability, updater};
@@ -27,23 +30,23 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 use crate::approval::ApprovalRegistry;
-use crate::db::Database;
-use crate::notices::Notices;
-use crate::knowledge::index::{knowledge_dir, KnowledgeIndex};
-use crate::memory::{MemoryStore, SnapshotStore};
-use crate::llm::{ClientRegistry, ModelRegistry};
-use crate::policy::Policy;
 use crate::credentials::CredentialsStore;
-use crate::settings::SettingsStore;
-use crate::skills_snapshot::SkillSnapshotStore;
-use crate::prefix_snapshot::PrefixSnapshotStore;
-use crate::tools::ToolRegistry;
-use crate::steer_queue::SteerQueue;
-use crate::turn_registry::TurnRegistry;
-use crate::workspace::WorkspaceRoot;
+use crate::db::Database;
+use crate::knowledge::index::{knowledge_dir, KnowledgeIndex};
 use crate::llm::anthropic::AnthropicMessagesClient;
 use crate::llm::openai_compatible::OpenAiCompatibleClient;
 use crate::llm::openai_responses::OpenAIResponsesClient;
+use crate::llm::{ClientRegistry, ModelRegistry};
+use crate::memory::{MemoryStore, SnapshotStore};
+use crate::notices::Notices;
+use crate::policy::Policy;
+use crate::prefix_snapshot::PrefixSnapshotStore;
+use crate::settings::SettingsStore;
+use crate::skills_snapshot::SkillSnapshotStore;
+use crate::steer_queue::SteerQueue;
+use crate::tools::ToolRegistry;
+use crate::turn_registry::TurnRegistry;
+use crate::workspace::WorkspaceRoot;
 
 // ═══════════════════════════════════════════════════════
 // 启动前自检与启动失败通道（仅发布构建）
@@ -223,7 +226,10 @@ pub fn run() {
                 if bak.exists() {
                     let _ = std::fs::remove_file(&bak);
                 }
-                eprintln!("[credentials] 已迁移 {} 家密钥至加密存储", legacy_keys.len());
+                eprintln!(
+                    "[credentials] 已迁移 {} 家密钥至加密存储",
+                    legacy_keys.len()
+                );
             }
             Err(e) => {
                 eprintln!("[credentials] 密钥迁移失败，维持明文现状：{e}");
@@ -272,7 +278,11 @@ pub fn run() {
             }
             Err(e) => {
                 eprintln!("[lib] 知识库索引加载失败（read_knowledge 将不可用）：{e}");
-                (Arc::new(KnowledgeIndex::empty_for_boot_failure()), 0, Some(e))
+                (
+                    Arc::new(KnowledgeIndex::empty_for_boot_failure()),
+                    0,
+                    Some(e),
+                )
             }
         }
     };
@@ -325,7 +335,7 @@ pub fn run() {
             Arc::clone(&memory_store),
             Arc::clone(&ledger),
         )
-            .expect("内置工具注册失败（schema 校验未通过）");
+        .expect("内置工具注册失败（schema 校验未通过）");
         Arc::new(reg)
     };
 
@@ -396,10 +406,18 @@ pub fn run() {
             if !r.changed.is_empty() || !r.removed.is_empty() {
                 let mut parts: Vec<String> = Vec::new();
                 if !r.changed.is_empty() {
-                    parts.push(format!("更新 {} 个（{}）", r.changed.len(), r.changed.join("、")));
+                    parts.push(format!(
+                        "更新 {} 个（{}）",
+                        r.changed.len(),
+                        r.changed.join("、")
+                    ));
                 }
                 if !r.removed.is_empty() {
-                    parts.push(format!("退役 {} 个（{}）", r.removed.len(), r.removed.join("、")));
+                    parts.push(format!(
+                        "退役 {} 个（{}）",
+                        r.removed.len(),
+                        r.removed.join("、")
+                    ));
                 }
                 parts.push(format!("未变 {} 个", r.unchanged));
                 eprintln!("[lib] 技能同步：{}", parts.join(" / "));
@@ -465,9 +483,9 @@ pub fn run() {
     // + index.json 原子索引）──
     // 后端纯存储层：写盘触发 = 前端轮末归档（append_turn）；删除对话 = 删持久文件。
     // Mutex 串行化全部命令（单 Agent 悬浮窗 + 单前端，无并发需求，消灭写竞态）。
-    let session_store = Arc::new(Mutex::new(
-        crate::session_store::SessionStore::new(&config::data_dir()),
-    ));
+    let session_store = Arc::new(Mutex::new(crate::session_store::SessionStore::new(
+        &config::data_dir(),
+    )));
 
     // ── 缓存区（工作记忆）State 已注释（2026-08：缓存工具取消注册，
     // 缓存系统停用，待升级为记忆系统；未来复用时可恢复）──

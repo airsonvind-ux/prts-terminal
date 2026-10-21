@@ -312,7 +312,8 @@ impl Bridge {
             .saturating_duration_since(Instant::now())
             .max(Duration::from_millis(1));
         let _ = stream.set_read_timeout(Some(remaining));
-        let ready = read_frame(&stream).map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
+        let ready =
+            read_frame(&stream).map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
         if ready.get("event").and_then(Value::as_str) != Some("ready") {
             let _ = child.kill();
             let _ = child.wait();
@@ -353,9 +354,7 @@ impl Bridge {
             .spawn(move || {
                 loop {
                     match read_frame(&read_stream) {
-                        Ok(frame) => {
-                            route_frame(&frame, &pending, &events, &records, &last_run)
-                        }
+                        Ok(frame) => route_frame(&frame, &pending, &events, &records, &last_run),
                         Err(_) => break, // EOF / 出错 → 桥没了
                     }
                 }
@@ -363,7 +362,9 @@ impl Bridge {
                 // 让所有等待中的命令立刻失败，而不是各自等到超时。
                 if let Ok(mut map) = pending.lock() {
                     for (_, (name, tx)) in map.drain() {
-                        let _ = tx.send(Err(BridgeError::Io(format!("桥已断开（{name} 未收到应答）"))));
+                        let _ = tx.send(Err(BridgeError::Io(format!(
+                            "桥已断开（{name} 未收到应答）"
+                        ))));
                     }
                 }
             })
@@ -535,8 +536,8 @@ fn route_frame(
             record.observe(frame);
         }
     }
-    let run_finished =
-        frame.get("code").and_then(Value::as_i64) == Some(crate::maa::records::CODE_ALL_TASKS_COMPLETED);
+    let run_finished = frame.get("code").and_then(Value::as_i64)
+        == Some(crate::maa::records::CODE_ALL_TASKS_COMPLETED);
 
     if let Ok(mut buffer) = events.lock() {
         buffer.push(frame.clone());
@@ -725,13 +726,23 @@ mod tests {
 
     #[test]
     fn parse_reply_reads_error_from_both_shapes() {
-        let refused = parse_reply("task_add", &json!({ "event": "result", "ok": false, "data": { "error": "invalid type: X" } }));
-        assert!(matches!(refused, Err(BridgeError::Refused { ref message, .. }) if message.contains("invalid type")));
+        let refused = parse_reply(
+            "task_add",
+            &json!({ "event": "result", "ok": false, "data": { "error": "invalid type: X" } }),
+        );
+        assert!(
+            matches!(refused, Err(BridgeError::Refused { ref message, .. }) if message.contains("invalid type"))
+        );
 
         let errored = parse_reply("status", &json!({ "event": "error", "error": "读帧失败" }));
-        assert!(matches!(errored, Err(BridgeError::Refused { ref message, .. }) if message.contains("读帧失败")));
+        assert!(
+            matches!(errored, Err(BridgeError::Refused { ref message, .. }) if message.contains("读帧失败"))
+        );
 
-        let ok = parse_reply("status", &json!({ "event": "result", "ok": true, "data": { "available": true } }));
+        let ok = parse_reply(
+            "status",
+            &json!({ "event": "result", "ok": true, "data": { "available": true } }),
+        );
         assert_eq!(ok.unwrap()["available"], json!(true));
     }
 

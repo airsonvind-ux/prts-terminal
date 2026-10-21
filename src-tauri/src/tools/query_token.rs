@@ -29,9 +29,9 @@
 
 use crate::tools::common::{self, Target};
 use crate::tools::common_fmt::{
-    collect_attr_names, find_bounding_keyframes, format_skill_expanded,
-    format_stats, format_talents, parse_chinese_or_digit, parse_json,
-    pick_talent_alt, split_digits, ComputedStats, ElitePhase, Skill, Talent,
+    collect_attr_names, find_bounding_keyframes, format_skill_expanded, format_stats,
+    format_talents, parse_chinese_or_digit, parse_json, pick_talent_alt, split_digits,
+    ComputedStats, ElitePhase, Skill, Talent,
 };
 use crate::tools::display::{array_summary, targets_summary};
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
@@ -148,27 +148,31 @@ impl Tool for QueryToken {
 // ═══════════════════════════════════════════════════════
 
 const TOKEN_ALWAYS_COLS: &[&str] = &[
-    "名称", "代号", "特性", "持有者",
-    "部署位置", "部署费用", "阻挡数", "嘲讽等级",
-    "再部署时间", "攻击速度", "攻击间隔", "备注",
-    "精英化阶段", "技能列表", "天赋列表",
+    "名称",
+    "代号",
+    "特性",
+    "持有者",
+    "部署位置",
+    "部署费用",
+    "阻挡数",
+    "嘲讽等级",
+    "再部署时间",
+    "攻击速度",
+    "攻击间隔",
+    "备注",
+    "精英化阶段",
+    "技能列表",
+    "天赋列表",
 ];
 
 // ═══════════════════════════════════════════════════════
 // 单召唤物格式化
 // ═══════════════════════════════════════════════════════
 
-fn format_one_token(
-    row: &HashMap<String, String>,
-    extra: &TokenExtraConfig,
-    out: &mut String,
-) {
-    let elite_phases: Vec<ElitePhase> =
-        parse_json(row, "精英化阶段").unwrap_or_default();
-    let skills: Vec<Skill> =
-        parse_json(row, "技能列表").unwrap_or_default();
-    let talents: Vec<Talent> =
-        parse_json(row, "天赋列表").unwrap_or_default();
+fn format_one_token(row: &HashMap<String, String>, extra: &TokenExtraConfig, out: &mut String) {
+    let elite_phases: Vec<ElitePhase> = parse_json(row, "精英化阶段").unwrap_or_default();
+    let skills: Vec<Skill> = parse_json(row, "技能列表").unwrap_or_default();
+    let talents: Vec<Talent> = parse_json(row, "天赋列表").unwrap_or_default();
 
     let token_name = row.get("名称").map(|s| s.as_str()).unwrap_or("未知");
 
@@ -177,8 +181,15 @@ fn format_one_token(
         .elite_phase
         .unwrap_or(elite_phases.len().saturating_sub(1))
         .min(elite_phases.len().saturating_sub(1));
-    let phase = if let Some(p) = elite_phases.get(phase_idx) { p } else { return; };
-    let level = extra.elite_level.unwrap_or(phase.max_level).min(phase.max_level);
+    let phase = if let Some(p) = elite_phases.get(phase_idx) {
+        p
+    } else {
+        return;
+    };
+    let level = extra
+        .elite_level
+        .unwrap_or(phase.max_level)
+        .min(phase.max_level);
     let pot_level = extra.pot_level.unwrap_or(0);
 
     out.push_str(&format!("━━━ {token_name} ━━━\n"));
@@ -187,13 +198,21 @@ fn format_one_token(
     format_token_basic_info(row, out);
 
     // ── 属性（默认或状态指定后的练度）──
-    let phase_label = if phase_idx == 0 { "精0".to_string() } else if phase_idx == 1 { "精1".to_string() } else { format!("精{phase_idx}") };
+    let phase_label = if phase_idx == 0 {
+        "精0".to_string()
+    } else if phase_idx == 1 {
+        "精1".to_string()
+    } else {
+        format!("精{phase_idx}")
+    };
     let level_disp = if level >= phase.max_level {
         "满级".to_string()
     } else {
         format!("{level}级")
     };
-    out.push_str(&format!("\n── 属性（{phase_label} {level_disp} / {pot_level}潜）──\n"));
+    out.push_str(&format!(
+        "\n── 属性（{phase_label} {level_disp} / {pot_level}潜）──\n"
+    ));
     let stats = compute_token_stats(phase, level);
     format_stats(&stats, out);
     let range_str = phase.range_id.as_deref().unwrap_or("无");
@@ -210,11 +229,14 @@ fn format_one_token(
 
     // ── 天赋（当前练度最优备选，不展开备选列表）──
     if !talents.is_empty() {
-        let talent_elite = extra.elite_phase.unwrap_or(elite_phases.len().saturating_sub(1));
+        let talent_elite = extra
+            .elite_phase
+            .unwrap_or(elite_phases.len().saturating_sub(1));
         // 先检查是否有匹配当前练度的备选，避免输出空标题
-        if talents.iter().any(|t| {
-            pick_talent_alt(&t.alternatives, talent_elite as u32, pot_level).is_some()
-        }) {
+        if talents
+            .iter()
+            .any(|t| pick_talent_alt(&t.alternatives, talent_elite as u32, pot_level).is_some())
+        {
             out.push_str("\n── 天赋 ──\n");
             format_talents(
                 &talents,
@@ -490,7 +512,10 @@ mod tests {
         assert!(tool.description().contains("召唤物"));
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["properties"].get("fields").is_none(), "parameters 不应再有 fields");
+        assert!(
+            params["properties"].get("fields").is_none(),
+            "parameters 不应再有 fields"
+        );
         assert!(params["properties"].get("extra").is_some());
     }
 
@@ -512,7 +537,10 @@ mod tests {
         // 默认：全部技能最高级（不逐级展开）
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["机械水獭"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["机械水獭"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("迷惑装置"));
         assert!(result.contains("爆破回收"));
         assert!(result.contains("专3"), "默认最高级应为专3\n结果: {result}");
@@ -524,10 +552,19 @@ mod tests {
         // extra 状态指定 → 默认区块（基本信息/属性/技能）照常输出
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=五潜"]}"#).unwrap().summary;
-        assert!(result.contains("── 基本信息"), "应包含基本信息\n结果: {result}");
+        let result = tool
+            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=五潜"]}"#)
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 基本信息"),
+            "应包含基本信息\n结果: {result}"
+        );
         assert!(result.contains("── 属性"), "应包含属性\n结果: {result}");
-        assert!(result.contains("── 技能列表"), "应包含技能列表\n结果: {result}");
+        assert!(
+            result.contains("── 技能列表"),
+            "应包含技能列表\n结果: {result}"
+        );
         assert!(result.contains("[迷惑装置]"), "应包含技能\n结果: {result}");
     }
 
@@ -539,16 +576,19 @@ mod tests {
         let tool = QueryToken;
         let r1 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精二40级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("精2 40级"), "应显示精2 40级\n结果: {r1}");
         let r2 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精一满级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("精1 满级"), "应显示精1 满级\n结果: {r2}");
         assert!(!r2.contains("精2"), "不应显示精2\n结果: {r2}");
         let r3 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精二"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r3.contains("精2 满级"), "省略等级=该阶段满级\n结果: {r3}");
     }
 
@@ -558,21 +598,31 @@ mod tests {
         let tool = QueryToken;
         let r1 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=满潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("/ 5潜"), "满潜=5潜\n结果: {r1}");
         let r2 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=五潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("/ 5潜"), "五潜=5潜\n结果: {r2}");
         let r3 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=0潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r3.contains("/ 0潜"), "0潜\n结果: {r3}");
         // 属性头完整形态（对齐 operator 风格）：阶段 + 等级 + 潜能
         let r4 = tool
-            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精二","潜能=五潜"]}"#)
-            .unwrap().summary;
-        assert!(r4.contains("精2 满级 / 5潜"), "属性头应含阶段/等级/潜能\n结果: {r4}");
+            .execute(
+                &ctx,
+                r#"{"names":["机械水獭"],"extra":["等级=精二","潜能=五潜"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert!(
+            r4.contains("精2 满级 / 5潜"),
+            "属性头应含阶段/等级/潜能\n结果: {r4}"
+        );
     }
 
     #[test]
@@ -581,13 +631,21 @@ mod tests {
         let tool = QueryToken;
         // 潜能：最后一项生效
         let r = tool
-            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=满潜","潜能=0潜"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["机械水獭"],"extra":["潜能=满潜","潜能=0潜"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("/ 0潜"), "got: {r}");
         // 等级：整体替换（精一40级 + 精二 → 精二满级）
         let r = tool
-            .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=精一40级","等级=精二"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["机械水獭"],"extra":["等级=精一40级","等级=精二"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("精2 满级"), "got: {r}");
         assert!(!r.contains("精2 40级"), "got: {r}");
     }
@@ -598,7 +656,8 @@ mod tests {
         let tool = QueryToken;
         let r = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["潜能=六潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r.contains("超出范围"), "got: {r}");
     }
 
@@ -609,14 +668,16 @@ mod tests {
         // 技能=3级 → 全部技能 Lv3
         let r1 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["技能=3级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("  Lv3:"), "应显示 Lv3\n结果: {r1}");
         assert!(!r1.contains("  Lv1:"), "不应显示 Lv1\n结果: {r1}");
         assert!(!r1.contains("  专"), "不应显示专精等级\n结果: {r1}");
         // 技能=专2 → 全部技能 专2
         let r2 = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["技能=专2"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("  专2:"), "应显示专2\n结果: {r2}");
         assert!(!r2.contains("  专3:"), "不应显示专3\n结果: {r2}");
         assert!(!r2.contains("  Lv7:"), "不应显示 Lv7\n结果: {r2}");
@@ -629,10 +690,15 @@ mod tests {
         let tool = QueryToken;
         let result = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["技能=3级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("[迷惑装置]"));
         assert!(result.contains("[爆破回收]"));
-        assert_eq!(result.matches("  Lv3:").count(), 2, "两个技能均应 Lv3\n结果: {result}");
+        assert_eq!(
+            result.matches("  Lv3:").count(),
+            2,
+            "两个技能均应 Lv3\n结果: {result}"
+        );
     }
 
     #[test]
@@ -642,10 +708,17 @@ mod tests {
         let tool = QueryToken;
         for bad in ["技能=满级", "技能=8级", "技能=专4"] {
             let result = tool
-                .execute(&ctx, &format!(r#"{{"names":["机械水獭"],"extra":["{bad}"]}}"#))
-                .unwrap().summary;
+                .execute(
+                    &ctx,
+                    &format!(r#"{{"names":["机械水獭"],"extra":["{bad}"]}}"#),
+                )
+                .unwrap()
+                .summary;
             assert!(result.contains("✗"), "'{bad}' 应报错\n结果: {result}");
-            assert!(result.contains("技能 值"), "'{bad}' 应指路技能值语法\n结果: {result}");
+            assert!(
+                result.contains("技能 值"),
+                "'{bad}' 应指路技能值语法\n结果: {result}"
+            );
         }
     }
 
@@ -655,9 +728,13 @@ mod tests {
         let tool = QueryToken;
         let result = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["职业=近卫"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态键应报错\n结果: {result}");
-        assert!(result.contains("仅限 等级/潜能/技能"), "应指路合法键\n结果: {result}");
+        assert!(
+            result.contains("仅限 等级/潜能/技能"),
+            "应指路合法键\n结果: {result}"
+        );
     }
 
     #[test]
@@ -666,7 +743,8 @@ mod tests {
         let tool = QueryToken;
         let result = tool
             .execute(&ctx, r#"{"names":["机械水獭"],"extra":["等级=三级跳"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态值应报错\n结果: {result}");
         assert!(result.contains("无法解析"), "应指路\n结果: {result}");
     }
@@ -680,11 +758,24 @@ mod tests {
         let tool = QueryToken;
         for legacy in ["精一20级", "满潜", "3级一技能", "逐级技能数据"] {
             let result = tool
-                .execute(&ctx, &format!(r#"{{"names":["机械水獭"],"extra":["{legacy}"]}}"#))
-                .unwrap().summary;
-            assert!(result.contains("✗"), "旧语法 '{legacy}' 应报错\n结果: {result}");
-            assert!(result.contains("键=值"), "旧语法 '{legacy}' 应指路键=值\n结果: {result}");
-            assert!(result.contains("等级/潜能/技能"), "旧语法 '{legacy}' 应列出合法键\n结果: {result}");
+                .execute(
+                    &ctx,
+                    &format!(r#"{{"names":["机械水獭"],"extra":["{legacy}"]}}"#),
+                )
+                .unwrap()
+                .summary;
+            assert!(
+                result.contains("✗"),
+                "旧语法 '{legacy}' 应报错\n结果: {result}"
+            );
+            assert!(
+                result.contains("键=值"),
+                "旧语法 '{legacy}' 应指路键=值\n结果: {result}"
+            );
+            assert!(
+                result.contains("等级/潜能/技能"),
+                "旧语法 '{legacy}' 应列出合法键\n结果: {result}"
+            );
         }
     }
 
@@ -695,8 +786,14 @@ mod tests {
         // extra 状态指定 等级=精一满级 → 属性块用精1
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["触手"],"extra":["等级=精一满级"]}"#).unwrap().summary;
-        assert!(result.contains("精1 满级"), "应显示精1 满级\n结果: {result}");
+        let result = tool
+            .execute(&ctx, r#"{"names":["触手"],"extra":["等级=精一满级"]}"#)
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("精1 满级"),
+            "应显示精1 满级\n结果: {result}"
+        );
         assert!(!result.contains("精2"));
     }
 
@@ -705,10 +802,16 @@ mod tests {
         // 状态指定 等级=精一 → 属性与天赋按精1 重算，不出现精2 条件
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["镜中虚影"],"extra":["等级=精一满级"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["镜中虚影"],"extra":["等级=精一满级"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("── 属性"), "应输出属性区块\n结果: {result}");
         assert!(result.contains("精1"), "属性应为精1\n结果: {result}");
-        assert!(!result.contains("精2"), "精1 练度不应出现精2\n结果: {result}");
+        assert!(
+            !result.contains("精2"),
+            "精1 练度不应出现精2\n结果: {result}"
+        );
     }
 
     // ── 边界 ──
@@ -717,7 +820,10 @@ mod tests {
     fn query_by_id() {
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"ids":["token_10007_phatom_twin"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"ids":["token_10007_phatom_twin"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("镜中虚影"));
     }
 
@@ -725,7 +831,10 @@ mod tests {
     fn not_found() {
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["绝对不存在的召唤物xyz"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["绝对不存在的召唤物xyz"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("未找到"));
     }
 
@@ -758,8 +867,14 @@ mod tests {
         // 有天赋的召唤物：镜中虚影
         let ctx = make_ctx();
         let tool = QueryToken;
-        let result = tool.execute(&ctx, r#"{"names":["镜中虚影"]}"#).unwrap().summary;
-        assert!(result.contains("── 天赋 ──"), "镜中虚影应有天赋\n结果: {result}");
+        let result = tool
+            .execute(&ctx, r#"{"names":["镜中虚影"]}"#)
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 天赋 ──"),
+            "镜中虚影应有天赋\n结果: {result}"
+        );
     }
 
     // ── 手动测试入口 ──
@@ -783,7 +898,11 @@ mod tests {
         if let Ok(name) = std::env::var("PRTS_TOKEN_NAME") {
             let mut params = serde_json::json!({ "names": [name] });
             if let Ok(estr) = std::env::var("PRTS_TOKEN_EXTRA") {
-                let ev: Vec<String> = if estr.is_empty() { vec![] } else { estr.split(',').map(|s| s.trim().to_string()).collect() };
+                let ev: Vec<String> = if estr.is_empty() {
+                    vec![]
+                } else {
+                    estr.split(',').map(|s| s.trim().to_string()).collect()
+                };
                 params["extra"] = serde_json::json!(ev);
             }
             println!("{}", call(&ctx, &params.to_string()));
@@ -793,7 +912,11 @@ mod tests {
         if let Ok(id) = std::env::var("PRTS_TOKEN_ID") {
             let mut params = serde_json::json!({ "ids": [id] });
             if let Ok(estr) = std::env::var("PRTS_TOKEN_EXTRA") {
-                let ev: Vec<String> = if estr.is_empty() { vec![] } else { estr.split(',').map(|s| s.trim().to_string()).collect() };
+                let ev: Vec<String> = if estr.is_empty() {
+                    vec![]
+                } else {
+                    estr.split(',').map(|s| s.trim().to_string()).collect()
+                };
                 params["extra"] = serde_json::json!(ev);
             }
             println!("{}", call(&ctx, &params.to_string()));
@@ -805,13 +928,23 @@ mod tests {
             ("1. 触手 · 默认", "触手", None),
             ("2. 机械水獭 · 默认（含技能）", "机械水獭", None),
             ("3. 机械水獭 · 技能=3级", "机械水獭", Some(&["技能=3级"])),
-            ("4. 机械水獭 · 等级=精一满级", "机械水獭", Some(&["等级=精一满级"])),
+            (
+                "4. 机械水獭 · 等级=精一满级",
+                "机械水獭",
+                Some(&["等级=精一满级"]),
+            ),
             ("5. 镜中虚影 · 默认（含天赋）", "镜中虚影", None),
-            ("6. 机械水獭 · 旧语法报错示例", "机械水獭", Some(&["3级一技能"])),
+            (
+                "6. 机械水獭 · 旧语法报错示例",
+                "机械水獭",
+                Some(&["3级一技能"]),
+            ),
         ];
         for (label, name, extra) in cases {
             let mut p = serde_json::json!({ "names": [name] });
-            if let Some(e) = extra { p["extra"] = serde_json::json!(e); }
+            if let Some(e) = extra {
+                p["extra"] = serde_json::json!(e);
+            }
             println!("========== {label} ==========");
             println!("{}", call(&ctx, &p.to_string()));
             println!();

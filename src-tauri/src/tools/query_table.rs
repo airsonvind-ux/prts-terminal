@@ -1,4 +1,4 @@
-﻿//! query_table —— 通用键值表查询工具
+//! query_table —— 通用键值表查询工具
 //!
 //! 语义：输入 table（表名）+ keys（键列表）→ 返回每个键对应条目的内容。
 //! 五张表共享"按键列表查询 + 去重 + 逐条格式化"的处理骨架，合并为单工具，
@@ -270,7 +270,14 @@ impl QueryTable {
         let info_missing = missing_name || missing_desc;
         let mut meta: Vec<String> = Vec::new();
         if !info_missing {
-            meta.push(if entry.功能 { "功能地块" } else { "非功能地块" }.into());
+            meta.push(
+                if entry.功能 {
+                    "功能地块"
+                } else {
+                    "非功能地块"
+                }
+                .into(),
+            );
         } else {
             // 标题标注与实际缺失维度一致，避免标题与正文自相矛盾（全完整情况已由外层排除）
             let label = if missing_name && missing_desc {
@@ -286,7 +293,9 @@ impl QueryTable {
 
         // 信息缺失：名称/描述至少一项为空
         if missing_name && missing_desc {
-            out.push_str(&format!("━━━ {tk}（已收录{meta_part}）━━━\n地块存在但信息尚未补充\n"));
+            out.push_str(&format!(
+                "━━━ {tk}（已收录{meta_part}）━━━\n地块存在但信息尚未补充\n"
+            ));
         } else if missing_name {
             out.push_str(&format!(
                 "━━━ {tk}（已收录{meta_part}）━━━\n描述：{}\n名称：待补充\n",
@@ -300,7 +309,9 @@ impl QueryTable {
         } else {
             let name = &entry.名称;
             let desc = &entry.描述;
-            out.push_str(&format!("━━━ {tk}（{name}{meta_part}）━━━\n名称：{name}\n描述：{desc}\n"));
+            out.push_str(&format!(
+                "━━━ {tk}（{name}{meta_part}）━━━\n名称：{name}\n描述：{desc}\n"
+            ));
         }
         if !entry.备注.is_empty() {
             out.push_str(&format!("备注：{}\n", entry.备注));
@@ -470,11 +481,9 @@ impl Tool for QueryTable {
             serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
 
         // ── 1. 解析参数 ──
-        let table = Table::parse(
-            v["table"]
-                .as_str()
-                .ok_or_else(|| ToolError::Parse("table 必须为字符串（range/tile/term/abnormal/slang 之一）".into()))?,
-        )?;
+        let table = Table::parse(v["table"].as_str().ok_or_else(|| {
+            ToolError::Parse("table 必须为字符串（range/tile/term/abnormal/slang 之一）".into())
+        })?)?;
 
         let keys: Vec<String> = v["keys"]
             .as_array()
@@ -586,7 +595,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"range","keys":["2-3"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("2-3（7 格"));
         assert!(out.contains("别名：领主远程"));
         assert!(out.contains("Ｏ"));
@@ -599,7 +609,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"range","keys":["1-5"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("1-5（1 格"));
         assert!(out.contains("干员格不在范围内"));
         assert!(out.contains("Ｏ▣"));
@@ -609,8 +620,12 @@ mod tests {
     fn range_raw_mode() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"range","keys":["1-5"],"raw":true}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"range","keys":["1-5"],"raw":true}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("grids: [[0,1]]"));
         assert!(!out.contains("Ｏ"));
         assert!(!out.contains("▣"));
@@ -621,7 +636,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"range","keys":["zz-9"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("✗ zz-9 未收录于 range 表"));
     }
 
@@ -629,8 +645,12 @@ mod tests {
     fn range_batch_partial_missing() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"range","keys":["2-3","zz-9","1-5"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"range","keys":["2-3","zz-9","1-5"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("2-3"));
         assert!(out.contains("1-5"));
         assert!(out.contains("✗ zz-9"));
@@ -642,12 +662,19 @@ mod tests {
     fn tile_full_entry() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_hole"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_hole"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("地穴"));
         assert!(out.contains("摔落至底部直接死亡"));
         assert!(out.contains("功能地块"));
-        assert!(!out.contains("待补充"), "完整条目不应标注待补充\n结果: {out}");
+        assert!(
+            !out.contains("待补充"),
+            "完整条目不应标注待补充\n结果: {out}"
+        );
     }
 
     #[test]
@@ -655,9 +682,16 @@ mod tests {
         // 备注非空：正文末尾追加备注行
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_hole"]}"#)
-            .unwrap().summary;
-        assert!(out.contains("备注：补充说明样例"), "备注应输出\n结果: {out}");
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_hole"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert!(
+            out.contains("备注：补充说明样例"),
+            "备注应输出\n结果: {out}"
+        );
     }
 
     #[test]
@@ -665,8 +699,12 @@ mod tests {
         // 备注缺省（未写）：不输出备注行
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_reed_a"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_reed_a"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(!out.contains("备注："), "无备注不应输出备注行\n结果: {out}");
     }
 
@@ -675,13 +713,23 @@ mod tests {
         // 条目存在但名称描述都空：应提示已收录、信息未补充，而非不存在
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_empty"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_empty"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("已收录"), "应标注已收录\n结果: {out}");
-        assert!(out.contains("信息尚未补充"), "应标注信息未补充\n结果: {out}");
+        assert!(
+            out.contains("信息尚未补充"),
+            "应标注信息未补充\n结果: {out}"
+        );
         assert!(!out.contains("不存在"), "不应提示不存在\n结果: {out}");
         // 信息缺失的条目：功能标记无依据（存储默认 false），不应输出非功能地块
-        assert!(!out.contains("非功能地块"), "缺失条目不应输出非功能标记\n结果: {out}");
+        assert!(
+            !out.contains("非功能地块"),
+            "缺失条目不应输出非功能标记\n结果: {out}"
+        );
     }
 
     #[test]
@@ -689,12 +737,22 @@ mod tests {
         // 有描述缺名称：标题标注名称待补充（与正文一致），保留已有描述
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_noname"]}"#)
-            .unwrap().summary;
-        assert!(out.contains("名称待补充"), "标题应标注名称待补充\n结果: {out}");
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_noname"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert!(
+            out.contains("名称待补充"),
+            "标题应标注名称待补充\n结果: {out}"
+        );
         assert!(out.contains("只有描述没有名称"));
         assert!(out.contains("名称：待补充"));
-        assert!(!out.contains("描述待补充"), "标题不应误标描述待补充\n结果: {out}");
+        assert!(
+            !out.contains("描述待补充"),
+            "标题不应误标描述待补充\n结果: {out}"
+        );
     }
 
     #[test]
@@ -702,10 +760,17 @@ mod tests {
         // 有条目但有名称缺描述：提示描述待补充，保留已有名称
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_volcano"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_volcano"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("热泵通道"));
-        assert!(out.contains("描述：待补充"), "应标注描述待补充\n结果: {out}");
+        assert!(
+            out.contains("描述：待补充"),
+            "应标注描述待补充\n结果: {out}"
+        );
         assert!(!out.contains("不存在"), "不应提示不存在\n结果: {out}");
     }
 
@@ -713,8 +778,12 @@ mod tests {
     fn tile_unknown_key() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_zzzz"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_zzzz"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("✗ tile_zzzz 未收录于 tile 表"));
     }
 
@@ -724,7 +793,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"tile","keys":["地穴"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("tile_hole"), "标题应带 tileKey\n结果: {out}");
         assert!(out.contains("地穴"));
         assert!(out.contains("摔落至底部直接死亡"));
@@ -736,9 +806,16 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"tile","keys":["芦苇丛"]}"#)
-            .unwrap().summary;
-        assert!(out.contains("tile_reed_a"), "应含第一个重名条目\n结果: {out}");
-        assert!(out.contains("tile_reed_b"), "应含第二个重名条目\n结果: {out}");
+            .unwrap()
+            .summary;
+        assert!(
+            out.contains("tile_reed_a"),
+            "应含第一个重名条目\n结果: {out}"
+        );
+        assert!(
+            out.contains("tile_reed_b"),
+            "应含第二个重名条目\n结果: {out}"
+        );
         assert!(out.contains("隐藏我方单位"));
         assert!(out.contains("使敌人隐匿"));
     }
@@ -750,7 +827,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"term","keys":["停顿"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("━━━ 停顿 ━━━"));
         assert!(out.contains("移动速度降低80%"));
     }
@@ -761,7 +839,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"term","keys":["可充能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("可充能X次"));
         assert!(out.contains("技力上限等于该技能技力需求的X倍"));
     }
@@ -770,8 +849,12 @@ mod tests {
     fn term_unknown_key() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"term","keys":["不存在的术语"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"term","keys":["不存在的术语"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("✗ 不存在的术语 未收录于 term 表"));
     }
 
@@ -780,9 +863,17 @@ mod tests {
         // 重复键只输出一次，保留首次出现顺序
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"term","keys":["停顿","停顿","束缚"]}"#)
-            .unwrap().summary;
-        assert_eq!(out.matches("━━━ 停顿 ━━━").count(), 1, "重复键应只输出一次\n结果: {out}");
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"term","keys":["停顿","停顿","束缚"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert_eq!(
+            out.matches("━━━ 停顿 ━━━").count(),
+            1,
+            "重复键应只输出一次\n结果: {out}"
+        );
         assert!(out.contains("━━━ 束缚 ━━━"));
     }
 
@@ -793,8 +884,12 @@ mod tests {
         // 命中：效果 + 分类 + 可抵抗全部输出
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["晕眩"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["晕眩"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("━━━ 晕眩 ━━━"));
         assert!(out.contains("效果：无法移动、阻挡、攻击及使用技能"));
         assert!(out.contains("分类：阻止攻击、阻止能力"));
@@ -806,8 +901,12 @@ mod tests {
         // 不可抵抗 + 无分类：不输出分类行，可抵抗明确标注否
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["沉默"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["沉默"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("可抵抗：否"));
         assert!(!out.contains("分类："), "无分类不应输出分类行\n结果: {out}");
     }
@@ -816,8 +915,12 @@ mod tests {
     fn abnormal_unknown_key() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["不存在的异常"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["不存在的异常"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("✗ 不存在的异常 未收录于 abnormal 表"));
     }
 
@@ -825,9 +928,17 @@ mod tests {
     fn abnormal_batch() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["晕眩","束缚","晕眩"]}"#)
-            .unwrap().summary;
-        assert_eq!(out.matches("━━━ 晕眩 ━━━").count(), 1, "重复键应只输出一次\n结果: {out}");
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["晕眩","束缚","晕眩"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert_eq!(
+            out.matches("━━━ 晕眩 ━━━").count(),
+            1,
+            "重复键应只输出一次\n结果: {out}"
+        );
         assert!(out.contains("━━━ 束缚 ━━━"));
     }
 
@@ -838,7 +949,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"slang","keys":["42"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("━━━ 42 ━━━"));
         assert!(out.contains("指向：史尔特尔（干员）"));
     }
@@ -849,7 +961,8 @@ mod tests {
         let tool = make_tool();
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"slang","keys":["大爹"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("指向：博卓卡斯替（敌人）"));
         assert!(out.contains("说明：可能指多个实体"));
     }
@@ -858,8 +971,12 @@ mod tests {
     fn slang_unknown_key() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"slang","keys":["不存在的黑话"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"slang","keys":["不存在的黑话"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("✗ 不存在的黑话 未收录于 slang 表"));
     }
 
@@ -869,9 +986,17 @@ mod tests {
     fn range_duplicate_keys_deduplicated() {
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"range","keys":["2-3","2-3","1-5","2-3"]}"#)
-            .unwrap().summary;
-        assert_eq!(out.matches("━━━ 2-3（7 格").count(), 1, "重复键应只输出一次\n结果: {out}");
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"range","keys":["2-3","2-3","1-5","2-3"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert_eq!(
+            out.matches("━━━ 2-3（7 格").count(),
+            1,
+            "重复键应只输出一次\n结果: {out}"
+        );
         assert!(out.contains("1-5"));
     }
 
@@ -917,7 +1042,10 @@ mod tests {
     fn invalid_raw_type() {
         // raw 传非布尔值：严格报错而非静默降级
         let tool = make_tool();
-        let result = tool.execute(&ToolContext::new(), r#"{"table":"range","keys":["2-3"],"raw":"true"}"#);
+        let result = tool.execute(
+            &ToolContext::new(),
+            r#"{"table":"range","keys":["2-3"],"raw":"true"}"#,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("布尔"));
     }
@@ -927,8 +1055,12 @@ mod tests {
         // raw 仅 range 表生效，term 表传入 raw 不影响输出
         let tool = make_tool();
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"term","keys":["停顿"],"raw":true}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"term","keys":["停顿"],"raw":true}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("━━━ 停顿 ━━━"));
         assert!(out.contains("移动速度降低80%"));
     }
@@ -947,58 +1079,87 @@ mod tests {
         // range：4-3 不含干员格，0-1 仅含干员格，3-10 别名穿透
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"range","keys":["4-3"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("4-3（13 格"));
         assert!(out.contains("干员格不在范围内"));
         assert!(out.contains("Ｏ・▣▣▣"));
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"range","keys":["3-10"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("别名：炮手攻击范围"));
         // tile：官方条目与非功能地块
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_hole"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_hole"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("地穴"));
         assert!(out.contains("功能地块"));
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"tile","keys":["tile_road"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"tile","keys":["tile_road"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("平地"));
         assert!(out.contains("非功能地块"));
         // term：真实术语
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"term","keys":["可充能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("可充能X次"));
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"term","keys":["移动"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("不退场，以当前血量在目标位置部署"));
         // abnormal：真实异常效果
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["晕眩"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["晕眩"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("可抵抗：是"));
         assert!(out.contains("分类：阻止攻击、阻止能力"));
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["战栗"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["战栗"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("无法触发普通攻击"));
         assert!(out.contains("可抵抗：否"));
         // slang：真实黑话
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"slang","keys":["42"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(out.contains("史尔特尔（干员）"));
         // 不存在的键（跨表确认提示格式）
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"term","keys":["绝对不存在的术语"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"term","keys":["绝对不存在的术语"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("未收录于 term 表"));
         let out = tool
-            .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["绝对不存在的异常"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ToolContext::new(),
+                r#"{"table":"abnormal","keys":["绝对不存在的异常"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(out.contains("未收录于 abnormal 表"));
     }
 

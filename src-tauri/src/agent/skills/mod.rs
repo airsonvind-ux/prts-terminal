@@ -56,7 +56,8 @@ mod tests {
 
     #[test]
     fn parses_full_skill_frontmatter() {
-        let text = "---\nname: 推演分析\ndescription: 推演时的行为规则\nsource: builtin\n---\n\n## 正文";
+        let text =
+            "---\nname: 推演分析\ndescription: 推演时的行为规则\nsource: builtin\n---\n\n## 正文";
         let meta = parse_skill_frontmatter(text).unwrap();
         assert_eq!(meta.name, "推演分析");
         assert_eq!(meta.description, "推演时的行为规则");

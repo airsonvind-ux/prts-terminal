@@ -31,9 +31,7 @@ pub(crate) fn parse_targets(v: &Value) -> Result<Vec<Target>, ToolError> {
         .unwrap_or(false);
 
     if has_ids && has_names {
-        return Err(ToolError::Parse(
-            "ids 与 names 互斥，不能同时传入".into(),
-        ));
+        return Err(ToolError::Parse("ids 与 names 互斥，不能同时传入".into()));
     }
     if !has_ids && !has_names {
         return Err(ToolError::Parse(
@@ -82,7 +80,12 @@ pub(crate) fn query_by_name(
     }
 
     let candidates = db
-        .query_filtered(table, fields, &[Filter::new("名称", FilterOp::Like, name)], 0)
+        .query_filtered(
+            table,
+            fields,
+            &[Filter::new("名称", FilterOp::Like, name)],
+            0,
+        )
         .map_err(ToolError::Execution)?;
 
     if candidates.rows.is_empty() {
@@ -107,7 +110,12 @@ pub(crate) fn query_by_id(
     fields: &[String],
 ) -> Result<Option<std::collections::HashMap<String, String>>, ToolError> {
     let result = db
-        .query_filtered(table, fields, &[Filter::new(id_column, FilterOp::Eq, id)], 1)
+        .query_filtered(
+            table,
+            fields,
+            &[Filter::new(id_column, FilterOp::Eq, id)],
+            1,
+        )
         .map_err(ToolError::Execution)?;
     Ok(result.rows.into_iter().next())
 }

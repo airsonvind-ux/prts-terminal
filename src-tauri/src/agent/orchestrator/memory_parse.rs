@@ -194,7 +194,11 @@ pub(super) fn render_delta(lines: &[String]) -> String {
             if text.is_empty() {
                 continue;
             }
-            let who = if ty == "user/message" { "用户" } else { "助手" };
+            let who = if ty == "user/message" {
+                "用户"
+            } else {
+                "助手"
+            };
             out.push(format!("{who}：{text}"));
         }
     }

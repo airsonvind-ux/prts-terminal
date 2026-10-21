@@ -27,9 +27,8 @@
 
 use crate::tools::common::{self, Target};
 use crate::tools::common_fmt::{
-    collect_attr_names, find_bounding_keyframes, format_skill_expanded,
-    format_stats, format_talents, parse_json, pick_talent_alt,
-    ComputedStats, ElitePhase, Skill, Talent,
+    collect_attr_names, find_bounding_keyframes, format_skill_expanded, format_stats,
+    format_talents, parse_json, pick_talent_alt, ComputedStats, ElitePhase, Skill, Talent,
 };
 use crate::tools::display::{array_summary, targets_summary};
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
@@ -146,33 +145,41 @@ impl Tool for QueryTrap {
 // ═══════════════════════════════════════════════════════
 
 const TRAP_ALWAYS_COLS: &[&str] = &[
-    "名称", "代号", "阻挡半径",
-    "再部署时间", "部署费用", "嘲讽等级", "阻挡数",
-    "技力回复速度", "攻击间隔", "元素抗性", "损伤抗性", "装置机制",
-    "精英化阶段", "技能列表", "天赋列表",
+    "名称",
+    "代号",
+    "阻挡半径",
+    "再部署时间",
+    "部署费用",
+    "嘲讽等级",
+    "阻挡数",
+    "技力回复速度",
+    "攻击间隔",
+    "元素抗性",
+    "损伤抗性",
+    "装置机制",
+    "精英化阶段",
+    "技能列表",
+    "天赋列表",
 ];
 
 // ═══════════════════════════════════════════════════════
 // 单装置格式化
 // ═══════════════════════════════════════════════════════
 
-fn format_one_trap(
-    row: &HashMap<String, String>,
-    extra: &TrapExtraConfig,
-    out: &mut String,
-) {
-    let elite_phases: Vec<ElitePhase> =
-        parse_json(row, "精英化阶段").unwrap_or_default();
-    let skills: Vec<Skill> =
-        parse_json(row, "技能列表").unwrap_or_default();
-    let talents: Vec<Talent> =
-        parse_json(row, "天赋列表").unwrap_or_default();
+fn format_one_trap(row: &HashMap<String, String>, extra: &TrapExtraConfig, out: &mut String) {
+    let elite_phases: Vec<ElitePhase> = parse_json(row, "精英化阶段").unwrap_or_default();
+    let skills: Vec<Skill> = parse_json(row, "技能列表").unwrap_or_default();
+    let talents: Vec<Talent> = parse_json(row, "天赋列表").unwrap_or_default();
 
     let trap_name = row.get("名称").map(|s| s.as_str()).unwrap_or("未知");
 
     // 装置无精英化概念：恒精0；等级= 直接作用，超上限 clamp 到最高等级
     let phase_idx = elite_phases.len().saturating_sub(1);
-    let phase = if let Some(p) = elite_phases.get(phase_idx) { p } else { return; };
+    let phase = if let Some(p) = elite_phases.get(phase_idx) {
+        p
+    } else {
+        return;
+    };
     let level = extra.level.unwrap_or(phase.max_level).min(phase.max_level);
 
     out.push_str(&format!("━━━ {trap_name} ━━━\n"));
@@ -200,9 +207,10 @@ fn format_one_trap(
     if !talents.is_empty() {
         let pot_default = 0;
         // 先检查是否有匹配当前练度的备选，避免输出空标题
-        if talents.iter().any(|t| {
-            pick_talent_alt(&t.alternatives, phase_idx as u32, pot_default).is_some()
-        }) {
+        if talents
+            .iter()
+            .any(|t| pick_talent_alt(&t.alternatives, phase_idx as u32, pot_default).is_some())
+        {
             out.push_str("\n── 天赋 ──\n");
             format_talents(
                 &talents,
@@ -298,9 +306,9 @@ fn parse_trap_extra(extra_val: &serde_json::Value) -> TrapExtraConfig {
             let value = &s[eq + 1..];
             match key {
                 "等级" => parse_trap_level_status(value, &mut cfg),
-                _ => cfg.errors.push(format!(
-                    "状态键 '{key}' 不支持：仅限 等级，请用 键=值 形式"
-                )),
+                _ => cfg
+                    .errors
+                    .push(format!("状态键 '{key}' 不支持：仅限 等级，请用 键=值 形式")),
             }
             continue;
         }
@@ -386,7 +394,10 @@ mod tests {
         assert!(tool.description().contains("装置"));
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["properties"].get("fields").is_none(), "parameters 不应再有 fields");
+        assert!(
+            params["properties"].get("fields").is_none(),
+            "parameters 不应再有 fields"
+        );
         assert!(params["properties"].get("extra").is_some());
     }
 
@@ -394,7 +405,10 @@ mod tests {
     fn query_default_all() {
         let ctx = make_ctx();
         let tool = QueryTrap;
-        let result = tool.execute(&ctx, r#"{"names":["障碍物"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["障碍物"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("障碍物"));
         assert!(result.contains("基本信息"));
         assert!(result.contains("属性"));
@@ -405,10 +419,19 @@ mod tests {
         // extra 状态指定 → 默认区块（基本信息/属性/技能）照常输出
         let ctx = make_ctx();
         let tool = QueryTrap;
-        let result = tool.execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=3"]}"#).unwrap().summary;
-        assert!(result.contains("── 基本信息"), "应包含基本信息\n结果: {result}");
+        let result = tool
+            .execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=3"]}"#)
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 基本信息"),
+            "应包含基本信息\n结果: {result}"
+        );
         assert!(result.contains("── 属性"), "应包含属性\n结果: {result}");
-        assert!(result.contains("── 技能列表"), "应包含技能列表\n结果: {result}");
+        assert!(
+            result.contains("── 技能列表"),
+            "应包含技能列表\n结果: {result}"
+        );
         assert!(result.contains("[阻挡路线]"), "应包含技能\n结果: {result}");
     }
 
@@ -420,12 +443,14 @@ mod tests {
         let tool = QueryTrap;
         let r1 = tool
             .execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=3"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("精0 3级"), "应显示精0 3级\n结果: {r1}");
         // 级 后缀等价（宽容处理）
         let r2 = tool
             .execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=3级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("精0 3级"), "级 后缀应可解析\n结果: {r2}");
     }
 
@@ -436,8 +461,12 @@ mod tests {
         let tool = QueryTrap;
         let result = tool
             .execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=99"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("精0 30级"), "应 clamp 到最高等级\n结果: {result}");
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("精0 30级"),
+            "应 clamp 到最高等级\n结果: {result}"
+        );
         assert!(!result.contains("99级"), "不应显示 99 级\n结果: {result}");
     }
 
@@ -447,7 +476,8 @@ mod tests {
         let tool = QueryTrap;
         let result = tool
             .execute(&ctx, r#"{"names":["障碍物"],"extra":["潜能=满潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态键应报错\n结果: {result}");
         assert!(result.contains("仅限 等级"), "应指路合法键\n结果: {result}");
     }
@@ -458,7 +488,8 @@ mod tests {
         let tool = QueryTrap;
         let result = tool
             .execute(&ctx, r#"{"names":["障碍物"],"extra":["等级=abc"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态值应报错\n结果: {result}");
         assert!(result.contains("无法解析"), "应指路\n结果: {result}");
     }
@@ -472,11 +503,24 @@ mod tests {
         let tool = QueryTrap;
         for legacy in ["精一", "精一20级", "满潜", "一技能", "专2一技能"] {
             let result = tool
-                .execute(&ctx, &format!(r#"{{"names":["障碍物"],"extra":["{legacy}"]}}"#))
-                .unwrap().summary;
-            assert!(result.contains("✗"), "旧语法 '{legacy}' 应报错\n结果: {result}");
-            assert!(result.contains("键=值"), "旧语法 '{legacy}' 应指路键=值\n结果: {result}");
-            assert!(result.contains("合法键：等级"), "旧语法 '{legacy}' 应列出合法键\n结果: {result}");
+                .execute(
+                    &ctx,
+                    &format!(r#"{{"names":["障碍物"],"extra":["{legacy}"]}}"#),
+                )
+                .unwrap()
+                .summary;
+            assert!(
+                result.contains("✗"),
+                "旧语法 '{legacy}' 应报错\n结果: {result}"
+            );
+            assert!(
+                result.contains("键=值"),
+                "旧语法 '{legacy}' 应指路键=值\n结果: {result}"
+            );
+            assert!(
+                result.contains("合法键：等级"),
+                "旧语法 '{legacy}' 应列出合法键\n结果: {result}"
+            );
         }
     }
 
@@ -486,7 +530,10 @@ mod tests {
     fn query_by_id() {
         let ctx = make_ctx();
         let tool = QueryTrap;
-        let result = tool.execute(&ctx, r#"{"ids":["trap_001_crate"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"ids":["trap_001_crate"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("障碍物"));
     }
 
@@ -494,7 +541,10 @@ mod tests {
     fn not_found() {
         let ctx = make_ctx();
         let tool = QueryTrap;
-        let result = tool.execute(&ctx, r#"{"names":["绝对不存在的装置xyz"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["绝对不存在的装置xyz"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("未找到"));
     }
 
@@ -543,7 +593,11 @@ mod tests {
         if let Ok(name) = std::env::var("PRTS_TRAP_NAME") {
             let mut params = serde_json::json!({ "names": [name] });
             if let Ok(estr) = std::env::var("PRTS_TRAP_EXTRA") {
-                let ev: Vec<String> = if estr.is_empty() { vec![] } else { estr.split(',').map(|s| s.trim().to_string()).collect() };
+                let ev: Vec<String> = if estr.is_empty() {
+                    vec![]
+                } else {
+                    estr.split(',').map(|s| s.trim().to_string()).collect()
+                };
                 params["extra"] = serde_json::json!(ev);
             }
             println!("{}", call(&ctx, &params.to_string()));
@@ -553,7 +607,11 @@ mod tests {
         if let Ok(id) = std::env::var("PRTS_TRAP_ID") {
             let mut params = serde_json::json!({ "ids": [id] });
             if let Ok(estr) = std::env::var("PRTS_TRAP_EXTRA") {
-                let ev: Vec<String> = if estr.is_empty() { vec![] } else { estr.split(',').map(|s| s.trim().to_string()).collect() };
+                let ev: Vec<String> = if estr.is_empty() {
+                    vec![]
+                } else {
+                    estr.split(',').map(|s| s.trim().to_string()).collect()
+                };
                 params["extra"] = serde_json::json!(ev);
             }
             println!("{}", call(&ctx, &params.to_string()));
@@ -571,7 +629,9 @@ mod tests {
         ];
         for (label, name, extra) in cases {
             let mut p = serde_json::json!({ "names": [name] });
-            if let Some(e) = extra { p["extra"] = serde_json::json!(e); }
+            if let Some(e) = extra {
+                p["extra"] = serde_json::json!(e);
+            }
             println!("========== {label} ==========");
             println!("{}", call(&ctx, &p.to_string()));
             println!();

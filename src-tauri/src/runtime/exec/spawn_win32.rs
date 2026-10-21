@@ -48,25 +48,25 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HLOCAL, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS,
-    REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
+    GRANT_ACCESS, REVOKE_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 use windows::Win32::Security::{
     AdjustTokenPrivileges, AllocateAndInitializeSid, CreateRestrictedToken, FreeSid, GetAce,
-    GetLengthSid, GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation, ACE_FLAGS, ACL,
-    CONTAINER_INHERIT_ACE, CREATE_RESTRICTED_TOKEN_FLAGS, DACL_SECURITY_INFORMATION,
-    DISABLE_MAX_PRIVILEGE, LUA_TOKEN, OBJECT_INHERIT_ACE, PSID, PSECURITY_DESCRIPTOR,
-    SE_PRIVILEGE_ENABLED, SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, SID_IDENTIFIER_AUTHORITY,
-    TOKEN_ACCESS_MASK, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_PRIVILEGES, TOKEN_ASSIGN_PRIMARY,
-    TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE, TOKEN_GROUPS, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES,
-    TOKEN_QUERY, TokenDefaultDacl, TokenGroups, UNPROTECTED_DACL_SECURITY_INFORMATION,
-    WRITE_RESTRICTED,
+    GetLengthSid, GetTokenInformation, LookupPrivilegeValueW, SetTokenInformation,
+    TokenDefaultDacl, TokenGroups, ACE_FLAGS, ACL, CONTAINER_INHERIT_ACE,
+    CREATE_RESTRICTED_TOKEN_FLAGS, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, LUA_TOKEN,
+    OBJECT_INHERIT_ACE, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SE_PRIVILEGE_ENABLED,
+    SID_AND_ATTRIBUTES, SID_IDENTIFIER_AUTHORITY, TOKEN_ACCESS_MASK, TOKEN_ADJUST_DEFAULT,
+    TOKEN_ADJUST_PRIVILEGES, TOKEN_ASSIGN_PRIMARY, TOKEN_DEFAULT_DACL, TOKEN_DUPLICATE,
+    TOKEN_GROUPS, TOKEN_IMPERSONATE, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    UNPROTECTED_DACL_SECURITY_INFORMATION, WRITE_RESTRICTED,
 };
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-    JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    CreateJobObjectW, JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+    QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
@@ -74,9 +74,10 @@ use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
     InitializeProcThreadAttributeList, OpenProcessToken, UpdateProcThreadAttribute,
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
-    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, WaitForSingleObject,
+    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST, STARTF_USESTDHANDLES,
+    STARTUPINFOEXW,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -181,9 +182,9 @@ fn resolve_exe_in_path(name: &str) -> Option<PathBuf> {
     }
     let exts = [".exe", ".cmd", ".bat", ".com"];
     for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        for cand in std::iter::once(dir.join(name)).chain(
-            exts.iter().map(|e| dir.join(format!("{name}{e}"))),
-        ) {
+        for cand in std::iter::once(dir.join(name))
+            .chain(exts.iter().map(|e| dir.join(format!("{name}{e}"))))
+        {
             if cand.is_file() {
                 return Some(cand);
             }
@@ -217,7 +218,17 @@ fn build_sid(authority: [u8; 6], subauths: &[u32]) -> Option<Vec<u8>> {
     }
     unsafe {
         AllocateAndInitializeSid(
-            &auth, subauths.len() as u8, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], &mut psid,
+            &auth,
+            subauths.len() as u8,
+            a[0],
+            a[1],
+            a[2],
+            a[3],
+            a[4],
+            a[5],
+            a[6],
+            a[7],
+            &mut psid,
         )
         .ok()?;
         let len = GetLengthSid(psid) as usize;
@@ -238,8 +249,11 @@ fn write_restricted_code_sid() -> Vec<u8> {
 fn writable_root_sid(root: &Path) -> Vec<u8> {
     let key = format!("{WRITE_ROOT_DISCRIMINATOR}{}", path_key(root));
     let h = hash_root(&key);
-    build_sid([0, 0, 0, 0, 0, 5], &[21, h[0] | 1, h[1] | 1, h[2] | 1, h[3] | 1])
-        .expect("写根 SID 构造失败")
+    build_sid(
+        [0, 0, 0, 0, 0, 5],
+        &[21, h[0] | 1, h[1] | 1, h[2] | 1, h[3] | 1],
+    )
+    .expect("写根 SID 构造失败")
 }
 
 fn hash_root(key: &str) -> [u32; 4] {
@@ -378,12 +392,19 @@ impl GrantSession {
         if let Some(entry) = entries.get_mut(&key) {
             // 已有活跃会话：共享其放行，只加引用
             entry.refs += 1;
-            return Ok(GrantSession { key, released: false });
+            return Ok(GrantSession {
+                key,
+                released: false,
+            });
         }
         // 本代首个会话：施加放行；失败原路收回已施加部分（此刻无并发者）
         let sid = writable_root_sid(ws);
         let mut restores = Vec::new();
-        for p in [ws.to_path_buf(), ws.join(EXEC_TEMP_DIR), ws.join(EXEC_CACHE_DIR)] {
+        for p in [
+            ws.to_path_buf(),
+            ws.join(EXEC_TEMP_DIR),
+            ws.join(EXEC_CACHE_DIR),
+        ] {
             if let Err(e) = grant_write_root(&p, &sid, &mut restores) {
                 for r in restores.iter_mut().rev() {
                     r.restore();
@@ -392,7 +413,10 @@ impl GrantSession {
             }
         }
         entries.insert(key.clone(), GrantEntry { refs: 1, restores });
-        Ok(GrantSession { key, released: false })
+        Ok(GrantSession {
+            key,
+            released: false,
+        })
     }
 
     /// 归还引用；末位（归零）执行本代还原，其余只递减计数。重复调用无效。
@@ -488,8 +512,7 @@ fn dacl_contains_sid(dacl: *const ACL, sid: &[u8]) -> bool {
             }
             let ace_sid = (ace as *const u8).add(8) as *const core::ffi::c_void;
             let len = GetLengthSid(PSID(ace_sid as *mut core::ffi::c_void)) as usize;
-            if len == sid.len()
-                && std::slice::from_raw_parts(ace_sid as *const u8, len) == &sid[..]
+            if len == sid.len() && std::slice::from_raw_parts(ace_sid as *const u8, len) == &sid[..]
             {
                 return true;
             }
@@ -517,7 +540,10 @@ fn grant_write_root(path: &Path, sid: &[u8], restores: &mut Vec<AclRestore>) -> 
             unsafe {
                 let _ = LocalFree(Some(HLOCAL(desc.0.cast())));
             }
-            return Err(io::Error::other(format!("SetEntriesInAclW(revoke) rc={}", rc.0)));
+            return Err(io::Error::other(format!(
+                "SetEntriesInAclW(revoke) rc={}",
+                rc.0
+            )));
         }
         base_dacl = clean;
     }
@@ -533,7 +559,11 @@ fn grant_write_root(path: &Path, sid: &[u8], restores: &mut Vec<AclRestore>) -> 
     let rc = unsafe {
         SetEntriesInAclW(
             Some(&[grant]),
-            if base_dacl.is_null() { None } else { Some(base_dacl) },
+            if base_dacl.is_null() {
+                None
+            } else {
+                Some(base_dacl)
+            },
             &mut granted,
         )
     };
@@ -544,7 +574,10 @@ fn grant_write_root(path: &Path, sid: &[u8], restores: &mut Vec<AclRestore>) -> 
             }
             let _ = LocalFree(Some(HLOCAL(desc.0.cast())));
         }
-        return Err(io::Error::other(format!("SetEntriesInAclW(grant) rc={}", rc.0)));
+        return Err(io::Error::other(format!(
+            "SetEntriesInAclW(grant) rc={}",
+            rc.0
+        )));
     }
 
     let rc = unsafe {
@@ -618,11 +651,14 @@ fn build_env_block(workspace_root: &Path, overrides: &[(String, String)]) -> Vec
     // 两种写法指向同一处；子进程解析 `\\?\` 路径不可靠。
     let temp_env = child_path(&temp).to_string_lossy().into_owned();
 
-    let mut eff: Vec<(String, String)> = vec![
-        ("TEMP".into(), temp_env.clone()),
-        ("TMP".into(), temp_env),
-    ];
-    eff.extend(overrides.iter().filter(|(k, _)| k != "TEMP" && k != "TMP").cloned());
+    let mut eff: Vec<(String, String)> =
+        vec![("TEMP".into(), temp_env.clone()), ("TMP".into(), temp_env)];
+    eff.extend(
+        overrides
+            .iter()
+            .filter(|(k, _)| k != "TEMP" && k != "TMP")
+            .cloned(),
+    );
 
     let mut block: Vec<u16> = Vec::new();
     for (k, v) in std::env::vars_os() {
@@ -692,8 +728,9 @@ fn create_restricted_token(workspace_root: &Path) -> Result<HANDLE, String> {
             });
         }
         let mut restricted: HANDLE = HANDLE(std::ptr::null_mut());
-        let flags =
-            CREATE_RESTRICTED_TOKEN_FLAGS(DISABLE_MAX_PRIVILEGE.0 | LUA_TOKEN.0 | WRITE_RESTRICTED.0);
+        let flags = CREATE_RESTRICTED_TOKEN_FLAGS(
+            DISABLE_MAX_PRIVILEGE.0 | LUA_TOKEN.0 | WRITE_RESTRICTED.0,
+        );
         CreateRestrictedToken(base, flags, None, None, Some(&attr), &mut restricted)
             .map_err(|e| format!("CreateRestrictedToken: {e}"))?;
         let _ = CloseHandle(base);
@@ -812,15 +849,24 @@ fn make_pipe(sa: &SECURITY_ATTRIBUTES) -> Result<(HANDLE, HANDLE), String> {
     unsafe {
         let mut read: HANDLE = HANDLE(std::ptr::null_mut());
         let mut write: HANDLE = HANDLE(std::ptr::null_mut());
-        CreatePipe(&mut read, &mut write, Some(sa as *const SECURITY_ATTRIBUTES), 0)
-            .map_err(|e| format!("CreatePipe: {e}"))?;
+        CreatePipe(
+            &mut read,
+            &mut write,
+            Some(sa as *const SECURITY_ATTRIBUTES),
+            0,
+        )
+        .map_err(|e| format!("CreatePipe: {e}"))?;
         Ok((read, write))
     }
 }
 
 /// CommandLineToArgvW 兼容引号（std::process 同算法）。
 fn quote_arg(arg: &str) -> String {
-    if !arg.is_empty() && !arg.chars().any(|c| c == ' ' || c == '\t' || c == '\n' || c == '"') {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|c| c == ' ' || c == '\t' || c == '\n' || c == '"')
+    {
         return arg.to_string();
     }
     let mut out = String::with_capacity(arg.len() + 2);
@@ -886,9 +932,18 @@ fn launch_restricted(
         let _ = InitializeProcThreadAttributeList(None, 2, None, &mut attr_list_size);
         let mut attr_buf = vec![0usize; attr_list_size.div_ceil(8) + 1];
         let attr_list = LPPROC_THREAD_ATTRIBUTE_LIST(attr_buf.as_mut_ptr().cast());
-        if let Err(e) = InitializeProcThreadAttributeList(Some(attr_list), 2, None, &mut attr_list_size)
+        if let Err(e) =
+            InitializeProcThreadAttributeList(Some(attr_list), 2, None, &mut attr_list_size)
         {
-            close_handles(&[stdin_read, stdin_write, out_read, out_write, err_read, err_write, job]);
+            close_handles(&[
+                stdin_read,
+                stdin_write,
+                out_read,
+                out_write,
+                err_read,
+                err_write,
+                job,
+            ]);
             return Err(format!("InitializeProcThreadAttributeList: {e}"));
         }
 
@@ -904,7 +959,15 @@ fn launch_restricted(
             None,
         ) {
             let _ = DeleteProcThreadAttributeList(attr_list);
-            close_handles(&[stdin_read, stdin_write, out_read, out_write, err_read, err_write, job]);
+            close_handles(&[
+                stdin_read,
+                stdin_write,
+                out_read,
+                out_write,
+                err_read,
+                err_write,
+                job,
+            ]);
             return Err(format!("UpdateProcThreadAttribute(HANDLE_LIST): {e}"));
         }
         if let Err(e) = UpdateProcThreadAttribute(
@@ -917,7 +980,15 @@ fn launch_restricted(
             None,
         ) {
             let _ = DeleteProcThreadAttributeList(attr_list);
-            close_handles(&[stdin_read, stdin_write, out_read, out_write, err_read, err_write, job]);
+            close_handles(&[
+                stdin_read,
+                stdin_write,
+                out_read,
+                out_write,
+                err_read,
+                err_write,
+                job,
+            ]);
             return Err(format!("UpdateProcThreadAttribute(JOB_LIST): {e}"));
         }
 
@@ -1104,7 +1175,10 @@ fn spawn_exec(
 ) -> io::Result<RestrictedChild> {
     // 1) exe 解析
     let exe = resolve_exe_in_path(program).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, format!("{program} 未在 PATH 中找到"))
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{program} 未在 PATH 中找到"),
+        )
     })?;
 
     // 2) 环境与放行准备：受限 = TEMP/缓存父目录预建 + ACL 放行 + 重定向；
@@ -1135,8 +1209,7 @@ fn spawn_exec(
 
     // 4) 令牌 + 启动（失败路径：grant Drop 归还引用，末位时还原 ACL）
     let token = if full {
-        open_own_token()
-            .map_err(|e| io::Error::other(format!("自身令牌获取失败：{e}")))?
+        open_own_token().map_err(|e| io::Error::other(format!("自身令牌获取失败：{e}")))?
     } else {
         create_restricted_token(workspace_root)
             .map_err(|e| io::Error::other(format!("受限令牌创建失败：{e}")))?
@@ -1265,7 +1338,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("prts-m4-{tag}-{}-{nanos}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("prts-m4-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1324,7 +1398,10 @@ mod tests {
         let outside = unique_ws("full-target");
         let target = outside.join("x.txt");
         // full（应用自身令牌）：区外写入成功
-        let script = format!("Set-Content -Path '{}' -Value 'full-write-ok'", target.display());
+        let script = format!(
+            "Set-Content -Path '{}' -Value 'full-write-ok'",
+            target.display()
+        );
         let (code, _, err) = run_full_ps(&ws, &script, Duration::from_secs(30));
         assert_eq!(code, Some(0), "full 应能写区外 err={err}");
         assert_eq!(
@@ -1345,10 +1422,17 @@ mod tests {
     #[test]
     fn restricted_echo_and_reads_work() {
         let ws = unique_ws("echo");
-        let (code, out, _) = run_ps(&ws, "Write-Output hello-m4; whoami", Duration::from_secs(30));
+        let (code, out, _) = run_ps(
+            &ws,
+            "Write-Output hello-m4; whoami",
+            Duration::from_secs(30),
+        );
         assert_eq!(code, Some(0), "受限 PS 应正常退出");
         assert!(out.contains("hello-m4"), "out: {out}");
-        assert!(out.to_lowercase().contains("\\"), "whoami 应输出当前用户: {out}");
+        assert!(
+            out.to_lowercase().contains("\\"),
+            "whoami 应输出当前用户: {out}"
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 
@@ -1418,9 +1502,15 @@ mod tests {
         );
         let (rcode, rout, rerr) = run_ps(&ws, &read_script, Duration::from_secs(30));
         assert_eq!(rcode, Some(0), "回读应成功 err={rerr}");
-        assert!(rout.contains("LEN:2000"), "WriteAllText 应写入（无 CLM）: {rout}");
         assert!(
-            rout.lines().find(|l| l.starts_with("TEMP:")).map(|l| l.ends_with(EXEC_TEMP_DIR)).unwrap_or(false),
+            rout.contains("LEN:2000"),
+            "WriteAllText 应写入（无 CLM）: {rout}"
+        );
+        assert!(
+            rout.lines()
+                .find(|l| l.starts_with("TEMP:"))
+                .map(|l| l.ends_with(EXEC_TEMP_DIR))
+                .unwrap_or(false),
             "TEMP 应重定向到 workspace 内: {rout}"
         );
         let _ = std::fs::remove_dir_all(&ws);
@@ -1501,7 +1591,10 @@ mod tests {
             let _ = f.read_to_string(&mut err);
         }
         let gp: u32 = out.trim().parse().unwrap_or(0);
-        assert!(gp != 0, "孙进程 pid 未从 stdout 捕获 out={out:?} err={err:?}");
+        assert!(
+            gp != 0,
+            "孙进程 pid 未从 stdout 捕获 out={out:?} err={err:?}"
+        );
         // 孙进程应已随 Job 终止（OpenProcess 应失败）
         let mut gone = false;
         for _ in 0..100 {
@@ -1574,7 +1667,10 @@ mod tests {
 
         drop(g2);
         let after_last_release = dacl_raw(&ws);
-        assert_eq!(before, after_last_release, "末位释放后 DACL 应还原到初始状态");
+        assert_eq!(
+            before, after_last_release,
+            "末位释放后 DACL 应还原到初始状态"
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }

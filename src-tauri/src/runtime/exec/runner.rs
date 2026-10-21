@@ -369,8 +369,7 @@ pub fn run_command(spec: &CommandSpec, options: &RunOptions) -> RunOutput {
         match spawned.try_wait() {
             Ok(Some(code)) => break Some(code),
             Ok(None) => {
-                let cancelled =
-                    options.cancel.as_ref().is_some_and(|c| c.is_aborted());
+                let cancelled = options.cancel.as_ref().is_some_and(|c| c.is_aborted());
                 let timed_out = deadline.is_some_and(|d| Instant::now() >= d);
                 if cancelled || timed_out {
                     // 树杀 + 收尸（受限 = TerminateJobObject 收敛；std = taskkill /T /F）
@@ -497,12 +496,21 @@ mod tests {
         let dir = unique_temp_dir("echo");
         let out = run_command(
             &spec("echo hello-runner", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(10)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(10)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
         assert_eq!(out.outcome, Outcome::Completed);
         assert_eq!(out.exit_code, Some(0));
         assert!(out.ok());
-        assert!(out.stdout_tail.contains("hello-runner"), "stdout: {:?}", out.stdout_tail);
+        assert!(
+            out.stdout_tail.contains("hello-runner"),
+            "stdout: {:?}",
+            out.stdout_tail
+        );
         assert!(!out.truncated);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -528,7 +536,12 @@ mod tests {
         let dir = unique_temp_dir("exit");
         let out = run_command(
             &spec("exit 3", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(10)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(10)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
         assert_eq!(out.outcome, Outcome::Completed);
         assert_eq!(out.exit_code, Some(3));
@@ -541,9 +554,18 @@ mod tests {
         let dir = unique_temp_dir("channels");
         let out = run_command(
             &spec("Write-Output channel-out; Write-Error channel-err", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(10)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(10)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
-        assert!(out.stdout_tail.contains("channel-out"), "stdout: {:?}", out.stdout_tail);
+        assert!(
+            out.stdout_tail.contains("channel-out"),
+            "stdout: {:?}",
+            out.stdout_tail
+        );
         assert!(
             out.stderr_tail.contains("channel-err") || out.stdout_tail.contains("channel-err"),
             "stderr: {:?} / stdout: {:?}",
@@ -558,13 +580,26 @@ mod tests {
         let dir = unique_temp_dir("timeout");
         let out = run_command(
             &spec("Start-Sleep -Seconds 3", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(1)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(1)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
-        assert_eq!(out.outcome, Outcome::TimedOut, "应超时并树杀: {:?}", out.outcome);
+        assert_eq!(
+            out.outcome,
+            Outcome::TimedOut,
+            "应超时并树杀: {:?}",
+            out.outcome
+        );
         // 上限放宽（<8s）：M4 受限路径首次使用含 PS 探针 + 受限启动开销，
         // 全量并行回归下该开销可能超过 3s；断言仍证明「1s 超时即回收，
         // 未等满 3s 的 Start-Sleep」的提前返回语义。
-        assert!(out.elapsed_ms < 8000, "应提前返回（≤8s 含启动开销，而非等满 3s）");
+        assert!(
+            out.elapsed_ms < 8000,
+            "应提前返回（≤8s 含启动开销，而非等满 3s）"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -577,9 +612,19 @@ mod tests {
         cancel.abort(); // 前置置位：轮询首轮即命中（≈100ms 内返回）
         let out = run_command(
             &spec("Start-Sleep -Seconds 3", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(30)), output_dir: None, log_stem: None, cancel: Some(cancel) },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(30)),
+                output_dir: None,
+                log_stem: None,
+                cancel: Some(cancel),
+            },
         );
-        assert_eq!(out.outcome, Outcome::Killed, "cancel 命中应为 Killed: {:?}", out.outcome);
+        assert_eq!(
+            out.outcome,
+            Outcome::Killed,
+            "cancel 命中应为 Killed: {:?}",
+            out.outcome
+        );
         assert!(out.elapsed_ms < 3000, "应提前返回（cancel 而非等满 3s）");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -589,7 +634,12 @@ mod tests {
         let dir = unique_temp_dir("spawn");
         let out = run_command(
             &spec("totally-not-exist-xyz-12345", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(5)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(5)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
         // PowerShell 对未知命令非零退出（CommandNotFound）——两种结局都合法：
         // spawn 级失败（找不到 shell）或命令级失败；断言不 panic 且非 ok
@@ -633,9 +683,19 @@ mod tests {
         std::fs::write(dir.join("probe.txt"), "probe-content").unwrap();
         let out = run_command(
             &spec("Get-Content probe.txt", &dir),
-            &RunOptions { timeout: Some(Duration::from_secs(10)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(10)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
-        assert!(out.ok(), "outcome: {:?} err: {:?}", out.outcome, out.stderr_tail);
+        assert!(
+            out.ok(),
+            "outcome: {:?} err: {:?}",
+            out.outcome,
+            out.stderr_tail
+        );
         assert!(out.stdout_tail.contains("probe-content"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -651,9 +711,19 @@ mod tests {
                 workspace_root: dir.clone(),
                 full_permission: false,
             },
-            &RunOptions { timeout: Some(Duration::from_secs(10)), output_dir: None, log_stem: None, cancel: None },
+            &RunOptions {
+                timeout: Some(Duration::from_secs(10)),
+                output_dir: None,
+                log_stem: None,
+                cancel: None,
+            },
         );
-        assert!(out.ok(), "cmd shell: {:?} / {:?}", out.outcome, out.stderr_tail);
+        assert!(
+            out.ok(),
+            "cmd shell: {:?} / {:?}",
+            out.outcome,
+            out.stderr_tail
+        );
         assert!(out.stdout_tail.to_lowercase().contains("cmd-ok"));
         let _ = std::fs::remove_dir_all(&dir);
     }

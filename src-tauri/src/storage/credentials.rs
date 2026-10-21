@@ -77,9 +77,9 @@ impl Default for CredentialsFile {
 #[cfg(windows)]
 fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
     use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     let input = CRYPT_INTEGER_BLOB {
@@ -112,9 +112,9 @@ fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
 /// 解密一段 DPAPI 密文块。换机、换用户、换熵都会失败。
 #[cfg(windows)]
 fn unprotect(blob: &[u8]) -> Result<Vec<u8>, String> {
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
     use windows::Win32::Security::Cryptography::{
-        CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
     if blob.is_empty() {
@@ -247,7 +247,9 @@ impl CredentialsStore {
         let mut skipped: Vec<String> = Vec::new();
         for (key, value) in parsed.secrets {
             let Some(b64) = value.strip_prefix(CIPHER_PREFIX) else {
-                skipped.push(format!("{key}（值缺少 {CIPHER_PREFIX} 前缀，疑似手写明文）"));
+                skipped.push(format!(
+                    "{key}（值缺少 {CIPHER_PREFIX} 前缀，疑似手写明文）"
+                ));
                 continue;
             };
             let Some(blob) = hex_decode(b64) else {
@@ -265,14 +267,21 @@ impl CredentialsStore {
             }
         }
         if !skipped.is_empty() {
-            store.load_note = Some(format!("跳过 {} 条凭据：{}", skipped.len(), skipped.join("；")));
+            store.load_note = Some(format!(
+                "跳过 {} 条凭据：{}",
+                skipped.len(),
+                skipped.join("；")
+            ));
         }
         store
     }
 
     /// 引用键是否有非空值。
     pub fn has(&self, key: &str) -> bool {
-        self.secrets.get(key).map(|v| !v.is_empty()).unwrap_or(false)
+        self.secrets
+            .get(key)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
     }
 
     /// 取明文值。
@@ -333,8 +342,8 @@ impl CredentialsStore {
             version: CREDENTIALS_VERSION,
             secrets,
         };
-        let text = serde_json::to_string_pretty(&file)
-            .map_err(|e| format!("凭据序列化失败：{e}"))?;
+        let text =
+            serde_json::to_string_pretty(&file).map_err(|e| format!("凭据序列化失败：{e}"))?;
 
         let dir = self
             .path
@@ -347,8 +356,8 @@ impl CredentialsStore {
         std::fs::rename(&tmp, &self.path).map_err(|e| format!("凭据文件替换失败：{e}"))?;
 
         // 写后重读校验（同 settings.rs）：读回不一致即报错，绝不当作写成功。
-        let back = std::fs::read_to_string(&self.path)
-            .map_err(|e| format!("凭据文件回读失败：{e}"))?;
+        let back =
+            std::fs::read_to_string(&self.path).map_err(|e| format!("凭据文件回读失败：{e}"))?;
         if back.trim() != text.trim() {
             return Err("凭据文件写后校验失败（回读内容与写入不一致）".to_string());
         }
@@ -388,7 +397,12 @@ mod tests {
 
     #[test]
     fn hex_roundtrip() {
-        for case in [vec![], vec![0u8], vec![255u8, 0, 128], (0u8..=255).collect()] {
+        for case in [
+            vec![],
+            vec![0u8],
+            vec![255u8, 0, 128],
+            (0u8..=255).collect(),
+        ] {
             let enc = hex_encode(&case);
             assert_eq!(hex_decode(&enc).unwrap(), case);
         }
@@ -402,7 +416,10 @@ mod tests {
             provider_key_ref("deepseek"),
             "llm.providers.deepseek.api_key"
         );
-        assert_eq!(provider_key_ref("my-proxy"), "llm.providers.my-proxy.api_key");
+        assert_eq!(
+            provider_key_ref("my-proxy"),
+            "llm.providers.my-proxy.api_key"
+        );
     }
 
     #[test]
@@ -436,7 +453,10 @@ mod tests {
         let dir = unique_temp_dir("highver");
         std::fs::write(
             dir.join(CREDENTIALS_FILE),
-            format!(r#"{{"version": {}, "secrets": {{}}}}"#, CREDENTIALS_VERSION + 1),
+            format!(
+                r#"{{"version": {}, "secrets": {{}}}}"#,
+                CREDENTIALS_VERSION + 1
+            ),
         )
         .unwrap();
         let mut store = CredentialsStore::load(&dir);
@@ -462,10 +482,7 @@ mod tests {
 
             // 明文绝不出现在盘上
             let text = std::fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap();
-            assert!(
-                !text.contains(secret),
-                "凭据文件里出现了明文密钥：{text}"
-            );
+            assert!(!text.contains(secret), "凭据文件里出现了明文密钥：{text}");
             assert!(text.contains(CIPHER_PREFIX), "值应带 dpapi 前缀");
 
             // 重新载入应解出同一明文
@@ -529,10 +546,7 @@ mod tests {
                 ])
                 .unwrap();
             let reloaded = CredentialsStore::load(&dir);
-            assert_eq!(
-                reloaded.get(&provider_key_ref("deepseek")),
-                Some("sk-a")
-            );
+            assert_eq!(reloaded.get(&provider_key_ref("deepseek")), Some("sk-a"));
             assert_eq!(reloaded.get(&provider_key_ref("zhipu")), Some("sk-b"));
             let _ = std::fs::remove_dir_all(&dir);
         }

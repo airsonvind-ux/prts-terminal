@@ -75,7 +75,9 @@ impl Tool for ListKnowledgeTool {
             None | Some(serde_json::Value::Null) => String::new(),
             Some(d) => d
                 .as_str()
-                .ok_or_else(|| ToolError::Parse("参数 dir 必须是字符串（目录名见知识库框架）".into()))?
+                .ok_or_else(|| {
+                    ToolError::Parse("参数 dir 必须是字符串（目录名见知识库框架）".into())
+                })?
                 .trim()
                 .trim_matches('/')
                 .to_string(),
@@ -83,9 +85,10 @@ impl Tool for ListKnowledgeTool {
 
         // ── 框架模式：省略/空 dir → 返回 _index.md 原文 ──
         if dir.is_empty() {
-            let fw = self.index.framework().ok_or_else(|| {
-                ToolError::Execution("知识库框架不可用（缺少 _index.md）".into())
-            })?;
+            let fw = self
+                .index
+                .framework()
+                .ok_or_else(|| ToolError::Execution("知识库框架不可用（缺少 _index.md）".into()))?;
             return Ok(ToolOutput::json(
                 serde_json::json!({ "mode": "framework", "content": fw }),
                 format!("知识库框架：\n\n{fw}"),
@@ -167,10 +170,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-lk-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-lk-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -248,7 +249,10 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"dir":"top2"}"#)
             .unwrap();
-        assert_eq!(out.summary, "目录「top2」下：\n条目：\n- D1：（1 节）\n  - 正文");
+        assert_eq!(
+            out.summary,
+            "目录「top2」下：\n条目：\n- D1：（1 节）\n  - 正文"
+        );
 
         // 首尾 / 归一化后 canonical 显示归一化值
         let out = tool
@@ -273,12 +277,13 @@ mod tests {
         assert!(out.summary.contains("四大领域"));
         assert!(out.summary.contains("**top1**：示例领域一"));
         assert!(out.summary.contains("**top2**：示例领域二"));
-        assert!(out.canonical["content"].as_str().unwrap().contains("## 四大领域"));
+        assert!(out.canonical["content"]
+            .as_str()
+            .unwrap()
+            .contains("## 四大领域"));
 
         // 显式空串同省略
-        let out = tool
-            .execute(&ToolContext::new(), r#"{"dir":""}"#)
-            .unwrap();
+        let out = tool.execute(&ToolContext::new(), r#"{"dir":""}"#).unwrap();
         assert_eq!(out.canonical["mode"], "framework");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -358,7 +363,10 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"dir":"top1"}"#)
             .unwrap();
-        assert_eq!(out.summary, "目录「top1」下：\n条目：\n- P1：简介P（无分节）");
+        assert_eq!(
+            out.summary,
+            "目录「top1」下：\n条目：\n- P1：简介P（无分节）"
+        );
         assert_eq!(
             out.canonical["entries"][0],
             serde_json::json!({ "title": "P1", "brief": "简介P", "sections": 0, "toc": [] })

@@ -13,8 +13,8 @@
 //! - SSE：event:/data: 行对（非 data: {"choices":[{"delta":...}]}）
 
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -22,9 +22,8 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
-    ModelRegistry,
-    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, StreamEvent,
+    StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -341,7 +340,11 @@ impl AnthropicMessagesClient {
         };
 
         let usage = body.get("usage").and_then(Self::extract_usage);
-        Ok(LlmResponse { text, tool_calls, usage })
+        Ok(LlmResponse {
+            text,
+            tool_calls,
+            usage,
+        })
     }
 
     // ── Usage 提取 ──
@@ -388,9 +391,10 @@ impl LlmClient for AnthropicMessagesClient {
             })?;
 
             let status = response.status();
-            let body: Value = response.json().await.map_err(|e| {
-                LlmError::Parse(format!("响应 JSON 解析失败: {e}"))
-            })?;
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
                 let err_msg = body
@@ -474,9 +478,18 @@ enum AnthropicSseEvent {
         /// 缓存读取命中（cache_read_input_tokens；无该字段 → None = 未观测）
         cache_read_input_tokens: Option<u32>,
     },
-    ContentBlockStart { index: usize, block_type: String, block_data: Value },
-    ContentBlockDelta { index: usize, delta: Value },
-    ContentBlockStop { index: usize },
+    ContentBlockStart {
+        index: usize,
+        block_type: String,
+        block_data: Value,
+    },
+    ContentBlockDelta {
+        index: usize,
+        delta: Value,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
     MessageDelta {
         /// SSE 的 stop_reason（end_turn / tool_use 等）。**当前只解析、无人读取**
         /// （消费点形如 `stop_reason: _`）；保留以便将来判结束原因，
@@ -693,10 +706,7 @@ fn process_anthropic_event(
         AnthropicSseEvent::ContentBlockDelta { index, delta } => {
             let acc = blocks.entry(*index).or_default();
 
-            let delta_type = delta
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let delta_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
             match delta_type {
                 "text_delta" => {
@@ -782,16 +792,12 @@ mod tests {
     ) -> impl futures_util::Stream<Item = Result<Vec<u8>, &'a str>> {
         let chunks: Vec<Result<Vec<u8>, &str>> = frames
             .iter()
-            .map(|(ev, data)| {
-                Ok(format!("event: {}\ndata: {}\n\n", ev, data).into_bytes())
-            })
+            .map(|(ev, data)| Ok(format!("event: {}\ndata: {}\n\n", ev, data).into_bytes()))
             .collect();
         stream::iter(chunks)
     }
 
-    async fn collect_anthropic_events(
-        frames: &[(&str, &str)],
-    ) -> (Vec<StreamEvent>, StreamResult) {
+    async fn collect_anthropic_events(frames: &[(&str, &str)]) -> (Vec<StreamEvent>, StreamResult) {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_c = events.clone();
         let on_event = move |e: StreamEvent| {
@@ -799,9 +805,7 @@ mod tests {
         };
 
         let s = anthropic_sse_stream(frames);
-        let result = parse_anthropic_sse_stream(s, &on_event)
-            .await
-            .unwrap();
+        let result = parse_anthropic_sse_stream(s, &on_event).await.unwrap();
 
         let collected = events.lock().unwrap().clone();
         (collected, result)
@@ -811,10 +815,7 @@ mod tests {
 
     #[test]
     fn convert_system_to_separate_field() {
-        let msgs = vec![
-            ChatMessage::system("你是 PRTS"),
-            ChatMessage::user("你好"),
-        ];
+        let msgs = vec![ChatMessage::system("你是 PRTS"), ChatMessage::user("你好")];
         let (sys, an_msgs) = AnthropicMessagesClient::convert_messages(&msgs);
         assert_eq!(sys, Some("你是 PRTS".into()));
         assert_eq!(an_msgs.len(), 1);
@@ -823,10 +824,7 @@ mod tests {
 
     #[test]
     fn convert_multiple_system_joined() {
-        let msgs = vec![
-            ChatMessage::system("规则 A"),
-            ChatMessage::system("规则 B"),
-        ];
+        let msgs = vec![ChatMessage::system("规则 A"), ChatMessage::system("规则 B")];
         let (sys, _) = AnthropicMessagesClient::convert_messages(&msgs);
         assert_eq!(sys, Some("规则 A\n\n规则 B".into()));
     }
@@ -873,10 +871,7 @@ mod tests {
         assert_eq!(content[0]["text"], "让我查一下");
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["name"], "query_enemy");
-        assert_eq!(
-            content[1]["input"]["name"],
-            "源石虫"
-        );
+        assert_eq!(content[1]["input"]["name"], "源石虫");
     }
 
     // ── 工具转换 ──
@@ -904,12 +899,30 @@ mod tests {
     #[tokio::test]
     async fn pure_text_stream() {
         let frames = &[
-            ("message_start", r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}"#),
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"博士"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"博士"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
@@ -929,23 +942,43 @@ mod tests {
     #[tokio::test]
     async fn tool_use_stream() {
         let frames = &[
-            ("message_start", r#"{"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":20}}}"#),
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"mess"}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"age\":\"hi\"}"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":30}}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":20}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"mess"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"age\":\"hi\"}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":30}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
         let (events, result) = collect_anthropic_events(frames).await;
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
-            if id == "toolu_1"
-            && name == "echo"
-            && arguments == r#"{"message":"hi"}"#
-        ));
+        assert!(
+            matches!(&events[0], StreamEvent::ToolCall { id, name, arguments }
+                if id == "toolu_1"
+                && name == "echo"
+                && arguments == r#"{"message":"hi"}"#
+            )
+        );
 
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].function.name, "echo");
@@ -957,16 +990,40 @@ mod tests {
     #[tokio::test]
     async fn mixed_text_and_tool_use() {
         let frames = &[
-            ("message_start", r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+            ),
             // text block
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来查询"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我来查询"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
             // tool_use block
-            ("content_block_start", r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"echo","input":{}}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":1}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":15}}"#),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"echo","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":15}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
@@ -985,22 +1042,48 @@ mod tests {
     #[tokio::test]
     async fn thinking_delta() {
         let frames = &[
-            ("message_start", r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#),
-            ("content_block_start", r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"需要查询数据库"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":0}"#),
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"需要查询数据库"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
             // text block after thinking
-            ("content_block_start", r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#),
-            ("content_block_delta", r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"结果如下"}}"#),
-            ("content_block_stop", r#"{"type":"content_block_stop","index":1}"#),
-            ("message_delta", r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"结果如下"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":10}}"#,
+            ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ];
 
         let (events, result) = collect_anthropic_events(frames).await;
 
         assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "需要查询数据库"));
+        assert!(
+            matches!(events[0], StreamEvent::ReasoningDelta { ref content } if content == "需要查询数据库")
+        );
         assert!(matches!(events[1], StreamEvent::TextDelta { .. }));
         assert_eq!(result.reasoning, Some("需要查询数据库".into()));
         assert_eq!(result.text, "结果如下");

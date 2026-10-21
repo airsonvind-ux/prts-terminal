@@ -29,16 +29,16 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::debug;
-use crate::notices::Notices;
-use crate::llm::{ChatMessage, LlmClient, LlmConfig};
-use crate::memory::schema::now_ms;
-use crate::memory::store::{Fingerprint, MemoryOp, MemoryStore};
-use crate::turn_registry::AbortSignal;
+use super::memory_parse::{parse_ops, render_delta, strip_fences, ExtractOutcome, RawOp};
 use super::memory_prompt::{
     build_extract_system, build_extract_user, build_repair_user, compress_system_prompt,
 };
-use super::memory_parse::{parse_ops, render_delta, strip_fences, ExtractOutcome, RawOp};
+use crate::debug;
+use crate::llm::{ChatMessage, LlmClient, LlmConfig};
+use crate::memory::schema::now_ms;
+use crate::memory::store::{Fingerprint, MemoryOp, MemoryStore};
+use crate::notices::Notices;
+use crate::turn_registry::AbortSignal;
 
 // ── 参数常量（成本纪律：小模型 / 增量 / 小输出）──
 
@@ -124,7 +124,9 @@ pub async fn run_experience_pipeline_with(
 
     // ── 0. 冷却检查 ──
     {
-        let s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        let s = store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         if let Some(until) = s.cooldown_until(&input.conversation_id) {
             if now < until {
                 let mut o = PipelineOutcome::default();
@@ -154,7 +156,9 @@ pub async fn run_experience_pipeline_with(
         return Ok(o);
     }
     let (recent, rewritable_text, sealed_text) = {
-        let s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        let s = store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         collect_material(&s)
     };
 
@@ -201,7 +205,9 @@ pub async fn run_experience_pipeline_with(
 
     // ── 4. 应用 + 推进水位 ──
     let report = {
-        let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         let r = s.apply_ops(
             &ops,
             &input.conversation_id,
@@ -226,7 +232,9 @@ pub async fn run_experience_pipeline_with(
     if !report.affected.is_empty() {
         // 提醒带内容：本次所涉条目行（日期·标题：摘要），正文细节不搬
         let lines: Vec<String> = {
-            let s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+            let s = store
+                .lock()
+                .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
             report
                 .affected
                 .iter()
@@ -256,7 +264,9 @@ pub async fn run_experience_pipeline_with(
 
     // ── 5. 滚动压缩（到 10 压 5）──
     let compress_plan = {
-        let s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+        let s = store
+            .lock()
+            .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         if s.recent_line_count() as usize >= COMPRESS_AFTER {
             let oldest = s.oldest_unabsorbed(COMPRESS_TAKE);
             Some((
@@ -279,20 +289,22 @@ pub async fn run_experience_pipeline_with(
             Ok((compressed, u1)) => {
                 usage_acc = add_usage(usage_acc, u1);
                 if !compressed.trim().is_empty() {
-                    let (fitted, u2) =
-                        fit_longterm(llm, config, abort, compressed.trim()).await;
+                    let (fitted, u2) = fit_longterm(llm, config, abort, compressed.trim()).await;
                     usage_acc = add_usage(usage_acc, u2);
                     match fitted {
                         Some(text) => {
                             let version = {
-                                let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+                                let mut s = store
+                                    .lock()
+                                    .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
                                 let v = s.set_longterm(text.clone(), through_ts, now)?;
                                 s.mark_absorbed(&ids, v)?;
                                 v
                             };
                             outcome.compressed = true;
                             // 提醒带内容：附新版长期梗概全文（快照冻结不再更新，靠提醒同步）
-                            let detail = format!("长期经历已整理（版本 {version}）\n{}", text.trim());
+                            let detail =
+                                format!("长期经历已整理（版本 {version}）\n{}", text.trim());
                             note(ledger, &detail);
                             outcome.note = Some(detail);
                         }
@@ -342,7 +354,15 @@ async fn extract_ops(
     let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
     let count = numbered_count(rewritable_text);
 
-    let (first, u1) = call_usage(llm, config, &messages, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
+    let (first, u1) = call_usage(
+        llm,
+        config,
+        &messages,
+        EXTRACT_MAX_TOKENS,
+        EXTRACT_TIMEOUT,
+        abort,
+    )
+    .await?;
     match parse_ops(&first, count) {
         Ok(mut outcome) => {
             outcome.usage = u1;
@@ -355,8 +375,17 @@ async fn extract_ops(
                 ChatMessage::system(build_extract_system()),
                 ChatMessage::user(build_repair_user(&first, &err)),
             ];
-            let (fixed, u2) = call_usage(llm, config, &repair_msgs, EXTRACT_MAX_TOKENS, EXTRACT_TIMEOUT, abort).await?;
-            let mut outcome = parse_ops(&fixed, count).map_err(|e2| format!("修复后仍无法解析：{e2}"))?;
+            let (fixed, u2) = call_usage(
+                llm,
+                config,
+                &repair_msgs,
+                EXTRACT_MAX_TOKENS,
+                EXTRACT_TIMEOUT,
+                abort,
+            )
+            .await?;
+            let mut outcome =
+                parse_ops(&fixed, count).map_err(|e2| format!("修复后仍无法解析：{e2}"))?;
             outcome.usage = add_usage(u1, u2);
             Ok(outcome)
         }
@@ -403,7 +432,10 @@ fn collect_material(s: &MemoryStore) -> (Vec<(String, Fingerprint, String)>, Str
 
 /// 材料中编号条目数（供编号有效性校验）。
 fn numbered_count(numbered_text: &str) -> usize {
-    numbered_text.lines().filter(|l| l.trim_start().starts_with('[')).count()
+    numbered_text
+        .lines()
+        .filter(|l| l.trim_start().starts_with('['))
+        .count()
 }
 
 /// 把已校验原始操作解析为存储指令（编号 → id + 指纹）。
@@ -451,11 +483,20 @@ async fn compress_longterm(
             current_long
         };
         let text = format!("现有长期记忆：\n{cur}\n\n需并入的旧条目：\n{entries_text}");
-        text.chars().take(MAX_COMPRESS_INPUT_CHARS).collect::<String>()
+        text.chars()
+            .take(MAX_COMPRESS_INPUT_CHARS)
+            .collect::<String>()
     };
     let messages = vec![ChatMessage::system(system), ChatMessage::user(input)];
-    let (raw, usage) =
-        call_usage(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await?;
+    let (raw, usage) = call_usage(
+        llm,
+        config,
+        &messages,
+        COMPRESS_MAX_TOKENS,
+        COMPRESS_TIMEOUT,
+        abort,
+    )
+    .await?;
     Ok((strip_fences(&raw), usage))
 }
 
@@ -480,11 +521,19 @@ async fn fit_longterm(
         text = text
     );
     let messages = vec![ChatMessage::system(system), ChatMessage::user(user)];
-    let (raw, usage) =
-        match call_usage(llm, config, &messages, COMPRESS_MAX_TOKENS, COMPRESS_TIMEOUT, abort).await {
-            Ok(v) => v,
-            Err(_) => return (None, None),
-        };
+    let (raw, usage) = match call_usage(
+        llm,
+        config,
+        &messages,
+        COMPRESS_MAX_TOKENS,
+        COMPRESS_TIMEOUT,
+        abort,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
     let out = strip_fences(&raw);
     let out = out.trim();
     if out.is_empty() || out.chars().count() > MAX_LONGTERM_CHARS {
@@ -562,7 +611,9 @@ fn record_failure(
     err: &str,
     now: u64,
 ) -> Result<(), String> {
-    let mut s = store.lock().map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
     s.mark_failure(conversation_id, err, now + FAILURE_COOLDOWN_MS, now)
 }
 
@@ -572,8 +623,8 @@ fn record_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::memory_parse::preprocess;
+    use super::*;
     use crate::llm::mock::{MockLlmClient, MockResponse};
     use crate::llm::{LlmError, LlmResponse, StreamEvent, StreamResult, ToolDef};
     use std::future::Future;
@@ -756,7 +807,13 @@ mod tests {
         }
     }
 
-    fn temp_store(tag: &str) -> (Arc<Mutex<MemoryStore>>, Arc<Mutex<Notices>>, std::path::PathBuf) {
+    fn temp_store(
+        tag: &str,
+    ) -> (
+        Arc<Mutex<MemoryStore>>,
+        Arc<Mutex<Notices>>,
+        std::path::PathBuf,
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -768,7 +825,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = MemoryStore::load(&dir).unwrap();
         let ledger = Notices::load(&dir);
-        (Arc::new(Mutex::new(store)), Arc::new(Mutex::new(ledger)), dir)
+        (
+            Arc::new(Mutex::new(store)),
+            Arc::new(Mutex::new(ledger)),
+            dir,
+        )
     }
 
     fn delta(n: usize) -> Vec<String> {
@@ -784,7 +845,9 @@ mod tests {
     #[tokio::test]
     async fn pipeline_creates_and_advances_watermark() {
         let (store, ledger, dir) = temp_store("create");
-        let client = mock_client(vec![r#"[{"target":null,"title":"伤害","summary":"确认了公式","detail":"细节","tags":["数值"]}]"#]);
+        let client = mock_client(vec![
+            r#"[{"target":null,"title":"伤害","summary":"确认了公式","detail":"细节","tags":["数值"]}]"#,
+        ]);
         let out = run_experience_pipeline(
             &client,
             &LlmConfig::default(),
@@ -801,7 +864,10 @@ mod tests {
         .await
         .unwrap();
         assert!(out.ran && out.created == 1);
-        assert_eq!(store.lock().unwrap().watermark("c1"), INCREMENTAL_TURNS as u64);
+        assert_eq!(
+            store.lock().unwrap().watermark("c1"),
+            INCREMENTAL_TURNS as u64
+        );
         assert_eq!(store.lock().unwrap().recent_line_count(), 1);
         // 提醒数据源已有事件，且**带内容**（条目行「日期·标题：摘要」）
         let guard = ledger.lock().unwrap();
@@ -984,15 +1050,17 @@ mod tests {
             let guard = ledger.lock().unwrap();
             assert!(
                 guard.events().iter().any(|e| {
-                    e.detail.contains("已整理（版本 1）")
-                        && e.detail.contains("旧事概要")
+                    e.detail.contains("已整理（版本 1）") && e.detail.contains("旧事概要")
                 }),
                 "压缩提醒应附长期梗概全文"
             );
         }
         let s = store.lock().unwrap();
         assert_eq!(s.longterm_version(), 1);
-        assert_eq!(s.recent_line_count(), (COMPRESS_AFTER - COMPRESS_TAKE) as u64);
+        assert_eq!(
+            s.recent_line_count(),
+            (COMPRESS_AFTER - COMPRESS_TAKE) as u64
+        );
         // 被吸收条目（level=long、absorbedIn 已置）
         assert!(s.experience_get("old0").unwrap().is_absorbed());
         assert_eq!(s.experience_get("old0").unwrap().level, "long");
@@ -1095,7 +1163,11 @@ mod tests {
         let s = store.lock().unwrap();
         assert_eq!(s.longterm(), "## 旧版\n一句话", "拒收应保留旧版");
         assert_eq!(s.longterm_version(), 1, "拒收不推进版本");
-        assert_eq!(s.recent_line_count(), COMPRESS_AFTER as u64, "拒收不吸收条目");
+        assert_eq!(
+            s.recent_line_count(),
+            COMPRESS_AFTER as u64,
+            "拒收不吸收条目"
+        );
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
     }

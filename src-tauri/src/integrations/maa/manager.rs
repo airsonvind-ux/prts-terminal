@@ -172,8 +172,7 @@ pub fn submit(tasks: &[Value], wait_secs: u64) -> Result<SubmitOutcome, String> 
         // 为何不是“追加给它”：运行记录（结果文件 / 最近一次）、事件缓冲与等待结果
         // 都是单槽的——两处派发会让“谁在等、超时算谁的、这份结果是谁的”全部串味。
         // 要一次安排多项，放进同一次调用的 tasks 数组（MAA 依次执行）。
-        if m
-            .bridge
+        if m.bridge
             .as_ref()
             .map(|b| b.run_in_flight())
             .unwrap_or(false)
@@ -576,8 +575,7 @@ impl Manager {
         let exe = bridge::resolve_exe().map_err(|e| e.to_string())?;
         let port = bridge::free_port().map_err(|e| e.to_string())?;
         let user_dir = data_dir.join("maa");
-        let bridge =
-            Bridge::spawn(&exe, &maa_dir, &user_dir, port).map_err(|e| e.to_string())?;
+        let bridge = Bridge::spawn(&exe, &maa_dir, &user_dir, port).map_err(|e| e.to_string())?;
 
         if !bridge.available() {
             let reason = bridge
@@ -626,9 +624,7 @@ impl Manager {
             } else {
                 format!("本机检测到：{}，但都没找到可用的 adb", installed.join("、"))
             };
-            return Err(format!(
-                "{listed}。请在设置里确认模拟器与 ADB 路径。"
-            ));
+            return Err(format!("{listed}。请在设置里确认模拟器与 ADB 路径。"));
         }
 
         // 探活：先让 adb 认识每个候选地址，再列设备（全新 adb 否则看不到设备）。
@@ -796,8 +792,8 @@ fn wait_for_queue(secs: u64) -> Result<(bool, Vec<Value>), String> {
                 return Ok((false, seen));
             };
             for frame in bridge.drain_events() {
-                let done = frame.get("code").and_then(Value::as_i64)
-                    == Some(CODE_ALL_TASKS_COMPLETED);
+                let done =
+                    frame.get("code").and_then(Value::as_i64) == Some(CODE_ALL_TASKS_COMPLETED);
                 seen.push(frame);
                 if done {
                     return Ok((true, seen));
@@ -858,7 +854,11 @@ fn add_task(bridge: &Bridge, type_: &str, params: &Value) -> Result<i64, String>
     let task_id = match reply {
         Ok(data) => data.get("task_id").and_then(Value::as_i64).unwrap_or(0),
         Err(e) => {
-            return Err(append_error_message(type_, reason_from_log(), e.to_string()));
+            return Err(append_error_message(
+                type_,
+                reason_from_log(),
+                e.to_string(),
+            ));
         }
     };
     if task_id != 0 {
@@ -876,7 +876,10 @@ fn add_task(bridge: &Bridge, type_: &str, params: &Value) -> Result<i64, String>
 
 /// MaaCore 的日志路径（桥把 user_dir 指向 PRTS 的数据目录）。
 fn asst_log_path() -> PathBuf {
-    config::data_dir().join("maa").join("debug").join("asst.log")
+    config::data_dir()
+        .join("maa")
+        .join("debug")
+        .join("asst.log")
 }
 
 fn file_len(path: &Path) -> u64 {
@@ -1077,12 +1080,19 @@ mod tests {
             json!({ "type": "OperBox" }),
             json!({ "type": "Depot" }),
         ];
-        assert_eq!(queue_default_wait_secs(&short), 90 + 180 + 60, "顺序执行，和就是界");
+        assert_eq!(
+            queue_default_wait_secs(&short),
+            90 + 180 + 60,
+            "顺序执行，和就是界"
+        );
 
         let mixed = vec![json!({ "type": "StartUp" }), json!({ "type": "Fight" })];
         assert_eq!(queue_default_wait_secs(&mixed), 0, "含长任务 → 整条不等");
 
-        assert_eq!(queue_default_wait_secs(&[json!({ "type": "Roguelike" })]), 0);
+        assert_eq!(
+            queue_default_wait_secs(&[json!({ "type": "Roguelike" })]),
+            0
+        );
     }
 
     #[test]
@@ -1139,7 +1149,8 @@ mod tests {
         let reason = parse_append_error(log).unwrap();
         assert!(reason.contains("Nope"), "取最后一条：{reason}");
 
-        let params = parse_append_error("[ERR] append_task | invalid params: {\"stage\":null}\n").unwrap();
+        let params =
+            parse_append_error("[ERR] append_task | invalid params: {\"stage\":null}\n").unwrap();
         assert!(params.contains("参数不全"), "{params}");
 
         assert!(parse_append_error("[INFO] append_task | task_id: 3\n").is_none());
@@ -1150,9 +1161,13 @@ mod tests {
         let installed = vec!["MuMu 12".to_string(), "雷电 LDPlayer".to_string()];
 
         let none = choose_target(vec![], &installed).unwrap_err();
-        assert!(none.contains("没有运行中的模拟器") && none.contains("MuMu 12"), "{none}");
+        assert!(
+            none.contains("没有运行中的模拟器") && none.contains("MuMu 12"),
+            "{none}"
+        );
 
-        let (target, address) = choose_target(vec![resolved("MuMu 12", "127.0.0.1:16384")], &installed).unwrap();
+        let (target, address) =
+            choose_target(vec![resolved("MuMu 12", "127.0.0.1:16384")], &installed).unwrap();
         assert_eq!(target.emulator, "MuMu 12");
         assert_eq!(address, "127.0.0.1:16384");
 
@@ -1170,7 +1185,9 @@ mod tests {
     #[test]
     fn normalize_tasks_validates_shape() {
         assert!(normalize_tasks(&[]).unwrap_err().contains("为空"));
-        assert!(normalize_tasks(&[json!({ "params": {} })]).unwrap_err().contains("缺少 type"));
+        assert!(normalize_tasks(&[json!({ "params": {} })])
+            .unwrap_err()
+            .contains("缺少 type"));
         assert!(normalize_tasks(&[json!({ "type": "Fight", "params": [] })])
             .unwrap_err()
             .contains("不是对象"));
@@ -1213,7 +1230,10 @@ mod tests {
             0,
         )
         .expect("派发队列");
-        println!("task_ids = {:?}（StartUp / OperBox / Depot）", outcome.task_ids);
+        println!(
+            "task_ids = {:?}（StartUp / OperBox / Depot）",
+            outcome.task_ids
+        );
 
         #[derive(Debug)]
         struct Seen {
@@ -1231,11 +1251,22 @@ mod tests {
             for frame in crate::maa::manager::drain_events() {
                 seen.push(Seen {
                     at: t0.elapsed().as_secs_f64(),
-                    event: frame.get("event").and_then(Value::as_str).unwrap_or("?").to_string(),
+                    event: frame
+                        .get("event")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_string(),
                     code: frame.get("code").and_then(Value::as_i64),
-                    name: frame.get("name").and_then(Value::as_str).unwrap_or("?").to_string(),
+                    name: frame
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("?")
+                        .to_string(),
                     taskid: frame.get("taskid").and_then(Value::as_i64),
-                    kind: frame.get("kind").and_then(Value::as_str).map(|s| s.to_string()),
+                    kind: frame
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .map(|s| s.to_string()),
                     size: frame.to_string().chars().count(),
                 });
             }
@@ -1243,14 +1274,20 @@ mod tests {
                 let m = lock().unwrap();
                 m.bridge
                     .as_ref()
-                    .and_then(|b| b.command(json!({ "cmd": "status" }), Duration::from_secs(10)).ok())
+                    .and_then(|b| {
+                        b.command(json!({ "cmd": "status" }), Duration::from_secs(10))
+                            .ok()
+                    })
                     .and_then(|v| v.get("running").and_then(Value::as_bool))
                     .unwrap_or(false)
             };
             let terminal = seen
                 .iter()
                 .any(|s| s.name == "AllTasksCompleted" || s.name.ends_with("Error"));
-            let quiet = seen.last().map(|s| t0.elapsed().as_secs_f64() - s.at).unwrap_or(0.0);
+            let quiet = seen
+                .last()
+                .map(|s| t0.elapsed().as_secs_f64() - s.at)
+                .unwrap_or(0.0);
             if !running && (terminal || quiet > 20.0) {
                 break;
             }
@@ -1299,7 +1336,10 @@ mod tests {
         kinds.sort();
         kinds.dedup();
         for kind in kinds {
-            let frames: Vec<&Seen> = seen.iter().filter(|s| s.kind.as_deref() == Some(kind.as_str())).collect();
+            let frames: Vec<&Seen> = seen
+                .iter()
+                .filter(|s| s.kind.as_deref() == Some(kind.as_str()))
+                .collect();
             if let Some(last) = frames.last() {
                 println!(
                     "\n{kind}: {} 帧，终帧 {} 字符（@{:.1}s）",
@@ -1325,10 +1365,13 @@ mod tests {
         crate::maa::manager::set_settings(bilibili_settings());
 
         // wait=false：先派出去，然后自己轮询等它跑完（不把锁攥在手里）。
-        let outcome = crate::maa::manager::submit(&[json!({ "type": "OperBox" })], 0)
-            .expect("派发 OperBox");
+        let outcome =
+            crate::maa::manager::submit(&[json!({ "type": "OperBox" })], 0).expect("派发 OperBox");
         println!("task_ids = {:?}", outcome.task_ids);
-        println!("connected = {} @ {}", outcome.connected.emulator, outcome.connected.address);
+        println!(
+            "connected = {} @ {}",
+            outcome.connected.emulator, outcome.connected.address
+        );
 
         let deadline = Instant::now() + Duration::from_secs(240);
         loop {
@@ -1336,7 +1379,10 @@ mod tests {
                 let m = lock().unwrap();
                 m.bridge
                     .as_ref()
-                    .and_then(|b| b.command(json!({ "cmd": "status" }), Duration::from_secs(10)).ok())
+                    .and_then(|b| {
+                        b.command(json!({ "cmd": "status" }), Duration::from_secs(10))
+                            .ok()
+                    })
                     .and_then(|v| v.get("running").and_then(Value::as_bool))
                     .unwrap_or(false)
             };
@@ -1458,7 +1504,10 @@ mod tests {
         match crate::maa::manager::connected() {
             Some(info) => {
                 println!("emulator = {} @ {}", info.emulator, info.address);
-                println!("config   = {}（extras 请求 = {}）", info.config, info.extras);
+                println!(
+                    "config   = {}（extras 请求 = {}）",
+                    info.config, info.extras
+                );
                 println!("连接期事件 {} 条：", info.events.len());
                 for (i, frame) in info.events.iter().take(60).enumerate() {
                     println!("  [{i}] {frame}");

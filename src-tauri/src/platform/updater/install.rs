@@ -9,12 +9,12 @@ use tauri::AppHandle;
 
 use crate::turn_registry::TurnRegistry;
 
+use super::check::check_source_with_retry;
 use super::{
     append_update_log, ensure_disk_space, ordered_sources, remove_post_install_notice,
     write_post_install_notice, DownloadedUpdate, PostInstallNotice, UpdateErrorStage, UpdatePhase,
     UpdateService, UpdateStatus, DOWNLOAD_TIMEOUT, PROGRESS_EMIT_INTERVAL,
 };
-use super::check::check_source_with_retry;
 
 pub(super) async fn download_internal(
     app: &AppHandle,

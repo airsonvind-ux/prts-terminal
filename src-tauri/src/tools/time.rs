@@ -105,9 +105,17 @@ mod tests {
         // 星期为合法中文值
         let weekday_line = line_of(s, "星期：");
         assert!(
-            ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-                .iter()
-                .any(|w| weekday_line == format!("星期：{w}")),
+            [
+                "星期一",
+                "星期二",
+                "星期三",
+                "星期四",
+                "星期五",
+                "星期六",
+                "星期日"
+            ]
+            .iter()
+            .any(|w| weekday_line == format!("星期：{w}")),
             "星期取值异常：\n{s}"
         );
 

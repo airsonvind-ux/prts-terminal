@@ -34,7 +34,11 @@ fn spfa(
             if !passable[nb.1 as usize][nb.0 as usize] {
                 continue;
             }
-            let cost = if obstacles.contains(&nb) { HAZARD_COST } else { 1 };
+            let cost = if obstacles.contains(&nb) {
+                HAZARD_COST
+            } else {
+                1
+            };
             let nd = dist[&g] + cost;
             let better = match dist.get(&nb) {
                 Some(&old) => nd < old,

@@ -340,10 +340,7 @@ pub(super) fn parse_injections(spec: &str) -> Result<Vec<Injection>, String> {
         while j + 1 < events.len() && events[j + 1].f == events[i].f {
             j += 1;
         }
-        let pushes = events[i..=j]
-            .iter()
-            .filter(|e| e.kind == "push")
-            .count();
+        let pushes = events[i..=j].iter().filter(|e| e.kind == "push").count();
         if pushes > 1 {
             return Err(format!("同帧多个推拉注入：帧 {}", events[i].f));
         }

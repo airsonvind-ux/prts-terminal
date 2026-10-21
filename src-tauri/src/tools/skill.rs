@@ -13,7 +13,9 @@
 //! 生命周期：激活后正文留在对话历史中持续生效，不设卸载机制
 //! （历史即上下文，跨轮自然持续；上下文压缩时随旧轮次一起清理）。
 
-use crate::tools::{DisplayLink, SkillEventMark, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
+use crate::tools::{
+    DisplayLink, SkillEventMark, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput,
+};
 
 // ═══════════════════════════════════════════════════════
 // ActivateSkillTool —— 激活 Skill
@@ -49,7 +51,11 @@ impl Tool for ActivateSkillTool {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(params) else {
             return ToolDisplay::default();
         };
-        let Some(name) = v.get("name").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) else {
+        let Some(name) = v
+            .get("name")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        else {
             return ToolDisplay::default();
         };
         // Skill 名 → 源 md 绝对路径（ctx.skill_index，后端解析）
@@ -116,7 +122,9 @@ impl Tool for ActivateSkillTool {
             }
         }
         let mut output = ToolOutput::text(summary);
-        output.skill_events = vec![SkillEventMark::Activate { name: name.to_string() }];
+        output.skill_events = vec![SkillEventMark::Activate {
+            name: name.to_string(),
+        }];
         Ok(output)
     }
 
@@ -186,7 +194,9 @@ mod tests {
         assert!(out.context_ops.is_empty(), "消息注入不再需要 ContextOp");
         assert_eq!(
             out.skill_events,
-            vec![SkillEventMark::Activate { name: "阿尔法".into() }]
+            vec![SkillEventMark::Activate {
+                name: "阿尔法".into()
+            }]
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -298,7 +308,9 @@ mod tests {
         let out = ActivateSkillTool
             .execute(&ctx, r#"{"name":"黑话小抄"}"#)
             .unwrap();
-        assert!(out.summary.starts_with("已激活 Skill「黑话小抄」\n\n## 正文"));
+        assert!(out
+            .summary
+            .starts_with("已激活 Skill「黑话小抄」\n\n## 正文"));
         assert!(out.summary.contains("配套文件目录"), "有资源的包应附目录行");
 
         let out2 = ActivateSkillTool

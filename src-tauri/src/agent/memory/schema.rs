@@ -132,8 +132,12 @@ impl GrowthPage {
                         .collect()
                 }
                 "source" => source = values.into_iter().next().unwrap_or_default(),
-                "createdAt" => created_at = values.first().and_then(|s| s.parse().ok()).unwrap_or(0),
-                "updatedAt" => updated_at = values.first().and_then(|s| s.parse().ok()).unwrap_or(0),
+                "createdAt" => {
+                    created_at = values.first().and_then(|s| s.parse().ok()).unwrap_or(0)
+                }
+                "updatedAt" => {
+                    updated_at = values.first().and_then(|s| s.parse().ok()).unwrap_or(0)
+                }
                 _ => {} // 未知字段忽略（向前兼容）
             }
         }

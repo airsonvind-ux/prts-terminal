@@ -537,10 +537,7 @@ mod tests {
     #[test]
     fn extract_param_value_last_param() {
         // 内容= 是最后一个参数，没有后续 |
-        assert_eq!(
-            extract_param_value("popup|内容=xxx", "内容"),
-            "xxx"
-        );
+        assert_eq!(extract_param_value("popup|内容=xxx", "内容"), "xxx");
     }
 
     #[test]

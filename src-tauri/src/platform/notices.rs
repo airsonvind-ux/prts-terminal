@@ -533,7 +533,12 @@ fn migrate(old: LegacyLedger, path: PathBuf) -> Notices {
         ("knowledge", DimKey::Knowledge),
         ("model", DimKey::Model),
     ] {
-        if let Some(e) = old.entries.iter().filter(|e| e.kind == kind).max_by_key(|e| e.seq) {
+        if let Some(e) = old
+            .entries
+            .iter()
+            .filter(|e| e.kind == kind)
+            .max_by_key(|e| e.seq)
+        {
             let d = n.dim_mut(key);
             d.value = e.detail.clone();
             d.stamp = e.seq;
@@ -542,10 +547,18 @@ fn migrate(old: LegacyLedger, path: PathBuf) -> Notices {
     }
 
     for (kind, key, base) in [
-        ("skill_catalog", DimKey::SkillCatalog, &old.last_skill_catalog),
+        (
+            "skill_catalog",
+            DimKey::SkillCatalog,
+            &old.last_skill_catalog,
+        ),
         ("tool_catalog", DimKey::ToolCatalog, &old.last_tool_catalog),
     ] {
-        let latest = old.entries.iter().filter(|e| e.kind == kind).max_by_key(|e| e.seq);
+        let latest = old
+            .entries
+            .iter()
+            .filter(|e| e.kind == kind)
+            .max_by_key(|e| e.seq);
         let note = latest.map(|e| e.detail.clone());
         let stamp = latest.map(|e| e.seq);
         let d = n.dim_mut(key);
@@ -594,10 +607,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-notices-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-notices-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -830,7 +841,10 @@ mod tests {
         assert_eq!(n.events().len(), EVENTS_CAP, "裁到容量上限");
         // 保留最新（最旧被裁）
         assert_eq!(n.events()[0].detail, "变化5");
-        assert_eq!(n.events()[EVENTS_CAP - 1].detail, format!("变化{}", EVENTS_CAP + 4));
+        assert_eq!(
+            n.events()[EVENTS_CAP - 1].detail,
+            format!("变化{}", EVENTS_CAP + 4)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

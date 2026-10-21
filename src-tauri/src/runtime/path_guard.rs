@@ -75,7 +75,9 @@ pub fn resolve_read(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErro
         .canonicalize()
         .map_err(|_| PathGuardError::Io(format!("文件不存在：{raw}")))?;
     if policy.is_blocked(&canonical) {
-        return Err(PathGuardError::Blocked(format!("受保护路径（BLOCKED）：{raw}")));
+        return Err(PathGuardError::Blocked(format!(
+            "受保护路径（BLOCKED）：{raw}"
+        )));
     }
     Ok(canonical)
 }
@@ -85,11 +87,7 @@ pub fn resolve_read(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErro
 /// 对象 = canonicalize 之后的真实路径。顺序即错误优先级：工作区内
 /// （否则 OutsideWorkspace）→ 非 BLOCKED（M2 #B：写同读拒 BLOCKED，防改写
 /// 运行中 db / 台账）→ 非 protected（.git）→ 非 READ_ONLY。
-fn check_write_bounds(
-    policy: &Policy,
-    resolved: &Path,
-    raw: &str,
-) -> Result<(), PathGuardError> {
+fn check_write_bounds(policy: &Policy, resolved: &Path, raw: &str) -> Result<(), PathGuardError> {
     // 目标已存在时先解析最终对象：符号链接必须按真实目标判定。
     // （父目录 canonicalize 不能覆盖“最后一段是符号链接”的形态。）
     let resolved = resolved
@@ -183,17 +181,17 @@ pub fn resolve_write(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErr
     } else {
         policy.workspace_root().canonical().join(raw)
     };
-    let parent = candidate.parent().ok_or_else(|| {
-        PathGuardError::Io(format!("无法解析路径：{raw}"))
-    })?;
-    let file_name = candidate.file_name().ok_or_else(|| {
-        PathGuardError::Io(format!("路径缺少文件名：{raw}"))
-    })?;
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| PathGuardError::Io(format!("无法解析路径：{raw}")))?;
+    let file_name = candidate
+        .file_name()
+        .ok_or_else(|| PathGuardError::Io(format!("路径缺少文件名：{raw}")))?;
     // 父目录必须存在（可 canonicalize）；文件名不参与解析——目标不存在
     // 也允许（新建文件场景）
-    let canonical_parent = parent.canonicalize().map_err(|_| {
-        PathGuardError::Io(format!("目录不存在：{}", parent.display()))
-    })?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|_| PathGuardError::Io(format!("目录不存在：{}", parent.display())))?;
     let resolved = canonical_parent.join(file_name);
 
     check_write_bounds(policy, &resolved, raw)?;
@@ -230,33 +228,32 @@ pub fn resolve_write_create(policy: &Policy, raw: &str) -> Result<PathBuf, PathG
                 if current != candidate {
                     return Err(PathGuardError::Io(format!("父路径不是目录：{raw}")));
                 }
-                let name = current.file_name().ok_or_else(|| {
-                    PathGuardError::Io(format!("路径缺少文件名：{raw}"))
-                })?;
+                let name = current
+                    .file_name()
+                    .ok_or_else(|| PathGuardError::Io(format!("路径缺少文件名：{raw}")))?;
                 segments.push(name.to_os_string());
-                current = current.parent().ok_or_else(|| {
-                    PathGuardError::Io(format!("无法解析路径：{raw}"))
-                })?.to_path_buf();
+                current = current
+                    .parent()
+                    .ok_or_else(|| PathGuardError::Io(format!("无法解析路径：{raw}")))?
+                    .to_path_buf();
             }
             Err(_) => {
                 // 不存在：压入组件继续上溯
-                let name = current.file_name().ok_or_else(|| {
-                    PathGuardError::Io(format!("无法解析路径：{raw}"))
-                })?;
+                let name = current
+                    .file_name()
+                    .ok_or_else(|| PathGuardError::Io(format!("无法解析路径：{raw}")))?;
                 segments.push(name.to_os_string());
                 match current.parent() {
                     Some(p) => current = p.to_path_buf(),
-                    None => {
-                        return Err(PathGuardError::Io(format!("无法解析路径：{raw}")))
-                    }
+                    None => return Err(PathGuardError::Io(format!("无法解析路径：{raw}"))),
                 }
             }
         }
     }
     // segments 自底向上（[c.txt, b, a]）；反序后从 A 拼出完整目标
-    let canonical_ancestor = current.canonicalize().map_err(|_| {
-        PathGuardError::Io(format!("目录不存在：{}", current.display()))
-    })?;
+    let canonical_ancestor = current
+        .canonicalize()
+        .map_err(|_| PathGuardError::Io(format!("目录不存在：{}", current.display())))?;
     let mut resolved = canonical_ancestor;
     for seg in segments.iter().rev() {
         resolved.push(seg);
@@ -281,10 +278,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-pg-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-pg-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -352,10 +347,7 @@ mod tests {
         let db = crate::config::db_seed_path();
         assert!(db.exists(), "dev 数据库种子应存在（测试前提）");
         let err = resolve_read(&policy, db.to_str().unwrap()).unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::Blocked(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::Blocked(_)), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -447,16 +439,10 @@ mod tests {
 
         // .git 下文件（写入对象库/HEAD 等）
         let err = resolve_write(&policy, ".git/config").unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::Protected(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::Protected(_)), "got: {err}");
         // .git 目录自身（resolved == .git → 前缀命中 protected）
         let err2 = resolve_write(&policy, ".git").unwrap_err();
-        assert!(
-            matches!(&err2, PathGuardError::Protected(_)),
-            "got: {err2}"
-        );
+        assert!(matches!(&err2, PathGuardError::Protected(_)), "got: {err2}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -467,10 +453,7 @@ mod tests {
         let policy = make_policy(&ws); // ws/ro 注入 read_only
 
         let err = resolve_write(&policy, "ro/x.txt").unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::ReadOnly(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::ReadOnly(_)), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -486,18 +469,12 @@ mod tests {
         std::fs::write(ws.join("secret.txt"), "secret").unwrap();
 
         let err = resolve_write(&policy, "secret.txt").unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::Blocked(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::Blocked(_)), "got: {err}");
 
         // 同路径经 resolve_write_create（覆盖既有 blocked 文件）亦拒：
         // 写工具共用同一判定序列
         let err2 = resolve_write_create(&policy, "secret.txt").unwrap_err();
-        assert!(
-            matches!(&err2, PathGuardError::Blocked(_)),
-            "got: {err2}"
-        );
+        assert!(matches!(&err2, PathGuardError::Blocked(_)), "got: {err2}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -661,10 +638,7 @@ mod tests {
         let policy = make_policy(&ws); // ws/ro 注入 read_only
 
         let err = resolve_write_create(&policy, "ro/n1/x.txt").unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::ReadOnly(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::ReadOnly(_)), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -676,10 +650,7 @@ mod tests {
 
         // .git 下缺目录的新建链（写入对象库/HEAD 等）→ protected
         let err = resolve_write_create(&policy, ".git/objects/aa/x.txt").unwrap_err();
-        assert!(
-            matches!(&err, PathGuardError::Protected(_)),
-            "got: {err}"
-        );
+        assert!(matches!(&err, PathGuardError::Protected(_)), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }

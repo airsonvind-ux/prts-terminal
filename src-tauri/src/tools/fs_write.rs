@@ -56,9 +56,7 @@ fn display_path(policy: &Policy, abs: &Path) -> String {
 /// 与 fs.rs read_file 的 match 风格同构，动词随写语义。
 fn map_write_guard_err(raw: &str, e: path_guard::PathGuardError) -> ToolError {
     match e {
-        path_guard::PathGuardError::Io(_) => {
-            ToolError::Execution(format!("路径不可写：{raw}"))
-        }
+        path_guard::PathGuardError::Io(_) => ToolError::Execution(format!("路径不可写：{raw}")),
         path_guard::PathGuardError::Blocked(_) => {
             ToolError::Execution(format!("文件不可写（受保护路径）：{raw}"))
         }
@@ -339,9 +337,7 @@ impl Tool for EditTool {
 
         // ── 1. 路径解析：读（存在 + BLOCKED 拒读）→ 普通文件 → 写（可写性）──
         let resolved = path_guard::resolve_read(&self.policy, raw).map_err(|e| match e {
-            path_guard::PathGuardError::Io(_) => {
-                ToolError::Execution(format!("文件不存在：{raw}"))
-            }
+            path_guard::PathGuardError::Io(_) => ToolError::Execution(format!("文件不存在：{raw}")),
             path_guard::PathGuardError::Blocked(_) => {
                 ToolError::Execution(format!("文件不可读（受保护路径）：{raw}"))
             }
@@ -492,10 +488,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-wr-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-wr-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -566,7 +560,10 @@ mod tests {
         assert!(out.canonical["replaced"].is_null());
         // canonical.path 为 canonicalize 后的绝对路径（守卫返回同基准）
         let canon_path = root.join("a.txt").canonicalize().unwrap();
-        assert_eq!(out.canonical["path"], canon_path.to_string_lossy().to_string());
+        assert_eq!(
+            out.canonical["path"],
+            canon_path.to_string_lossy().to_string()
+        );
         assert_eq!(read_back(&root, "a.txt"), "new\n");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -610,7 +607,10 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"path":"a.txt","content":"new\n"}"#)
             .unwrap();
-        assert_eq!(out.summary, "已覆盖 a.txt（原 3 行 / 18B → 现 1 行 / 4B，UTF-8）");
+        assert_eq!(
+            out.summary,
+            "已覆盖 a.txt（原 3 行 / 18B → 现 1 行 / 4B，UTF-8）"
+        );
         assert_eq!(out.canonical["created"], false);
         assert_eq!(out.canonical["replaced"]["bytes"], 18);
         assert_eq!(out.canonical["replaced"]["lines"], 3);
@@ -699,7 +699,10 @@ mod tests {
         );
         // 写后 read_file 可读回（10MB 上限读放行）
         let out2 = read_tool(&root)
-            .execute(&ToolContext::new(), r#"{"path":"big_ok.txt","offset":1,"limit":1}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"path":"big_ok.txt","offset":1,"limit":1}"#,
+            )
             .unwrap();
         assert!(out2.summary.contains("共 1 行"));
 
@@ -777,7 +780,10 @@ mod tests {
         let tool = write_tool(&root);
 
         let err = tool
-            .execute(&ToolContext::new(), r#"{"path":"bin.bin","content":"text"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"path":"bin.bin","content":"text"}"#,
+            )
             .unwrap_err();
         assert!(
             matches!(&err, ToolError::Execution(m) if m.contains("不是 UTF-8 文本，拒绝覆盖")),
@@ -809,7 +815,10 @@ mod tests {
         );
         // RO 前缀下缺目录的新建链同样拒绝
         let err2 = tool
-            .execute(&ToolContext::new(), r#"{"path":"ro/n1/x.txt","content":"x"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"path":"ro/n1/x.txt","content":"x"}"#,
+            )
             .unwrap_err();
         assert!(
             matches!(&err2, ToolError::Execution(m) if m.contains("只读路径，禁止写入")),
@@ -827,7 +836,10 @@ mod tests {
         let tool = write_tool(&root);
 
         let err = tool
-            .execute(&ToolContext::new(), r#"{"path":".git/config","content":"x"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"path":".git/config","content":"x"}"#,
+            )
             .unwrap_err();
         assert!(
             matches!(&err, ToolError::Execution(m) if m.contains("工作区保护路径（.git）")),
@@ -867,7 +879,10 @@ mod tests {
         let tool = WriteFileTool::new(make_blocked_policy(&root));
 
         let err = tool
-            .execute(&ToolContext::new(), r#"{"path":"secret.txt","content":"x"}"#)
+            .execute(
+                &ToolContext::new(),
+                r#"{"path":"secret.txt","content":"x"}"#,
+            )
             .unwrap_err();
         assert!(
             matches!(&err, ToolError::Execution(m) if m.contains("文件不可写（受保护路径）")),
@@ -884,7 +899,9 @@ mod tests {
         let tool = write_tool(&root);
 
         // 缺 content
-        let err = tool.execute(&ToolContext::new(), r#"{"path":"a.txt"}"#).unwrap_err();
+        let err = tool
+            .execute(&ToolContext::new(), r#"{"path":"a.txt"}"#)
+            .unwrap_err();
         assert!(
             matches!(&err, ToolError::Parse(m) if m.contains("参数 content 必须是字符串")),
             "got: {err}"
@@ -944,7 +961,11 @@ mod tests {
             .unwrap();
         assert_eq!(out.canonical["line"], 2);
         assert_eq!(out.canonical["lineEnd"], 3);
-        assert!(out.summary.contains("位置: 第 2–3 行（2 行区域）"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("位置: 第 2–3 行（2 行区域）"),
+            "got: {}",
+            out.summary
+        );
         assert_eq!(read_back(&root, "m.txt"), "aaa\nBBB\nddd\n");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -1025,7 +1046,11 @@ mod tests {
         assert_eq!(out.canonical["normalizedCrlf"], true);
         assert_eq!(out.canonical["line"], 1);
         assert_eq!(out.canonical["lineEnd"], 2);
-        assert!(out.summary.contains("（行尾 CRLF 已自动归一匹配）"), "got: {}", out.summary);
+        assert!(
+            out.summary.contains("（行尾 CRLF 已自动归一匹配）"),
+            "got: {}",
+            out.summary
+        );
         // 命中区域整段替换（new 按原样 LF 落盘），区域外行尾保持 CRLF
         assert_eq!(read_back(&root, "crlf.txt"), "AAA\nBBB\r\nccc\r\n");
 
@@ -1050,7 +1075,11 @@ mod tests {
             matches!(&err, ToolError::Execution(m) if m.contains("未找到待替换文本")),
             "got: {err}"
         );
-        assert_eq!(read_back(&root, "a.txt"), "line1\nline2\nline3\n", "未命中不应落盘");
+        assert_eq!(
+            read_back(&root, "a.txt"),
+            "line1\nline2\nline3\n",
+            "未命中不应落盘"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1072,7 +1101,11 @@ mod tests {
                 if m.contains("出现 2 处") && m.contains("行 1、3")),
             "got: {err}"
         );
-        assert_eq!(read_back(&root, "m.txt"), "dup\nkeep\ndup\nend\n", "不唯一不应落盘");
+        assert_eq!(
+            read_back(&root, "m.txt"),
+            "dup\nkeep\ndup\nend\n",
+            "不唯一不应落盘"
+        );
 
         // 出现 4 处：行号只列前 3 个 + 省略号
         std::fs::write(root.join("m.txt"), "d\nd\nd\nd\n").unwrap();
@@ -1152,7 +1185,11 @@ mod tests {
             matches!(&err, ToolError::Execution(m) if m.contains("替换后内容将超过 10MB")),
             "got: {err}"
         );
-        assert_eq!(read_back(&root, "s.txt"), "tiny content\n", "取消后文件应保持原样");
+        assert_eq!(
+            read_back(&root, "s.txt"),
+            "tiny content\n",
+            "取消后文件应保持原样"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1322,7 +1359,10 @@ mod tests {
         // 单行但超 80：截断首段 + 规模
         let long = "x".repeat(100);
         let out = display_text(&long);
-        assert!(out.starts_with(&format!("{}…", "x".repeat(60))), "got: {out}");
+        assert!(
+            out.starts_with(&format!("{}…", "x".repeat(60))),
+            "got: {out}"
+        );
         assert!(out.ends_with("…（100 字符，跨 1 行）"), "got: {out}");
         // 超 200 字符不整段回显：只给规模标注
         let huge = "y".repeat(201);

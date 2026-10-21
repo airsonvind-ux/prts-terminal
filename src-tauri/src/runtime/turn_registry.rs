@@ -214,7 +214,12 @@ impl TurnRegistry {
     /// 置位中止。返回 true = 找到活动 turn 并已置位；false = 无（幂等，
     /// abort_turn 命令以 Ok(false) 表达，非错误）。
     pub fn abort(&self, session_id: &str) -> bool {
-        let found = self.turns.lock().unwrap().get(session_id).map(|t| t.signal.clone());
+        let found = self
+            .turns
+            .lock()
+            .unwrap()
+            .get(session_id)
+            .map(|t| t.signal.clone());
         match found {
             Some(signal) => {
                 signal.abort();
@@ -298,7 +303,10 @@ mod tests {
         assert!(!first.is_aborted());
         let second = reg.register("s1", "conv-1");
         assert_eq!(reg.active_count(), 1, "同 session 重复注册应替换而非累积");
-        assert!(first.is_aborted(), "旧条目应被 abort（防御：旧 process 收敛退出）");
+        assert!(
+            first.is_aborted(),
+            "旧条目应被 abort（防御：旧 process 收敛退出）"
+        );
         assert!(!second.is_aborted(), "新条目不受影响");
         // abort 命中新条目
         assert!(reg.abort("s1"));

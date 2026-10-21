@@ -93,8 +93,7 @@ impl Tool for MaaTaskTool {
     }
 
     fn execute(&self, _ctx: &ToolContext, params: &str) -> Result<ToolOutput, ToolError> {
-        let v: Value =
-            serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
+        let v: Value = serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
 
         match v.get("action").and_then(Value::as_str).unwrap_or("run") {
             "stop" => {
@@ -137,8 +136,7 @@ impl Tool for MaaTaskTool {
                     .get("wait")
                     .and_then(Value::as_u64)
                     .unwrap_or_else(|| manager::queue_default_wait_secs(&tasks));
-                let outcome =
-                    manager::submit(&tasks, wait_secs).map_err(ToolError::Execution)?;
+                let outcome = manager::submit(&tasks, wait_secs).map_err(ToolError::Execution)?;
                 // 等待期间取走的帧在 `outcome.events` 里；缓冲区剩下的只是收尾之后到的。
                 // 两边都要——少了一边，等待越成功摘要就越空（2026-10-06 真机逮到）。
                 let mut events = outcome.events.clone();
@@ -241,7 +239,10 @@ fn render_run(
         lines.push(format!(
             "已派出：{} 个任务在后台执行（task_id {}）。",
             ids.len(),
-            ids.iter().map(i64::to_string).collect::<Vec<_>>().join("、")
+            ids.iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join("、")
         ));
         // 派发即返回：不给结果、不给路径、不给回执。
         return (
@@ -328,7 +329,9 @@ fn render_run(
 
     // 界园主动重开：`TaskChainExtraInfo{what: RoutingRestart}`，不进识别路由，单独看一眼。
     if progress.iter().any(|f| {
-        f.get("details").and_then(|d| d.get("what")).and_then(Value::as_str)
+        f.get("details")
+            .and_then(|d| d.get("what"))
+            .and_then(Value::as_str)
             == Some("RoutingRestart")
     }) {
         lines.push("界园里主动重开了一次。".to_string());
@@ -399,9 +402,21 @@ fn render_status() -> (Value, String) {
     let mut lines = Vec::new();
     lines.push(format!(
         "MAA ：{}｜桥：{}｜连接：{}",
-        if view.maa_installed { "已装" } else { "未装" },
-        if view.bridge_available { "已启动" } else { "未启动" },
-        if view.connected { "已连接" } else { "未连接" }
+        if view.maa_installed {
+            "已装"
+        } else {
+            "未装"
+        },
+        if view.bridge_available {
+            "已启动"
+        } else {
+            "未启动"
+        },
+        if view.connected {
+            "已连接"
+        } else {
+            "未连接"
+        }
     ));
     if let Some(err) = &view.last_error {
         lines.push(format!("最近错误：{err}"));
@@ -748,7 +763,10 @@ fn facility_text(group: &[&Value]) -> String {
         .map(|(key, n)| (facility_name(key).to_string(), n))
         .collect();
     items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let parts: Vec<String> = items.iter().map(|(name, n)| format!("{name} ×{n}")).collect();
+    let parts: Vec<String> = items
+        .iter()
+        .map(|(name, n)| format!("{name} ×{n}"))
+        .collect();
     format!("已换班：{}。", parts.join("、"))
 }
 
@@ -840,8 +858,14 @@ fn fight_lines(by_kind: &mut BTreeMap<&str, Vec<&Value>>, params: &Value, lines:
         }
     }
 
-    let series = times.as_ref().and_then(|g| last_field(g, "series")).and_then(Value::as_i64);
-    let cost = times.as_ref().and_then(|g| last_field(g, "sanity_cost")).and_then(Value::as_i64);
+    let series = times
+        .as_ref()
+        .and_then(|g| last_field(g, "series"))
+        .and_then(Value::as_i64);
+    let cost = times
+        .as_ref()
+        .and_then(|g| last_field(g, "sanity_cost"))
+        .and_then(Value::as_i64);
     let before = sanity
         .as_ref()
         .and_then(|g| last_field(g, "current_sanity"))
@@ -1226,7 +1250,10 @@ mod tests {
 
     #[test]
     fn summarize_tasks_lists_short_and_counts_long() {
-        let short = vec![json!({ "type": "StartUp" }), json!({ "type": "Fight", "params": { "stage": "1-7" } })];
+        let short = vec![
+            json!({ "type": "StartUp" }),
+            json!({ "type": "Fight", "params": { "stage": "1-7" } }),
+        ];
         assert_eq!(summarize_tasks(&short), "StartUp → Fight(1-7)");
 
         let long = vec![
@@ -1235,7 +1262,10 @@ mod tests {
             json!({ "type": "Recruit" }),
             json!({ "type": "Mall" }),
         ];
-        assert_eq!(summarize_tasks(&long), "StartUp → Fight → Recruit 等 4 个任务");
+        assert_eq!(
+            summarize_tasks(&long),
+            "StartUp → Fight → Recruit 等 4 个任务"
+        );
     }
 
     #[test]
@@ -1347,7 +1377,10 @@ mod tests {
                     "details": { "own_opers": vec![0; 3] }, "taskid": 2 }),
         ];
         let (_, text) = render_run(&out, &tasks, &events, 300);
-        assert!(text.starts_with("完成：队列 2 个任务，耗时 42.4s。"), "{text}");
+        assert!(
+            text.starts_with("完成：队列 2 个任务，耗时 42.4s。"),
+            "{text}"
+        );
         assert!(text.contains("- Depot：仓库 1 种物品。"), "{text}");
         assert!(text.contains("- OperBox：持有 3 名干员。"), "{text}");
     }
@@ -1409,7 +1442,10 @@ mod tests {
         })];
         let lines = conclusions_for("Recruit", &json!({}), &frames);
         assert!(lines.contains(&"共招募 1 次。".to_string()), "{lines:?}");
-        assert!(lines.contains(&"高星：4 星「爆发」。".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"高星：4 星「爆发」。".to_string()),
+            "{lines:?}"
+        );
     }
 
     #[test]
@@ -1466,7 +1502,10 @@ mod tests {
             "type": "copilot", "subtype": "action",
             "details": { "name": "史尔特尔", "location": [4, 5], "direction": "左" }
         });
-        assert_eq!(step_core(&params).unwrap(), "单步：已执行动作（史尔特尔 → 左）");
+        assert_eq!(
+            step_core(&params).unwrap(),
+            "单步：已执行动作（史尔特尔 → 左）"
+        );
     }
 
     #[test]
@@ -1508,7 +1547,10 @@ mod tests {
         ];
         assert_eq!(
             conclusions_for("Fight", &json!({}), &frames),
-            vec!["SS-1：龙门币 ×10。".to_string(), "SS-2：固源岩 ×1。".to_string()]
+            vec![
+                "SS-1：龙门币 ×10。".to_string(),
+                "SS-2：固源岩 ×1。".to_string()
+            ]
         );
     }
 
@@ -1544,7 +1586,11 @@ mod tests {
     #[test]
     fn award_receipt_only_lists_what_is_explicitly_on() {
         assert_eq!(
-            conclusions_for("Award", &json!({ "award": true, "mail": true, "mining": false }), &[]),
+            conclusions_for(
+                "Award",
+                &json!({ "award": true, "mail": true, "mining": false }),
+                &[]
+            ),
             vec!["本次执行：每日/每周奖励、邮件。".to_string()]
         );
         assert!(conclusions_for("Award", &json!({}), &[]).is_empty());
@@ -1616,7 +1662,10 @@ mod tests {
         }
 
         // 收尾后可能还有零星帧。
-        println!("\n收尾后再取到 {} 帧", crate::maa::manager::drain_events().len());
+        println!(
+            "\n收尾后再取到 {} 帧",
+            crate::maa::manager::drain_events().len()
+        );
 
         // 跑完之后队列清不清空？（一直没验过的未知）
         match crate::maa::manager::queue() {

@@ -105,11 +105,7 @@ pub fn resolve_requested(
 /// `request_param` 来自 resolve_compat（"thinking"=DeepSeek、
 /// "enable_thinking"=Qwen/Zhipu 族、None=OpenAI 系 effort）。
 /// **resolve 未返回档（非 reasoning/未知模型）时调用方不应调用本函数**。
-pub fn apply_completions(
-    body: &mut Value,
-    request_param: Option<&str>,
-    level: &'static str,
-) {
+pub fn apply_completions(body: &mut Value, request_param: Option<&str>, level: &'static str) {
     match request_param {
         Some("thinking") => apply_deepseek_completions(body, level),
         Some("enable_thinking") => {
@@ -297,8 +293,14 @@ mod tests {
             }
         }"#;
         let reg = ModelRegistry::from_json(json).unwrap();
-        assert_eq!(resolve_requested(&reg, "deepseek", "deepseek-chat", None), None);
-        assert_eq!(resolve_requested(&reg, "deepseek", "deepseek-chat", Some("high")), None);
+        assert_eq!(
+            resolve_requested(&reg, "deepseek", "deepseek-chat", None),
+            None
+        );
+        assert_eq!(
+            resolve_requested(&reg, "deepseek", "deepseek-chat", Some("high")),
+            None
+        );
     }
 
     fn completions_body(request_param: Option<&str>) -> Value {
@@ -370,7 +372,9 @@ mod tests {
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["thinking"]["budget_tokens"], 16384);
         // budget < max_tokens 约束：默认 4096 不足 → 联动抬升
-        assert!(b["max_tokens"].as_u64().unwrap() > b["thinking"]["budget_tokens"].as_u64().unwrap());
+        assert!(
+            b["max_tokens"].as_u64().unwrap() > b["thinking"]["budget_tokens"].as_u64().unwrap()
+        );
         // 档位预算映射
         let mut b = serde_json::json!({"model": "claude", "max_tokens": 99999});
         apply_anthropic(&mut b, "low");

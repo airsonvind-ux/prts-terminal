@@ -141,7 +141,7 @@ use crate::session::SessionEvent;
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMessage {
-    pub role: String,   // "user" | "assistant" | "error"
+    pub role: String, // "user" | "assistant" | "error"
     pub content: String,
     /// 推理模型的思维链内容（DeepSeek thinking mode），serde default = None
     #[serde(default)]
@@ -168,9 +168,18 @@ mod tests {
         let event = AgentEvent::phase("abc123", AgentPhase::Reasoning);
         let json = serde_json::to_string(&event).unwrap();
         println!("Serialized: {json}");
-        assert!(json.contains("\"sessionId\":\"abc123\""), "expected sessionId, got: {json}");
-        assert!(json.contains("\"type\":\"phase\""), "expected type=phase, got: {json}");
-        assert!(json.contains("\"phase\":\"reasoning\""), "expected phase=reasoning, got: {json}");
+        assert!(
+            json.contains("\"sessionId\":\"abc123\""),
+            "expected sessionId, got: {json}"
+        );
+        assert!(
+            json.contains("\"type\":\"phase\""),
+            "expected type=phase, got: {json}"
+        );
+        assert!(
+            json.contains("\"phase\":\"reasoning\""),
+            "expected phase=reasoning, got: {json}"
+        );
     }
 
     #[test]
@@ -184,8 +193,14 @@ mod tests {
     fn conversation_title_serializes_camelcase() {
         let event = AgentEvent::conversation_title("conv-1", "伤害计算");
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"conversation/title\""), "got: {json}");
-        assert!(json.contains("\"conversationId\":\"conv-1\""), "got: {json}");
+        assert!(
+            json.contains("\"type\":\"conversation/title\""),
+            "got: {json}"
+        );
+        assert!(
+            json.contains("\"conversationId\":\"conv-1\""),
+            "got: {json}"
+        );
         assert!(json.contains("\"title\":\"伤害计算\""), "got: {json}");
         // 会话/标题事件可经 IpcEvent 平面序列化
         let ipc = IpcEvent::Agent(event);

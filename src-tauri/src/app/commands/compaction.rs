@@ -112,9 +112,9 @@ pub async fn compact_conversation(
         .lock()
         .map_err(|e| format!("配置锁获取失败: {e}"))?
         .clone();
-    let client = llm.select(&cfg.api_type).ok_or_else(|| {
-        format!("协议 {:?} 暂未支持", cfg.api_type)
-    })?;
+    let client = llm
+        .select(&cfg.api_type)
+        .ok_or_else(|| format!("协议 {:?} 暂未支持", cfg.api_type))?;
     // 窗口与主对话同源（model_registry）；自定义模型查不到时用兜底常量
     let window = model_registry
         .get_model(&cfg.provider, &cfg.model)

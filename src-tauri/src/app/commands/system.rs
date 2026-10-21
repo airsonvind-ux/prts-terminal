@@ -71,7 +71,10 @@ pub async fn verify_connection(config: LlmConfig) -> Result<(), String> {
         ApiType::AnthropicMessages => {
             // Anthropic 协议：用 x-api-key 鉴权，剥离尾部路径后请求 /v1/models
             let root = strip_api_path(base_url);
-            (format!("{}/v1/models", root), Some(("x-api-key", config.api_key.clone())))
+            (
+                format!("{}/v1/models", root),
+                Some(("x-api-key", config.api_key.clone())),
+            )
         }
         _ => {
             // OpenAI 兼容协议：用 Bearer 鉴权
@@ -148,9 +151,7 @@ fn strip_api_path(url: &str) -> String {
 /// 从内存中的 ModelRegistry 枚举供应商信息，返回 id、展示名、
 /// api_type、base_url、默认 compat。前端供应商下拉渲染此列表。
 #[tauri::command]
-pub fn list_providers(
-    model_registry: State<'_, Arc<ModelRegistry>>,
-) -> Vec<ProviderInfo> {
+pub fn list_providers(model_registry: State<'_, Arc<ModelRegistry>>) -> Vec<ProviderInfo> {
     model_registry.list_providers()
 }
 
@@ -251,14 +252,11 @@ pub async fn list_models(
                 context_length: matched.map(|m| m.context).unwrap_or(0),
                 supports_reasoning: matched.map(|m| m.reasoning).unwrap_or(false),
                 supports_vision: matched.map(|m| m.supports_vision).unwrap_or(false),
-                compat: matched
-                    .and_then(|m| m.compat.clone())
-                    .unwrap_or_default(),
+                compat: matched.and_then(|m| m.compat.clone()).unwrap_or_default(),
                 thinking_levels: matched
                     .map(|m| m.thinking_levels.clone())
                     .unwrap_or_default(),
-                default_thinking_level: matched
-                    .and_then(|m| m.default_thinking_level.clone()),
+                default_thinking_level: matched.and_then(|m| m.default_thinking_level.clone()),
                 enriched: matched.is_some(),
             })
         })

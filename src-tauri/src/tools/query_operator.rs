@@ -64,10 +64,27 @@ use std::collections::HashMap;
 
 /// operators 表完整列名（附加列识别与查询字段共用）。
 const ALL_COLUMNS: &[&str] = &[
-    "干员ID", "名称", "代号", "描述", "部署位置", "标签", "获取方式",
-    "是否不可获取", "是否为异格", "稀有度", "职业", "职业分支", "最大潜能",
-    "备注", "信赖加成", "精英化阶段", "技能列表", "关联token", "天赋列表",
-    "潜能提升", "模组列表",
+    "干员ID",
+    "名称",
+    "代号",
+    "描述",
+    "部署位置",
+    "标签",
+    "获取方式",
+    "是否不可获取",
+    "是否为异格",
+    "稀有度",
+    "职业",
+    "职业分支",
+    "最大潜能",
+    "备注",
+    "信赖加成",
+    "精英化阶段",
+    "技能列表",
+    "关联token",
+    "天赋列表",
+    "潜能提升",
+    "模组列表",
 ];
 
 /// 默认结果已包含的列：附加列中重复指定时忽略（不重复输出、不报错）。
@@ -182,34 +199,31 @@ impl Tool for QueryOperator {
 // 单干员格式化
 // ═══════════════════════════════════════════════════════
 
-fn format_one_operator(
-    row: &HashMap<String, String>,
-    extra: &ExtraConfig,
-    out: &mut String,
-) {
-    let elite_phases: Vec<ElitePhase> =
-        parse_json(row, "精英化阶段").unwrap_or_default();
-    let trust: HashMap<String, f64> =
-        parse_json(row, "信赖加成").unwrap_or_default();
-    let skills: Vec<Skill> =
-        parse_json(row, "技能列表").unwrap_or_default();
-    let talents: Vec<Talent> =
-        parse_json(row, "天赋列表").unwrap_or_default();
-    let potentials: Vec<String> =
-        parse_json(row, "潜能提升").unwrap_or_default();
-    let modules: Vec<Module> =
-        parse_json(row, "模组列表").unwrap_or_default();
-    let tags_json: Vec<String> =
-        parse_json(row, "标签").unwrap_or_default();
-    let tokens_json: Vec<String> =
-        parse_json(row, "关联token").unwrap_or_default();
+fn format_one_operator(row: &HashMap<String, String>, extra: &ExtraConfig, out: &mut String) {
+    let elite_phases: Vec<ElitePhase> = parse_json(row, "精英化阶段").unwrap_or_default();
+    let trust: HashMap<String, f64> = parse_json(row, "信赖加成").unwrap_or_default();
+    let skills: Vec<Skill> = parse_json(row, "技能列表").unwrap_or_default();
+    let talents: Vec<Talent> = parse_json(row, "天赋列表").unwrap_or_default();
+    let potentials: Vec<String> = parse_json(row, "潜能提升").unwrap_or_default();
+    let modules: Vec<Module> = parse_json(row, "模组列表").unwrap_or_default();
+    let tags_json: Vec<String> = parse_json(row, "标签").unwrap_or_default();
+    let tokens_json: Vec<String> = parse_json(row, "关联token").unwrap_or_default();
 
     let op_name = row.get("名称").map(|s| s.as_str()).unwrap_or("未知");
     let rarity: u32 = row.get("稀有度").and_then(|s| s.parse().ok()).unwrap_or(0);
 
-    let phase_idx = extra.elite_phase.unwrap_or(elite_phases.len().saturating_sub(1));
-    let phase = if let Some(p) = elite_phases.get(phase_idx) { p } else { return; };
-    let level = extra.elite_level.unwrap_or(phase.max_level).min(phase.max_level);
+    let phase_idx = extra
+        .elite_phase
+        .unwrap_or(elite_phases.len().saturating_sub(1));
+    let phase = if let Some(p) = elite_phases.get(phase_idx) {
+        p
+    } else {
+        return;
+    };
+    let level = extra
+        .elite_level
+        .unwrap_or(phase.max_level)
+        .min(phase.max_level);
 
     let trust_pct = extra.trust_pct.unwrap_or(100.0) / 100.0;
     let pot_level = extra.pot_level.unwrap_or(0);
@@ -226,9 +240,22 @@ fn format_one_operator(
     let module_active = !extra.module_none
         && modules.get(module_idx).is_some()
         && can_use_module(phase_idx, level, rarity);
-    let effective_module = if module_active { modules.get(module_idx) } else { None };
+    let effective_module = if module_active {
+        modules.get(module_idx)
+    } else {
+        None
+    };
 
-    let stats = compute_stats(phase, level, &trust, trust_pct, &potentials, pot_level, effective_module, MODULE_LEVEL);
+    let stats = compute_stats(
+        phase,
+        level,
+        &trust,
+        trust_pct,
+        &potentials,
+        pot_level,
+        effective_module,
+        MODULE_LEVEL,
+    );
 
     out.push_str(&format!("━━━ {op_name} ━━━\n"));
 
@@ -244,17 +271,39 @@ fn format_one_operator(
     }
 
     // ── 属性（默认或状态指定后的练度）──
-    let phase_label = if phase_idx == 0 { "精0".to_string() } else if phase_idx == 1 { "精1".to_string() } else { format!("精{phase_idx}") };
+    let phase_label = if phase_idx == 0 {
+        "精0".to_string()
+    } else if phase_idx == 1 {
+        "精1".to_string()
+    } else {
+        format!("精{phase_idx}")
+    };
     let module_name = if extra.module_none || modules.is_empty() {
         "无模组".to_string()
     } else if module_active {
-        modules.get(module_idx).map(|m| format!("{}级{}", ordinal_cn(MODULE_LEVEL), m.name.as_str())).unwrap_or_else(|| "无模组".to_string())
+        modules
+            .get(module_idx)
+            .map(|m| format!("{}级{}", ordinal_cn(MODULE_LEVEL), m.name.as_str()))
+            .unwrap_or_else(|| "无模组".to_string())
     } else {
-        modules.get(module_idx).map(|m| format!("{}（未解锁）", m.name.as_str())).unwrap_or_else(|| "无模组".to_string())
+        modules
+            .get(module_idx)
+            .map(|m| format!("{}（未解锁）", m.name.as_str()))
+            .unwrap_or_else(|| "无模组".to_string())
     };
-    let trust_label = if (trust_pct - 1.0).abs() < 0.001 { "满信赖" } else { &format!("{}%信赖", (trust_pct * 100.0) as u32) };
-    let pot_label = if pot_level == 0 { "0潜" } else { &format!("{pot_level}潜") };
-    out.push_str(&format!("\n── 属性（{phase_label} {level}级 / {trust_label} / {pot_label} / {module_name}）──\n"));
+    let trust_label = if (trust_pct - 1.0).abs() < 0.001 {
+        "满信赖"
+    } else {
+        &format!("{}%信赖", (trust_pct * 100.0) as u32)
+    };
+    let pot_label = if pot_level == 0 {
+        "0潜"
+    } else {
+        &format!("{pot_level}潜")
+    };
+    out.push_str(&format!(
+        "\n── 属性（{phase_label} {level}级 / {trust_label} / {pot_label} / {module_name}）──\n"
+    ));
     format_stats(&stats, out);
     // 攻击范围
     let range_str = phase.range_id.as_deref().unwrap_or("无");
@@ -742,8 +791,12 @@ fn split_digits<'a>(s: &'a str) -> (&'a str, &'a str) {
 fn parse_chinese_or_digit(s: &str) -> Option<u32> {
     match s {
         "零" | "0" => Some(0),
-        "一" => Some(1), "二" => Some(2), "三" => Some(3),
-        "四" => Some(4), "五" => Some(5), "六" => Some(6),
+        "一" => Some(1),
+        "二" => Some(2),
+        "三" => Some(3),
+        "四" => Some(4),
+        "五" => Some(5),
+        "六" => Some(6),
         _ => s.parse::<u32>().ok(),
     }
 }
@@ -801,8 +854,14 @@ fn format_raw_phases(phases: &[ElitePhase], out: &mut String) {
 
     // 属性固定输出顺序（与 format_stats 一致）
     let attr_order = [
-        "生命上限", "攻击", "防御", "法术抗性",
-        "部署费用", "阻挡数", "再部署时间", "攻击间隔",
+        "生命上限",
+        "攻击",
+        "防御",
+        "法术抗性",
+        "部署费用",
+        "阻挡数",
+        "再部署时间",
+        "攻击间隔",
     ];
 
     for (i, phase) in phases.iter().enumerate() {
@@ -877,7 +936,9 @@ fn compute_stats(
         } else {
             lo_val + (hi_val - lo_val) * frac
         };
-        stats.attrs.insert(attr.to_string(), (interp, 0.0, 0.0, 0.0));
+        stats
+            .attrs
+            .insert(attr.to_string(), (interp, 0.0, 0.0, 0.0));
     }
 
     stats.base_atk_interval = stats.attrs.get("攻击间隔").map(|v| v.0).unwrap_or(1.0);
@@ -888,7 +949,9 @@ fn compute_stats(
             let canon = canonical_attr(&trust_attr);
             if canon == "攻击速度" {
                 stats.atk_speed_bonus += raw_val * trust_pct;
-                stats.atk_speed_sources.push(format!("信赖+{:.0}", raw_val * trust_pct));
+                stats
+                    .atk_speed_sources
+                    .push(format!("信赖+{:.0}", raw_val * trust_pct));
             } else if let Some(entry) = stats.attrs.get_mut(canon) {
                 let bonus = raw_val * trust_pct;
                 entry.1 = bonus;
@@ -915,8 +978,8 @@ fn compute_stats(
 
     // 4. 模组加成
     if let Some(module) = module {
-        let effect_idx = (module_lvl.saturating_sub(1) as usize)
-            .min(module.effects.len().saturating_sub(1));
+        let effect_idx =
+            (module_lvl.saturating_sub(1) as usize).min(module.effects.len().saturating_sub(1));
         if let Some(effect) = module.effects.get(effect_idx) {
             if let Some(ref updates) = effect.stat_updates {
                 for u in updates {
@@ -970,8 +1033,14 @@ fn canonical_attr(name: &str) -> &str {
 }
 
 const CANONICAL_ATTRS: &[&str] = &[
-    "生命上限", "攻击", "防御", "法术抗性",
-    "部署费用", "阻挡数", "再部署时间", "攻击间隔",
+    "生命上限",
+    "攻击",
+    "防御",
+    "法术抗性",
+    "部署费用",
+    "阻挡数",
+    "再部署时间",
+    "攻击间隔",
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -980,16 +1049,34 @@ const CANONICAL_ATTRS: &[&str] = &[
 
 fn format_stats(stats: &ComputedStats, out: &mut String) {
     let attr_order = [
-        "生命上限", "攻击", "防御", "法术抗性",
-        "部署费用", "阻挡数", "再部署时间", "攻击间隔",
+        "生命上限",
+        "攻击",
+        "防御",
+        "法术抗性",
+        "部署费用",
+        "阻挡数",
+        "再部署时间",
+        "攻击间隔",
     ];
 
     for attr in attr_order {
         if let Some(&(base, trust, pot, module)) = stats.attrs.get(attr) {
             let parts: Vec<String> = [
-                if trust.abs() > 0.001 { Some(format!("{trust:+.0}(信赖)")) } else { None },
-                if pot.abs() > 0.001 { Some(format!("{pot:+.0}(潜能)")) } else { None },
-                if module.abs() > 0.001 { Some(format!("{module:+.0}(模组)")) } else { None },
+                if trust.abs() > 0.001 {
+                    Some(format!("{trust:+.0}(信赖)"))
+                } else {
+                    None
+                },
+                if pot.abs() > 0.001 {
+                    Some(format!("{pot:+.0}(潜能)"))
+                } else {
+                    None
+                },
+                if module.abs() > 0.001 {
+                    Some(format!("{module:+.0}(模组)"))
+                } else {
+                    None
+                },
             ]
             .into_iter()
             .flatten()
@@ -1122,7 +1209,10 @@ mod tests {
         assert!(tool.description().contains("干员"));
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["properties"].get("fields").is_none(), "parameters 不应再有 fields");
+        assert!(
+            params["properties"].get("fields").is_none(),
+            "parameters 不应再有 fields"
+        );
         assert!(params["properties"].get("extra").is_some());
         // 增量声明契约由 extra 参数描述单点承载（desc 不再重复声明，2026-08-31）
         assert!(
@@ -1141,7 +1231,10 @@ mod tests {
         // 无 extra：名称/备注/描述/职业/职业分支/属性/天赋/模组；技能需点单，不随默认返回
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["阿米娅"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["阿米娅"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("阿米娅"));
         assert!(result.contains("备注"));
         assert!(result.contains("描述"));
@@ -1150,21 +1243,36 @@ mod tests {
         assert!(result.contains("── 属性"));
         assert!(result.contains("── 天赋"));
         assert!(result.contains("── 模组"));
-        assert!(result.contains("(信赖)"), "属性应标注信赖来源\n结果: {result}");
-        assert!(result.contains("(模组)"), "属性应标注模组来源\n结果: {result}");
-        assert!(!result.contains("── 技能"), "默认不输出技能区块，技能需点单\n结果: {result}");
+        assert!(
+            result.contains("(信赖)"),
+            "属性应标注信赖来源\n结果: {result}"
+        );
+        assert!(
+            result.contains("(模组)"),
+            "属性应标注模组来源\n结果: {result}"
+        );
+        assert!(
+            !result.contains("── 技能"),
+            "默认不输出技能区块，技能需点单\n结果: {result}"
+        );
     }
 
     #[test]
     fn query_default_stats() {
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["阿米娅"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["阿米娅"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("阿米娅"));
         assert!(result.contains("属性"));
         assert!(result.contains("天赋"));
         assert!(result.contains("模组"));
-        assert!(!result.contains("── 技能"), "默认不输出技能区块\n结果: {result}");
+        assert!(
+            !result.contains("── 技能"),
+            "默认不输出技能区块\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1173,15 +1281,24 @@ mod tests {
         // 技能详情输出应包含 rangeID，LLM 才能解码实际攻击范围
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["远山"],"extra":["二技能"]}"#).unwrap().summary;
-        assert!(result.contains("攻击范围: 3-3"), "技能详情应输出攻击范围ID\n结果: {result}");
+        let result = tool
+            .execute(&ctx, r#"{"names":["远山"],"extra":["二技能"]}"#)
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("攻击范围: 3-3"),
+            "技能详情应输出攻击范围ID\n结果: {result}"
+        );
     }
 
     #[test]
     fn talent_picks_correct_alternative() {
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["阿米娅"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["阿米娅"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("天赋"));
         assert!(result.contains("额外回复2点技力"));
     }
@@ -1191,11 +1308,20 @@ mod tests {
         // 默认天赋区块：每个天赋只取当前最优备选（不展开全部备选）
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["阿米娅"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["阿米娅"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("情绪吸收"), "应包含天赋名\n结果: {result}");
         // 最优备选模式：带括号条件、无缩进备选列表
-        assert!(result.contains("（精2）"), "默认最高精英化应为精2\n结果: {result}");
-        assert!(!result.contains("  精0"), "不应展开全部备选\n结果: {result}");
+        assert!(
+            result.contains("（精2）"),
+            "默认最高精英化应为精2\n结果: {result}"
+        );
+        assert!(
+            !result.contains("  精0"),
+            "不应展开全部备选\n结果: {result}"
+        );
     }
 
     // ── 状态指定（含 =）──
@@ -1206,17 +1332,23 @@ mod tests {
         let tool = QueryOperator;
         let r1 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精二40级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("精2 40级"), "应显示精2 40级\n结果: {r1}");
         let r2 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精一满级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("精1"), "应显示精1\n结果: {r2}");
         assert!(!r2.contains("精2"), "不应显示精2\n结果: {r2}");
         let r3 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精二"]}"#)
-            .unwrap().summary;
-        assert!(r3.contains("精2 80级"), "省略等级=该阶段满级（阿米娅精2满级80）\n结果: {r3}");
+            .unwrap()
+            .summary;
+        assert!(
+            r3.contains("精2 80级"),
+            "省略等级=该阶段满级（阿米娅精2满级80）\n结果: {r3}"
+        );
     }
 
     #[test]
@@ -1225,15 +1357,18 @@ mod tests {
         let tool = QueryOperator;
         let r1 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=满潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("5潜"), "满潜=5潜\n结果: {r1}");
         let r2 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=五潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("5潜"), "五潜=5潜\n结果: {r2}");
         let r3 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=0潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r3.contains("0潜"), "0潜\n结果: {r3}");
     }
 
@@ -1243,15 +1378,18 @@ mod tests {
         let tool = QueryOperator;
         let r1 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["信赖=50"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("50%信赖"), "50 表示50%\n结果: {r1}");
         let r2 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["信赖=满"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("满信赖"), "满=100%\n结果: {r2}");
         let r3 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["信赖=零"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r3.contains("0%信赖"), "零=0%\n结果: {r3}");
     }
 
@@ -1262,14 +1400,16 @@ mod tests {
         // 模组=X模 → 选中 X 模，输出其完整效果（Lv1~3）
         let r1 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=X模"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r1.contains("DWDB-221E"), "应显示 X 模\n结果: {r1}");
         assert!(r1.contains("Lv1"), "应输出完整效果\n结果: {r1}");
         assert!(r1.contains("Lv3"), "应输出完整效果（累加展示）\n结果: {r1}");
         // 模组=无模组 → 属性不计模组加成、模组区块显示未装配
         let r2 = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=无模组"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r2.contains("未装配"), "模组区块应显示未装配\n结果: {r2}");
         assert!(!r2.contains("(模组)"), "属性不应有模组来源标注\n结果: {r2}");
     }
@@ -1280,17 +1420,29 @@ mod tests {
         let tool = QueryOperator;
         // 潜能：最后一项（满潜=5潜）生效；反序则 0潜生效
         let r = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=0潜","潜能=五潜","潜能=满潜"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["潜能=0潜","潜能=五潜","潜能=满潜"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("/ 5潜"), "got: {r}");
         let r = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=满潜","潜能=0潜"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["潜能=满潜","潜能=0潜"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("/ 0潜"), "got: {r}");
         // 等级：整体替换（精一40级 + 精二 → 精二满级，不留 40级）
         let r = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精一40级","等级=精二"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["等级=精一40级","等级=精二"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("精2 80级"), "got: {r}");
         assert!(!r.contains("精2 40级"), "got: {r}");
     }
@@ -1301,14 +1453,22 @@ mod tests {
         let tool = QueryOperator;
         // 无模组 → X模：以最后一项为准（X 模生效）
         let r = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=无模组","模组=X模"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["模组=无模组","模组=X模"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("DWDB-221E"), "got: {r}");
         assert!(!r.contains("未装配"), "got: {r}");
         // X模 → 无模组：以最后一项为准（无模组生效）
         let r = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=X模","模组=无模组"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["模组=X模","模组=无模组"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(r.contains("未装配"), "got: {r}");
         assert!(!r.contains("DWDB-221E"), "got: {r}");
     }
@@ -1319,7 +1479,8 @@ mod tests {
         let tool = QueryOperator;
         let r = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=六潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(r.contains("超出范围"), "got: {r}");
     }
 
@@ -1330,9 +1491,13 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精一"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("── 天赋"), "应含天赋区块\n结果: {result}");
-        assert!(!result.contains("（精2）"), "精1练度不应出现精2天赋条件（重算生效）\n结果: {result}");
+        assert!(
+            !result.contains("（精2）"),
+            "精1练度不应出现精2天赋条件（重算生效）\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1341,9 +1506,13 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["职业=近卫"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态键应报错\n结果: {result}");
-        assert!(result.contains("仅限 等级/潜能/信赖/模组"), "应指路合法键\n结果: {result}");
+        assert!(
+            result.contains("仅限 等级/潜能/信赖/模组"),
+            "应指路合法键\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1352,7 +1521,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=三级跳"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "非法状态值应报错\n结果: {result}");
         assert!(result.contains("无法解析"), "应指路\n结果: {result}");
     }
@@ -1366,10 +1536,20 @@ mod tests {
         let tool = QueryOperator;
         for legacy in ["精一20级", "五潜", "零信赖", "X模"] {
             let result = tool
-                .execute(&ctx, &format!(r#"{{"names":["阿米娅"],"extra":["{legacy}"]}}"#))
-                .unwrap().summary;
-            assert!(result.contains("✗"), "旧语法 '{legacy}' 应报错\n结果: {result}");
-            assert!(result.contains("键=值"), "旧语法 '{legacy}' 应指路键=值\n结果: {result}");
+                .execute(
+                    &ctx,
+                    &format!(r#"{{"names":["阿米娅"],"extra":["{legacy}"]}}"#),
+                )
+                .unwrap()
+                .summary;
+            assert!(
+                result.contains("✗"),
+                "旧语法 '{legacy}' 应报错\n结果: {result}"
+            );
+            assert!(
+                result.contains("键=值"),
+                "旧语法 '{legacy}' 应指路键=值\n结果: {result}"
+            );
         }
     }
 
@@ -1382,10 +1562,17 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["缓蚀"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("[缓蚀]"));
-        assert!(!result.contains("[封护]"), "不应输出其他技能\n结果: {result}");
-        assert!(!result.contains("[旧日绽放]"), "不应输出其他技能\n结果: {result}");
+        assert!(
+            !result.contains("[封护]"),
+            "不应输出其他技能\n结果: {result}"
+        );
+        assert!(
+            !result.contains("[旧日绽放]"),
+            "不应输出其他技能\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1395,11 +1582,21 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["3级缓蚀"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("[缓蚀]"));
-        assert!(result.contains("Lv3: 攻击力+60%"), "应显示缓蚀 Lv3\n结果: {result}");
-        assert!(!result.contains("[封护]"), "不应输出其他技能\n结果: {result}");
-        assert!(!result.contains("[旧日绽放]"), "不应输出其他技能\n结果: {result}");
+        assert!(
+            result.contains("Lv3: 攻击力+60%"),
+            "应显示缓蚀 Lv3\n结果: {result}"
+        );
+        assert!(
+            !result.contains("[封护]"),
+            "不应输出其他技能\n结果: {result}"
+        );
+        assert!(
+            !result.contains("[旧日绽放]"),
+            "不应输出其他技能\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1409,7 +1606,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["专2旧日绽放"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("[旧日绽放]"));
         assert!(result.contains("专2"), "应显示专2\n结果: {result}");
         assert!(!result.contains("专3"), "不应显示专3\n结果: {result}");
@@ -1422,10 +1620,20 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["精神爆发"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("[精神爆发]"), "应匹配技能精神爆发\n结果: {result}");
-        assert!(!result.contains("[战术咏唱"), "不应输出其他技能\n结果: {result}");
-        assert!(!result.contains("[奇美拉]"), "不应输出其他技能\n结果: {result}");
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("[精神爆发]"),
+            "应匹配技能精神爆发\n结果: {result}"
+        );
+        assert!(
+            !result.contains("[战术咏唱"),
+            "不应输出其他技能\n结果: {result}"
+        );
+        assert!(
+            !result.contains("[奇美拉]"),
+            "不应输出其他技能\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1435,11 +1643,18 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["二技能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         // 缇缇三个技能：缓蚀/封护/旧日绽放
-        assert!(!result.contains("缓蚀"), "指定二技能不应含一技能\n结果: {result}");
+        assert!(
+            !result.contains("缓蚀"),
+            "指定二技能不应含一技能\n结果: {result}"
+        );
         assert!(result.contains("封护"), "应包含二技能\n结果: {result}");
-        assert!(!result.contains("旧日绽放"), "指定二技能不应含三技能\n结果: {result}");
+        assert!(
+            !result.contains("旧日绽放"),
+            "指定二技能不应含三技能\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1449,11 +1664,15 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["3级一技能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("Lv3"), "应显示 Lv3\n结果: {result}");
         assert!(!result.contains("专3"), "Lv3 不应显示专3\n结果: {result}");
         assert!(!result.contains("封护"), "不应包含二技能\n结果: {result}");
-        assert!(!result.contains("旧日绽放"), "不应包含三技能\n结果: {result}");
+        assert!(
+            !result.contains("旧日绽放"),
+            "不应包含三技能\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1463,7 +1682,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["专2二技能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("专2"), "应显示专2\n结果: {result}");
         assert!(!result.contains("专3"), "不应显示专3\n结果: {result}");
     }
@@ -1475,7 +1695,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["五技能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("无第5个技能"), "超界应提示\n结果: {result}");
     }
 
@@ -1486,9 +1707,13 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["二技能","3级三技能"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("[封护]"), "应输出二技能\n结果: {result}");
-        assert!(result.contains("[旧日绽放]"), "应输出三技能\n结果: {result}");
+        assert!(
+            result.contains("[旧日绽放]"),
+            "应输出三技能\n结果: {result}"
+        );
         assert!(result.contains("Lv3"), "三技能应显示 Lv3\n结果: {result}");
         assert!(!result.contains("[缓蚀]"), "不应输出一技能\n结果: {result}");
     }
@@ -1499,8 +1724,12 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryOperator;
         let result = tool
-            .execute(&ctx, r#"{"names":["缇缇"],"extra":["等级=精一满级","三技能"]}"#)
-            .unwrap().summary;
+            .execute(
+                &ctx,
+                r#"{"names":["缇缇"],"extra":["等级=精一满级","三技能"]}"#,
+            )
+            .unwrap()
+            .summary;
         // 属性块应显示精1
         assert!(result.contains("精1"), "应包含精1\n结果: {result}");
         // 技能块只含三技能
@@ -1517,9 +1746,16 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["技能列表"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("不提供整列"), "应指路点单制\n结果: {result}");
-        assert!(result.contains("技能请点单"), "应指路点单制\n结果: {result}");
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("不提供整列"),
+            "应指路点单制\n结果: {result}"
+        );
+        assert!(
+            result.contains("技能请点单"),
+            "应指路点单制\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1529,7 +1765,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["天赋二"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("天赋不提供点单"), "应指路\n结果: {result}");
     }
 
@@ -1540,7 +1777,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["凝固的时光"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("天赋不提供点单"), "应指路\n结果: {result}");
     }
 
@@ -1551,7 +1789,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["不存在的技能xyz"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "应有报错\n结果: {result}");
         assert!(result.contains("键=值"), "应指路键=值\n结果: {result}");
     }
@@ -1565,13 +1804,28 @@ mod tests {
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["稀有度","部署位置","代号","标签","获取方式","潜能提升","关联token"]}"#)
             .unwrap().summary;
-        assert!(result.contains("稀有度: 5"), "应输出稀有度（阿米娅5星）\n结果: {result}");
-        assert!(result.contains("部署位置: "), "应输出部署位置\n结果: {result}");
+        assert!(
+            result.contains("稀有度: 5"),
+            "应输出稀有度（阿米娅5星）\n结果: {result}"
+        );
+        assert!(
+            result.contains("部署位置: "),
+            "应输出部署位置\n结果: {result}"
+        );
         assert!(result.contains("代号: "), "应输出代号\n结果: {result}");
         assert!(result.contains("标签: "), "应输出标签\n结果: {result}");
-        assert!(result.contains("获取方式: "), "应输出获取方式\n结果: {result}");
-        assert!(result.contains("── 潜能提升 ──"), "应输出潜能提升\n结果: {result}");
-        assert!(result.contains("关联token: "), "应输出关联token\n结果: {result}");
+        assert!(
+            result.contains("获取方式: "),
+            "应输出获取方式\n结果: {result}"
+        );
+        assert!(
+            result.contains("── 潜能提升 ──"),
+            "应输出潜能提升\n结果: {result}"
+        );
+        assert!(
+            result.contains("关联token: "),
+            "应输出关联token\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1579,11 +1833,24 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryOperator;
         let result = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["干员ID","最大潜能","是否不可获取"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("干员ID: char_002_amiya"), "应输出干员ID\n结果: {result}");
-        assert!(result.contains("最大潜能: "), "应输出最大潜能\n结果: {result}");
-        assert!(result.contains("是否不可获取: "), "应输出是否不可获取\n结果: {result}");
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["干员ID","最大潜能","是否不可获取"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("干员ID: char_002_amiya"),
+            "应输出干员ID\n结果: {result}"
+        );
+        assert!(
+            result.contains("最大潜能: "),
+            "应输出最大潜能\n结果: {result}"
+        );
+        assert!(
+            result.contains("是否不可获取: "),
+            "应输出是否不可获取\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1591,10 +1858,20 @@ mod tests {
         let ctx = make_ctx();
         let tool = QueryOperator;
         let result = tool
-            .execute(&ctx, r#"{"names":["阿米娅"],"extra":["精英化阶段","信赖加成"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("── 精英化阶段（完整数据）──"), "应输出精英化阶段 raw\n结果: {result}");
-        assert!(result.contains("信赖加成（满信赖）"), "应输出信赖加成\n结果: {result}");
+            .execute(
+                &ctx,
+                r#"{"names":["阿米娅"],"extra":["精英化阶段","信赖加成"]}"#,
+            )
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 精英化阶段（完整数据）──"),
+            "应输出精英化阶段 raw\n结果: {result}"
+        );
+        assert!(
+            result.contains("信赖加成（满信赖）"),
+            "应输出信赖加成\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1604,12 +1881,28 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["缇缇"],"extra":["天赋列表"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("── 天赋 ──"), "默认天赋区块应照常输出（并存）\n结果: {result}");
-        assert!(result.contains("── 天赋列表（完整数据）──"), "应输出完整天赋列表\n结果: {result}");
-        assert!(result.contains("[凝固的时光]"), "应包含天赋名\n结果: {result}");
-        assert!(result.contains("[勇气的报偿]"), "应包含天赋名\n结果: {result}");
-        assert!(result.contains("  精"), "展开模式应有缩进条件标注\n结果: {result}");
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 天赋 ──"),
+            "默认天赋区块应照常输出（并存）\n结果: {result}"
+        );
+        assert!(
+            result.contains("── 天赋列表（完整数据）──"),
+            "应输出完整天赋列表\n结果: {result}"
+        );
+        assert!(
+            result.contains("[凝固的时光]"),
+            "应包含天赋名\n结果: {result}"
+        );
+        assert!(
+            result.contains("[勇气的报偿]"),
+            "应包含天赋名\n结果: {result}"
+        );
+        assert!(
+            result.contains("  精"),
+            "展开模式应有缩进条件标注\n结果: {result}"
+        );
     }
 
     #[test]
@@ -1619,9 +1912,16 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组列表"]}"#)
-            .unwrap().summary;
-        assert!(result.contains("── 模组 ──"), "默认模组区块应照常输出（并存）\n结果: {result}");
-        assert!(result.contains("── 模组列表（完整数据）──"), "应输出完整模组列表\n结果: {result}");
+            .unwrap()
+            .summary;
+        assert!(
+            result.contains("── 模组 ──"),
+            "默认模组区块应照常输出（并存）\n结果: {result}"
+        );
+        assert!(
+            result.contains("── 模组列表（完整数据）──"),
+            "应输出完整模组列表\n结果: {result}"
+        );
         assert!(result.contains("Lv1"), "应包含全部等级效果\n结果: {result}");
         assert!(result.contains("Lv3"), "应包含全部等级效果\n结果: {result}");
     }
@@ -1632,9 +1932,13 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["不存在的列"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"), "未命中应报错\n结果: {result}");
-        assert!(result.contains("知识库"), "应指路知识库列名\n结果: {result}");
+        assert!(
+            result.contains("知识库"),
+            "应指路知识库列名\n结果: {result}"
+        );
     }
 
     // ── 练度/数值相关（语法迁移后的旧用例）──
@@ -1645,7 +1949,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精一满级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("精1"));
         assert!(!result.contains("精2"));
     }
@@ -1656,7 +1961,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["模组=X模"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("DWDB-221E"), "应显示默认模组");
     }
 
@@ -1666,7 +1972,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=五潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("5潜"));
     }
 
@@ -1676,7 +1983,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["信赖=零"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("0%信赖"));
     }
 
@@ -1687,7 +1995,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["等级=精二满级"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("信赖"));
         assert!(result.contains("模组"));
     }
@@ -1698,7 +2007,8 @@ mod tests {
         let tool = QueryOperator;
         let result = tool
             .execute(&ctx, r#"{"names":["阿米娅"],"extra":["潜能=五潜"]}"#)
-            .unwrap().summary;
+            .unwrap()
+            .summary;
         assert!(result.contains("额外回复3") || result.contains("+1"));
     }
 
@@ -1716,7 +2026,10 @@ mod tests {
     fn not_found_returns_message() {
         let ctx = make_ctx();
         let tool = QueryOperator;
-        let result = tool.execute(&ctx, r#"{"names":["绝对不存在的干员xyz"]}"#).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"names":["绝对不存在的干员xyz"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("未找到"));
     }
 
@@ -1805,9 +2118,15 @@ mod tests {
         // 支持环境变量交互：PRTS_NAME / PRTS_EXTRA（逗号分隔）
         if let Ok(name) = std::env::var("PRTS_NAME") {
             let evec: Option<Vec<String>> = std::env::var("PRTS_EXTRA").ok().map(|s| {
-                if s.is_empty() { vec![] } else { s.split(',').map(|x| x.trim().to_string()).collect() }
+                if s.is_empty() {
+                    vec![]
+                } else {
+                    s.split(',').map(|x| x.trim().to_string()).collect()
+                }
             });
-            let extra_ref: Option<Vec<&str>> = evec.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+            let extra_ref: Option<Vec<&str>> = evec
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect());
             println!("{}  extra={:?}", name, extra_ref);
             println!("{}", call(&ctx, &name, extra_ref.as_deref()));
             return;
@@ -1815,9 +2134,21 @@ mod tests {
 
         let cases: &[(&str, &str, Option<&[&str]>)] = &[
             ("1. 阿米娅 · 默认", "阿米娅", None),
-            ("2. 阿米娅 · 等级=精一满级", "阿米娅", Some(&["等级=精一满级"])),
-            ("3. 缇缇 · 技能点单（二技能 + 3级三技能）", "缇缇", Some(&["二技能", "3级三技能"])),
-            ("4. 阿米娅 · 潜能=五潜 + 模组=无模组", "阿米娅", Some(&["潜能=五潜", "模组=无模组"])),
+            (
+                "2. 阿米娅 · 等级=精一满级",
+                "阿米娅",
+                Some(&["等级=精一满级"]),
+            ),
+            (
+                "3. 缇缇 · 技能点单（二技能 + 3级三技能）",
+                "缇缇",
+                Some(&["二技能", "3级三技能"]),
+            ),
+            (
+                "4. 阿米娅 · 潜能=五潜 + 模组=无模组",
+                "阿米娅",
+                Some(&["潜能=五潜", "模组=无模组"]),
+            ),
             ("5. 缇缇 · 附加列 天赋列表", "缇缇", Some(&["天赋列表"])),
             ("6. 阿米娅 · 旧语法报错示例", "阿米娅", Some(&["精一20级"])),
         ];

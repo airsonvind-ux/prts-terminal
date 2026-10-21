@@ -1,4 +1,4 @@
-﻿//! 会话日志（session log）—— 后端事实来源与 LLM 历史派生
+//! 会话日志（session log）—— 后端事实来源与 LLM 历史派生
 //!
 //! 架构升级提案 · 模块 1：
 //! 后端 append-only session log 成为对话事实来源，前端退为 log 的投影缓存。
@@ -261,10 +261,7 @@ pub enum SessionEvent {
     /// 激活状态本身随 ActiveContext 每 turn 重建（天然卸载），log 只记录
     /// 事实（何时激活了哪个 Skill），不承载状态。
     #[serde(rename = "skill/activate", rename_all = "camelCase")]
-    SkillActivate {
-        session_id: String,
-        name: String,
-    },
+    SkillActivate { session_id: String, name: String },
 
     /// 工具审批请求（M3-A §5.1 / M4）：run_command 询问用户确认时推送。
     /// auto 直放仅 log_only（无 IPC）；crit 拦截不产生 request。
@@ -326,7 +323,6 @@ pub enum SessionEvent {
     //     session_id: String,
     //     key: String,
     // },
-
     /// 错误事件（可恢复错误也入 log，与前端 error 事件对应）。
     /// 当前调度循环以 turn/end reason=error 表达错误，本变体为
     /// 可恢复错误（recoverable=true，继续处理）预留。
@@ -343,10 +339,16 @@ pub enum SessionEvent {
 
 impl SessionEvent {
     pub fn turn_start(session_id: &str) -> Self {
-        Self::TurnStart { session_id: session_id.to_string() }
+        Self::TurnStart {
+            session_id: session_id.to_string(),
+        }
     }
     pub fn turn_end(session_id: &str, reason: TurnEndReason) -> Self {
-        Self::TurnEnd { session_id: session_id.to_string(), reason, usage: None }
+        Self::TurnEnd {
+            session_id: session_id.to_string(),
+            reason,
+            usage: None,
+        }
     }
 
     /// turn 结束（携带本轮累计用量；用量统计用）。
@@ -355,7 +357,11 @@ impl SessionEvent {
         reason: TurnEndReason,
         usage: Option<UsageStat>,
     ) -> Self {
-        Self::TurnEnd { session_id: session_id.to_string(), reason, usage }
+        Self::TurnEnd {
+            session_id: session_id.to_string(),
+            reason,
+            usage,
+        }
     }
     pub fn step_start(session_id: &str, step: u32, estimated_tokens: u64) -> Self {
         Self::StepStart {
@@ -364,8 +370,18 @@ impl SessionEvent {
             estimated_tokens,
         }
     }
-    pub fn step_end(session_id: &str, step: u32, usage: Option<TokenUsage>, elapsed_ms: u64) -> Self {
-        Self::StepEnd { session_id: session_id.to_string(), step, usage, elapsed_ms }
+    pub fn step_end(
+        session_id: &str,
+        step: u32,
+        usage: Option<TokenUsage>,
+        elapsed_ms: u64,
+    ) -> Self {
+        Self::StepEnd {
+            session_id: session_id.to_string(),
+            step,
+            usage,
+            elapsed_ms,
+        }
     }
     pub fn user_message(session_id: &str, content: &str) -> Self {
         Self::UserMessage {
@@ -388,7 +404,11 @@ impl SessionEvent {
         }
     }
     pub fn assistant_chunk(session_id: &str, kind: ChunkKind, content: &str) -> Self {
-        Self::AssistantChunk { session_id: session_id.to_string(), kind, content: content.to_string() }
+        Self::AssistantChunk {
+            session_id: session_id.to_string(),
+            kind,
+            content: content.to_string(),
+        }
     }
     pub fn assistant_message(
         session_id: &str,
@@ -428,7 +448,13 @@ impl SessionEvent {
             display,
         }
     }
-    pub fn tool_result(session_id: &str, call_id: &str, tool_name: Option<&str>, summary: &str, ok: bool) -> Self {
+    pub fn tool_result(
+        session_id: &str,
+        call_id: &str,
+        tool_name: Option<&str>,
+        summary: &str,
+        ok: bool,
+    ) -> Self {
         Self::ToolResult {
             session_id: session_id.to_string(),
             call_id: call_id.to_string(),
@@ -633,7 +659,11 @@ impl SessionLog {
             None => true,
         };
         if changed {
-            self.append(SessionEvent::request_header(session_id, system_prompt, tool_defs.to_vec()));
+            self.append(SessionEvent::request_header(
+                session_id,
+                system_prompt,
+                tool_defs.to_vec(),
+            ));
             self.last_header = Some((system_prompt.to_string(), tool_defs.to_vec()));
         }
     }
@@ -696,11 +726,7 @@ impl SessionLog {
                     // 历史播种的 tool 结果不携带 tool_name（前端消息无此字段）
                     if let Some(ref call_id) = m.tool_call_id {
                         self.append(SessionEvent::tool_result(
-                            session_id,
-                            call_id,
-                            None,
-                            &m.content,
-                            true,
+                            session_id, call_id, None, &m.content, true,
                         ));
                     }
                 }
@@ -746,7 +772,10 @@ impl SessionLog {
     ///
     /// 给的是**会话落点**（快照副本），非用户原始路径：原文件被移动或删除后标记仍可读，
     /// 且不把用户的目录结构带进请求。
-    fn derive_user_message(content: &str, attachments: &[crate::attachments::Attachment]) -> ChatMessage {
+    fn derive_user_message(
+        content: &str,
+        attachments: &[crate::attachments::Attachment],
+    ) -> ChatMessage {
         if attachments.is_empty() {
             return ChatMessage::user(content);
         }
@@ -794,7 +823,11 @@ impl SessionLog {
 
         for event in &self.events {
             match event {
-                SessionEvent::UserMessage { content, attachments, .. } => {
+                SessionEvent::UserMessage {
+                    content,
+                    attachments,
+                    ..
+                } => {
                     flush_assistant(
                         &mut out,
                         &mut text_buf,
@@ -808,7 +841,12 @@ impl SessionLog {
                     ChunkKind::Text => text_buf.push_str(content),
                     ChunkKind::Reasoning => reasoning_buf.push_str(content),
                 },
-                SessionEvent::ToolCall { call_id, tool_name, params, .. } => {
+                SessionEvent::ToolCall {
+                    call_id,
+                    tool_name,
+                    params,
+                    ..
+                } => {
                     pending_tool_calls.push(ToolCall {
                         id: call_id.clone(),
                         call_type: "function".into(),
@@ -818,7 +856,13 @@ impl SessionLog {
                         },
                     });
                 }
-                SessionEvent::ToolResult { call_id, summary, tool_name, attachments, .. } => {
+                SessionEvent::ToolResult {
+                    call_id,
+                    summary,
+                    tool_name,
+                    attachments,
+                    ..
+                } => {
                     flush_assistant(
                         &mut out,
                         &mut text_buf,
@@ -954,18 +998,25 @@ mod tests {
         assert!(json.contains("\"type\":\"turn/start\""), "got {json}");
         assert!(json.contains("\"sessionId\":\"s1\""), "got {json}");
 
-        let json = serde_json::to_string(&SessionEvent::tool_call("s1", "c1", "echo", "{}")).unwrap();
+        let json =
+            serde_json::to_string(&SessionEvent::tool_call("s1", "c1", "echo", "{}")).unwrap();
         assert!(json.contains("\"type\":\"tool/call\""), "got {json}");
         assert!(json.contains("\"callId\":\"c1\""), "got {json}");
         assert!(json.contains("\"toolName\":\"echo\""), "got {json}");
         // 空展示切片：序列化时省略 display 字段（旧数据兼容口径）
         assert!(!json.contains("display"), "got {json}");
 
-        let json = serde_json::to_string(&SessionEvent::turn_end("s1", TurnEndReason::Stagnation)).unwrap();
+        let json = serde_json::to_string(&SessionEvent::turn_end("s1", TurnEndReason::Stagnation))
+            .unwrap();
         assert!(json.contains("\"type\":\"turn/end\""), "got {json}");
         assert!(json.contains("\"reason\":\"stagnation\""), "got {json}");
 
-        let json = serde_json::to_string(&SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "想")).unwrap();
+        let json = serde_json::to_string(&SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "想",
+        ))
+        .unwrap();
         assert!(json.contains("\"type\":\"assistant/chunk\""), "got {json}");
         assert!(json.contains("\"kind\":\"reasoning\""), "got {json}");
     }
@@ -978,10 +1029,7 @@ mod tests {
             "c1",
             "read_file",
             "{}",
-            crate::tools::ToolDisplay::link(crate::tools::DisplayLink::file(
-                "C:/ws/a.md",
-                "a.md",
-            )),
+            crate::tools::ToolDisplay::link(crate::tools::DisplayLink::file("C:/ws/a.md", "a.md")),
         );
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"display\""), "got {json}");
@@ -996,7 +1044,10 @@ mod tests {
             crate::tools::ToolDisplay::info("源石虫"),
         );
         let json2 = serde_json::to_string(&ev2).unwrap();
-        assert!(json2.contains("\"display\":{\"text\":\"源石虫\"}"), "got {json2}");
+        assert!(
+            json2.contains("\"display\":{\"text\":\"源石虫\"}"),
+            "got {json2}"
+        );
     }
 
     #[test]
@@ -1009,7 +1060,11 @@ mod tests {
             (TurnEndReason::MaxTokens, "max-tokens"),
         ] {
             let json = serde_json::to_string(&reason).unwrap();
-            assert_eq!(json, format!("\"{expected}\""), "reason {reason:?} 序列化不符合词汇表");
+            assert_eq!(
+                json,
+                format!("\"{expected}\""),
+                "reason {reason:?} 序列化不符合词汇表"
+            );
         }
     }
 
@@ -1027,10 +1082,16 @@ mod tests {
         .unwrap();
         assert!(json.contains("\"type\":\"cache/store\""), "got {json}");
         assert!(json.contains("\"bucket\":\"static\""), "got {json}");
-        assert!(json.contains("\"sourceEntry\":\"Buff机制基础\""), "got {json}");
+        assert!(
+            json.contains("\"sourceEntry\":\"Buff机制基础\""),
+            "got {json}"
+        );
 
         let json = serde_json::to_string(&SessionEvent::cache_load(
-            "s1", "k", CacheBucket::Dynamic, true,
+            "s1",
+            "k",
+            CacheBucket::Dynamic,
+            true,
         ))
         .unwrap();
         assert!(json.contains("\"type\":\"cache/load\""), "got {json}");
@@ -1038,7 +1099,10 @@ mod tests {
         assert!(json.contains("\"bucket\":\"dynamic\""), "got {json}");
 
         let json = serde_json::to_string(&SessionEvent::cache_remove(
-            "s1", "k", CacheBucket::Dynamic, false,
+            "s1",
+            "k",
+            CacheBucket::Dynamic,
+            false,
         ))
         .unwrap();
         assert!(json.contains("\"type\":\"cache/remove\""), "got {json}");
@@ -1135,11 +1199,16 @@ mod tests {
         };
         let msg = SessionLog::derive_user_message("看这个", &[att]);
         assert!(
-            msg.content.contains("[附件：note.txt，路径：C:/data/session-files/c1/note_7.txt]"),
+            msg.content
+                .contains("[附件：note.txt，路径：C:/data/session-files/c1/note_7.txt]"),
             "got: {}",
             msg.content
         );
-        assert!(msg.content.contains("看这个"), "原文应保留：{}", msg.content);
+        assert!(
+            msg.content.contains("看这个"),
+            "原文应保留：{}",
+            msg.content
+        );
     }
 
     /// 工具结果的图片附件 → 派生时补一条带图 user 消息（跟轮可重建）。
@@ -1261,10 +1330,26 @@ mod tests {
     fn derive_accumulates_chunks_into_single_message() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "你好"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "第一段"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "第二段"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "让我想想"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "第三段"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "第一段",
+        ));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "第二段",
+        ));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "让我想想",
+        ));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "第三段",
+        ));
 
         let derived = log.derive_messages(ReasoningPolicy::Preserve);
         assert_eq!(derived.len(), 2);
@@ -1276,12 +1361,42 @@ mod tests {
     fn derive_merges_tool_round_into_one_assistant_message() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "查敌人"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "需要工具"));
-        log.append(SessionEvent::tool_call("s1", "c1", "query_enemy", r#"{"x":1}"#));
-        log.append(SessionEvent::tool_call("s1", "c2", "query_enemy", r#"{"x":2}"#));
-        log.append(SessionEvent::tool_result("s1", "c1", Some("query_enemy"), "结果1", true));
-        log.append(SessionEvent::tool_result("s1", "c2", Some("query_enemy"), "结果2", true));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "最终回答"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "需要工具",
+        ));
+        log.append(SessionEvent::tool_call(
+            "s1",
+            "c1",
+            "query_enemy",
+            r#"{"x":1}"#,
+        ));
+        log.append(SessionEvent::tool_call(
+            "s1",
+            "c2",
+            "query_enemy",
+            r#"{"x":2}"#,
+        ));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("query_enemy"),
+            "结果1",
+            true,
+        ));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c2",
+            Some("query_enemy"),
+            "结果2",
+            true,
+        ));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "最终回答",
+        ));
 
         let derived = log.derive_messages(ReasoningPolicy::Preserve);
         // user + assistant(带2个工具调用) + tool × 2 + assistant(最终)
@@ -1314,21 +1429,38 @@ mod tests {
     fn require_tool_call_policy_drops_reasoning_without_tools() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "你好"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "思考过程"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "思考过程",
+        ));
         log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "回答"));
 
         let derived = log.derive_messages(ReasoningPolicy::RequireToolCall);
         assert_eq!(derived[1].content, "回答");
-        assert!(derived[1].reasoning_content.is_none(), "无工具轮次应丢弃推理链");
+        assert!(
+            derived[1].reasoning_content.is_none(),
+            "无工具轮次应丢弃推理链"
+        );
     }
 
     #[test]
     fn require_tool_call_policy_keeps_reasoning_with_tools() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "查数据"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "需要工具"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "需要工具",
+        ));
         log.append(SessionEvent::tool_call("s1", "c1", "echo", "{}"));
-        log.append(SessionEvent::tool_result("s1", "c1", Some("echo"), "结果", true));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("echo"),
+            "结果",
+            true,
+        ));
 
         let derived = log.derive_messages(ReasoningPolicy::RequireToolCall);
         assert_eq!(derived[1].role, crate::llm::MessageRole::Assistant);
@@ -1340,7 +1472,11 @@ mod tests {
     fn preserve_policy_keeps_reasoning_always() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "你好"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "思考过程"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "思考过程",
+        ));
         log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "回答"));
 
         let derived = log.derive_messages(ReasoningPolicy::Preserve);
@@ -1352,7 +1488,11 @@ mod tests {
     #[test]
     fn push_header_dedups_identical_snapshots() {
         let mut log = SessionLog::new();
-        let defs = vec![ToolDef::new("echo", "回显", serde_json::json!({"type": "object"}))];
+        let defs = vec![ToolDef::new(
+            "echo",
+            "回显",
+            serde_json::json!({"type": "object"}),
+        )];
         log.push_header("s1", "system prompt", &defs);
         log.push_header("s1", "system prompt", &defs);
         assert_eq!(log.events().len(), 1);
@@ -1362,7 +1502,11 @@ mod tests {
         assert_eq!(log.events().len(), 2);
 
         // 工具 schema 变化 → 追加
-        let other_defs = vec![ToolDef::new("echo", "改了描述", serde_json::json!({"type": "object"}))];
+        let other_defs = vec![ToolDef::new(
+            "echo",
+            "改了描述",
+            serde_json::json!({"type": "object"}),
+        )];
         log.push_header("s1", "changed prompt", &other_defs);
         assert_eq!(log.events().len(), 3);
     }

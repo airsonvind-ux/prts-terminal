@@ -286,9 +286,7 @@ pub struct ProviderPatch {
 impl LlmPatch {
     /// 本 patch 是否触及 llm 段（决定是否同步 llm_config State）。
     pub fn is_empty(&self) -> bool {
-        self.active_provider.is_none()
-            && self.providers.is_none()
-            && self.thinking_level.is_none()
+        self.active_provider.is_none() && self.providers.is_none() && self.thinking_level.is_none()
     }
 }
 
@@ -416,9 +414,7 @@ impl SettingsStore {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(n) = v.get("schema_version").and_then(|x| x.as_u64()) {
                 if n > SCHEMA_VERSION as u64 {
-                    eprintln!(
-                        "[settings] schemaVersion {n} 高于当前 {SCHEMA_VERSION}：只读降级"
-                    );
+                    eprintln!("[settings] schemaVersion {n} 高于当前 {SCHEMA_VERSION}：只读降级");
                     return Self {
                         settings: Settings::default(),
                         source: Source::FutureVersion(n as u32),
@@ -522,7 +518,11 @@ impl SettingsStore {
                     api_key: old.api_key,
                     base_url: old.base_url,
                     headers: old.headers,
-                    max_tokens: if old.max_tokens == 0 { 4096 } else { old.max_tokens },
+                    max_tokens: if old.max_tokens == 0 {
+                        4096
+                    } else {
+                        old.max_tokens
+                    },
                 },
             );
         }
@@ -619,12 +619,7 @@ impl SettingsStore {
             if let Some(providers) = &p.providers {
                 for (name, pp) in providers {
                     // 条目懒建：首次配某家 → 插入默认条目
-                    let entry = self
-                        .settings
-                        .llm
-                        .providers
-                        .entry(name.clone())
-                        .or_default();
+                    let entry = self.settings.llm.providers.entry(name.clone()).or_default();
                     if let Some(v) = &pp.api_type {
                         entry.api_type = *v;
                     }
@@ -863,7 +858,10 @@ mod tests {
             .resolve_active_with(|p| (p == "deepseek").then(|| "sk-test".to_string()));
         assert_eq!(resolved.api_key, "sk-test");
         assert_eq!(loaded.settings.llm.thinking_level.as_deref(), Some("high"));
-        assert_eq!(loaded.settings.exec.mode, crate::exec_settings::ExecutionMode::Auto);
+        assert_eq!(
+            loaded.settings.exec.mode,
+            crate::exec_settings::ExecutionMode::Auto
+        );
         assert!(!loaded.settings.window.always_on_top);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -926,12 +924,21 @@ mod tests {
         let s = SettingsStore::load(&dir);
         assert_eq!(s.source(), Source::File);
         assert_eq!(s.settings.llm.active_provider, "deepseek");
-        let pc = s.settings.llm.providers.get("deepseek").expect("迁移应建条目");
+        let pc = s
+            .settings
+            .llm
+            .providers
+            .get("deepseek")
+            .expect("迁移应建条目");
         assert_eq!(pc.model, "deepseek-chat");
         assert_eq!(pc.api_key, "sk-v1");
         assert_eq!(pc.base_url, None);
         assert_eq!(s.settings.llm.thinking_level.as_deref(), Some("low"));
-        assert_eq!(s.settings.exec.mode, crate::exec_settings::ExecutionMode::Ask, "exec 保留");
+        assert_eq!(
+            s.settings.exec.mode,
+            crate::exec_settings::ExecutionMode::Ask,
+            "exec 保留"
+        );
         let c = s.settings.llm.resolve_active();
         assert_eq!(c.provider, "deepseek");
         assert_eq!(c.model, "deepseek-chat");
@@ -971,12 +978,15 @@ mod tests {
         assert_eq!(changes.key_ops.len(), 1);
         assert_eq!(changes.key_ops[0].provider, "kimi");
         assert_eq!(changes.key_ops[0].plaintext, "sk-kimi");
-        assert_eq!(kimi.api_type, ApiType::OpenAiCompletions, "缺省字段走 default");
+        assert_eq!(
+            kimi.api_type,
+            ApiType::OpenAiCompletions,
+            "缺省字段走 default"
+        );
         assert_eq!(s.settings.llm.active_provider, "kimi");
-        let patch2: SettingsPatch = serde_json::from_str(
-            r#"{ "llm": { "providers": { "kimi": { "model": "" } } } }"#,
-        )
-        .unwrap();
+        let patch2: SettingsPatch =
+            serde_json::from_str(r#"{ "llm": { "providers": { "kimi": { "model": "" } } } }"#)
+                .unwrap();
         s.apply_patch(&patch2);
         assert_eq!(s.settings.llm.providers.get("kimi").unwrap().model, "");
         assert_eq!(s.settings.llm.providers.len(), 1);
@@ -996,14 +1006,20 @@ mod tests {
         let c = s.apply_patch(&seed);
         assert_eq!(c.key_ops.len(), 1);
         assert_eq!(c.key_ops[0].plaintext, "sk-original");
-        assert_eq!(s.settings.llm.providers.get("deepseek").unwrap().api_key, "");
+        assert_eq!(
+            s.settings.llm.providers.get("deepseek").unwrap().api_key,
+            ""
+        );
 
         let masked: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "api_key": "********" } } } }"#,
         )
         .unwrap();
         let c = s.apply_patch(&masked);
-        assert!(c.key_ops.is_empty(), "掩码占位不产生密钥操作（保留该家现值）");
+        assert!(
+            c.key_ops.is_empty(),
+            "掩码占位不产生密钥操作（保留该家现值）"
+        );
         let absent: SettingsPatch = serde_json::from_str(
             r#"{ "llm": { "providers": { "deepseek": { "model": "m2" } } } }"#,
         )
@@ -1153,7 +1169,11 @@ mod tests {
             crate::config::default_workspace_path(),
             "空 = 默认工作区回退"
         );
-        assert_ne!(s.workspace_root(), dir.clone(), "空值不再回退数据根（旧语义已撤）");
+        assert_ne!(
+            s.workspace_root(),
+            dir.clone(),
+            "空值不再回退数据根（旧语义已撤）"
+        );
 
         // 显式值优先
         let mut s2 = SettingsStore::load(&dir);

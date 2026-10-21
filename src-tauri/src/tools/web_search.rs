@@ -63,7 +63,11 @@ impl SearchResult {
         // snippet 优先 content（既有实现同规则），再退 description/snippet
         let snippet = ["content", "description", "snippet"]
             .iter()
-            .find_map(|k| item.get(*k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
+            .find_map(|k| {
+                item.get(*k)
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or("");
         Some(Self {
             title: title.to_string(),
@@ -157,7 +161,11 @@ impl Tool for WebSearchTool {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(params) else {
             return ToolDisplay::default();
         };
-        match v.get("query").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+        match v
+            .get("query")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+        {
             Some(q) => ToolDisplay::info(q),
             None => ToolDisplay::default(),
         }
@@ -238,17 +246,13 @@ impl WebSearchProvider for AnysearchFreeBackend {
             .no_proxy()
             .build()
             .map_err(|e| SearchError::Network(e.to_string()))?;
-        let resp = client
-            .post(&url)
-            .json(&body)
-            .send()
-            .map_err(|e| {
-                if e.is_timeout() {
-                    SearchError::Network(format!("请求超时（{} 秒）", REQUEST_TIMEOUT.as_secs()))
-                } else {
-                    SearchError::Network(e.to_string())
-                }
-            })?;
+        let resp = client.post(&url).json(&body).send().map_err(|e| {
+            if e.is_timeout() {
+                SearchError::Network(format!("请求超时（{} 秒）", REQUEST_TIMEOUT.as_secs()))
+            } else {
+                SearchError::Network(e.to_string())
+            }
+        })?;
         let status = resp.status();
         let bytes = resp
             .bytes()
@@ -353,7 +357,10 @@ mod tests {
 
     impl FakeBackend {
         fn new(case: FakeCase) -> Self {
-            Self { case, seen: Arc::new(std::sync::Mutex::new(Vec::new())) }
+            Self {
+                case,
+                seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
         }
         fn recorded(&self) -> Vec<u32> {
             self.seen.lock().unwrap().clone()
@@ -403,10 +410,21 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["title"], "明日方舟 泰拉能源综述");
         assert_eq!(results[0]["url"], "https://example.com/a");
-        assert_eq!(results[0]["snippet"], "关于源石能源应用的中文综述页面摘要内容。");
+        assert_eq!(
+            results[0]["snippet"],
+            "关于源石能源应用的中文综述页面摘要内容。"
+        );
         // summary：中文编号列表，含标题/链接/摘要
-        assert!(out.summary.starts_with("共 2 条结果："), "got: {}", out.summary);
-        assert!(out.summary.contains("1. **明日方舟 泰拉能源综述**"), "got: {}", out.summary);
+        assert!(
+            out.summary.starts_with("共 2 条结果："),
+            "got: {}",
+            out.summary
+        );
+        assert!(
+            out.summary.contains("1. **明日方舟 泰拉能源综述**"),
+            "got: {}",
+            out.summary
+        );
         assert!(out.summary.contains("https://example.com/b"));
         assert!(out.summary.contains("技能机制与数值说明。"));
     }
@@ -427,10 +445,7 @@ mod tests {
         let t = WebSearchTool::new(Arc::new(FakeBackend::new(FakeCase::Empty)));
         let out = exec(&t, r#"{"query":"不存在的关键词xyz"}"#).unwrap();
         assert_eq!(out.canonical["results"], serde_json::json!([]));
-        assert_eq!(
-            out.summary,
-            "未找到与「不存在的关键词xyz」相关的结果"
-        );
+        assert_eq!(out.summary, "未找到与「不存在的关键词xyz」相关的结果");
     }
 
     // ── 错误型：限流 / 服务错误 → 中文 ToolError ──
@@ -461,7 +476,10 @@ mod tests {
     fn missing_or_blank_query_rejected() {
         let t = hit_tool();
         let err = exec(&t, r#"{}"#).unwrap_err();
-        assert!(err.to_string().contains("缺少必填参数: query"), "got: {err}");
+        assert!(
+            err.to_string().contains("缺少必填参数: query"),
+            "got: {err}"
+        );
         let err = exec(&t, r#"{"query":"   "}"#).unwrap_err();
         assert!(err.to_string().contains("query 不能为空"), "got: {err}");
     }
@@ -472,7 +490,7 @@ mod tests {
     fn max_results_clamped_and_forwarded() {
         let backend = Arc::new(FakeBackend::new(FakeCase::Hit));
         let t = WebSearchTool::new(backend.clone()); // Arc<FakeBackend> → Arc<dyn> 参数位自动 unsize
-        // 缺省 → 10；超上限 999 → 20；下限 0 → 1
+                                                     // 缺省 → 10；超上限 999 → 20；下限 0 → 1
         let _ = exec(&t, r#"{"query":"a"}"#).unwrap();
         let _ = exec(&t, r#"{"query":"a","maxResults":999}"#).unwrap();
         let _ = exec(&t, r#"{"query":"a","maxResults":0}"#).unwrap();
@@ -551,6 +569,9 @@ mod tests {
         let err = parse_anysearch_results(b"not json at all", 10).unwrap_err();
         assert!(matches!(err, SearchError::Network(_)), "got: {err:?}");
         let err = parse_anysearch_results(br#"{"data":{"foo":1}}"#, 10).unwrap_err();
-        assert!(matches!(err, SearchError::Network(_)), "缺 results 应为结构错误");
+        assert!(
+            matches!(err, SearchError::Network(_)),
+            "缺 results 应为结构错误"
+        );
     }
 }

@@ -89,7 +89,9 @@ impl std::str::FromStr for FilterOp {
             ">=" => Ok(FilterOp::Gte),
             "<=" => Ok(FilterOp::Lte),
             "LIKE" => Ok(FilterOp::Like),
-            _ => Err(format!("不支持的操作符: {s}。可用: =, >, <, >=, <=, !=, LIKE")),
+            _ => Err(format!(
+                "不支持的操作符: {s}。可用: =, >, <, >=, <=, !=, LIKE"
+            )),
         }
     }
 }
@@ -405,11 +407,7 @@ impl Database {
     ///
     /// 表级和字段级白名单校验与 `query_filtered` 一致。
     /// 无条件（filters 为空）返回全表行数。
-    pub fn query_count(
-        &self,
-        table: &str,
-        filters: &[Filter],
-    ) -> Result<u32, String> {
+    pub fn query_count(&self, table: &str, filters: &[Filter]) -> Result<u32, String> {
         self.ensure_available()?;
 
         // ── 1. 校验表存在 ──
@@ -467,7 +465,9 @@ impl Database {
         let count: u32 = if param_refs.is_empty() {
             conn.query_row(&sql, [], |row| row.get(0))
         } else {
-            conn.query_row(&sql, rusqlite::params_from_iter(param_refs), |row| row.get(0))
+            conn.query_row(&sql, rusqlite::params_from_iter(param_refs), |row| {
+                row.get(0)
+            })
         }
         .map_err(|e| format!("COUNT 查询失败: {e}"))?;
 
@@ -605,7 +605,8 @@ mod tests {
                 &["名称".into(), "级别".into(), "最大生命值".into()],
                 &[name_like("enemies", "名称", "源石虫")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         assert!(!rows.is_empty(), "至少应返回一条结果");
@@ -624,7 +625,8 @@ mod tests {
                 &["名称".into()],
                 &[name_like("enemies", "名称", "这个敌人绝对不存在xyz123")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
         assert!(rows.is_empty());
     }
@@ -638,7 +640,8 @@ mod tests {
                 &["名称".into(), "职业".into(), "稀有度".into()],
                 &[name_like("operators", "名称", "阿米娅")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         // 阿米娅有三条（原版+近卫+医疗），受 LIMIT 5 保护
@@ -652,10 +655,16 @@ mod tests {
         let rows = db
             .query_filtered(
                 "stages",
-                &["关卡名".into(), "关卡ID".into(), "关卡编号".into(), "理智消耗".into()],
+                &[
+                    "关卡名".into(),
+                    "关卡ID".into(),
+                    "关卡编号".into(),
+                    "理智消耗".into(),
+                ],
                 &[name_like("stages", "关卡名", "暴君")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         assert!(!rows.is_empty());
@@ -672,7 +681,8 @@ mod tests {
                 &["levelId".into()],
                 &[Filter::new("levelId", FilterOp::Like, "main_01-07")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
         assert!(!rows.is_empty());
         assert_eq!(rows[0]["levelId"], "level_main_01-07");
@@ -687,7 +697,8 @@ mod tests {
                 &["名称".into()],
                 &[name_like("enemies", "名称", "源石虫")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         // LIMIT 5 生效
@@ -701,12 +712,14 @@ mod tests {
     #[test]
     fn query_nonexistent_table() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
-        let result = db.query_filtered(
-            "nonexistent",
-            &["名称".into()],
-            &[name_like("nonexistent", "名称", "test")],
-            5,
-        ).map(|r| r.rows);
+        let result = db
+            .query_filtered(
+                "nonexistent",
+                &["名称".into()],
+                &[name_like("nonexistent", "名称", "test")],
+                5,
+            )
+            .map(|r| r.rows);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("未知数据表"));
     }
@@ -714,12 +727,14 @@ mod tests {
     #[test]
     fn query_invalid_filter_field() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
-        let result = db.query_filtered(
-            "enemies",
-            &["名称".into()],
-            &[Filter::new("这列肯定不存在", FilterOp::Eq, "test")],
-            5,
-        ).map(|r| r.rows);
+        let result = db
+            .query_filtered(
+                "enemies",
+                &["名称".into()],
+                &[Filter::new("这列肯定不存在", FilterOp::Eq, "test")],
+                5,
+            )
+            .map(|r| r.rows);
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("过滤字段"));
@@ -737,7 +752,8 @@ mod tests {
                 &["名称".into(), "不存在的列xyz".into(), "级别".into()],
                 &[name_like("enemies", "名称", "源石虫")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         // 有效字段存在
@@ -750,12 +766,14 @@ mod tests {
     #[test]
     fn all_invalid_fields_returns_error() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
-        let result = db.query_filtered(
-            "enemies",
-            &["不存在的列".into()],
-            &[name_like("enemies", "名称", "test")],
-            5,
-        ).map(|r| r.rows);
+        let result = db
+            .query_filtered(
+                "enemies",
+                &["不存在的列".into()],
+                &[name_like("enemies", "名称", "test")],
+                5,
+            )
+            .map(|r| r.rows);
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("均不在"));
@@ -773,7 +791,8 @@ mod tests {
                 &["名称".into(), "持有者".into()],
                 &[name_like("tokens", "名称", "触手")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
         assert!(!rows.is_empty());
         assert_eq!(rows[0]["名称"], "触手");
@@ -788,7 +807,8 @@ mod tests {
                 &["名称".into(), "代号".into()],
                 &[name_like("traps", "名称", "障碍物")],
                 5,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
         assert!(!rows.is_empty());
         assert_eq!(rows[0]["名称"], "障碍物");
@@ -797,12 +817,9 @@ mod tests {
     #[test]
     fn query_empty_fields_array() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
-        let result = db.query_filtered(
-            "enemies",
-            &[],
-            &[name_like("enemies", "名称", "源石虫")],
-            5,
-        ).map(|r| r.rows);
+        let result = db
+            .query_filtered("enemies", &[], &[name_like("enemies", "名称", "源石虫")], 5)
+            .map(|r| r.rows);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("均不在"));
     }
@@ -819,7 +836,8 @@ mod tests {
                 &["名称".into(), "法术抗性".into()],
                 &[Filter::new("法术抗性", FilterOp::Gt, "90")],
                 0, // 不设上限
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         assert!(!rows.is_empty(), "至少应有法抗>90的敌人");
@@ -839,7 +857,8 @@ mod tests {
                 &["名称".into(), "地位".into()],
                 &[Filter::new("地位", FilterOp::Eq, "领袖")],
                 20,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         assert!(!rows.is_empty(), "至少应有一个领袖敌人");
@@ -861,7 +880,8 @@ mod tests {
                     Filter::new("级别", FilterOp::Eq, "0"),
                 ],
                 10,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         for row in &rows {
@@ -875,12 +895,8 @@ mod tests {
         // 无条件查询 + LIMIT 3
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
         let rows = db
-            .query_filtered(
-                "enemies",
-                &["名称".into()],
-                &[],
-                3,
-            ).map(|r| r.rows)
+            .query_filtered("enemies", &["名称".into()], &[], 3)
+            .map(|r| r.rows)
             .unwrap();
 
         assert_eq!(rows.len(), 3);
@@ -891,16 +907,16 @@ mod tests {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
         // 法抗 > 90 的数量
         let count = db
-            .query_count(
-                "enemies",
-                &[Filter::new("法术抗性", FilterOp::Gt, "90")],
-            )
+            .query_count("enemies", &[Filter::new("法术抗性", FilterOp::Gt, "90")])
             .unwrap();
         assert!(count > 0);
 
         // 无条件 = 全表
         let total = db.query_count("enemies", &[]).unwrap();
-        assert!(total > 1000, "enemies 表应有超过 1000 条记录，实际: {total}");
+        assert!(
+            total > 1000,
+            "enemies 表应有超过 1000 条记录，实际: {total}"
+        );
     }
 
     #[test]
@@ -913,11 +929,16 @@ mod tests {
                 &["名称".into()],
                 &[name_like("enemies", "名称", "源石虫")],
                 0,
-            ).map(|r| r.rows)
+            )
+            .map(|r| r.rows)
             .unwrap();
 
         // 源石虫变种有 40+ 条，无 LIMIT 应全部返回
-        assert!(rows.len() > 5, "无 LIMIT 应返回 > 5 条，实际: {}", rows.len());
+        assert!(
+            rows.len() > 5,
+            "无 LIMIT 应返回 > 5 条，实际: {}",
+            rows.len()
+        );
     }
 
     // ── FilterOp ──

@@ -98,9 +98,7 @@ impl Tool for ReadKnowledgeTool {
                 .map(|s| {
                     s.as_str()
                         .map(str::to_string)
-                        .ok_or_else(|| {
-                            ToolError::Parse("参数 sections 的元素必须是字符串".into())
-                        })
+                        .ok_or_else(|| ToolError::Parse("参数 sections 的元素必须是字符串".into()))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         };
@@ -146,7 +144,10 @@ impl Tool for ReadKnowledgeTool {
         if sections.is_empty() {
             let mut s = format!("条目「{entry}」全文：\n{body}");
             if !key_points.is_empty() {
-                s.push_str(&format!("\n\n条目要点：\n{}", format_key_points(&key_points)));
+                s.push_str(&format!(
+                    "\n\n条目要点：\n{}",
+                    format_key_points(&key_points)
+                ));
             }
             let mut canonical = serde_json::json!({
                 "entry": entry,
@@ -172,7 +173,10 @@ impl Tool for ReadKnowledgeTool {
                     .join("\n\n");
                 let mut s = format!("（条目「{entry}」节选）\n{joined}");
                 if !key_points.is_empty() {
-                    s.push_str(&format!("\n\n条目要点：\n{}", format_key_points(&key_points)));
+                    s.push_str(&format!(
+                        "\n\n条目要点：\n{}",
+                        format_key_points(&key_points)
+                    ));
                 }
                 let mut canonical = serde_json::json!({
                     "entry": entry,
@@ -273,10 +277,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-rk-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-rk-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -392,9 +394,7 @@ mod tests {
         let idx = Arc::new(KnowledgeIndex::load(&root).unwrap());
         let tool = ReadKnowledgeTool::new(idx);
 
-        let err = tool
-            .execute(&ToolContext::new(), r#"{}"#)
-            .unwrap_err();
+        let err = tool.execute(&ToolContext::new(), r#"{}"#).unwrap_err();
         assert!(matches!(&err, ToolError::Parse(_)), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -437,8 +437,14 @@ mod tests {
         );
         // 节选不返回 frontmatter；key_points 随阅读返回附带（全文/节选一致，
         // 不在导航层提前给出，也绝不在阅读层缺失）
-        assert!(!out.summary.contains("---"), "节选不应含 frontmatter 分隔线");
-        assert!(!out.summary.contains("title:"), "节选不应含 frontmatter 字段");
+        assert!(
+            !out.summary.contains("---"),
+            "节选不应含 frontmatter 分隔线"
+        );
+        assert!(
+            !out.summary.contains("title:"),
+            "节选不应含 frontmatter 字段"
+        );
         // canonical
         assert_eq!(out.canonical["entry"], "Buff机制基础");
         assert_eq!(
@@ -496,7 +502,10 @@ mod tests {
             out.canonical["sections"],
             serde_json::json!(["第三节内容", "第一节内容", "第二节内容"])
         );
-        assert_eq!(out.canonical["content"], out.summary.trim_start_matches("（条目「多节条目」节选）\n"));
+        assert_eq!(
+            out.canonical["content"],
+            out.summary.trim_start_matches("（条目「多节条目」节选）\n")
+        );
         // 节选不包含 frontmatter
         assert!(!out.summary.contains("---"));
 
@@ -618,10 +627,22 @@ mod tests {
         // 无 key_points 条目：不带「条目要点」段
         assert!(out.summary.starts_with("条目「长条目」全文："));
         assert!(out.summary.contains("## 第一节"));
-        assert!(out.summary.contains("结束。"), "省略 sections 应返回全文正文");
-        assert!(out.canonical.get("key_points").is_none(), "无要点不加 key_points 字段");
-        assert!(!out.summary.contains("条目要点"), "无 key_points 不带要点段");
-        assert!(out.canonical.get("sections").is_none(), "全文模式不带 sections 字段");
+        assert!(
+            out.summary.contains("结束。"),
+            "省略 sections 应返回全文正文"
+        );
+        assert!(
+            out.canonical.get("key_points").is_none(),
+            "无要点不加 key_points 字段"
+        );
+        assert!(
+            !out.summary.contains("条目要点"),
+            "无 key_points 不带要点段"
+        );
+        assert!(
+            out.canonical.get("sections").is_none(),
+            "全文模式不带 sections 字段"
+        );
 
         // 按节读取可用
         let out = tool

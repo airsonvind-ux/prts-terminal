@@ -95,7 +95,9 @@ mod tests {
     use super::*;
     use futures_util::stream;
 
-    fn bytes_stream(chunks: Vec<Vec<u8>>) -> impl futures_util::Stream<Item = Result<Vec<u8>, String>> + Unpin {
+    fn bytes_stream(
+        chunks: Vec<Vec<u8>>,
+    ) -> impl futures_util::Stream<Item = Result<Vec<u8>, String>> + Unpin {
         stream::iter(chunks.into_iter().map(Ok))
     }
 
@@ -115,7 +117,11 @@ mod tests {
         let frames = collect(chunks).await;
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0], "data: {\"t\":\"记录的可信度不由我担保\"}");
-        assert!(!frames[0].contains('\u{FFFD}'), "不应出现替换符: {}", frames[0]);
+        assert!(
+            !frames[0].contains('\u{FFFD}'),
+            "不应出现替换符: {}",
+            frames[0]
+        );
     }
 
     /// `\r\n\r\n` 分隔的帧同样要切得开。
@@ -135,7 +141,12 @@ mod tests {
     /// 帧被 chunk 切开也不影响切帧（未成帧的尾字节留在缓冲里）。
     #[tokio::test]
     async fn frame_split_across_chunks() {
-        let frames = collect(vec![b"data: he".to_vec(), b"llo\n".to_vec(), b"\n".to_vec()]).await;
+        let frames = collect(vec![
+            b"data: he".to_vec(),
+            b"llo\n".to_vec(),
+            b"\n".to_vec(),
+        ])
+        .await;
         assert_eq!(frames, vec!["data: hello".to_string()]);
     }
 

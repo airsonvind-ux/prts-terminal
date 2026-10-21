@@ -88,7 +88,11 @@ const OFFICIAL_MARKER: &str = "hgsdk.dll";
 impl MachineInfo {
     /// 三值维度文案：`(maa, emulator, game_pc)`。空 → `未检测到`。
     pub fn dim_values(&self) -> (String, String, String) {
-        let maa = if self.maa.is_some() { "已安装" } else { "未检测到" };
+        let maa = if self.maa.is_some() {
+            "已安装"
+        } else {
+            "未检测到"
+        };
 
         let emulator = if self.emulators.is_empty() {
             "未检测到".to_string()
@@ -326,7 +330,10 @@ fn dir_from_uninstall(s: &str) -> PathBuf {
         let cut = lower.find(".exe").map(|i| i + 4).unwrap_or(s.len());
         &s[..cut]
     };
-    Path::new(exe).parent().map(Path::to_path_buf).unwrap_or_default()
+    Path::new(exe)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
 }
 
 // ═══════════════════════════════════════════════════════
@@ -602,7 +609,10 @@ mod tests {
         };
         let (maa, emulator, game_pc) = m.dim_values();
         assert_eq!(maa, "已安装");
-        assert_eq!(emulator, "MuMu 12；雷电 LDPlayer", "同类型去重 + 排序（字节序）");
+        assert_eq!(
+            emulator, "MuMu 12；雷电 LDPlayer",
+            "同类型去重 + 排序（字节序）"
+        );
         assert_eq!(game_pc, "B服；官服", "官/B 都装时并报");
     }
 

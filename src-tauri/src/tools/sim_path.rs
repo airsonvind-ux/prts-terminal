@@ -62,7 +62,7 @@ struct TileEntry(String, i64, i64, i64); // tileKey, heightType, buildableType, 
 /// 内部检查点模型（数据库路线与 DSL 统一归一）
 #[derive(Clone, Debug, serde::Serialize)]
 struct Checkpoint {
-    kind: String,          // MOVE / WAIT / WAIT_GLOBAL / WAIT_FRAGMENT / WAIT_WAVE / DISAPPEAR / APPEAR / END / START
+    kind: String, // MOVE / WAIT / WAIT_GLOBAL / WAIT_FRAGMENT / WAIT_WAVE / DISAPPEAR / APPEAR / END / START
     time: f64,
     pos: Option<(i64, i64)>,
     offset: Option<(f32, f32)>,
@@ -70,19 +70,24 @@ struct Checkpoint {
 
 impl Checkpoint {
     fn new(kind: &str) -> Self {
-        Checkpoint { kind: kind.to_string(), time: 0.0, pos: None, offset: None }
+        Checkpoint {
+            kind: kind.to_string(),
+            time: 0.0,
+            pos: None,
+            offset: None,
+        }
     }
 }
 
 /// 注入事件（push / block）：设定帧仅为触发信号，不改变设定帧状态，下一帧起生效
 #[derive(Clone, Debug, serde::Serialize)]
 struct Injection {
-    kind: String,          // push / block
+    kind: String, // push / block
     f: i64,
     dir: Option<(f32, f32)>, // push 方向（已归一化）
-    dist: Option<f32>,      // push 距离
-    dur: i64,               // push 失衡帧数 / block 部署帧到撤退帧的总帧数
-    at: Option<(i64, i64)>, // block 阻挡位（自动模式）
+    dist: Option<f32>,       // push 距离
+    dur: i64,                // push 失衡帧数 / block 部署帧到撤退帧的总帧数
+    at: Option<(i64, i64)>,  // block 阻挡位（自动模式）
     pos: Option<(f32, f32)>, // block 偏移后坐标（pos 模式，预计算目标）
 }
 
@@ -132,7 +137,10 @@ fn round_half_even(v: f64) -> f64 {
 }
 
 fn cell32(x: f32, y: f32) -> (i64, i64) {
-    (round_half_even(f64::from(x)) as i64, round_half_even(f64::from(y)) as i64)
+    (
+        round_half_even(f64::from(x)) as i64,
+        round_half_even(f64::from(y)) as i64,
+    )
 }
 
 /// clamp 到最大长度（纯 float32，对齐游戏语义 / sim_all.py：np.sqrt 保持 f32）。
@@ -316,13 +324,27 @@ impl<'a> Simulator<'a> {
         let in_map = cx >= 0 && cx < w && cy >= 0 && cy < h;
         if !in_map || !passable[cy as usize][cx as usize] {
             // 光标在不可通行格：8 邻域最近可通行格方向（正上优先、顺时针递减）
-            let order = [(0, 1), (1, 1), (1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1)];
+            let order = [
+                (0, 1),
+                (1, 1),
+                (1, 0),
+                (1, -1),
+                (0, -1),
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+            ];
             let mut best_dir: Option<(f32, f32)> = None;
             let mut best_d = f32::MAX;
             for (dx, dy) in order {
                 let (ox, oy) = (cx + dx, cy + dy);
-                if ox >= 0 && ox < w && oy >= 0 && oy < h
-                    && passable[oy as usize][ox as usize] && !self.obstacles.contains(&(ox, oy)) {
+                if ox >= 0
+                    && ox < w
+                    && oy >= 0
+                    && oy < h
+                    && passable[oy as usize][ox as usize]
+                    && !self.obstacles.contains(&(ox, oy))
+                {
                     // sim_all.py：d = np.sqrt(F(dx)*F(dx) + F(dy)*F(dy))（f32）
                     let d = (dx as f32 * dx as f32 + dy as f32 * dy as f32).sqrt();
                     if d < best_d {
@@ -355,7 +377,13 @@ impl<'a> Simulator<'a> {
                 if passable[oy as usize][ox as usize] && !self.obstacles.contains(&(ox, oy)) {
                     continue;
                 }
-                let nx = if dx < 0 { foot_x - HALF_BODY } else if dx > 0 { foot_x + HALF_BODY } else { foot_x };
+                let nx = if dx < 0 {
+                    foot_x - HALF_BODY
+                } else if dx > 0 {
+                    foot_x + HALF_BODY
+                } else {
+                    foot_x
+                };
                 let ny = foot_y;
                 let (fdx, fdy) = (dx as f32, dy as f32);
                 let app_x = ((nx - cx as f32) * fdx).max(0.0);
@@ -387,18 +415,32 @@ impl<'a> Simulator<'a> {
 
     fn check_hole(&self) -> bool {
         let (hx, hy) = cell32(self.entity.0, self.entity.1);
-        hx >= 0 && hx < self.model.width && hy >= 0 && hy < self.model.height
+        hx >= 0
+            && hx < self.model.width
+            && hy >= 0
+            && hy < self.model.height
             && self.model.tile_key[hy as usize][hx as usize] == "tile_hole"
     }
 
     fn finish_cp(&mut self, f: i64, label: &str) {
         self.out.cp_done.push(f);
-        self.out.events.push(SimEvent { f, text: format!("检查点完成 {label}，位置 ({:.3},{:.3})", self.entity.0, self.entity.1) });
+        self.out.events.push(SimEvent {
+            f,
+            text: format!(
+                "检查点完成 {label}，位置 ({:.3},{:.3})",
+                self.entity.0, self.entity.1
+            ),
+        });
         self.cp_idx += 1;
         if self.cp_idx < self.checkpoints.len() && self.checkpoints[self.cp_idx].kind == "WAIT" {
             self.wait_left = self.checkpoints[self.cp_idx].time as f32;
             self.out.events.push(SimEvent {
-                f, text: format!("停驻开始 {}s，位置 ({:.3},{:.3})", self.checkpoints[self.cp_idx].time, self.entity.0, self.entity.1) });
+                f,
+                text: format!(
+                    "停驻开始 {}s，位置 ({:.3},{:.3})",
+                    self.checkpoints[self.cp_idx].time, self.entity.0, self.entity.1
+                ),
+            });
         }
     }
 
@@ -419,8 +461,12 @@ impl<'a> Simulator<'a> {
                     return;
                 }
                 let (cx, cy) = cell32(self.cursor.0, self.cursor.1);
-                if cx < 0 || cx >= self.model.width || cy < 0 || cy >= self.model.height
-                    || !self.model.passable[cy as usize][cx as usize] {
+                if cx < 0
+                    || cx >= self.model.width
+                    || cy < 0
+                    || cy >= self.model.height
+                    || !self.model.passable[cy as usize][cx as usize]
+                {
                     self.finish_cp(f, "MOVE 卡墙跳");
                     return;
                 }
@@ -442,7 +488,8 @@ impl<'a> Simulator<'a> {
                 let dx = self.cursor.0 - self.end.0 as f32;
                 let dy = self.cursor.1 - self.end.1 as f32;
                 if (dx * dx + dy * dy).sqrt() < GOAL_R {
-                    self.out.end_reason = format!("抵达终点，位置 ({:.3},{:.3})", self.entity.0, self.entity.1);
+                    self.out.end_reason =
+                        format!("抵达终点，位置 ({:.3},{:.3})", self.entity.0, self.entity.1);
                     self.out.end_frame = f;
                 }
             }
@@ -453,7 +500,10 @@ impl<'a> Simulator<'a> {
             "APPEAR" => {
                 let p = pos.unwrap();
                 // 纯 float32：entity = F(pos + spawn_offset)
-                self.entity = (p.0 as f32 + self.spawn_offset.0, p.1 as f32 + self.spawn_offset.1);
+                self.entity = (
+                    p.0 as f32 + self.spawn_offset.0,
+                    p.1 as f32 + self.spawn_offset.1,
+                );
                 self.cursor = (p.0 as f32, p.1 as f32);
                 self.disappeared = false;
                 self.finish_cp(f, &format!("APPEAR{:?}", p));
@@ -462,13 +512,28 @@ impl<'a> Simulator<'a> {
         }
     }
 
-    fn record_frame(&mut self, f: i64, given: Option<(f32, f32)>, vel: Option<(f32, f32)>, avoid: (f32, f32), note: Option<&str>) {
+    fn record_frame(
+        &mut self,
+        f: i64,
+        given: Option<(f32, f32)>,
+        vel: Option<(f32, f32)>,
+        avoid: (f32, f32),
+        note: Option<&str>,
+    ) {
         let cell = cell32(self.cursor.0, self.cursor.1);
         self.out.frames.push(FrameRec {
-            f, x: self.entity.0, y: self.entity.1,
-            cx: self.cursor.0, cy: self.cursor.1, cell,
-            given, vel, avoid,
-            cp: self.cp_idx, nav: self.nav, phase: (self.nav - self.k).rem_euclid(3),
+            f,
+            x: self.entity.0,
+            y: self.entity.1,
+            cx: self.cursor.0,
+            cy: self.cursor.1,
+            cell,
+            given,
+            vel,
+            avoid,
+            cp: self.cp_idx,
+            nav: self.nav,
+            phase: (self.nav - self.k).rem_euclid(3),
             note: note.map(|s| s.to_string()),
         });
     }
@@ -491,15 +556,25 @@ impl<'a> Simulator<'a> {
             (0.0, 0.0)
         };
         let sb = match given {
-            Some((gx, gy)) => (gx * self.theo - self.inertia.0, gy * self.theo - self.inertia.1),
+            Some((gx, gy)) => (
+                gx * self.theo - self.inertia.0,
+                gy * self.theo - self.inertia.1,
+            ),
             None => (-self.inertia.0, -self.inertia.1),
         };
         let steer = (sb.0 * STEERING + av.0, sb.1 * STEERING + av.1);
         let accel = clamp32(steer.0, steer.1, MAX_STEER);
-        let vel = clamp32(accel.0 * DELTA + self.inertia.0, accel.1 * DELTA + self.inertia.1, self.theo);
+        let vel = clamp32(
+            accel.0 * DELTA + self.inertia.0,
+            accel.1 * DELTA + self.inertia.1,
+            self.theo,
+        );
         let disp = (vel.0 * DELTA, vel.1 * DELTA);
         self.entity = (self.entity.0 + disp.0, self.entity.1 + disp.1);
-        self.cursor = (self.entity.0 - self.spawn_offset.0, self.entity.1 - self.spawn_offset.1);
+        self.cursor = (
+            self.entity.0 - self.spawn_offset.0,
+            self.entity.1 - self.spawn_offset.1,
+        );
         self.inertia = vel;
         (given, vel, disp)
     }
@@ -511,18 +586,29 @@ impl<'a> Simulator<'a> {
         if cell != self.last_cell {
             self.last_cell = cell;
             self.out.events.push(SimEvent {
-                f, text: format!("进入格 [{}, {}]，位置 ({:.3},{:.3})", cell.0, cell.1, self.cursor.0, self.cursor.1) });
+                f,
+                text: format!(
+                    "进入格 [{}, {}]，位置 ({:.3},{:.3})",
+                    cell.0, cell.1, self.cursor.0, self.cursor.1
+                ),
+            });
         }
         self.record_frame(f, given, Some(vel), self.avoid, None);
     }
 
     fn run(&mut self, injections: &[Injection]) -> Result<(), String> {
-                self.out.events.push(SimEvent {
+        self.out.events.push(SimEvent {
             f: 0,
-            text: format!("生成于 ({:.3},{:.3}) [格{:?}]", self.entity.0, self.entity.1, self.last_cell),
+            text: format!(
+                "生成于 ({:.3},{:.3}) [格{:?}]",
+                self.entity.0, self.entity.1, self.last_cell
+            ),
         });
         if self.spawn_offset != (0.0, 0.0) {
-            self.out.events.push(SimEvent { f: 0, text: format!("生成偏移 {:?}", self.spawn_offset) });
+            self.out.events.push(SimEvent {
+                f: 0,
+                text: format!("生成偏移 {:?}", self.spawn_offset),
+            });
         }
         let mut inj_idx = 0usize;
         // 失衡状态（push 设定帧下一帧起生效 dur 帧；失衡覆盖一切）
@@ -558,8 +644,14 @@ impl<'a> Simulator<'a> {
                         blocking = None;
                         self.out.events.push(SimEvent {
                             f,
-                            text: format!("推拉开始：方向{:?} 距离{} 持续{}帧，位置 ({:.3},{:.3})",
-                                inj.dir.unwrap(), inj.dist.unwrap(), inj.dur, self.entity.0, self.entity.1),
+                            text: format!(
+                                "推拉开始：方向{:?} 距离{} 持续{}帧，位置 ({:.3},{:.3})",
+                                inj.dir.unwrap(),
+                                inj.dist.unwrap(),
+                                inj.dur,
+                                self.entity.0,
+                                self.entity.1
+                            ),
                         });
                     }
                     "block" => {
@@ -587,7 +679,10 @@ impl<'a> Simulator<'a> {
                             };
                             self.out.events.push(SimEvent {
                                 f,
-                                text: format!("部署阻挡 {} dur={}，位置 ({:.3},{:.3})", desc, inj.dur, self.entity.0, self.entity.1),
+                                text: format!(
+                                    "部署阻挡 {} dur={}，位置 ({:.3},{:.3})",
+                                    desc, inj.dur, self.entity.0, self.entity.1
+                                ),
                             });
                         }
                     }
@@ -623,8 +718,17 @@ impl<'a> Simulator<'a> {
                 };
                 let disp = (ps.dir.0 * step, ps.dir.1 * step);
                 self.entity = (self.entity.0 + disp.0, self.entity.1 + disp.1);
-                self.cursor = (self.entity.0 - self.spawn_offset.0, self.entity.1 - self.spawn_offset.1);
-                self.record_frame(f, None, Some((disp.0 * FPS, disp.1 * FPS)), self.avoid, Some("推拉"));
+                self.cursor = (
+                    self.entity.0 - self.spawn_offset.0,
+                    self.entity.1 - self.spawn_offset.1,
+                );
+                self.record_frame(
+                    f,
+                    None,
+                    Some((disp.0 * FPS, disp.1 * FPS)),
+                    self.avoid,
+                    Some("推拉"),
+                );
                 if f == ps.start_f + dur - 1 {
                     // 推拉结束（失衡末帧的帧末结果事件）
                     self.out.events.push(SimEvent {
@@ -639,8 +743,10 @@ impl<'a> Simulator<'a> {
                 if bs.offset_rem > 0 {
                     // 偏移过程帧（线性匀速，纯 float32）
                     let progress = (7.0 - bs.offset_rem as f32) / 6.0;
-                    let pos = (bs.offset_from.0 + (bs.offset_to.0 - bs.offset_from.0) * progress,
-                              bs.offset_from.1 + (bs.offset_to.1 - bs.offset_from.1) * progress);
+                    let pos = (
+                        bs.offset_from.0 + (bs.offset_to.0 - bs.offset_from.0) * progress,
+                        bs.offset_from.1 + (bs.offset_to.1 - bs.offset_from.1) * progress,
+                    );
                     self.entity = (pos.0 + self.spawn_offset.0, pos.1 + self.spawn_offset.1);
                     self.cursor = (pos.0, pos.1);
                     blocking.as_mut().unwrap().offset_rem -= 1;
@@ -650,7 +756,10 @@ impl<'a> Simulator<'a> {
                         // 偏移完成（帧末结果事件）：偏移收尾 + 稳定坐标宣告
                         self.out.events.push(SimEvent {
                             f,
-                            text: format!("阻挡偏移完成，位置 ({:.3},{:.3})", self.entity.0, self.entity.1),
+                            text: format!(
+                                "阻挡偏移完成，位置 ({:.3},{:.3})",
+                                self.entity.0, self.entity.1
+                            ),
                         });
                     }
                     if f == ev_end {
@@ -729,12 +838,17 @@ impl<'a> Simulator<'a> {
                         // 偏移开始（帧首判定事件，坐标 = 判定坐标）；本帧即偏移第 0 帧，执行第 1 步位移
                         self.out.events.push(SimEvent {
                             f,
-                            text: format!("阻挡偏移开始，起点 ({:.3},{:.3})", self.entity.0, self.entity.1),
+                            text: format!(
+                                "阻挡偏移开始，起点 ({:.3},{:.3})",
+                                self.entity.0, self.entity.1
+                            ),
                         });
                         let from = self.entity;
                         let progress = 1.0 / 6.0;
-                        let pos = (from.0 + (t.0 - from.0) * progress,
-                                  from.1 + (t.1 - from.1) * progress);
+                        let pos = (
+                            from.0 + (t.0 - from.0) * progress,
+                            from.1 + (t.1 - from.1) * progress,
+                        );
                         self.entity = (pos.0 + self.spawn_offset.0, pos.1 + self.spawn_offset.1);
                         self.cursor = (pos.0, pos.1);
                         blocking.as_mut().unwrap().offset_rem -= 1;
@@ -749,7 +863,10 @@ impl<'a> Simulator<'a> {
                         // 稳定开始（帧首判定事件，坐标 = 判定坐标）；本帧稳定冻结
                         self.out.events.push(SimEvent {
                             f,
-                            text: format!("稳定阻挡开始，位置 ({:.3},{:.3})", self.entity.0, self.entity.1),
+                            text: format!(
+                                "稳定阻挡开始，位置 ({:.3},{:.3})",
+                                self.entity.0, self.entity.1
+                            ),
                         });
                         self.record_frame(f, None, Some(self.inertia), self.avoid, Some("阻挡"));
                     }
@@ -774,7 +891,10 @@ impl<'a> Simulator<'a> {
             self.out.end_reason = format!("超出帧上限（{}）", self.max_frames);
             self.out.end_frame = self.max_frames - 1;
         }
-        self.out.events.push(SimEvent { f: self.out.end_frame, text: self.out.end_reason.clone() });
+        self.out.events.push(SimEvent {
+            f: self.out.end_frame,
+            text: self.out.end_reason.clone(),
+        });
         Ok(())
     }
 }
@@ -844,11 +964,13 @@ impl Tool for SimPath {
     }
 
     fn execute(&self, ctx: &ToolContext, params: &str) -> Result<ToolOutput, ToolError> {
-        let v: serde_json::Value = serde_json::from_str(params)
-            .map_err(|e| ToolError::Parse(e.to_string()))?;
-        let level_id = v["levelId"].as_str()
+        let v: serde_json::Value =
+            serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
+        let level_id = v["levelId"]
+            .as_str()
             .ok_or_else(|| ToolError::Parse("缺少必填参数: levelId".into()))?;
-        let route_index = v["routeIndex"].as_i64()
+        let route_index = v["routeIndex"]
+            .as_i64()
             .ok_or_else(|| ToolError::Parse("缺少必填参数: routeIndex".into()))?;
         let speed = v["speed"].as_f64().unwrap_or(1.0) as f32;
         let k = v["k"].as_i64().unwrap_or(1);
@@ -858,18 +980,27 @@ impl Tool for SimPath {
         let t_wave = v["timeAxis"]["wave"].as_i64().unwrap_or(0);
         let log_override = v["log"].as_str().map(|s| s.to_string());
 
-        let db = ctx.db.as_ref().ok_or_else(|| ToolError::Execution("数据库未连接".into()))?;
-        let result = db.query_filtered(
-            "levels",
-            &["levelId".into(), "地图数据".into(), "路线".into()],
-            &[Filter::new("levelId", FilterOp::Eq, level_id)],
-            1,
-        ).map_err(|e| ToolError::Execution(e.to_string()))?;
-        let row = result.rows.into_iter().next()
+        let db = ctx
+            .db
+            .as_ref()
+            .ok_or_else(|| ToolError::Execution("数据库未连接".into()))?;
+        let result = db
+            .query_filtered(
+                "levels",
+                &["levelId".into(), "地图数据".into(), "路线".into()],
+                &[Filter::new("levelId", FilterOp::Eq, level_id)],
+                1,
+            )
+            .map_err(|e| ToolError::Execution(e.to_string()))?;
+        let row = result
+            .rows
+            .into_iter()
+            .next()
             .ok_or_else(|| ToolError::Execution(format!("未找到关卡: {level_id}")))?;
 
         // 地图模型
-        let map_raw = row.get("地图数据")
+        let map_raw = row
+            .get("地图数据")
             .ok_or_else(|| ToolError::Execution("地图数据缺失".into()))?;
         let md: MapData = serde_json::from_str(map_raw)
             .map_err(|e| ToolError::Execution(format!("解析地图数据失败: {e}")))?;
@@ -891,50 +1022,96 @@ impl Tool for SimPath {
                 }
             }
         }
-        let model = MapModel { width: w, height: h, passable, tile_key };
+        let model = MapModel {
+            width: w,
+            height: h,
+            passable,
+            tile_key,
+        };
 
         // 额外障碍物
         if let Some(obs) = v["obstacle"].as_str() {
             for token in obs.split(';') {
                 let token = token.trim();
-                if token.is_empty() { continue; }
+                if token.is_empty() {
+                    continue;
+                }
                 let mut it = token.split(',');
-                let x = it.next().and_then(|s| s.trim().parse::<i64>().ok())
+                let x = it
+                    .next()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
                     .ok_or_else(|| ToolError::Parse(format!("障碍物解析失败: {token}")))?;
-                let y = it.next().and_then(|s| s.trim().parse::<i64>().ok())
+                let y = it
+                    .next()
+                    .and_then(|s| s.trim().parse::<i64>().ok())
                     .ok_or_else(|| ToolError::Parse(format!("障碍物解析失败: {token}")))?;
                 obstacles.insert((x, y));
             }
         }
 
         // 路线：自定义 DSL 或数据库
-        let (start_pos, end, spawn_offset, checkpoints, route_label) = if let Some(dsl) = v["route"].as_str() {
-            let cps = parse_dsl(dsl).map_err(ToolError::Parse)?;
-            let start = cps.iter().find(|c| c.kind == "START").and_then(|c| c.pos)
-                .ok_or_else(|| ToolError::Parse("自定义路线需包含 START(x,y)".into()))?;
-            let end = cps.iter().find(|c| c.kind == "END").and_then(|c| c.pos)
-                .ok_or_else(|| ToolError::Parse("自定义路线需包含 END(x,y)".into()))?;
-            // 生成偏移取 START 的偏移参数（过滤前）
-            let spawn_offset = cps.iter().find(|c| c.kind == "START")
-                .and_then(|c| c.offset).unwrap_or((0.0, 0.0));
-            let mut cps: Vec<Checkpoint> = cps.into_iter()
-                .filter(|c| c.kind != "START" && c.kind != "END").collect();
-            cps.push(Checkpoint { kind: "END".into(), time: 0.0, pos: Some(end), offset: None });
-            (start, end, spawn_offset, cps, "自定义".to_string())
-        } else {
-            let routes_raw = row.get("路线")
-                .ok_or_else(|| ToolError::Execution("路线数据缺失".into()))?;
-            let routes: serde_json::Value = serde_json::from_str(routes_raw)
-                .map_err(|e| ToolError::Execution(format!("解析路线失败: {e}")))?;
-            let arr = routes.as_array().ok_or_else(|| ToolError::Execution("路线格式错误".into()))?;
-            if route_index < 0 || route_index as usize >= arr.len() {
-                return Err(ToolError::Execution(format!("路线序号 {} 越界（共 {} 条）", route_index, arr.len())));
-            }
-            let (start_cp, end, spawn_offset, mut cps) = parse_db_route(&arr[route_index as usize])
-                .map_err(ToolError::Parse)?;
-            cps.push(Checkpoint { kind: "END".into(), time: 0.0, pos: Some(end), offset: None });
-            (start_cp.pos.unwrap(), end, spawn_offset, cps, "数据库".to_string())
-        };
+        let (start_pos, end, spawn_offset, checkpoints, route_label) =
+            if let Some(dsl) = v["route"].as_str() {
+                let cps = parse_dsl(dsl).map_err(ToolError::Parse)?;
+                let start = cps
+                    .iter()
+                    .find(|c| c.kind == "START")
+                    .and_then(|c| c.pos)
+                    .ok_or_else(|| ToolError::Parse("自定义路线需包含 START(x,y)".into()))?;
+                let end = cps
+                    .iter()
+                    .find(|c| c.kind == "END")
+                    .and_then(|c| c.pos)
+                    .ok_or_else(|| ToolError::Parse("自定义路线需包含 END(x,y)".into()))?;
+                // 生成偏移取 START 的偏移参数（过滤前）
+                let spawn_offset = cps
+                    .iter()
+                    .find(|c| c.kind == "START")
+                    .and_then(|c| c.offset)
+                    .unwrap_or((0.0, 0.0));
+                let mut cps: Vec<Checkpoint> = cps
+                    .into_iter()
+                    .filter(|c| c.kind != "START" && c.kind != "END")
+                    .collect();
+                cps.push(Checkpoint {
+                    kind: "END".into(),
+                    time: 0.0,
+                    pos: Some(end),
+                    offset: None,
+                });
+                (start, end, spawn_offset, cps, "自定义".to_string())
+            } else {
+                let routes_raw = row
+                    .get("路线")
+                    .ok_or_else(|| ToolError::Execution("路线数据缺失".into()))?;
+                let routes: serde_json::Value = serde_json::from_str(routes_raw)
+                    .map_err(|e| ToolError::Execution(format!("解析路线失败: {e}")))?;
+                let arr = routes
+                    .as_array()
+                    .ok_or_else(|| ToolError::Execution("路线格式错误".into()))?;
+                if route_index < 0 || route_index as usize >= arr.len() {
+                    return Err(ToolError::Execution(format!(
+                        "路线序号 {} 越界（共 {} 条）",
+                        route_index,
+                        arr.len()
+                    )));
+                }
+                let (start_cp, end, spawn_offset, mut cps) =
+                    parse_db_route(&arr[route_index as usize]).map_err(ToolError::Parse)?;
+                cps.push(Checkpoint {
+                    kind: "END".into(),
+                    time: 0.0,
+                    pos: Some(end),
+                    offset: None,
+                });
+                (
+                    start_cp.pos.unwrap(),
+                    end,
+                    spawn_offset,
+                    cps,
+                    "数据库".to_string(),
+                )
+            };
 
         // 注入
         let injections = match v["inject"].as_str() {
@@ -961,11 +1138,16 @@ impl Tool for SimPath {
             obstacles: &obstacles,
             checkpoints,
             end,
-            k, theo, t_off,
+            k,
+            theo,
+            t_off,
             max_frames,
             nav_maps: HashMap::new(),
             // 纯 float32：entity = F(start + spawn_offset)、cursor = F(start)
-            entity: (start_pos.0 as f32 + spawn_offset.0, start_pos.1 as f32 + spawn_offset.1),
+            entity: (
+                start_pos.0 as f32 + spawn_offset.0,
+                start_pos.1 as f32 + spawn_offset.1,
+            ),
             cursor: (start_pos.0 as f32, start_pos.1 as f32),
             spawn_offset,
             inertia: (0.0, 0.0),
@@ -975,7 +1157,13 @@ impl Tool for SimPath {
             wait_left: 0.0,
             disappeared: false,
             last_cell: (start_pos.0, start_pos.1),
-            out: SimOut { events: Vec::new(), frames: Vec::new(), cp_done: Vec::new(), end_frame: 0, end_reason: String::new() },
+            out: SimOut {
+                events: Vec::new(),
+                frames: Vec::new(),
+                cp_done: Vec::new(),
+                end_frame: 0,
+                end_reason: String::new(),
+            },
         };
         // 首检查点为 WAIT 时初始化计时
         if !sim.checkpoints.is_empty() && sim.checkpoints[0].kind == "WAIT" {
@@ -987,10 +1175,19 @@ impl Tool for SimPath {
         // summary：事件流
         let mut lines = Vec::new();
         lines.push("══════ 寻路模拟 ══════".to_string());
-        lines.push(format!("关卡: {}  路线: {}（{}）  K={}  移速={}格/秒", level_id, route_index, route_label, k, speed));
+        lines.push(format!(
+            "关卡: {}  路线: {}（{}）  K={}  移速={}格/秒",
+            level_id, route_index, route_label, k, speed
+        ));
         lines.push(format!("起点: {:?}  f0 生成  终点: {:?}", start_pos, end));
         if !injections.is_empty() {
-            lines.push(format!("注入: {:?}", injections.iter().map(|i| format!("{}@{}", i.kind, i.f)).collect::<Vec<_>>()));
+            lines.push(format!(
+                "注入: {:?}",
+                injections
+                    .iter()
+                    .map(|i| format!("{}@{}", i.kind, i.f))
+                    .collect::<Vec<_>>()
+            ));
         }
         lines.push(String::new());
         for ev in &out.events {
@@ -1037,11 +1234,17 @@ impl Tool for SimPath {
                 "avoid": [round6(fr.avoid.0), round6(fr.avoid.1)],
                 "cp": fr.cp, "nav": fr.nav, "phase": fr.phase, "note": fr.note,
             });
-            log_content.push_str(&format!("{}\n", serde_json::to_string(&rec).unwrap_or_default()));
+            log_content.push_str(&format!(
+                "{}\n",
+                serde_json::to_string(&rec).unwrap_or_default()
+            ));
         }
         for ev in &out.events {
             let rec = json!({ "type": "event", "f": ev.f, "text": ev.text });
-            log_content.push_str(&format!("{}\n", serde_json::to_string(&rec).unwrap_or_default()));
+            log_content.push_str(&format!(
+                "{}\n",
+                serde_json::to_string(&rec).unwrap_or_default()
+            ));
         }
         fs::write(&log_path, log_content)
             .map_err(|e| ToolError::Execution(format!("log 写入失败: {e}")))?;
@@ -1082,10 +1285,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-sim-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-sim-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1128,8 +1329,7 @@ mod tests {
         let ws = match std::env::var("PRTS_SIM_WS") {
             Ok(p) => {
                 let dir = PathBuf::from(p);
-                std::fs::create_dir_all(&dir)
-                    .unwrap_or_else(|e| panic!("PRTS_SIM_WS 不可用: {e}"));
+                std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("PRTS_SIM_WS 不可用: {e}"));
                 dir
             }
             Err(_) => unique_temp_dir("show"),
@@ -1140,28 +1340,49 @@ mod tests {
             let k = std::env::var("PRTS_SIM_K").unwrap_or_else(|_| "1".into());
             let inject = std::env::var("PRTS_SIM_INJECT").unwrap_or_default();
             let route = std::env::var("PRTS_SIM_ROUTE").unwrap_or_default();
-            let mut p = format!(r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k}}}"#);
+            let mut p = format!(
+                r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k}}}"#
+            );
             if !inject.is_empty() {
-                p = format!(r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k},"inject":"{inject}"}}"#);
+                p = format!(
+                    r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k},"inject":"{inject}"}}"#
+                );
             }
             if !route.is_empty() {
-                p = format!(r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k},"route":"{route}"}}"#);
+                p = format!(
+                    r#"{{"levelId":"{level_id}","routeIndex":{route_index},"speed":{speed},"k":{k},"route":"{route}"}}"#
+                );
             }
             println!("{}", run_in(&ws, &p));
             return;
         }
         // 默认演示：路线 5（沙滩车移速 1.3 → 理论 0.65）
         println!("===== 路线 5 基础 =====");
-        println!("{}", run_in(&ws, r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3}"#));
+        println!(
+            "{}",
+            run_in(
+                &ws,
+                r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3}"#
+            )
+        );
     }
 
     #[test]
     fn sim_route5_basic() {
         // 与 sim_tool.py 对拍：路线 5，属性移速 1.3（理论 0.65），K=1
         let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3}"#);
-        assert!(s.contains("f93    检查点完成 MOVE(8, 2)"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f994   检查点完成 WAIT"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f1784  检查点完成 MOVE(2, 1)"), "检查点完成事件不符\n{s}");
+        assert!(
+            s.contains("f93    检查点完成 MOVE(8, 2)"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f994   检查点完成 WAIT"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f1784  检查点完成 MOVE(2, 1)"),
+            "检查点完成事件不符\n{s}"
+        );
         assert!(s.contains("抵达终点"), "应抵达终点\n{s}");
     }
 
@@ -1169,9 +1390,18 @@ mod tests {
     fn sim_route1_basic_k2() {
         // 与 sim_tool.py 对拍：路线 1，K=2，属性移速 1.3
         let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":1,"speed":1.3,"k":2}"#);
-        assert!(s.contains("f1801  检查点完成 WAIT"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f2471  检查点完成 MOVE(9, 5)"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f2796  检查点完成 MOVE(8, 5)"), "检查点完成事件不符\n{s}");
+        assert!(
+            s.contains("f1801  检查点完成 WAIT"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f2471  检查点完成 MOVE(9, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f2796  检查点完成 MOVE(8, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
         assert!(s.contains("f3633  抵达终点"), "终点帧不符\n{s}");
     }
 
@@ -1179,9 +1409,18 @@ mod tests {
     fn sim_route3_basic_k1() {
         // 与 sim_tool.py 对拍：路线 3，K=1，属性移速 1.3
         let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":3,"speed":1.3,"k":1}"#);
-        assert!(s.contains("f3601  检查点完成 WAIT"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f4364  检查点完成 MOVE(9, 5)"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f4689  检查点完成 MOVE(8, 5)"), "检查点完成事件不符\n{s}");
+        assert!(
+            s.contains("f3601  检查点完成 WAIT"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f4364  检查点完成 MOVE(9, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f4689  检查点完成 MOVE(8, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
         assert!(s.contains("f5525  抵达终点"), "终点帧不符\n{s}");
     }
 
@@ -1189,10 +1428,21 @@ mod tests {
     fn sim_route1_block_tune() {
         // 路线 1 调避障轴（K=2，属性移速 1.3，block@1930 at=(4,1) dur=6 纯偏移）：
         // 部署帧 1930（寻路照常），1931 起偏移 6 帧到 (3.5,1)，偏移后事件整体推后
-        let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":1,"speed":1.3,"k":2,"inject":"block@1930:at=(4,1),dur=6"}"#);
-        assert!(s.contains("阻挡偏移完成，位置 (3.500,1.000)"), "偏移完成不符\n{s}");
-        assert!(s.contains("f2488  检查点完成 MOVE(9, 5)"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f2813  检查点完成 MOVE(8, 5)"), "检查点完成事件不符\n{s}");
+        let s = run(
+            r#"{"levelId":"level_rogue5_t-10","routeIndex":1,"speed":1.3,"k":2,"inject":"block@1930:at=(4,1),dur=6"}"#,
+        );
+        assert!(
+            s.contains("阻挡偏移完成，位置 (3.500,1.000)"),
+            "偏移完成不符\n{s}"
+        );
+        assert!(
+            s.contains("f2488  检查点完成 MOVE(9, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f2813  检查点完成 MOVE(8, 5)"),
+            "检查点完成事件不符\n{s}"
+        );
         assert!(s.contains("f3649  抵达终点"), "终点帧不符\n{s}");
     }
 
@@ -1200,33 +1450,59 @@ mod tests {
     fn sim_route3_block_verify() {
         // 路线 3 调避障轴（K=1，block@4381 at=(9,5) dur=6）：
         // 部署帧 4381（寻路照常），4382 起偏移 6 帧，偏移目标 (9.0382,4.5015)（显示 3 位小数）
-        let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":3,"speed":1.3,"k":1,"inject":"block@4381:at=(9,5),dur=6"}"#);
-        assert!(s.contains("阻挡偏移完成，位置 (9.038,4.501)"), "偏移坐标不符\n{s}");
-        assert!(s.contains("f4387  撤退"), "撤退帧不符（应为偏移完成同帧）\n{s}");
+        let s = run(
+            r#"{"levelId":"level_rogue5_t-10","routeIndex":3,"speed":1.3,"k":1,"inject":"block@4381:at=(9,5),dur=6"}"#,
+        );
+        assert!(
+            s.contains("阻挡偏移完成，位置 (9.038,4.501)"),
+            "偏移坐标不符\n{s}"
+        );
+        assert!(
+            s.contains("f4387  撤退"),
+            "撤退帧不符（应为偏移完成同帧）\n{s}"
+        );
     }
 
     #[test]
     fn sim_custom_route_dsl() {
         // 自定义路线 DSL：START/MOVE/WAIT/END
-        let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"route":"START(10,2);MOVE(8,2);WAIT(10.0);END(2,7)"}"#);
+        let s = run(
+            r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"route":"START(10,2);MOVE(8,2);WAIT(10.0);END(2,7)"}"#,
+        );
         assert!(s.contains("（自定义）"), "应标记自定义路线\n{s}");
-        assert!(s.contains("f93    检查点完成 MOVE(8, 2)"), "检查点完成事件不符\n{s}");
-        assert!(s.contains("f394   检查点完成 WAIT"), "检查点完成事件不符\n{s}");
+        assert!(
+            s.contains("f93    检查点完成 MOVE(8, 2)"),
+            "检查点完成事件不符\n{s}"
+        );
+        assert!(
+            s.contains("f394   检查点完成 WAIT"),
+            "检查点完成事件不符\n{s}"
+        );
         assert!(s.contains("抵达终点"), "应抵达终点\n{s}");
     }
 
     #[test]
     fn sim_push_into_hole() {
         // 推拉入坑：路线 5 起点 (10,2) 向左推 3 格 → (7,2) 地穴
-        let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"inject":"push@10:dir=(-1,0),dist=3.0,dur=30"}"#);
-        assert!(s.contains("入坑：实体坐标进入地穴格 (7,2)"), "应入坑 (7,2)\n{s}");
+        let s = run(
+            r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"inject":"push@10:dir=(-1,0),dist=3.0,dur=30"}"#,
+        );
+        assert!(
+            s.contains("入坑：实体坐标进入地穴格 (7,2)"),
+            "应入坑 (7,2)\n{s}"
+        );
     }
 
     #[test]
     fn sim_block_auto_radial() {
         // block pos 模式直给偏移坐标 + 入坑（偏移过程到位时入坑 (7,3)）
-        let s = run(r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"inject":"block@30:pos=(7.3,3.0),dur=6"}"#);
-        assert!(s.contains("入坑：实体坐标进入地穴格 (7,3)"), "应入坑 (7,3)\n{s}");
+        let s = run(
+            r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"inject":"block@30:pos=(7.3,3.0),dur=6"}"#,
+        );
+        assert!(
+            s.contains("入坑：实体坐标进入地穴格 (7,3)"),
+            "应入坑 (7,3)\n{s}"
+        );
     }
 
     #[test]
@@ -1248,7 +1524,10 @@ mod tests {
         let tool = SimPath::new(ws.clone());
 
         let s = tool
-            .execute(&ctx, r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"log":"out/a.jsonl"}"#)
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3,"log":"out/a.jsonl"}"#,
+            )
             .unwrap()
             .summary;
 
@@ -1261,10 +1540,13 @@ mod tests {
             log_path.starts_with(&ws),
             "log 应落在工作区内：{log_path:?} vs {ws:?}"
         );
-        assert_eq!(log_path, ws.join("out").join("a.jsonl"), "相对路径应基于工作区解析");
+        assert_eq!(
+            log_path,
+            ws.join("out").join("a.jsonl"),
+            "相对路径应基于工作区解析"
+        );
         assert!(log_path.is_file(), "log 文件应真实存在");
 
         let _ = std::fs::remove_dir_all(&ws);
     }
 }
-

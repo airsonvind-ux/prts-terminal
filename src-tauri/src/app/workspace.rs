@@ -93,9 +93,7 @@ impl WorkspaceRoot {
     ///
     /// 写入点唯一：`set_settings`（在 busy 闸之内，故不会在对话处理中更换）。
     pub fn set(&self, path: impl Into<PathBuf>) {
-        *self.inner
-            .write()
-            .expect("工作根写锁中毒（持有者 panic）") = Inner::of(path.into());
+        *self.inner.write().expect("工作根写锁中毒（持有者 panic）") = Inner::of(path.into());
     }
 }
 
@@ -120,10 +118,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-wsroot-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-wsroot-{tag}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -142,7 +138,11 @@ mod tests {
 
         shadow.set(b.clone());
 
-        assert_eq!(root.current(), b, "克隆体应共享同一份值（set 对两侧都可见）");
+        assert_eq!(
+            root.current(),
+            b,
+            "克隆体应共享同一份值（set 对两侧都可见）"
+        );
         assert_eq!(
             root.canonical(),
             b.canonicalize().unwrap(),

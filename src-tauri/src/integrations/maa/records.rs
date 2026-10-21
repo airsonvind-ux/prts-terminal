@@ -40,7 +40,9 @@ pub fn pointer_path(kind: &str) -> PathBuf {
 /// 在给定目录里找写入时刻最新的 `latest-<类型>.jsonl`。
 /// 返回 `(识别种类, 路径, 写入时刻, 行数, 任务类型)`——任务类型取自文件里第一帧的
 /// `taskchain`（老文件可能没有）；只看文件本身，**看不出“那次算不算跑完”**。
-pub fn latest_pointer_in(dir: &Path) -> Option<(String, PathBuf, SystemTime, usize, Option<String>)> {
+pub fn latest_pointer_in(
+    dir: &Path,
+) -> Option<(String, PathBuf, SystemTime, usize, Option<String>)> {
     let mut best: Option<(String, PathBuf, SystemTime)> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -66,7 +68,11 @@ pub fn latest_pointer_in(dir: &Path) -> Option<(String, PathBuf, SystemTime, usi
         .lines()
         .next()
         .and_then(|first| serde_json::from_str::<Value>(first).ok())
-        .and_then(|v| v.get("taskchain").and_then(Value::as_str).map(str::to_string));
+        .and_then(|v| {
+            v.get("taskchain")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
     Some((kind, path, at, lines, chain))
 }
 
@@ -77,7 +83,9 @@ pub fn latest_pointer_on_disk() -> Option<(String, PathBuf, SystemTime, usize, O
 
 /// 把时刻换算成毫秒（JSON 里能存的形状）。
 pub fn ms_of(at: SystemTime) -> u128 {
-    at.duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    at.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// 一个类型攒下的帧。
@@ -388,7 +396,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("prts-cleanup-{}", now_ms()));
         std::fs::create_dir_all(&dir).unwrap();
         for i in 0..KEEP_PER_KIND + 5 {
-            std::fs::write(dir.join(format!("{}-OperBoxInfo.jsonl", 1_000_000 + i)), "x").unwrap();
+            std::fs::write(
+                dir.join(format!("{}-OperBoxInfo.jsonl", 1_000_000 + i)),
+                "x",
+            )
+            .unwrap();
         }
         std::fs::write(dir.join("latest-OperBoxInfo.jsonl"), "pointer").unwrap();
 
@@ -400,7 +412,10 @@ mod tests {
             .filter(|e| !e.file_name().to_string_lossy().starts_with("latest-"))
             .count();
         assert_eq!(history, KEEP_PER_KIND, "每类型只留最近 N 份");
-        assert!(dir.join("latest-OperBoxInfo.jsonl").exists(), "指针不参与清理");
+        assert!(
+            dir.join("latest-OperBoxInfo.jsonl").exists(),
+            "指针不参与清理"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

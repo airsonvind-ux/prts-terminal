@@ -46,7 +46,8 @@ fn slice_chars(s: &str, max: usize) -> String {
 /// system 语义对齐既有实现 `summarizeTitle`（约 10 字、语言跟随用户首句、无标点）；
 /// user 为 `用户：{首问}\n助手：{首答}`，各截 500 字符。
 pub fn build_title_messages(user_text: &str, assistant_text: &str) -> Vec<ChatMessage> {
-    let system = "你是一个对话标题生成器。根据用户和助手的第一轮对话，用一句极短的话概括对话主题。\n\n\
+    let system =
+        "你是一个对话标题生成器。根据用户和助手的第一轮对话，用一句极短的话概括对话主题。\n\n\
 规则：\n\
 1. 标题目标约 10 个字（中文）或 5 个单词（英文），保持极短\n\
 2. 语言必须和用户说的第一句话一致：用户说中文就用中文，用户说英文就用英文\n\
@@ -75,11 +76,37 @@ pub fn clean_title(raw: &str) -> Option<String> {
         matches!(
             c,
             '"' | '\''
-                | '“' | '”' | '‘' | '’'
-                | '《' | '》' | '「' | '」' | '『' | '』'
-                | '【' | '】' | '（' | '）' | '(' | ')'
-                | '[' | ']' | '。' | '，' | ',' | '.' | '、'
-                | '！' | '!' | '？' | '?' | ':' | '：' | '；' | ';'
+                | '“'
+                | '”'
+                | '‘'
+                | '’'
+                | '《'
+                | '》'
+                | '「'
+                | '」'
+                | '『'
+                | '』'
+                | '【'
+                | '】'
+                | '（'
+                | '）'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '。'
+                | '，'
+                | ','
+                | '.'
+                | '、'
+                | '！'
+                | '!'
+                | '？'
+                | '?'
+                | ':'
+                | '：'
+                | '；'
+                | ';'
         )
     });
     let stripped = stripped.trim();
@@ -136,7 +163,11 @@ pub async fn generate_title_full(
     let mut cfg = config.clone();
     cfg.thinking_level = Some("off".to_string());
     let capped = cfg.max_tokens.min(TITLE_MAX_TOKENS);
-    cfg.max_tokens = if capped == 0 { TITLE_MAX_TOKENS } else { capped };
+    cfg.max_tokens = if capped == 0 {
+        TITLE_MAX_TOKENS
+    } else {
+        capped
+    };
 
     let messages = build_title_messages(user_text, assistant_text);
     let run = llm.chat(&cfg, &messages, &[]);
@@ -144,11 +175,17 @@ pub async fn generate_title_full(
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
             debug!("action" => "title_generation_failed", "error" => e.to_string());
-            return TitleResult { title: None, usage: None };
+            return TitleResult {
+                title: None,
+                usage: None,
+            };
         }
         Err(_) => {
             debug!("action" => "title_generation_timeout");
-            return TitleResult { title: None, usage: None };
+            return TitleResult {
+                title: None,
+                usage: None,
+            };
         }
     };
 
@@ -158,7 +195,10 @@ pub async fn generate_title_full(
     if cleaned.is_none() {
         debug!("action" => "title_generation_empty");
     }
-    TitleResult { title: cleaned, usage }
+    TitleResult {
+        title: cleaned,
+        usage,
+    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -270,7 +310,11 @@ mod tests {
         let after = body.split("\n助手：").nth(1).unwrap();
         assert_eq!(after.chars().count(), 500);
         // 前缀 "用户：" + 500 字
-        let user_part = body.trim_start_matches("用户：").split("\n助手：").next().unwrap();
+        let user_part = body
+            .trim_start_matches("用户：")
+            .split("\n助手：")
+            .next()
+            .unwrap();
         assert_eq!(user_part.chars().count(), 500);
         // system 含关键规则
         assert!(msgs[0].content.contains("约 10 个字"));
@@ -284,7 +328,10 @@ mod tests {
         assert_eq!(clean_title("《集成战略》").as_deref(), Some("集成战略"));
         assert_eq!(clean_title("标题。").as_deref(), Some("标题"));
         // 多行 → 取首行
-        assert_eq!(clean_title("Buff机制\n解释：...").as_deref(), Some("Buff机制"));
+        assert_eq!(
+            clean_title("Buff机制\n解释：...").as_deref(),
+            Some("Buff机制")
+        );
         // 空 / 纯标点 → None
         assert_eq!(clean_title("   "), None);
         assert_eq!(clean_title("\"\""), None);

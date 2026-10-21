@@ -53,7 +53,11 @@ impl CacheEntry {
     /// 静态桶条目（LLM 读知识条目后的自写总结，source 关联知识条目）。
     /// 测试构造便捷用；生产路径（tools/cache.rs）直接构造字面量。
     #[allow(dead_code)]
-    pub fn static_summary(key: impl Into<String>, content: impl Into<String>, source_entry: impl Into<String>) -> Self {
+    pub fn static_summary(
+        key: impl Into<String>,
+        content: impl Into<String>,
+        source_entry: impl Into<String>,
+    ) -> Self {
         Self {
             key: key.into(),
             content: content.into(),
@@ -291,9 +295,21 @@ mod tests {
     #[test]
     fn static_entries_sorted_by_key() {
         let mut store = CacheStore::new();
-        store.store_static(CacheEntry::static_summary("buff.总结", "B 内容", "Buff机制基础"));
-        store.store_static(CacheEntry::static_summary("伤害.公式", "A 内容", "数值计算"));
-        store.store_static(CacheEntry::static_summary("索敌.规则", "C 内容", "索敌机制"));
+        store.store_static(CacheEntry::static_summary(
+            "buff.总结",
+            "B 内容",
+            "Buff机制基础",
+        ));
+        store.store_static(CacheEntry::static_summary(
+            "伤害.公式",
+            "A 内容",
+            "数值计算",
+        ));
+        store.store_static(CacheEntry::static_summary(
+            "索敌.规则",
+            "C 内容",
+            "索敌机制",
+        ));
         // 按 key 字典序输出（与 ActiveContext::reference_entries 同一原则：
         // 注入顺序确定 → prompt 组装可复现，request/header 去重不误判）
         // 注意：字符串按 Unicode 码点排序，ASCII（b=0x62）排在汉字（伤=0x4F24）前
@@ -320,16 +336,26 @@ mod tests {
         assert_eq!(stores.len(), 0);
 
         // 同 id 两次访问 → 同一分区（get_or_create）
-        stores.partition("conv-1").store_static(CacheEntry::static_summary("k", "v", "条目"));
+        stores
+            .partition("conv-1")
+            .store_static(CacheEntry::static_summary("k", "v", "条目"));
         let same = stores.partition("conv-1");
         assert_eq!(same.load_static("k").unwrap().content, "v");
         assert_eq!(stores.len(), 1);
 
         // 不同 id → 不同分区，互不干扰（切换对话保留）
-        stores.partition("conv-2").store_static(CacheEntry::static_summary("k", "v2", "条目"));
+        stores
+            .partition("conv-2")
+            .store_static(CacheEntry::static_summary("k", "v2", "条目"));
         assert_eq!(stores.len(), 2);
-        assert_eq!(stores.partition("conv-1").load_static("k").unwrap().content, "v");
-        assert_eq!(stores.partition("conv-2").load_static("k").unwrap().content, "v2");
+        assert_eq!(
+            stores.partition("conv-1").load_static("k").unwrap().content,
+            "v"
+        );
+        assert_eq!(
+            stores.partition("conv-2").load_static("k").unwrap().content,
+            "v2"
+        );
     }
 
     #[test]
@@ -342,7 +368,9 @@ mod tests {
         stores.partition("conv-1");
         assert!(stores.get("conv-1").is_some());
         // 静态注入看到的分区内容与写入路径一致
-        stores.partition("conv-1").store_static(CacheEntry::static_summary("k", "v", "条目"));
+        stores
+            .partition("conv-1")
+            .store_static(CacheEntry::static_summary("k", "v", "条目"));
         let entries = stores.get("conv-1").unwrap().static_entries();
         assert_eq!(entries, vec![("k".to_string(), "v".to_string())]);
     }

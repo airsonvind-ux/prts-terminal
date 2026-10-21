@@ -90,7 +90,10 @@ impl PrefixSnapshotStore {
                     return p;
                 }
                 Err(e) => {
-                    eprintln!("[prefix] 快照解析失败，以活体重写（{}）：{e}", path.display());
+                    eprintln!(
+                        "[prefix] 快照解析失败，以活体重写（{}）：{e}",
+                        path.display()
+                    );
                 }
             }
         }
@@ -188,8 +191,7 @@ impl PrefixSnapshotStore {
                 continue;
             }
             // 有主：会话内容文件存在 → 保留；否则删除
-            if !self.dir.join(format!("{id}.jsonl")).exists()
-                && std::fs::remove_file(&path).is_ok()
+            if !self.dir.join(format!("{id}.jsonl")).exists() && std::fs::remove_file(&path).is_ok()
             {
                 removed += 1;
             }
@@ -282,11 +284,22 @@ mod tests {
         let mut snaps = PrefixSnapshotStore::new(&sessions);
         snaps.get_or_freeze(Some("c1"), "系统 A", &defs("描述 A"));
 
-        assert!(!snaps.refresh("c1", "系统 A", &defs("描述 A")), "无差 → 不写");
-        assert!(snaps.refresh("c1", "系统 B", &defs("描述 A")), "system 变 → 写");
-        assert!(snaps.refresh("c1", "系统 B", &defs("描述 B")), "工具描述变 → 写");
+        assert!(
+            !snaps.refresh("c1", "系统 A", &defs("描述 A")),
+            "无差 → 不写"
+        );
+        assert!(
+            snaps.refresh("c1", "系统 B", &defs("描述 A")),
+            "system 变 → 写"
+        );
+        assert!(
+            snaps.refresh("c1", "系统 B", &defs("描述 B")),
+            "工具描述变 → 写"
+        );
         assert_eq!(
-            snaps.get_or_freeze(Some("c1"), "系统 C", &defs("描述 C")).system,
+            snaps
+                .get_or_freeze(Some("c1"), "系统 C", &defs("描述 C"))
+                .system,
             "系统 B",
             "刷新后读回新值"
         );

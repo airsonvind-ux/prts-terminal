@@ -1,4 +1,4 @@
-﻿//! 上下文组装 —— 构建发给 LLM 的消息列表（模块 2：注册制组装，P0）
+//! 上下文组装 —— 构建发给 LLM 的消息列表（模块 2：注册制组装，P0）
 //!
 //! 职责：
 //!   1. 以 **PromptSection 注册制** 组装系统提示词（替代硬编码 `format!`）
@@ -31,10 +31,10 @@
 //! 这里的估算仅作近似参考，精确 token 数以 API 返回的 usage 为准。
 
 // use std::collections::HashMap; // 已注释（2026-08：ActiveContext 移除）
-use crate::llm::ChatMessage;
 #[cfg(test)]
 use super::prompt::{SYSTEM_PROMPT, UI_PROMPT};
 use super::prompt_registry::builtin_registry;
+use crate::llm::ChatMessage;
 
 pub use super::prompt_registry::{
     PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_UI,
@@ -182,10 +182,7 @@ pub fn assemble_system_prompt(skill_catalog: &str) -> String {
 /// `memory_block` 为对话冻结快照原文（由命令层经 SnapshotStore 取）；
 /// **空块时不注册记忆 section**——无记忆态输出与旧实现逐字节一致。
 /// 记忆区不做二次改写（四节内容均为存量原文，装配不产生新内容）。
-pub fn assemble_system_prompt_with_memory(
-    skill_catalog: &str,
-    memory_block: &str,
-) -> String {
+pub fn assemble_system_prompt_with_memory(skill_catalog: &str, memory_block: &str) -> String {
     let mut reg = builtin_registry().clone();
     // Catalog 层：Skill 目录（渐进披露——只给 name + description，正文按需
     // activate_skill 加载）。空目录显示（无）。
@@ -202,8 +199,12 @@ pub fn assemble_system_prompt_with_memory(
     // 记忆区（Phase 4 任务二 · 批 1）：冻结快照，置 system 尾部。
     // 空块不注册（无记忆态逐字节兼容）。
     if !memory_block.trim().is_empty() {
-        reg.register_section(PromptSection::new("prts.memory", ORDER_MEMORY, memory_block))
-            .expect("builtin section 注册冲突");
+        reg.register_section(PromptSection::new(
+            "prts.memory",
+            ORDER_MEMORY,
+            memory_block,
+        ))
+        .expect("builtin section 注册冲突");
     }
     reg.assemble()
 }
@@ -354,17 +355,23 @@ mod tests {
     fn assemble_sorts_by_order() {
         let mut reg = PromptRegistry::default();
         // 乱序注册 → 按 order 升序装配
-        reg.register_section(PromptSection::new("c", 200, "C段")).unwrap();
-        reg.register_section(PromptSection::new("a", 0, "A段")).unwrap();
-        reg.register_section(PromptSection::new("b", 100, "B段")).unwrap();
+        reg.register_section(PromptSection::new("c", 200, "C段"))
+            .unwrap();
+        reg.register_section(PromptSection::new("a", 0, "A段"))
+            .unwrap();
+        reg.register_section(PromptSection::new("b", 100, "B段"))
+            .unwrap();
         assert_eq!(reg.assemble(), "A段\n\nB段\n\nC段");
     }
 
     #[test]
     fn duplicate_section_name_rejected() {
         let mut reg = PromptRegistry::default();
-        reg.register_section(PromptSection::new("a", 0, "A段")).unwrap();
-        let err = reg.register_section(PromptSection::new("a", 10, "重复")).unwrap_err();
+        reg.register_section(PromptSection::new("a", 0, "A段"))
+            .unwrap();
+        let err = reg
+            .register_section(PromptSection::new("a", 10, "重复"))
+            .unwrap_err();
         assert!(err.contains("重复注册"));
         assert_eq!(reg.sections.len(), 1);
     }
@@ -464,10 +471,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-context-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-context-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -508,7 +513,10 @@ mod tests {
         ];
         let est = estimate_messages(&messages);
         // system 4 ascii*0.3=1.2→2 + 你好 2 cjk*0.6=1.2→2 + 2 条消息模板开销 8 = 12
-        assert_eq!(est, estimate_tokens("system text") + estimate_tokens("你好") + 8);
+        assert_eq!(
+            est,
+            estimate_tokens("system text") + estimate_tokens("你好") + 8
+        );
         assert!(est >= 10);
     }
 
@@ -516,16 +524,14 @@ mod tests {
     fn estimate_messages_includes_reasoning_and_tool_args() {
         let mut msg = ChatMessage::user("查数据");
         msg.reasoning_content = Some("思考".into());
-        msg.tool_calls = Some(vec![
-            crate::llm::ToolCall {
-                id: "c1".into(),
-                call_type: "function".into(),
-                function: crate::llm::ToolCallFunction {
-                    name: "query_enemy".into(),
-                    arguments: r#"{"names":["源石虫"]}"#.into(),
-                },
+        msg.tool_calls = Some(vec![crate::llm::ToolCall {
+            id: "c1".into(),
+            call_type: "function".into(),
+            function: crate::llm::ToolCallFunction {
+                name: "query_enemy".into(),
+                arguments: r#"{"names":["源石虫"]}"#.into(),
             },
-        ]);
+        }]);
         let messages = vec![msg];
         let est = estimate_messages(&messages);
         assert!(

@@ -1,5 +1,5 @@
-use super::*;
 use super::llm_call::{call_llm_with_retry, prepare_request_images};
+use super::*;
 
 /// 调度循环：turn 内反复执行 step（调 LLM → 判断是否需要工具 → 执行工具 → 继续），
 /// 直到 LLM 不再请求工具或停滞检测触发。
@@ -164,7 +164,12 @@ pub(super) async fn dispatch_turn_with_memory(
                 usage,
             ));
             let elapsed_ms = t0.elapsed().as_millis() as u64;
-            sink.emit(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
+            sink.emit(SessionEvent::step_end(
+                session_id,
+                step,
+                result.usage,
+                elapsed_ms,
+            ));
 
             // ── 插话关轮重读（2026-09-25 语义修订）──
             // 本段已收尾（assistant 消息归档、step/end 已闭）：重读队列——
@@ -225,7 +230,12 @@ pub(super) async fn dispatch_turn_with_memory(
 
         // step/end：工具执行完成后闭合 step 边界
         let elapsed_ms = t0.elapsed().as_millis() as u64;
-        sink.emit(SessionEvent::step_end(session_id, step, result.usage, elapsed_ms));
+        sink.emit(SessionEvent::step_end(
+            session_id,
+            step,
+            result.usage,
+            elapsed_ms,
+        ));
 
         // ── 停滞检测：升格为终止原因（turn/end reason=stagnation）──
         // M3-B：停滞与中止并发 → 中止优先（中止先于停滞判定）

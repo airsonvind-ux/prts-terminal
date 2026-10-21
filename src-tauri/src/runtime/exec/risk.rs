@@ -31,18 +31,27 @@ pub struct CritVerdict {
 static CRIT_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
     let pairs: &[(&str, &'static str)] = &[
         // 递归删除（del/erase/rd/rmdir + /s 或 -s）
-        (r"\b(?:del|erase|rd|rmdir)\b[^\r\n]*(?:/|-)\s*s\b", "crit-recursive-delete"),
+        (
+            r"\b(?:del|erase|rd|rmdir)\b[^\r\n]*(?:/|-)\s*s\b",
+            "crit-recursive-delete",
+        ),
         // 磁盘格式化/分区（format + 盘符、diskpart）
         (r"\bformat\b\s+[a-zA-Z]:", "crit-format-drive"),
         (r"\bdiskpart\b", "crit-diskpart"),
         // 注册表写
-        (r"\breg\b\s+(?:add|delete|import|restore)\b", "crit-registry-write"),
+        (
+            r"\breg\b\s+(?:add|delete|import|restore)\b",
+            "crit-registry-write",
+        ),
         // ACL/所有权变更
         (r"\btakeown\b", "crit-takeown"),
         (r"\bicacls\b", "crit-icacls"),
         // 账户/服务/计划任务持久化
         (r"\bnet\s+(?:user|localgroup)\b", "crit-net-account"),
-        (r"\bsc\s+(?:create|delete|config|failure)\b", "crit-sc-service"),
+        (
+            r"\bsc\s+(?:create|delete|config|failure)\b",
+            "crit-sc-service",
+        ),
         (r"\bschtasks\s+/(?:create|delete|change)\b", "crit-schtasks"),
         // 引导配置
         (r"\bbcdedit\b", "crit-bcdedit"),
@@ -155,8 +164,15 @@ const fn strict(kind: OpKind, path_rule: PathRule) -> ProgramSpec {
 
 /// 删除词全表（M3-A 设计 §5；git rm 单独并入——见 [`is_delete_word`]）。
 const DELETE_WORDS: &[&str] = &[
-    "del", "erase", "rm", "rd", "rmdir", "remove-item", "remove-itemproperty",
-    "clear-content", "clear-recyclebin",
+    "del",
+    "erase",
+    "rm",
+    "rd",
+    "rmdir",
+    "remove-item",
+    "remove-itemproperty",
+    "clear-content",
+    "clear-recyclebin",
 ];
 
 /// 是否命中删除词表（删除门 D；任何位置都 ASK，不论目标在哪）。
@@ -166,7 +182,14 @@ pub fn is_delete_word(name: &str) -> bool {
 
 /// 版本探测可执行（命令形如 `<probe> --version|-v` 属系统查询类型放行）。
 pub const PROBE_EXECUTABLES: &[&str] = &[
-    "python", "python3", "node", "npm", "git", "powershell", "pwsh", "cmd",
+    "python",
+    "python3",
+    "node",
+    "npm",
+    "git",
+    "powershell",
+    "pwsh",
+    "cmd",
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -179,14 +202,13 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
         // ── 系统查询族：无副作用信息读取，类型放行 AUTO ──
         "echo" | "write-output" | "write-host" => strict(OpKind::SystemQueryOp, PathRule::NoPaths),
         "get-process" | "get-service" | "systeminfo" | "ver" | "ipconfig" | "date" | "time"
-        | "tasklist" | "get-location" | "pwd" => {
-            strict(OpKind::SystemQueryOp, PathRule::NoPaths)
-        }
+        | "tasklist" | "get-location" | "pwd" => strict(OpKind::SystemQueryOp, PathRule::NoPaths),
 
         // ── 文件读族：全部非选项参数即路径，地域判定 ──
-        "type" | "cat" | "gc" | "get-content" | "get-childitem" | "dir" | "ls" | "gci"
-        | "tree" | "more" | "select-string" | "findstr" | "where" | "get-command"
-        | "get-item" => strict(OpKind::FileReadOp, PathRule::PositionalAll),
+        "type" | "cat" | "gc" | "get-content" | "get-childitem" | "dir" | "ls" | "gci" | "tree"
+        | "more" | "select-string" | "findstr" | "where" | "get-command" | "get-item" => {
+            strict(OpKind::FileReadOp, PathRule::PositionalAll)
+        }
 
         // ── 文件写/移动/新建族：地域判定 ──
         "copy" | "cp" | "cpi" | "move" | "mv" | "mi" | "xcopy" | "rename" | "ren" | "rni"
@@ -194,7 +216,11 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
             strict(OpKind::FileWriteOp, PathRule::PositionalAll)
         }
         // robocopy：前两个路径参数；/ 开关全部宽松（/mir、/purge 由删除门拦）
-        "robocopy" => spec(OpKind::FileWriteOp, PathRule::PositionalFirstTwo, OptionPolicy::Lenient),
+        "robocopy" => spec(
+            OpKind::FileWriteOp,
+            PathRule::PositionalFirstTwo,
+            OptionPolicy::Lenient,
+        ),
 
         // ── 目录导航族 ──
         "cd" | "chdir" | "set-location" | "sl" | "pushd" | "popd" => {
@@ -202,7 +228,13 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
         }
 
         // ── 删除族（删除门 D 提前拦；此处仅防御兜底）──
-        "del" | "erase" | "rm" | "rd" | "rmdir" | "remove-item" | "remove-itemproperty"
+        "del"
+        | "erase"
+        | "rm"
+        | "rd"
+        | "rmdir"
+        | "remove-item"
+        | "remove-itemproperty"
         | "clear-content" => strict(OpKind::FileDeleteOp, PathRule::NoPaths),
 
         // ── 网络族（ASK network-op）──
@@ -217,7 +249,9 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
 
         // ── 进程控制族（ASK process-control）──
         "taskkill" | "stop-process" | "kill" | "shutdown" | "logoff" | "stop-computer"
-        | "restart-computer" | "start-process" => strict(OpKind::ProcessControlOp, PathRule::NoPaths),
+        | "restart-computer" | "start-process" => {
+            strict(OpKind::ProcessControlOp, PathRule::NoPaths)
+        }
 
         // ── 系统配置族（ASK config-op；netsh/net/route 整命令族保守）──
         "netsh" | "net" | "route" | "set-executionpolicy" | "wmic" => {
@@ -257,8 +291,20 @@ pub const SKIP_VALUE_OPTIONS: &[&str] = &["-filter"];
 
 /// 解释器清单（-c/-Command/-e 等形态 → CodeExecOp ASK；脚本文件 → RunProgramOp）。
 pub const INTERPRETER_NAMES: &[&str] = &[
-    "python", "python3", "node", "npm", "npx", "pwsh", "powershell", "cmd", "bash", "sh",
-    "deno", "bun", "ruby", "perl",
+    "python",
+    "python3",
+    "node",
+    "npm",
+    "npx",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "bash",
+    "sh",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
 ];
 
 /// 命令名 → 基础语义规格（表驱动分类；git/reg/解释器 = None 走子表）。
@@ -280,7 +326,10 @@ mod tests {
 
     #[test]
     fn crit_recursive_delete_variants() {
-        assert_eq!(crit_rule("del /s /q C:\\temp\\*"), Some("crit-recursive-delete"));
+        assert_eq!(
+            crit_rule("del /s /q C:\\temp\\*"),
+            Some("crit-recursive-delete")
+        );
         assert_eq!(crit_rule("del /S C:\\temp"), Some("crit-recursive-delete"));
         assert_eq!(crit_rule("erase /s C:\\x"), Some("crit-recursive-delete"));
         assert_eq!(crit_rule("rmdir /s C:\\x"), Some("crit-recursive-delete"));
@@ -302,15 +351,30 @@ mod tests {
 
     #[test]
     fn crit_registry_write_variants() {
-        assert_eq!(crit_rule("reg delete HKCU\\Software\\X"), Some("crit-registry-write"));
-        assert_eq!(crit_rule("reg add HKLM\\Software\\X /v Y"), Some("crit-registry-write"));
-        assert_eq!(crit_rule("reg import backup.reg"), Some("crit-registry-write"));
+        assert_eq!(
+            crit_rule("reg delete HKCU\\Software\\X"),
+            Some("crit-registry-write")
+        );
+        assert_eq!(
+            crit_rule("reg add HKLM\\Software\\X /v Y"),
+            Some("crit-registry-write")
+        );
+        assert_eq!(
+            crit_rule("reg import backup.reg"),
+            Some("crit-registry-write")
+        );
     }
 
     #[test]
     fn crit_acl_ownership_commands() {
-        assert_eq!(crit_rule("takeown /f C:\\Windows\\System32\\x.dll"), Some("crit-takeown"));
-        assert_eq!(crit_rule("icacls C:\\x /grant Users:F"), Some("crit-icacls"));
+        assert_eq!(
+            crit_rule("takeown /f C:\\Windows\\System32\\x.dll"),
+            Some("crit-takeown")
+        );
+        assert_eq!(
+            crit_rule("icacls C:\\x /grant Users:F"),
+            Some("crit-icacls")
+        );
     }
 
     #[test]
@@ -320,8 +384,14 @@ mod tests {
             crit_rule("net localgroup Administrators hacker /add"),
             Some("crit-net-account")
         );
-        assert_eq!(crit_rule("sc create EvilSvc binPath= C:\\x"), Some("crit-sc-service"));
-        assert_eq!(crit_rule("schtasks /create /tn X /tr Y"), Some("crit-schtasks"));
+        assert_eq!(
+            crit_rule("sc create EvilSvc binPath= C:\\x"),
+            Some("crit-sc-service")
+        );
+        assert_eq!(
+            crit_rule("schtasks /create /tn X /tr Y"),
+            Some("crit-schtasks")
+        );
         assert_eq!(
             crit_rule("bcdedit /set {current} safeboot minimal"),
             Some("crit-bcdedit")
@@ -371,7 +441,11 @@ mod tests {
         );
         assert_eq!(
             classify_program_spec("robocopy"),
-            Some(spec(OpKind::FileWriteOp, PathRule::PositionalFirstTwo, OptionPolicy::Lenient))
+            Some(spec(
+                OpKind::FileWriteOp,
+                PathRule::PositionalFirstTwo,
+                OptionPolicy::Lenient
+            ))
         );
         assert_eq!(
             classify_program_spec("echo"),

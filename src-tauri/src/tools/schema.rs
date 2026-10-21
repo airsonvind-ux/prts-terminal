@@ -71,7 +71,9 @@ pub fn validate_arguments(schema: &Value, args: &Value) -> Result<(), String> {
             if val.is_null() {
                 continue;
             }
-            let Some(spec) = props.get(name) else { continue };
+            let Some(spec) = props.get(name) else {
+                continue;
+            };
             let Some(expected) = spec.get("type").and_then(|t| t.as_str()) else {
                 continue;
             };
@@ -190,7 +192,11 @@ mod tests {
         // number 兼容 integer
         assert!(validate_arguments(&schema, &json!({ "fields": [], "ratio": 3 })).is_ok());
         // 合法参数通过
-        assert!(validate_arguments(&schema, &json!({ "fields": ["a"], "level": 1, "ratio": 0.5 })).is_ok());
+        assert!(validate_arguments(
+            &schema,
+            &json!({ "fields": ["a"], "level": 1, "ratio": 0.5 })
+        )
+        .is_ok());
     }
 
     #[test]

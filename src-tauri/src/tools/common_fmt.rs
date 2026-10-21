@@ -22,8 +22,14 @@ use serde::Deserialize;
 
 /// 属性输出固定顺序（与 format_stats 共享）。
 pub(crate) const ATTR_ORDER: &[&str] = &[
-    "生命上限", "攻击", "防御", "法术抗性",
-    "部署费用", "阻挡数", "再部署时间", "攻击间隔",
+    "生命上限",
+    "攻击",
+    "防御",
+    "法术抗性",
+    "部署费用",
+    "阻挡数",
+    "再部署时间",
+    "攻击间隔",
 ];
 
 // ═══════════════════════════════════════════════════════
@@ -160,8 +166,12 @@ pub(crate) fn split_digits<'a>(s: &'a str) -> (&'a str, &'a str) {
 pub(crate) fn parse_chinese_or_digit(s: &str) -> Option<u32> {
     match s {
         "零" | "0" => Some(0),
-        "一" => Some(1), "二" => Some(2), "三" => Some(3),
-        "四" => Some(4), "五" => Some(5), "六" => Some(6),
+        "一" => Some(1),
+        "二" => Some(2),
+        "三" => Some(3),
+        "四" => Some(4),
+        "五" => Some(5),
+        "六" => Some(6),
         _ => s.parse::<u32>().ok(),
     }
 }
@@ -236,9 +246,21 @@ pub(crate) fn format_stats(stats: &ComputedStats, out: &mut String) {
     for attr in ordered {
         if let Some(&(base, trust, pot, module)) = stats.attrs.get(attr) {
             let parts: Vec<String> = [
-                if trust.abs() > 0.001 { Some(format!("{trust:+.0}(信赖)")) } else { None },
-                if pot.abs() > 0.001 { Some(format!("{pot:+.0}(潜能)")) } else { None },
-                if module.abs() > 0.001 { Some(format!("{module:+.0}(模组)")) } else { None },
+                if trust.abs() > 0.001 {
+                    Some(format!("{trust:+.0}(信赖)"))
+                } else {
+                    None
+                },
+                if pot.abs() > 0.001 {
+                    Some(format!("{pot:+.0}(潜能)"))
+                } else {
+                    None
+                },
+                if module.abs() > 0.001 {
+                    Some(format!("{module:+.0}(模组)"))
+                } else {
+                    None
+                },
             ]
             .into_iter()
             .flatten()
@@ -291,9 +313,15 @@ pub(crate) fn format_skill_expanded(
     out.push_str(&format!("[{}]\n", skill.name));
 
     let mut meta = Vec::new();
-    if let Some(ref t) = skill.trigger_type { meta.push(t.as_str()); }
-    if let Some(ref s) = skill.sp_type { meta.push(s.as_str()); }
-    if let Some(ref d) = skill.duration_type { meta.push(d.as_str()); }
+    if let Some(ref t) = skill.trigger_type {
+        meta.push(t.as_str());
+    }
+    if let Some(ref s) = skill.sp_type {
+        meta.push(s.as_str());
+    }
+    if let Some(ref d) = skill.duration_type {
+        meta.push(d.as_str());
+    }
     if !meta.is_empty() {
         out.push_str(&format!("  {}\n", meta.join(" / ")));
     }
@@ -313,9 +341,17 @@ pub(crate) fn format_skill_expanded(
         out.push('\n');
         if let Some(ref sp) = detail.sp {
             let mut sp_parts = Vec::new();
-            if let Some(c) = sp.charges { if c > 1 { sp_parts.push(format!("可充能 {c}")); } }
-            if let Some(c) = sp.sp_cost { sp_parts.push(format!("技力消耗 {c}")); }
-            if let Some(s) = sp.init_sp { sp_parts.push(format!("初始技力 {s}")); }
+            if let Some(c) = sp.charges {
+                if c > 1 {
+                    sp_parts.push(format!("可充能 {c}"));
+                }
+            }
+            if let Some(c) = sp.sp_cost {
+                sp_parts.push(format!("技力消耗 {c}"));
+            }
+            if let Some(s) = sp.init_sp {
+                sp_parts.push(format!("初始技力 {s}"));
+            }
             if !sp_parts.is_empty() {
                 out.push_str(&format!("    {}\n", sp_parts.join(" / ")));
             }
@@ -364,25 +400,43 @@ pub(crate) fn format_talents(
         }
         if expand_all {
             let do_filter = talent_idx.is_some();
-            let matching: Vec<_> = talent.alternatives.iter().filter(|alt| {
-                if do_filter {
-                    if let Some(e) = elite_phase {
-                        if alt.condition.elite as usize > e { return false; }
+            let matching: Vec<_> = talent
+                .alternatives
+                .iter()
+                .filter(|alt| {
+                    if do_filter {
+                        if let Some(e) = elite_phase {
+                            if alt.condition.elite as usize > e {
+                                return false;
+                            }
+                        }
+                        if let Some(p) = pot_level {
+                            if alt.condition.potential > p {
+                                return false;
+                            }
+                        }
                     }
-                    if let Some(p) = pot_level {
-                        if alt.condition.potential > p { return false; }
-                    }
-                }
-                true
-            }).collect();
+                    true
+                })
+                .collect();
             if matching.is_empty() {
                 continue;
             }
             out.push_str(&format!("[{}]\n", talent.name));
             for alt in matching {
                 let cond = &alt.condition;
-                let elite_label = if cond.elite == 0 { "精0".to_string() } else if cond.elite == 1 { "精1".to_string() } else { format!("精{}", cond.elite) };
-                let pot_label = if cond.potential > 0 { format!("{}潜", cond.potential) } else { String::new() };
+                let elite_label = if cond.elite == 0 {
+                    "精0".to_string()
+                } else if cond.elite == 1 {
+                    "精1".to_string()
+                } else {
+                    format!("精{}", cond.elite)
+                };
+                let pot_label = if cond.potential > 0 {
+                    format!("{}潜", cond.potential)
+                } else {
+                    String::new()
+                };
                 let cond_str = if pot_label.is_empty() {
                     elite_label
                 } else {
@@ -403,8 +457,18 @@ pub(crate) fn format_talents(
             let best = pick_talent_alt(&talent.alternatives, elite, pot);
             if let Some(alt) = best {
                 let cond = &alt.condition;
-                let elite_label = if cond.elite == 0 { "精0".to_string() } else if cond.elite == 1 { "精1".to_string() } else { format!("精{}", cond.elite) };
-                let pot_label = if cond.potential > 0 { format!("{}潜", cond.potential) } else { String::new() };
+                let elite_label = if cond.elite == 0 {
+                    "精0".to_string()
+                } else if cond.elite == 1 {
+                    "精1".to_string()
+                } else {
+                    format!("精{}", cond.elite)
+                };
+                let pot_label = if cond.potential > 0 {
+                    format!("{}潜", cond.potential)
+                } else {
+                    String::new()
+                };
                 let cond_str = if pot_label.is_empty() {
                     format!("（{elite_label}）")
                 } else {

@@ -94,8 +94,8 @@ pub fn list_skills() -> Result<Vec<SkillEntry>, String> {
 
 /// list_skills 实现体（显式目录参数：命令层传运行根，测试传夹具）。
 pub(super) fn list_skills_from(dir: &std::path::Path) -> Result<Vec<SkillEntry>, String> {
-    let idx = crate::skills_index::SkillIndex::load(dir)
-        .map_err(|e| format!("技能目录读取失败: {e}"))?;
+    let idx =
+        crate::skills_index::SkillIndex::load(dir).map_err(|e| format!("技能目录读取失败: {e}"))?;
     Ok(idx
         .names()
         .into_iter()
@@ -105,9 +105,7 @@ pub(super) fn list_skills_from(dir: &std::path::Path) -> Result<Vec<SkillEntry>,
                 .resolve(name)
                 .map(|m| m.description.clone())
                 .unwrap_or_default(),
-            file_path: idx
-                .path(name)
-                .map(|p| p.to_string_lossy().into_owned()),
+            file_path: idx.path(name).map(|p| p.to_string_lossy().into_owned()),
             source: idx.resolve(name).and_then(|m| m.source.clone()),
         })
         .collect())
@@ -163,9 +161,7 @@ pub fn open_url(app: AppHandle, url: String) -> Result<(), String> {
 /// 由 `DimKey::kind()` 分类、前端按标记筛）；进行中对话取增量（stamp/seq > 游标的
 /// 维度与事件）。后端**无消费状态**（纯只读）——游标在前端按对话维护。
 #[tauri::command]
-pub fn get_reminder_data(
-    ledger: State<'_, Arc<Mutex<Notices>>>,
-) -> Result<ReminderData, String> {
+pub fn get_reminder_data(ledger: State<'_, Arc<Mutex<Notices>>>) -> Result<ReminderData, String> {
     let n = ledger
         .lock()
         .map_err(|e| format!("提醒数据锁获取失败: {e}"))?;
@@ -199,10 +195,7 @@ pub async fn choose_workspace_directory(
         }
     }
     builder.pick_folder(move |picked| {
-        let value = picked.and_then(|fp| {
-            fp.as_path()
-                .map(|p| p.to_string_lossy().into_owned())
-        });
+        let value = picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
         let _ = tx.send(value);
     });
     rx.await.map_err(|e| format!("目录选择失败: {e}"))

@@ -53,12 +53,7 @@ impl EventSink {
     }
 
     /// 追加 request/header 快照（仅变化时真正追加）。
-    pub(super) fn push_header(
-        &self,
-        session_id: &str,
-        system_prompt: &str,
-        tool_defs: &[ToolDef],
-    ) {
+    pub(super) fn push_header(&self, session_id: &str, system_prompt: &str, tool_defs: &[ToolDef]) {
         self.log
             .lock()
             .unwrap()

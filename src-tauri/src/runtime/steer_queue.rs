@@ -81,10 +81,7 @@ impl SteerQueue {
     pub fn take_next(&self, session_id: &str) -> Option<SteerEntry> {
         let mut parts = self.partitions.lock().unwrap();
         let entry = parts.get_mut(session_id)?.entries.pop_front()?;
-        if parts
-            .get(session_id)
-            .is_some_and(|p| p.entries.is_empty())
-        {
+        if parts.get(session_id).is_some_and(|p| p.entries.is_empty()) {
             parts.remove(session_id);
         }
         Some(entry)
@@ -319,7 +316,11 @@ mod tests {
         q.enqueue("s2", "新丙");
         assert_eq!(q.adopt("conv-1", "s2"), 2, "合并两条保留条目");
         assert_eq!(q.len("s1"), 0, "保留分区随合并清出");
-        assert_eq!(q.take_next("s2").unwrap().text, "旧甲", "保留条目（旧）在前");
+        assert_eq!(
+            q.take_next("s2").unwrap().text,
+            "旧甲",
+            "保留条目（旧）在前"
+        );
         assert_eq!(q.take_next("s2").unwrap().text, "旧乙");
         assert_eq!(q.take_next("s2").unwrap().text, "新丙", "既有条目保序在后");
     }

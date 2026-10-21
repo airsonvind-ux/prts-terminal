@@ -42,11 +42,7 @@ impl TurnState {
     /// - `final_usage` 覆盖式为最后一次调用快照（上下文占用）。
     /// - `total_input/output_tokens` 跨调用求和 = 成本账本。
     /// 推理链取最后一次非空值。
-    pub(super) fn record_call(
-        &mut self,
-        usage: Option<TokenUsage>,
-        reasoning: Option<String>,
-    ) {
+    pub(super) fn record_call(&mut self, usage: Option<TokenUsage>, reasoning: Option<String>) {
         if let Some(u) = usage {
             self.final_usage = Some(u);
             self.total_input_tokens += u.input_tokens;

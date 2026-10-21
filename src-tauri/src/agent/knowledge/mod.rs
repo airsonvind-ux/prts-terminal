@@ -94,12 +94,7 @@ pub(crate) fn parse_frontmatter_fields(text: &str) -> Option<Vec<(String, Vec<St
             let inner = value.trim_start_matches('[').trim_end_matches(']');
             let items: Vec<String> = inner
                 .split(',')
-                .map(|item| {
-                    item.trim()
-                        .trim_matches('"')
-                        .trim_matches('\'')
-                        .to_string()
-                })
+                .map(|item| item.trim().trim_matches('"').trim_matches('\'').to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
             fields.push((key, items));
@@ -207,7 +202,8 @@ mod tests {
     fn parses_crlf_frontmatter() {
         // CRLF 换行（外部编辑工具写入）：解析与 LF 等价
         // （实测：key_points 批量写入后一批条目转为 CRLF 被静默跳过）
-        let text = "---\r\ntitle: 阻挡\r\nbrief: b\r\nkey_points:\r\n  - 一格一敌\r\n---\r\n\r\n## 正文";
+        let text =
+            "---\r\ntitle: 阻挡\r\nbrief: b\r\nkey_points:\r\n  - 一格一敌\r\n---\r\n\r\n## 正文";
         let meta = parse_frontmatter(text).unwrap();
         assert_eq!(meta.title, "阻挡");
         assert_eq!(meta.key_points, vec!["一格一敌"]);

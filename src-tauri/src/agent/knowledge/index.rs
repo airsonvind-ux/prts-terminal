@@ -36,10 +36,7 @@ impl KnowledgeIndex {
     /// - root 不存在或不可读 → Err（描述性信息）
     pub fn load(root: &Path) -> Result<Self, String> {
         if !root.is_dir() {
-            return Err(format!(
-                "知识库目录不存在或不可读：{}",
-                root.display()
-            ));
+            return Err(format!("知识库目录不存在或不可读：{}", root.display()));
         }
 
         let mut entries: HashMap<String, PathBuf> = HashMap::new();
@@ -89,7 +86,10 @@ impl KnowledgeIndex {
 
                 let Some(meta) = crate::knowledge::parse_frontmatter(&text) else {
                     // 无 frontmatter 或结构异常（如换行符/字段格式问题）均落此分支
-                    eprintln!("[knowledge] 跳过 frontmatter 无效的条目：{}", path.display());
+                    eprintln!(
+                        "[knowledge] 跳过 frontmatter 无效的条目：{}",
+                        path.display()
+                    );
                     continue;
                 };
                 if meta.title.is_empty() {
@@ -257,10 +257,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-kb-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("prts-kb-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -321,10 +319,7 @@ mod tests {
         let idx = KnowledgeIndex::load(&root).unwrap();
 
         assert_eq!(idx.resolve("BBB"), Some(Path::new("sub1/bbb.md")));
-        assert_eq!(
-            idx.entry_path("BBB"),
-            Some(root.join("sub1/bbb.md"))
-        );
+        assert_eq!(idx.entry_path("BBB"), Some(root.join("sub1/bbb.md")));
         assert_eq!(idx.resolve("不存在"), None);
         assert_eq!(idx.entry_path("不存在"), None);
 
@@ -410,10 +405,13 @@ mod tests {
         .unwrap();
         let idx = KnowledgeIndex::load(&root).unwrap();
         let (_, entries) = idx.dir_children("sub1").unwrap();
-        assert_eq!(entries, vec![
-            ("多节".to_string(), "b".to_string(), 3),
-            ("无节".to_string(), "b".to_string(), 0),
-        ]);
+        assert_eq!(
+            entries,
+            vec![
+                ("多节".to_string(), "b".to_string(), 3),
+                ("无节".to_string(), "b".to_string(), 0),
+            ]
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

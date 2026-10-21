@@ -6,6 +6,8 @@
 
 // mod cache; // 已注释（2026-08：缓存工具取消注册；未来记忆系统复用时可恢复）
 mod capture;
+pub(crate) mod common;
+pub(crate) mod common_fmt;
 mod display;
 mod fs;
 mod fs_grep;
@@ -32,10 +34,9 @@ mod web_common;
 mod web_fetch;
 mod web_search;
 pub mod wiki;
-pub(crate) mod common;
-pub(crate) mod common_fmt;
 
 // pub use cache::{CacheListTool, CacheRemoveTool, CacheRetrieveTool, CacheStoreTool};
+pub use display::{DisplayLink, ToolDisplay};
 pub use fs::{ListDirTool, ReadFileTool};
 pub use fs_grep::GrepTool;
 pub use fs_write::{EditTool, WriteFileTool};
@@ -51,9 +52,8 @@ pub use query_stage::QueryStage;
 pub use query_table::QueryTable;
 pub use query_token::QueryToken;
 pub use query_trap::QueryTrap;
-pub use search_entities::SearchEntities;
 pub use run_command::RunCommandTool;
-pub use display::{DisplayLink, ToolDisplay};
+pub use search_entities::SearchEntities;
 pub use sim_path::SimPath;
 pub use skill::ActivateSkillTool;
 pub use time::TimeTool;
@@ -771,10 +771,7 @@ mod tests {
         assert_eq!(load["key"], "enemy.unit_1001");
         assert_eq!(load["content"], "源石虫");
 
-        let remove = serde_json::to_value(ContextOp::ReferenceRemove {
-            key: "k".into(),
-        })
-        .unwrap();
+        let remove = serde_json::to_value(ContextOp::ReferenceRemove { key: "k".into() }).unwrap();
         assert_eq!(remove["op"], "reference-remove");
         assert_eq!(remove["key"], "k");
 
@@ -848,7 +845,11 @@ mod tests {
             .iter()
             .map(|d| d.function.name.clone())
             .collect();
-        assert_eq!(names, vec!["alpha", "mike", "zeta"], "list_defs 应按工具名升序");
+        assert_eq!(
+            names,
+            vec!["alpha", "mike", "zeta"],
+            "list_defs 应按工具名升序"
+        );
         let names_again: Vec<String> = reg
             .list_defs()
             .iter()
@@ -888,7 +889,8 @@ mod tests {
         reg.register(Box::new(DisplayProbeTool)).unwrap();
         let ctx = ToolContext::new();
         assert_eq!(
-            reg.display_for("display_probe", r#"{"probe":1}"#, &ctx).text,
+            reg.display_for("display_probe", r#"{"probe":1}"#, &ctx)
+                .text,
             "探针对象"
         );
         // 工具自身判定为空 → 空切片
@@ -934,7 +936,9 @@ mod tests {
         let mem_root =
             std::env::temp_dir().join(format!("prts-reg-mem-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&mem_root).unwrap();
-        let memory = Arc::new(Mutex::new(crate::memory::MemoryStore::load(&mem_root).unwrap()));
+        let memory = Arc::new(Mutex::new(
+            crate::memory::MemoryStore::load(&mem_root).unwrap(),
+        ));
         let ledger = Arc::new(Mutex::new(crate::notices::Notices::load(&mem_root)));
 
         register_builtin(
@@ -970,8 +974,12 @@ mod tests {
     fn register_rejects_invalid_schema() {
         struct BadSchemaTool;
         impl Tool for BadSchemaTool {
-            fn name(&self) -> &str { "bad_schema" }
-            fn description(&self) -> &str { "schema 非法的工具" }
+            fn name(&self) -> &str {
+                "bad_schema"
+            }
+            fn description(&self) -> &str {
+                "schema 非法的工具"
+            }
             fn parameters(&self) -> serde_json::Value {
                 serde_json::json!({ "type": "string" }) // 顶层必须是 object
             }
@@ -991,7 +999,9 @@ mod tests {
         let mut reg = ToolRegistry::new();
         reg.register(Box::new(QueryLevel)).unwrap();
         let ctx = ToolContext::new(); // 无 db——若 guard 不拦截会走到 Execution("数据库未连接")
-        let err = reg.execute("query_level", &ctx, r#"{"levelId":"x"}"#).unwrap_err();
+        let err = reg
+            .execute("query_level", &ctx, r#"{"levelId":"x"}"#)
+            .unwrap_err();
         assert!(
             matches!(&err, ToolError::Parse(msg) if msg.contains("缺少必填参数: fields")),
             "got: {err}"

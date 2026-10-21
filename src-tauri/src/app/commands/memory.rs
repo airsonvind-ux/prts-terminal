@@ -47,7 +47,9 @@ pub async fn finalize_memory(
     };
     // 读水位 + 增量（会话文件缺失/损坏 → 无可提炼）
     let (delta, turn_from, new_watermark) = {
-        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         let rec = match s.get(&conversation_id) {
             Ok(r) => r,
             Err(_) => return Ok(()),
@@ -118,7 +120,9 @@ pub fn memory_catch_up(
     limit: Option<usize>,
 ) -> Result<Vec<String>, String> {
     let limit = limit.unwrap_or(MEMORY_CATCH_UP_LIMIT).max(1);
-    let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    let mut s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
     let mut metas = s.list()?;
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at));
     let mem = memory_store
@@ -502,7 +506,9 @@ pub fn memory_experience_clear(
     }
     let now = crate::memory::schema::now_ms();
     {
-        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         let metas = s.list()?;
         let mut m = memory_store
             .lock()
@@ -594,7 +600,9 @@ pub async fn memory_tidy(
     };
     // 读水位 + 增量
     let (delta, turn_from, new_watermark) = {
-        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
         let rec = match s.get(&conversation_id) {
             Ok(r) => r,
             Err(_) => {
@@ -662,7 +670,14 @@ pub async fn memory_tidy(
                 if o.compressed {
                     msg.push_str("，并压缩长期记忆");
                 }
-                (if o.rewritten > 0 { "rewritten" } else { "created" }, msg)
+                (
+                    if o.rewritten > 0 {
+                        "rewritten"
+                    } else {
+                        "created"
+                    },
+                    msg,
+                )
             } else if o.compressed {
                 ("compressed", "已压缩长期记忆".to_string())
             } else {

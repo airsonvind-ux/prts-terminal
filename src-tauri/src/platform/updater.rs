@@ -22,8 +22,8 @@ use url::Url;
 
 use crate::turn_registry::TurnRegistry;
 
-mod install;
 mod check;
+mod install;
 use check::check_internal;
 use install::{download_internal, install_internal};
 
@@ -322,8 +322,8 @@ fn write_post_install_notice(notice: &PostInstallNotice) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("创建更新状态目录失败：{e}"))?;
     }
-    let body = serde_json::to_string_pretty(notice)
-        .map_err(|e| format!("序列化更新日志失败：{e}"))?;
+    let body =
+        serde_json::to_string_pretty(notice).map_err(|e| format!("序列化更新日志失败：{e}"))?;
     std::fs::write(&path, body).map_err(|e| format!("写入更新日志失败：{e}"))?;
     Ok(())
 }

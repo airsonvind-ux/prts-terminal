@@ -19,10 +19,8 @@ pub async fn pick_skill_file(app: AppHandle) -> Result<Option<String>, String> {
         .set_title("选择技能文件（.md）")
         .add_filter("Markdown", &["md"])
         .pick_file(move |picked| {
-            let value = picked.and_then(|fp| {
-                fp.as_path()
-                    .map(|p| p.to_string_lossy().into_owned())
-            });
+            let value =
+                picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
             let _ = tx.send(value);
         });
     rx.await.map_err(|e| format!("文件选择失败: {e}"))
@@ -37,10 +35,8 @@ pub async fn pick_skill_folder(app: AppHandle) -> Result<Option<String>, String>
         .file()
         .set_title("选择技能文件夹（含 SKILL.md）")
         .pick_folder(move |picked| {
-            let value = picked.and_then(|fp| {
-                fp.as_path()
-                    .map(|p| p.to_string_lossy().into_owned())
-            });
+            let value =
+                picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
             let _ = tx.send(value);
         });
     rx.await.map_err(|e| format!("文件夹选择失败: {e}"))

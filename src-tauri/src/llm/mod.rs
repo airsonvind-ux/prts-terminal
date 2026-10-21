@@ -15,14 +15,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub mod anthropic;
 #[cfg(test)]
 #[cfg(test)]
 pub mod mock;
 pub mod openai_compatible;
-pub mod anthropic;
 pub mod openai_responses;
-pub mod thinking;
 pub mod sse;
+pub mod thinking;
 // 协议异常清洗（匿名工具调用）：对照既有实现的 stream-guard，见模块头。
 pub mod protocol_guard;
 
@@ -188,7 +188,11 @@ pub struct Compat {
     ///
     /// models.json 手写键为 snake_case（thinking_format），此处 alias 接收；
     /// 序列化仍按容器 rename_all 输出 camelCase（前端契约，见测试）。
-    #[serde(default, alias = "thinking_format", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "thinking_format",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub thinking_format: Option<ThinkingFormat>,
     /// 认证方式。None = 默认 "bearer"。"none" = 不发送 Authorization header
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,29 +380,81 @@ pub struct ImagePart {
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::System, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
+        Self {
+            role: MessageRole::System,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+            image_paths: None,
+            images: None,
+        }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::User, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
+        Self {
+            role: MessageRole::User,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+            image_paths: None,
+            images: None,
+        }
     }
 
     /// 带图像路径的 user 消息（来自 history 附件的播种）。物化由请求前完成。
     pub fn user_with_image_paths(content: impl Into<String>, image_paths: Vec<String>) -> Self {
-        Self { role: MessageRole::User, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: Some(image_paths), images: None }
+        Self {
+            role: MessageRole::User,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+            image_paths: Some(image_paths),
+            images: None,
+        }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: None, tool_call_id: None, reasoning_content: None, image_paths: None, images: None }
+        Self {
+            role: MessageRole::Assistant,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: None,
+            image_paths: None,
+            images: None,
+        }
     }
 
-    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>, reasoning_content: Option<String>) -> Self {
-        Self { role: MessageRole::Assistant, content: content.into(), tool_calls: Some(tool_calls), tool_call_id: None, reasoning_content, image_paths: None, images: None }
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+        reasoning_content: Option<String>,
+    ) -> Self {
+        Self {
+            role: MessageRole::Assistant,
+            content: content.into(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+            reasoning_content,
+            image_paths: None,
+            images: None,
+        }
     }
 
     /// 工具执行结果消息。tool_call_id 用于 LLM API 侧匹配对应的 tool_call。
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: MessageRole::Tool, content: content.into(), tool_calls: None, tool_call_id: Some(tool_call_id.into()), reasoning_content: None, image_paths: None, images: None }
+        Self {
+            role: MessageRole::Tool,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+            reasoning_content: None,
+            image_paths: None,
+            images: None,
+        }
     }
 }
 
@@ -434,12 +490,16 @@ pub struct ToolCallFunction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
     #[serde(rename = "type")]
-    pub tool_type: String,  // 固定 "function"
+    pub tool_type: String, // 固定 "function"
     pub function: ToolDefFunction,
 }
 
 impl ToolDef {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
         Self {
             tool_type: "function".into(),
             function: ToolDefFunction {
@@ -617,8 +677,8 @@ impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Config(msg) => write!(f, "LLM 配置错误：{msg}"),
-            Self::Api(msg)    => write!(f, "LLM API 错误：{msg}"),
-            Self::Parse(msg)  => write!(f, "LLM 响应解析错误：{msg}"),
+            Self::Api(msg) => write!(f, "LLM API 错误：{msg}"),
+            Self::Parse(msg) => write!(f, "LLM 响应解析错误：{msg}"),
             Self::Timeout(msg) => write!(f, "LLM 请求超时：{msg}"),
         }
     }
@@ -665,9 +725,11 @@ pub fn assert_stream_contract(events: &[StreamEvent], result: &StreamResult) {
     let calls_from_events: Vec<(&str, &str, &str)> = events
         .iter()
         .filter_map(|e| match e {
-            StreamEvent::ToolCall { id, name, arguments } => {
-                Some((id.as_str(), name.as_str(), arguments.as_str()))
-            }
+            StreamEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => Some((id.as_str(), name.as_str(), arguments.as_str())),
             _ => None,
         })
         .collect();
@@ -775,7 +837,11 @@ pub const CANONICAL_THINKING_LEVELS: &[&str] = &["off", "low", "medium", "high",
 
 /// 模型 id 归一化：去掉 `provider/` 前缀并转小写（仅用于查表匹配，不动目录原值）。
 pub fn normalize_model_id(id: &str) -> String {
-    id.rsplit('/').next().unwrap_or(id).trim().to_ascii_lowercase()
+    id.rsplit('/')
+        .next()
+        .unwrap_or(id)
+        .trim()
+        .to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone)]
@@ -843,8 +909,8 @@ impl ModelRegistry {
             default_thinking_level: Option<String>,
         }
 
-        let file: ModelsFile = serde_json::from_str(json)
-            .map_err(|e| format!("models.json 解析失败: {e}"))?;
+        let file: ModelsFile =
+            serde_json::from_str(json).map_err(|e| format!("models.json 解析失败: {e}"))?;
 
         // ── 目录自检（2026-10-08）──
         // 错误在加载时暴露，不在运行时静默降级。键名/多写字段已被上面的
@@ -884,27 +950,34 @@ impl ModelRegistry {
 
         let mut providers = HashMap::new();
         for (id, pj) in file.providers {
-            let models: HashMap<String, ModelEntry> = pj.models
+            let models: HashMap<String, ModelEntry> = pj
+                .models
                 .into_iter()
                 .map(|(mid, mj)| {
-                    (mid, ModelEntry {
-                        name: mj.name,
-                        context: mj.context,
-                        reasoning: mj.reasoning,
-                        supports_vision: mj.supports_vision,
-                        compat: mj.compat,
-                        thinking_levels: mj.thinking_levels,
-                        default_thinking_level: mj.default_thinking_level,
-                    })
+                    (
+                        mid,
+                        ModelEntry {
+                            name: mj.name,
+                            context: mj.context,
+                            reasoning: mj.reasoning,
+                            supports_vision: mj.supports_vision,
+                            compat: mj.compat,
+                            thinking_levels: mj.thinking_levels,
+                            default_thinking_level: mj.default_thinking_level,
+                        },
+                    )
                 })
                 .collect();
 
-            providers.insert(id, ProviderEntry {
-                api_type: pj.defaults.api_type,
-                base_url: pj.defaults.base_url,
-                default_compat: pj.defaults.compat.unwrap_or_default(),
-                models,
-            });
+            providers.insert(
+                id,
+                ProviderEntry {
+                    api_type: pj.defaults.api_type,
+                    base_url: pj.defaults.base_url,
+                    default_compat: pj.defaults.compat.unwrap_or_default(),
+                    models,
+                },
+            );
         }
 
         let display_names = Self::build_display_names();
@@ -923,7 +996,11 @@ impl ModelRegistry {
             })
             .collect();
 
-        Ok(Self { providers, display_names, norm_ids })
+        Ok(Self {
+            providers,
+            display_names,
+            norm_ids,
+        })
     }
 
     /// 硬编码的 provider id → 展示名映射。
@@ -1009,7 +1086,11 @@ impl ModelRegistry {
             .iter()
             .map(|(id, pe)| ProviderInfo {
                 id: id.clone(),
-                display_name: self.display_names.get(id).cloned().unwrap_or_else(|| id.clone()),
+                display_name: self
+                    .display_names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.clone()),
                 api_type: pe.api_type,
                 base_url: pe.base_url.clone(),
                 default_compat: pe.default_compat.clone(),
@@ -1040,7 +1121,10 @@ impl ModelRegistry {
     pub fn get_model(&self, provider: &str, model: &str) -> Option<&ModelEntry> {
         let pe = self.providers.get(provider)?;
         pe.models.get(model).or_else(|| {
-            let canonical = self.norm_ids.get(provider)?.get(&normalize_model_id(model))?;
+            let canonical = self
+                .norm_ids
+                .get(provider)?
+                .get(&normalize_model_id(model))?;
             pe.models.get(canonical)
         })
     }
@@ -1118,7 +1202,17 @@ mod tests {
     /// 曾缺 zhipu 等致空 Base URL 连接报"未配置 Base URL"回归）
     #[test]
     fn default_base_url_covers_all_presets() {
-        for p in ["deepseek", "openai", "anthropic", "ollama", "zhipu", "kimi", "qwen", "volcengine", "gemini"] {
+        for p in [
+            "deepseek",
+            "openai",
+            "anthropic",
+            "ollama",
+            "zhipu",
+            "kimi",
+            "qwen",
+            "volcengine",
+            "gemini",
+        ] {
             assert!(default_base_url(p).is_some(), "预设 {p} 应有默认 URL");
         }
         assert!(default_base_url("my-custom").is_none(), "自定义需显式填写");
@@ -1137,13 +1231,19 @@ mod tests {
     #[test]
     fn registry_rejects_invalid_values() {
         let bad_ctx = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"M","context":0}}}}"#;
-        assert!(ModelRegistry::from_json(bad_ctx).unwrap_err().contains("context 为 0"));
+        assert!(ModelRegistry::from_json(bad_ctx)
+            .unwrap_err()
+            .contains("context 为 0"));
 
         let bad_name = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"  ","context":1}}}}"#;
-        assert!(ModelRegistry::from_json(bad_name).unwrap_err().contains("name 为空"));
+        assert!(ModelRegistry::from_json(bad_name)
+            .unwrap_err()
+            .contains("name 为空"));
 
         let bad_level = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"m":{"name":"M","context":1,"thinking_levels":["low","ultra"]}}}}"#;
-        assert!(ModelRegistry::from_json(bad_level).unwrap_err().contains("未知思考档位"));
+        assert!(ModelRegistry::from_json(bad_level)
+            .unwrap_err()
+            .contains("未知思考档位"));
     }
 
     #[test]
@@ -1151,7 +1251,10 @@ mod tests {
         let json = r#"{"openai":{"defaults":{"api_type":"openai-completions","base_url":"https://x/v1"},"models":{"gpt-5.6":{"name":"GPT-5.6","context":1000}}}}"#;
         let reg = ModelRegistry::from_json(json).unwrap();
         assert!(reg.get_model("openai", "gpt-5.6").is_some());
-        assert!(reg.get_model("openai", "openai/gpt-5.6").is_some(), "带前缀应命中");
+        assert!(
+            reg.get_model("openai", "openai/gpt-5.6").is_some(),
+            "带前缀应命中"
+        );
         assert!(reg.get_model("openai", "GPT-5.6").is_some(), "大小写应命中");
         assert!(reg.get_model("openai", "nope").is_none());
         assert!(reg.get_model("no-such-provider", "gpt-5.6").is_none());
@@ -1175,7 +1278,10 @@ mod tests {
         let tc = ToolCall {
             id: "call_1".into(),
             call_type: "function".into(),
-            function: ToolCallFunction { name: "query".into(), arguments: "{}".into() },
+            function: ToolCallFunction {
+                name: "query".into(),
+                arguments: "{}".into(),
+            },
         };
         let at = ChatMessage::assistant_with_tools("", vec![tc], None);
         assert_eq!(at.role, MessageRole::Assistant);
@@ -1188,10 +1294,22 @@ mod tests {
 
     #[test]
     fn message_role_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&MessageRole::System).unwrap(), "\"system\"");
-        assert_eq!(serde_json::to_string(&MessageRole::User).unwrap(), "\"user\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Assistant).unwrap(), "\"assistant\"");
-        assert_eq!(serde_json::to_string(&MessageRole::Tool).unwrap(), "\"tool\"");
+        assert_eq!(
+            serde_json::to_string(&MessageRole::System).unwrap(),
+            "\"system\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::User).unwrap(),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Assistant).unwrap(),
+            "\"assistant\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MessageRole::Tool).unwrap(),
+            "\"tool\""
+        );
     }
 
     /// ModelInfo 序列化契约：camelCase 键名 + enriched 字段（前端 U 徽章依据）。
@@ -1244,10 +1362,22 @@ mod tests {
 
     #[test]
     fn default_base_url_known_providers() {
-        assert_eq!(default_base_url("deepseek"), Some("https://api.deepseek.com/v1"));
-        assert_eq!(default_base_url("openai"), Some("https://api.openai.com/v1"));
-        assert_eq!(default_base_url("anthropic"), Some("https://api.anthropic.com"));
-        assert_eq!(default_base_url("ollama"), Some("http://localhost:11434/v1"));
+        assert_eq!(
+            default_base_url("deepseek"),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert_eq!(
+            default_base_url("openai"),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            default_base_url("anthropic"),
+            Some("https://api.anthropic.com")
+        );
+        assert_eq!(
+            default_base_url("ollama"),
+            Some("http://localhost:11434/v1")
+        );
     }
 
     #[test]
@@ -1265,7 +1395,10 @@ mod tests {
             auth: Some(AuthMode::None),
         };
         let json = serde_json::to_string(&c).unwrap();
-        assert!(json.contains("\"thinkingFormat\""), "Expected camelCase thinkingFormat, got: {json}");
+        assert!(
+            json.contains("\"thinkingFormat\""),
+            "Expected camelCase thinkingFormat, got: {json}"
+        );
         assert!(json.contains("\"auth\""), "Expected auth, got: {json}");
     }
 
@@ -1291,7 +1424,10 @@ mod tests {
         };
         let json = serde_json::to_string(&info).unwrap();
         // ProviderInfo 的 compat 字段是嵌套的 Compat，必须验证 camelCase
-        assert!(json.contains("\"thinkingFormat\""), "Nested compat must be camelCase, got: {json}");
+        assert!(
+            json.contains("\"thinkingFormat\""),
+            "Nested compat must be camelCase, got: {json}"
+        );
     }
 
     /// 真实 models.json 解析回归（2026-09-19 修）：文件里 `compat` 用 snake_case
@@ -1300,8 +1436,7 @@ mod tests {
     /// 配置，堵住「测试只覆盖手搭结构、不读文件」的盲区。
     #[test]
     fn real_models_json_deepseek_compat_resolves() {
-        let reg =
-            ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
         let r = reg.get_resolved_compat("deepseek", "deepseek-flash", ApiType::OpenAiCompletions);
         assert_eq!(
             r.carrier.as_deref(),

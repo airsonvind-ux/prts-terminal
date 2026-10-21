@@ -38,13 +38,11 @@ use settings::{guard_config_write, CONFIG_WRITE_GUARD_MSG};
 
 #[cfg(test)]
 use workspace::{
-    list_dir_entries, resolve_workspace_target, search_workspace_entries,
-    WORKSPACE_SEARCH_LIMIT,
+    list_dir_entries, resolve_workspace_target, search_workspace_entries, WORKSPACE_SEARCH_LIMIT,
 };
 
 #[cfg(test)]
 use prelude::*;
-
 
 #[cfg(test)]
 mod tests {
@@ -133,7 +131,10 @@ mod tests {
             .iter()
             .find(|s| s.name == "数值计算")
             .expect("应含数值计算技能");
-        assert_eq!(calc.description, "计算规则", "frontmatter description 应被解析");
+        assert_eq!(
+            calc.description, "计算规则",
+            "frontmatter description 应被解析"
+        );
         assert!(calc.source.is_none(), "fixture 无 source → None（用户态）");
         // file_path：绝对路径且在目标目录内（打开链接用；文件名≠name）
         let fp = calc.file_path.as_ref().expect("应记录源文件路径");
@@ -171,7 +172,10 @@ mod tests {
             v.get("filePath").and_then(|x| x.as_str()),
             Some("F:/skills/数值计算.md")
         );
-        assert!(v.get("file_path").is_none(), "不应输出 snake_case file_path");
+        assert!(
+            v.get("file_path").is_none(),
+            "不应输出 snake_case file_path"
+        );
         assert!(v.get("name").is_some());
         assert!(v.get("description").is_some());
         assert_eq!(
@@ -322,7 +326,10 @@ mod tests {
 
         // abort 不释放 busy：快照仍在，直到 process 返回后 unregister
         assert!(reg.abort("s1"));
-        assert!(guard_config_write(&reg).is_err(), "中止后仍 busy（轮未收尾）");
+        assert!(
+            guard_config_write(&reg).is_err(),
+            "中止后仍 busy（轮未收尾）"
+        );
 
         reg.unregister("s1");
         assert!(guard_config_write(&reg).is_ok(), "注销（轮收尾）后放行");
@@ -361,7 +368,11 @@ mod tests {
 
         let entries = list_dir_entries(&root).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["Alpha", "zeta", "a.txt", "b.txt"], "目录在前，各自按名");
+        assert_eq!(
+            names,
+            vec!["Alpha", "zeta", "a.txt", "b.txt"],
+            "目录在前，各自按名"
+        );
         assert!(entries[0].is_dir, "目录标记");
         assert!(!entries[2].is_dir, "文件标记");
         // 路径为拼接形式（非 canonical，不带 \\?\ 前缀）——直接回传给前端用
@@ -380,7 +391,11 @@ mod tests {
             resolve_workspace_target(&root, Some(&sub.to_string_lossy())).is_ok(),
             "根内子目录放行"
         );
-        assert_eq!(resolve_workspace_target(&root, None).unwrap(), root, "省略 = 根自身");
+        assert_eq!(
+            resolve_workspace_target(&root, None).unwrap(),
+            root,
+            "省略 = 根自身"
+        );
         assert_eq!(
             resolve_workspace_target(&root, Some("  ")).unwrap(),
             root,
@@ -424,7 +439,10 @@ mod tests {
         assert!(deep[0].ancestor_dirs[0].ends_with("a"));
         assert!(deep[0].ancestor_dirs[2].ends_with("c"));
 
-        assert!(search_workspace_entries(&root, "  ").is_empty(), "空查询不搜");
+        assert!(
+            search_workspace_entries(&root, "  ").is_empty(),
+            "空查询不搜"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -451,7 +469,10 @@ mod tests {
             .iter()
             .find(|h| h.is_dir && h.relative_path == "d")
             .expect("根级目录命中");
-        assert!(root_dir_hit.parent_subdir.is_empty(), "根级 parentSubdir 为空串");
+        assert!(
+            root_dir_hit.parent_subdir.is_empty(),
+            "根级 parentSubdir 为空串"
+        );
         assert!(root_dir_hit.ancestor_dirs.is_empty(), "根级命中无祖先目录");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -473,7 +494,10 @@ mod tests {
             let mem = memory.lock().unwrap();
             snapshots.lock().unwrap().get_or_assemble(Some("c1"), &mem);
         }
-        skills.lock().unwrap().get_or_freeze(Some("c1"), Some("目录 A"));
+        skills
+            .lock()
+            .unwrap()
+            .get_or_freeze(Some("c1"), Some("目录 A"));
         prefix
             .lock()
             .unwrap()
@@ -485,7 +509,15 @@ mod tests {
             mem.growth_update(PROFILE_NAME, Some("画像"), None, None, SOURCE_USER)
                 .unwrap();
         }
-        refresh_frozen_snapshots("c1", Some("目录 B"), &[], &memory, &snapshots, &skills, &prefix);
+        refresh_frozen_snapshots(
+            "c1",
+            Some("目录 B"),
+            &[],
+            &memory,
+            &snapshots,
+            &skills,
+            &prefix,
+        );
 
         assert_eq!(
             std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),

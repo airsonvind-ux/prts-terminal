@@ -200,7 +200,12 @@ pub(crate) fn file_link(policy: &Policy, raw: &str) -> DisplayLink {
             if p.is_absolute() {
                 raw.to_string()
             } else {
-                policy.workspace_root().canonical().join(raw).to_string_lossy().into_owned()
+                policy
+                    .workspace_root()
+                    .canonical()
+                    .join(raw)
+                    .to_string_lossy()
+                    .into_owned()
             }
         });
     DisplayLink::file(resolved, file_name_label(raw))
@@ -293,7 +298,11 @@ mod tests {
         let long = "甲".repeat(MAX_DISPLAY_TEXT_CHARS + 10);
         let d = ToolDisplay::info_with_full(long.clone(), long.clone());
         assert!(d.text.ends_with('…'));
-        assert_eq!(d.full.as_deref(), Some(long.as_str()), "截断了就要给看全文的渠道");
+        assert_eq!(
+            d.full.as_deref(),
+            Some(long.as_str()),
+            "截断了就要给看全文的渠道"
+        );
     }
 
     #[test]

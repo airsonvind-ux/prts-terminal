@@ -114,7 +114,11 @@ mod tests {
         log.append(SessionEvent::user_message("s1", "你好"));
         log.append(SessionEvent::step_start("s1", 1, 100));
         log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "片段"));
-        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Reasoning, "思考"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "思考",
+        ));
         log.append(SessionEvent::step_end(
             "s1",
             1,
@@ -135,13 +139,13 @@ mod tests {
         for l in &lines {
             serde_json::from_str::<serde_json::Value>(l).unwrap();
         }
-        assert!(lines.iter().all(|l| {
-            !l.contains("assistant/chunk") && !l.contains("user/message")
-        }));
-        // step/start 携带请求前估算（双锚 estimate 兜底锚）
         assert!(lines
             .iter()
-            .any(|l| l.contains("\"type\":\"step/start\"") && l.contains("\"estimatedTokens\":100")));
+            .all(|l| { !l.contains("assistant/chunk") && !l.contains("user/message") }));
+        // step/start 携带请求前估算（双锚 estimate 兜底锚）
+        assert!(lines.iter().any(
+            |l| l.contains("\"type\":\"step/start\"") && l.contains("\"estimatedTokens\":100")
+        ));
         // step/end 携带 provider usage（基线锚）
         assert!(lines
             .iter()

@@ -359,19 +359,28 @@ mod tests {
         std::fs::create_dir_all(root.join("shell")).unwrap();
         std::fs::write(root.join("shell").join("adb.exe"), b"x").unwrap();
 
-        let resolved = resolve_all(&machine_with("MuMu 12", root.clone()), &Overrides::default());
+        let resolved = resolve_all(
+            &machine_with("MuMu 12", root.clone()),
+            &Overrides::default(),
+        );
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].config, "MuMuEmulator12");
         assert_eq!(resolved[0].adb_path, root.join("shell").join("adb.exe"));
         assert!(resolved[0].extras, "MuMu 支持截图增强");
-        assert_eq!(resolved[0].addresses.first().map(String::as_str), Some("127.0.0.1:16384"));
+        assert_eq!(
+            resolved[0].addresses.first().map(String::as_str),
+            Some("127.0.0.1:16384")
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn skips_emulator_without_adb() {
         let root = temp_root("empty");
-        let resolved = resolve_all(&machine_with("MuMu 12", root.clone()), &Overrides::default());
+        let resolved = resolve_all(
+            &machine_with("MuMu 12", root.clone()),
+            &Overrides::default(),
+        );
         assert!(resolved.is_empty(), "装目录里没有 adb 就不该给出目标");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -439,8 +448,14 @@ mod tests {
 
         let info = MachineInfo {
             emulators: vec![
-                Emulator { label: "MuMu 12".to_string(), path: mumu.clone() },
-                Emulator { label: "雷电 LDPlayer".to_string(), path: ld.clone() },
+                Emulator {
+                    label: "MuMu 12".to_string(),
+                    path: mumu.clone(),
+                },
+                Emulator {
+                    label: "雷电 LDPlayer".to_string(),
+                    path: ld.clone(),
+                },
             ],
             ..Default::default()
         };
@@ -448,7 +463,10 @@ mod tests {
         let auto = resolve_all(&info, &Overrides::default());
         assert_eq!(auto.len(), 2, "不指定时两家都给");
 
-        let only = Overrides { emulator: Some("雷电 LDPlayer".to_string()), ..Default::default() };
+        let only = Overrides {
+            emulator: Some("雷电 LDPlayer".to_string()),
+            ..Default::default()
+        };
         let picked = resolve_all(&info, &only);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].config, "LDPlayer");

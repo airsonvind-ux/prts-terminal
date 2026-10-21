@@ -126,7 +126,12 @@ impl Tool for WebFetchTool {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(params) else {
             return ToolDisplay::default();
         };
-        match v.get("url").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+        match v
+            .get("url")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             // URL 链接（前端经 open_url 交系统浏览器打开）
             Some(u) => ToolDisplay::link(DisplayLink::url(u)),
             None => ToolDisplay::default(),
@@ -300,7 +305,9 @@ impl WebFetchTool {
 /// 单跳客户端：超时（生产 15s）+ manual 重定向 + 固定 UA/头 + 禁代理。
 /// 注意：blocking 的 ClientBuilder 无 header()，头一律经 default_headers。
 fn build_client(timeout: Duration) -> Result<reqwest::blocking::Client, reqwest::Error> {
-    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT as HDR_ACCEPT, ACCEPT_LANGUAGE as HDR_ACCEPT_LANG};
+    use reqwest::header::{
+        HeaderMap, HeaderValue, ACCEPT as HDR_ACCEPT, ACCEPT_LANGUAGE as HDR_ACCEPT_LANG,
+    };
     let mut headers = HeaderMap::new();
     headers.insert(HDR_ACCEPT, HeaderValue::from_static(ACCEPT));
     headers.insert(HDR_ACCEPT_LANG, HeaderValue::from_static(ACCEPT_LANGUAGE));
@@ -422,7 +429,9 @@ fn strip_html_to_text(html: &str) -> String {
 
     let (scripts, styles, noscripts, templates, head, comments, blocks, tags, numeric) = {
         let r = regexes();
-        (&r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8])
+        (
+            &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8],
+        )
     };
     let mut text = html.to_string();
     text = scripts.replace_all(&text, "").into_owned();
@@ -518,7 +527,12 @@ mod tests {
     }
 
     fn canned(status: u16, content_type: &'static str, body: impl Into<Vec<u8>>) -> Canned {
-        Canned { status, content_type, headers: Vec::new(), body: body.into() }
+        Canned {
+            status,
+            content_type,
+            headers: Vec::new(),
+            body: body.into(),
+        }
     }
 
     fn status_text(code: u16) -> &'static str {
@@ -562,7 +576,9 @@ mod tests {
                         }
                     }
                 }
-                let Some(resp) = handler(idx, request_line.trim()) else { break };
+                let Some(resp) = handler(idx, request_line.trim()) else {
+                    break;
+                };
                 let mut head = format!(
                     "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
                     resp.status,
@@ -618,9 +634,17 @@ mod tests {
     #[test]
     fn rejects_non_http_schemes() {
         let t = tool(5);
-        for u in ["ftp://example.com/file", "javascript:alert(1)", "file:///C:/secret.txt"] {
+        for u in [
+            "ftp://example.com/file",
+            "javascript:alert(1)",
+            "file:///C:/secret.txt",
+        ] {
             let err = exec(&t, &format!(r#"{{"url":"{u}"}}"#)).unwrap_err();
-            assert_eq!(err_text(&err), "参数解析失败：仅支持 http/https 链接", "url: {u}");
+            assert_eq!(
+                err_text(&err),
+                "参数解析失败：仅支持 http/https 链接",
+                "url: {u}"
+            );
         }
     }
 
@@ -628,7 +652,10 @@ mod tests {
     fn rejects_invalid_or_missing_url() {
         let t = tool(5);
         let err = exec(&t, r#"{"url":"不是链接"}"#).unwrap_err();
-        assert!(err_text(&err).contains("参数解析失败：无效的链接"), "got: {err}");
+        assert!(
+            err_text(&err).contains("参数解析失败：无效的链接"),
+            "got: {err}"
+        );
         let err = exec(&t, r#"{}"#).unwrap_err();
         assert!(err_text(&err).contains("缺少必填参数: url"), "got: {err}");
         let err = exec(&t, r#"{"url":"  "}"#).unwrap_err();
@@ -668,7 +695,8 @@ mod tests {
         let out = exec(&t, &format!(r#"{{"url":"{base}/start"}}"#)).unwrap();
         let head: String = out.summary.chars().take(40).collect();
         assert!(
-            out.summary.starts_with("来源：127.0.0.1/docs/article（纯文本）"),
+            out.summary
+                .starts_with("来源：127.0.0.1/docs/article（纯文本）"),
             "头部应展示最终 URL, got: {head}"
         );
         assert!(out.summary.contains("重定向后正文到达"));
@@ -710,7 +738,11 @@ mod tests {
     #[test]
     fn http_404_reports_status() {
         let base = spawn_canned(|_, _| {
-            Some(canned(404, "text/html", "<html><body>missing</body></html>"))
+            Some(canned(
+                404,
+                "text/html",
+                "<html><body>missing</body></html>",
+            ))
         });
         let t = tool(5);
         let err = exec(&t, &format!(r#"{{"url":"{base}/missing"}}"#)).unwrap_err();
@@ -775,16 +807,24 @@ mod tests {
 
     #[test]
     fn html_article_extracts_clean_markdown() {
-        let base = spawn_canned(|_, _| Some(canned(200, "text/html; charset=utf-8", article_html())));
+        let base =
+            spawn_canned(|_, _| Some(canned(200, "text/html; charset=utf-8", article_html())));
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/news/energy"}}"#)).unwrap();
         assert!(
-            out.summary.starts_with("来源：127.0.0.1/news/energy（网页正文）\n"),
+            out.summary
+                .starts_with("来源：127.0.0.1/news/energy（网页正文）\n"),
             "got head: {}",
             out.summary.chars().take(40).collect::<String>()
         );
-        assert!(out.summary.contains("源石技艺的现代研究最早可追溯到"), "中文长句应完整保留");
-        assert!(out.summary.contains("阿米娅") && out.summary.contains("术师"), "表格行应保留");
+        assert!(
+            out.summary.contains("源石技艺的现代研究最早可追溯到"),
+            "中文长句应完整保留"
+        );
+        assert!(
+            out.summary.contains("阿米娅") && out.summary.contains("术师"),
+            "表格行应保留"
+        );
         assert!(out.summary.contains('|'), "表格应转 markdown 管道符形态");
         assert!(out.summary.contains("天赋系统详解"), "链接文本应保留");
         assert!(
@@ -801,7 +841,10 @@ mod tests {
             "<style",
             "<nav",
         ] {
-            assert!(!out.summary.contains(banned), "chrome 特征不应残留: {banned}");
+            assert!(
+                !out.summary.contains(banned),
+                "chrome 特征不应残留: {banned}"
+            );
         }
     }
 
@@ -822,7 +865,10 @@ mod tests {
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/portal"}}"#)).unwrap();
         let head: String = out.summary.chars().take(40).collect();
-        assert!(out.summary.contains("（网页文本）"), "降级格式标签应为网页文本, got: {head}");
+        assert!(
+            out.summary.contains("（网页文本）"),
+            "降级格式标签应为网页文本, got: {head}"
+        );
         assert!(out.summary.contains("促销横幅文字在这里"), "页面文本应保留");
         assert!(out.summary.contains("条目卡片3"), "降级输出非空且含内容");
         assert!(!out.summary.contains("<div"), "不应残留原始标签");
@@ -850,9 +896,14 @@ mod tests {
 
     #[test]
     fn json_response_is_pretty_printed() {
-        let body = r#"{"status":"ok","rows":[{"name":"罗德岛","type":"制药"}],"count":1}"#.to_string();
+        let body =
+            r#"{"status":"ok","rows":[{"name":"罗德岛","type":"制药"}],"count":1}"#.to_string();
         let base = spawn_canned(move |_, _| {
-            Some(canned(200, "application/json; charset=utf-8", body.as_bytes().to_vec()))
+            Some(canned(
+                200,
+                "application/json; charset=utf-8",
+                body.as_bytes().to_vec(),
+            ))
         });
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/api/org"}}"#)).unwrap();
@@ -865,11 +916,18 @@ mod tests {
     #[test]
     fn malformed_json_falls_back_to_raw() {
         let base = spawn_canned(|_, _| {
-            Some(canned(200, "application/json", b"{ not valid json !!!".to_vec()))
+            Some(canned(
+                200,
+                "application/json",
+                b"{ not valid json !!!".to_vec(),
+            ))
         });
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/api/bad"}}"#)).unwrap();
-        assert!(out.summary.contains("{ not valid json !!!"), "解析失败应原样返回");
+        assert!(
+            out.summary.contains("{ not valid json !!!"),
+            "解析失败应原样返回"
+        );
     }
 
     // ── 纯文本分流 ──
@@ -877,7 +935,11 @@ mod tests {
     #[test]
     fn plain_text_passthrough() {
         let base = spawn_canned(|_, _| {
-            Some(canned(200, "text/plain; charset=utf-8", "凯尔希：请保持理性。"))
+            Some(canned(
+                200,
+                "text/plain; charset=utf-8",
+                "凯尔希：请保持理性。",
+            ))
         });
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/note.txt"}}"#)).unwrap();
@@ -904,9 +966,8 @@ mod tests {
     #[test]
     fn truncates_overlong_text_with_marker() {
         let body = "正文内容行。".repeat(3000); // 约 18000 字 > 默认 12000
-        let base = spawn_canned(move |_, _| {
-            Some(canned(200, "text/plain; charset=utf-8", body.clone()))
-        });
+        let base =
+            spawn_canned(move |_, _| Some(canned(200, "text/plain; charset=utf-8", body.clone())));
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/long.txt"}}"#)).unwrap();
         assert!(

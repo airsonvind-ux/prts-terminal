@@ -1,4 +1,4 @@
-﻿//! query_rogue —— 集成战略条目查询工具
+//! query_rogue —— 集成战略条目查询工具
 //!
 //! 语义：输入肉鸽主题 + 名称或 ID → 返回该条目的全部有值字段。
 //! 跨六表独立查询，由 `theme` 参数指定目标表。
@@ -50,20 +50,51 @@ struct ThemeInfo {
 
 /// 所有可用主题。display 用于输出中的主题标注。
 const THEMES: &[ThemeInfo] = &[
-    ThemeInfo { table: "rogue_1_entries", display: "傀影与猩红孤钻",
-                aliases: &["1", "rogue1", "rogue_1", "傀影", "傀影与猩红孤钻"] },
-    ThemeInfo { table: "rogue_2_entries", display: "水月与深蓝之树",
-                aliases: &["2", "rogue2", "rogue_2", "水月", "水月与深蓝之树"] },
-    ThemeInfo { table: "rogue_3_entries", display: "探索者的银凇止境",
-                aliases: &["3", "rogue3", "rogue_3", "萨米", "银凇", "凇止境",
-                          "探索者的银凇止境"] },
-    ThemeInfo { table: "rogue_4_entries", display: "萨卡兹的无终奇语",
-                aliases: &["4", "rogue4", "rogue_4", "萨卡兹", "萨卡兹的无终奇语"] },
-    ThemeInfo { table: "rogue_5_entries", display: "岁的界园志异",
-                aliases: &["5", "rogue5", "rogue_5", "界园", "岁的界园志异"] },
-    ThemeInfo { table: "rogue_6_entries", display: "沉沦者的黑流树海",
-                aliases: &["6", "rogue6", "rogue_6", "黑流", "黑流树海",
-                          "沉沦者的黑流树海"] },
+    ThemeInfo {
+        table: "rogue_1_entries",
+        display: "傀影与猩红孤钻",
+        aliases: &["1", "rogue1", "rogue_1", "傀影", "傀影与猩红孤钻"],
+    },
+    ThemeInfo {
+        table: "rogue_2_entries",
+        display: "水月与深蓝之树",
+        aliases: &["2", "rogue2", "rogue_2", "水月", "水月与深蓝之树"],
+    },
+    ThemeInfo {
+        table: "rogue_3_entries",
+        display: "探索者的银凇止境",
+        aliases: &[
+            "3",
+            "rogue3",
+            "rogue_3",
+            "萨米",
+            "银凇",
+            "凇止境",
+            "探索者的银凇止境",
+        ],
+    },
+    ThemeInfo {
+        table: "rogue_4_entries",
+        display: "萨卡兹的无终奇语",
+        aliases: &["4", "rogue4", "rogue_4", "萨卡兹", "萨卡兹的无终奇语"],
+    },
+    ThemeInfo {
+        table: "rogue_5_entries",
+        display: "岁的界园志异",
+        aliases: &["5", "rogue5", "rogue_5", "界园", "岁的界园志异"],
+    },
+    ThemeInfo {
+        table: "rogue_6_entries",
+        display: "沉沦者的黑流树海",
+        aliases: &[
+            "6",
+            "rogue6",
+            "rogue_6",
+            "黑流",
+            "黑流树海",
+            "沉沦者的黑流树海",
+        ],
+    },
 ];
 
 /// 解析用户输入的 theme 参数，返回对应的 ThemeInfo。
@@ -161,7 +192,9 @@ impl Tool for QueryRogue {
         let theme = if raw_theme.trim().is_empty() {
             ""
         } else {
-            resolve_theme(raw_theme).map(|t| t.display).unwrap_or(raw_theme)
+            resolve_theme(raw_theme)
+                .map(|t| t.display)
+                .unwrap_or(raw_theme)
         };
         let name = targets_summary(&v);
         match (theme.is_empty(), name) {
@@ -180,8 +213,7 @@ impl Tool for QueryRogue {
         let theme_str = v["theme"]
             .as_str()
             .ok_or_else(|| ToolError::Parse("\"theme\" 参数必填，请指定肉鸽主题".into()))?;
-        let theme = resolve_theme(theme_str)
-            .map_err(|e| ToolError::Execution(e))?;
+        let theme = resolve_theme(theme_str).map_err(|e| ToolError::Execution(e))?;
 
         // ── 2. 解析查询目标 ──
         let targets = common::parse_targets(&v)?;
@@ -213,7 +245,10 @@ impl Tool for QueryRogue {
                             format_one_entry(&row, theme.display, &mut output);
                         }
                         None => {
-                            output.push_str(&format!("✗ ID: {id}：未在 {theme_name} 中找到\n", theme_name = theme.display));
+                            output.push_str(&format!(
+                                "✗ ID: {id}：未在 {theme_name} 中找到\n",
+                                theme_name = theme.display
+                            ));
                         }
                     }
                 }
@@ -221,7 +256,10 @@ impl Tool for QueryRogue {
                     let (rows, dropped) = query_by_name_with_variants(db, theme.table, name)?;
                     collect_dropped(&mut all_dropped, &dropped);
                     if rows.is_empty() {
-                        output.push_str(&format!("✗ 名称: {name}：未在 {theme_name} 中找到\n", theme_name = theme.display));
+                        output.push_str(&format!(
+                            "✗ 名称: {name}：未在 {theme_name} 中找到\n",
+                            theme_name = theme.display
+                        ));
                     } else {
                         all_rows.extend(rows.iter().cloned());
                         for (j, row) in rows.iter().enumerate() {
@@ -256,7 +294,16 @@ impl Tool for QueryRogue {
 // ═══════════════════════════════════════════════════════
 
 /// 所有需要查询的列（六表通用 schema）。
-const ALL_COLS: &[&str] = &["id", "名称", "效果", "类型", "稀有度", "buff", "备注", "特性"];
+const ALL_COLS: &[&str] = &[
+    "id",
+    "名称",
+    "效果",
+    "类型",
+    "稀有度",
+    "buff",
+    "备注",
+    "特性",
+];
 
 /// 收集 dropped_fields，去重。
 fn collect_dropped(acc: &mut Vec<String>, incoming: &[String]) {
@@ -275,12 +322,7 @@ fn query_by_id(
 ) -> Result<(Option<HashMap<String, String>>, Vec<String>), ToolError> {
     let fields: Vec<String> = ALL_COLS.iter().map(|c| c.to_string()).collect();
     let result = db
-        .query_filtered(
-            table,
-            &fields,
-            &[Filter::new("id", FilterOp::Eq, id)],
-            1,
-        )
+        .query_filtered(table, &fields, &[Filter::new("id", FilterOp::Eq, id)], 1)
         .map_err(|e| ToolError::Execution(e))?;
     let row = result.rows.into_iter().next();
     Ok((row, result.dropped_fields))
@@ -311,7 +353,9 @@ fn query_by_name_with_variants(
         )
         .map_err(|e| ToolError::Execution(e))?;
     for d in &exact_result.dropped_fields {
-        if !all_dropped.contains(d) { all_dropped.push(d.clone()); }
+        if !all_dropped.contains(d) {
+            all_dropped.push(d.clone());
+        }
     }
 
     if !exact_result.rows.is_empty() {
@@ -325,15 +369,18 @@ fn query_by_name_with_variants(
 
     // LIKE 降级：取第一条。无 ORDER BY，按 rowid（数据管线插入顺序）返回，
     // 依赖"基础版先于变体插入"，query_same_name_* 与 like_fallback_* 测试守护该假设
-    let like_result = db.query_filtered(
-        table,
-        &fields,
-        &[Filter::new("名称", FilterOp::Like, name)],
-        5,
-    )
-    .map_err(|e| ToolError::Execution(e))?;
+    let like_result = db
+        .query_filtered(
+            table,
+            &fields,
+            &[Filter::new("名称", FilterOp::Like, name)],
+            5,
+        )
+        .map_err(|e| ToolError::Execution(e))?;
     for d in &like_result.dropped_fields {
-        if !all_dropped.contains(d) { all_dropped.push(d.clone()); }
+        if !all_dropped.contains(d) {
+            all_dropped.push(d.clone());
+        }
     }
 
     let Some(primary) = like_result.rows.into_iter().next() else {
@@ -372,7 +419,9 @@ fn append_with_variants(
             )
             .map_err(|e| ToolError::Execution(e))?;
         for d in &variant_result.dropped_fields {
-            if !all_dropped.contains(d) { all_dropped.push(d.clone()); }
+            if !all_dropped.contains(d) {
+                all_dropped.push(d.clone());
+            }
         }
         if let Some(vrow) = variant_result.rows.into_iter().next() {
             out.push(vrow);
@@ -452,9 +501,7 @@ fn format_one_entry(row: &HashMap<String, String>, theme_display: &str, out: &mu
                                     let texts: Vec<&str> =
                                         items.iter().filter_map(|i| i.as_str()).collect();
                                     if !texts.is_empty() {
-                                        out.push_str(
-                                            &format!("特性·{k}：{}\n", texts.join("、")),
-                                        );
+                                        out.push_str(&format!("特性·{k}：{}\n", texts.join("、")));
                                     }
                                 }
                                 Value::String(s) => out.push_str(&format!("特性·{k}：{s}\n")),
@@ -510,7 +557,11 @@ fn format_buff(buffs: &[Value], out: &mut String) {
                     let pkey = param["key"].as_str().unwrap_or("?");
                     // valueStr 非空优先；为 null 时回退 value（空串视为无值）
                     let pval = if let Some(vs) = param["valueStr"].as_str() {
-                        if vs.is_empty() { None } else { Some(vs.to_string()) }
+                        if vs.is_empty() {
+                            None
+                        } else {
+                            Some(vs.to_string())
+                        }
                     } else if let Some(v) = param["value"].as_f64() {
                         if v.fract() == 0.0 {
                             Some(format!("{:.0}", v))
@@ -531,7 +582,6 @@ fn format_buff(buffs: &[Value], out: &mut String) {
         }
     }
 }
-
 
 // ═══════════════════════════════════════════════════════
 // 测试
@@ -614,17 +664,20 @@ mod tests {
         assert!(tool.description().contains("集成战略"));
         let params = tool.parameters();
         assert_eq!(params["type"], "object");
-        assert!(params["required"].as_array().unwrap().contains(&serde_json::json!("theme")));
+        assert!(params["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("theme")));
     }
 
     #[test]
     fn query_relic_by_name() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"傀影","names":["热水壶"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"傀影","names":["热水壶"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("热水壶"));
         assert!(result.contains("藏品"));
         assert!(result.contains("傀影与猩红孤钻"));
@@ -635,10 +688,10 @@ mod tests {
     fn query_relic_by_id() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"1","ids":["rogue_1_relic_r01"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"1","ids":["rogue_1_relic_r01"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("热水壶"));
     }
 
@@ -646,10 +699,10 @@ mod tests {
     fn query_sa_rogue3() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨米","names":["地形图"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨米","names":["地形图"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("地形图"));
         assert!(result.contains("探索者的银凇止境"));
     }
@@ -658,10 +711,10 @@ mod tests {
     fn query_sa_rogue4_thought() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["死仇时代的恨意"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨卡兹","names":["死仇时代的恨意"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("死仇时代的恨意"));
         assert!(result.contains("萨卡兹的无终奇语"));
     }
@@ -670,10 +723,10 @@ mod tests {
     fn query_sa_rogue5_coin() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"界园","names":["大炎通宝"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"界园","names":["大炎通宝"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("大炎通宝"));
         assert!(result.contains("通宝"));
         assert!(result.contains("界园"));
@@ -684,10 +737,10 @@ mod tests {
         // 剧目类型 buff 为 null — 验证不崩溃
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"傀影","names":["《凯旋颂》"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"傀影","names":["《凯旋颂》"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("《凯旋颂》"));
         assert!(result.contains("剧目"));
         // buff 为空，不应出现 "buff：" 行
@@ -698,10 +751,10 @@ mod tests {
     fn query_mutation_by_name() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"水月","names":["造血障碍"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"水月","names":["造血障碍"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("造血障碍"));
         assert!(result.contains("排异反应"));
         assert!(result.contains("buff"));
@@ -711,10 +764,10 @@ mod tests {
     fn query_collapse_paradigm() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨米","names":["去量化"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨米","names":["去量化"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("去量化"));
         assert!(result.contains("坍缩范式"));
     }
@@ -725,10 +778,10 @@ mod tests {
     fn multi_relic_sa_rogue4() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["精选兽肉罐头"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨卡兹","names":["精选兽肉罐头"]}"#)
+            .unwrap()
+            .summary;
         // 基础版本 + 三种变体全部出现
         assert!(result.contains("精选兽肉罐头"));
         assert!(result.contains("精选兽肉罐头-α"));
@@ -745,10 +798,10 @@ mod tests {
     fn multi_relic_sa_rogue3() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨米","names":["地形图"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨米","names":["地形图"]}"#)
+            .unwrap()
+            .summary;
         // 萨米的地形图也有多元奇物变体
         assert!(result.contains("地形图"));
         assert!(result.contains("地形图-α"));
@@ -759,10 +812,10 @@ mod tests {
         // 直接搜索变体名称时不应再展开
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["精选兽肉罐头-α"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨卡兹","names":["精选兽肉罐头-α"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("精选兽肉罐头-α"));
         // 不应出现其他变体
         assert!(!result.contains("精选兽肉罐头-β"));
@@ -776,10 +829,10 @@ mod tests {
         // 萨卡兹年代追忆：同名三条（成型期/扩张期/鼎盛期），全部返回
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["魔王年代"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨卡兹","names":["魔王年代"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("魔王年代"));
         assert!(result.contains("年代追忆（成型期）"));
         assert!(result.contains("年代追忆（扩张期）"));
@@ -791,10 +844,10 @@ mod tests {
         // 界园岁时：同名四条（朦胧/真切/入髓/醒觉），全部返回
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"界园","names":["酉疗"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"界园","names":["酉疗"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("岁时（朦胧）"));
         assert!(result.contains("岁时（真切）"));
         assert!(result.contains("岁时（入髓）"));
@@ -807,10 +860,10 @@ mod tests {
         // 效果文本相同但 buff 不同（常规/组合排异），以 buff key 区分
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"水月","names":["造血障碍"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"水月","names":["造血障碍"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("char_ability_new"));
         assert!(result.contains("char_shared_data"));
     }
@@ -822,10 +875,10 @@ mod tests {
         // 界园通宝：特性为 JSON 对象 {"标识": [...]}，应格式化输出
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"界园","names":["大炎通宝"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"界园","names":["大炎通宝"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("特性·标识"));
         assert!(result.contains("不在诡意行商和易与中出售"));
     }
@@ -837,10 +890,10 @@ mod tests {
         // 名称不完全匹配时走 LIKE：命中基础版并展开 -α/-β/-γ 变体
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["精选兽肉罐"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"萨卡兹","names":["精选兽肉罐"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("精选兽肉罐头"));
         assert!(result.contains("精选兽肉罐头-α"));
         assert!(result.contains("精选兽肉罐头-β"));
@@ -852,10 +905,13 @@ mod tests {
         // LIKE 也找不到 → 报未找到
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"萨卡兹","names":["完全不存在的东西xyz"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(
+                &ctx,
+                r#"{"theme":"萨卡兹","names":["完全不存在的东西xyz"]}"#,
+            )
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"));
         assert!(result.contains("未"));
     }
@@ -883,10 +939,10 @@ mod tests {
     fn not_found() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"傀影","names":["绝对不存在的条目xyz"]}"#,
-        ).unwrap().summary;
+        let result = tool
+            .execute(&ctx, r#"{"theme":"傀影","names":["绝对不存在的条目xyz"]}"#)
+            .unwrap()
+            .summary;
         assert!(result.contains("✗"));
         assert!(result.contains("未"));
     }
@@ -905,10 +961,7 @@ mod tests {
     fn invalid_theme() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"不存在的主题","names":["热水壶"]}"#,
-        );
+        let result = tool.execute(&ctx, r#"{"theme":"不存在的主题","names":["热水壶"]}"#);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("无法识别"));
@@ -918,10 +971,7 @@ mod tests {
     fn no_db_returns_error() {
         let ctx = ToolContext::new();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"傀影","names":["热水壶"]}"#,
-        );
+        let result = tool.execute(&ctx, r#"{"theme":"傀影","names":["热水壶"]}"#);
         assert!(result.is_err());
     }
 
@@ -929,10 +979,7 @@ mod tests {
     fn missing_both_ids_and_names() {
         let ctx = make_ctx();
         let tool = QueryRogue;
-        let result = tool.execute(
-            &ctx,
-            r#"{"theme":"傀影"}"#,
-        );
+        let result = tool.execute(&ctx, r#"{"theme":"傀影"}"#);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("ids") || err.contains("names"));
@@ -960,7 +1007,11 @@ mod tests {
             if let Ok(name) = std::env::var("PRTS_ROGUE_NAME") {
                 println!(
                     "{}",
-                    call(&ctx, &theme, &serde_json::json!({"names": [name]}).to_string())
+                    call(
+                        &ctx,
+                        &theme,
+                        &serde_json::json!({"names": [name]}).to_string()
+                    )
                 );
                 return;
             }

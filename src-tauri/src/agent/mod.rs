@@ -6,6 +6,4 @@ pub mod orchestrator;
 pub mod prefix_snapshot;
 pub mod skills;
 
-pub use skills::{
-    index as skills_index, install as skills_install, snapshot as skills_snapshot,
-};
+pub use skills::{index as skills_index, install as skills_install, snapshot as skills_snapshot};
