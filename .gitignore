@@ -23,6 +23,9 @@ dist-ssr
 *.sln
 *.sw?
 
+# 本地开发工具（DSH 项目 skill 等，不入库）
+.dsh/
+
 # --- PRTS 本地排除（2026-09-17 建仓）---
 data-source/
 data-pipeline/**/*.db
