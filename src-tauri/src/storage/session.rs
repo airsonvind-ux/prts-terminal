@@ -544,6 +544,7 @@ impl SessionEvent {
     /// `rule_id` = 判定 reason 码（地域性信任门出卡族；无门信息传 None）。
     /// `privilege` = 请求身份面（restricted 默认 / full 完整权限）。
     /// `justification` = full 档必填的一句话理由（restricted 档传 None）。
+    #[allow(clippy::too_many_arguments)] // 事件构造器字段一一对应，拆结构会改变事件契约
     pub fn tool_approval_request(
         session_id: &str,
         call_id: &str,
@@ -567,6 +568,7 @@ impl SessionEvent {
     }
 
     /// 工具审批/策略判定结果（构造器）。
+    #[allow(clippy::too_many_arguments)] // 事件构造器字段一一对应，拆结构会改变事件契约
     pub fn tool_approval_result(
         session_id: &str,
         call_id: &str,

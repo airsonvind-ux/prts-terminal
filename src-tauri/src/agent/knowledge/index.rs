@@ -187,6 +187,7 @@ impl KnowledgeIndex {
     ///
     /// - `dir` 首尾空白与首尾 `/` 被剔除；空串 = 根目录。
     /// - 目录不存在（无任何条目路径位于其下）返回 `None`，由工具侧转为错误。
+    #[allow(clippy::type_complexity)] // 目录导航的双返回结构；拆类型别名收益低于调用点噪声
     pub fn dir_children(&self, dir: &str) -> Option<(Vec<String>, Vec<(String, String, usize)>)> {
         let dir = dir.trim().trim_matches('/');
         let prefix = if dir.is_empty() {

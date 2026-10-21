@@ -155,7 +155,6 @@ pub enum ApiType {
     OpenAIResponses,
 }
 
-
 /// 模型所属的 thinking 家族。
 ///
 /// 来自既有实现 `fa()` 的检测结果，在 models.json 中显式声明。

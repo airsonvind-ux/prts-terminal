@@ -210,9 +210,10 @@ impl Notices {
             return n;
         }
 
-        let mut n = Notices::default();
-        n.path = path;
-        n
+        Notices {
+            path,
+            ..Default::default()
+        }
     }
 
     /// 追加一个序号（返回新值）。
@@ -525,8 +526,10 @@ struct LegacyEntry {
 
 /// 旧台账 → 新结构（各环境 kind 取最新 → dims；其余 → events；seq = 旧最大）。
 fn migrate(old: LegacyLedger, path: PathBuf) -> Notices {
-    let mut n = Notices::default();
-    n.path = path;
+    let mut n = Notices {
+        path,
+        ..Default::default()
+    };
 
     for (kind, key) in [
         ("workspace", DimKey::Workspace),

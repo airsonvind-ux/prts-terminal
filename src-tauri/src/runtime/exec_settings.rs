@@ -34,7 +34,6 @@ impl ExecutionMode {
     }
 }
 
-
 /// 执行设置容器（当前仅模式一项；未来扩展直接加字段）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionSettings {

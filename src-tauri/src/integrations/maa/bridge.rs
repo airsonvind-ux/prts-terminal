@@ -352,11 +352,8 @@ impl Bridge {
         std::thread::Builder::new()
             .name("maa-bridge-reader".to_string())
             .spawn(move || {
-                loop {
-                    match read_frame(&read_stream) {
-                        Ok(frame) => route_frame(&frame, &pending, &events, &records, &last_run),
-                        Err(_) => break, // EOF / 出错 → 桥没了
-                    }
+                while let Ok(frame) = read_frame(&read_stream) {
+                    route_frame(&frame, &pending, &events, &records, &last_run);
                 }
                 alive.store(false, Ordering::SeqCst);
                 // 让所有等待中的命令立刻失败，而不是各自等到超时。

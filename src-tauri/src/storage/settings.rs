@@ -107,8 +107,7 @@ pub struct UiSection {
 /// providers 键 = 供应商名（预设 id 或自定义名）；条目懒建（patch 首次配某家
 /// 时创建，缺省字段走 ProviderConfig default）。多供应商各存各家 key/模型/
 /// base_url——切换供应商零丢失（B 方案核心，修复单槽退化）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct LlmSection {
     #[serde(default)]
     pub active_provider: String,
@@ -119,7 +118,6 @@ pub struct LlmSection {
     #[serde(default)]
     pub thinking_level: Option<String>,
 }
-
 
 /// 单家供应商配置（原单份 llm 字段去 provider）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,13 +195,11 @@ impl LlmSection {
 /// workspace 段。workspace_root 空串 = 用默认工作区
 /// （`<主目录>/PRTS-WorkSpace`，见 `crate::config::default_workspace_path`；
 /// 空值不是「无工作目录」，故不存在空态）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct WorkspaceSettings {
     #[serde(default)]
     pub workspace_root: String,
 }
-
 
 /// window 段。always_on_top = 运行期置顶（启动时 setup 应用初值；
 /// 运行时经 set_always_on_top 命令即时切换 + 写回本字段）。

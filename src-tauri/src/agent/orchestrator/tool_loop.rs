@@ -108,6 +108,7 @@ fn check_run_permission(args: &str) -> RunPerm {
 ///   用户决策，oneshot 300s 超时）——询问模式不消费门的放行语义
 ///   （模式 Ask 下 Auto 判定同样弹卡）；reason 码经 request/result 的
 ///   rule_id 通道携带（前端确认卡类别短语）。
+///
 /// 询问串行（一次一张卡）；审批通过的命令回原执行段（safe 组并行/串行不受影响）。
 ///
 /// M3-B：询问等待改三路 select（rx / abort / 300s sleep）；中止分支对本卡

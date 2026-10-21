@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)] // Tauri 命令参数面与前端 invoke 契约固定，拆 struct 会改变 IPC 形状
+
 use super::prelude::*;
 
 // ═══════════════════════════════════════════════════════
@@ -208,7 +210,7 @@ pub async fn agent_process(
         &session_id,
         request.history,
         &tools, // State<Arc<ToolRegistry>> → &Arc<ToolRegistry>（deref 强制）
-        &llm,  // Arc<dyn LlmClient> → &dyn LlmClient
+        &llm,   // Arc<dyn LlmClient> → &dyn LlmClient
         &llm_config,
         &model_registry,
         db,

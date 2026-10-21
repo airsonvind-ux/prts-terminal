@@ -287,6 +287,7 @@ fn build_anysearch_request(query: &str, max_results: u32) -> (String, Value) {
 /// 兼容两种结构（既有实现 anySearchResultsFrom 同规则）：
 /// - envelope：{code, message?, data:{results:[...], metadata?}}
 /// - 扁平：{results:[...]} / {code:0, results:[...]}
+///
 /// code 非 0（业务错误）→ Api(message 或 code)；结果字段 content 优先
 /// description/snippet（既有实现同规则）；无 url 项丢弃；超出 limit 截断。
 fn parse_anysearch_results(bytes: &[u8], limit: u32) -> Result<Vec<SearchResult>, SearchError> {

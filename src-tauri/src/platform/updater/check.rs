@@ -138,9 +138,9 @@ async fn check_sources(
         match check_source_with_retry(app, source, 1).await {
             Ok(Some(update)) => {
                 saw_valid = true;
-                let replace = best.as_ref().is_none_or(|(_, current)| {
-                    version_is_newer(&update.version, &current.version)
-                });
+                let replace = best
+                    .as_ref()
+                    .is_none_or(|(_, current)| version_is_newer(&update.version, &current.version));
                 append_update_log(&format!(
                     "check source={} update={} selected={}",
                     source.label, update.version, replace

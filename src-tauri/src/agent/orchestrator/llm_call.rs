@@ -63,6 +63,7 @@ fn push_notice(content: &mut String, notice: &str) {
 /// 仅当**请求尚未产出任何流式事件**（连接/建流阶段失败）时重试——
 /// 一旦流已开始（chunk/tool 已双写入 log 与 IPC），重试会造成
 /// 重复事件污染回放，此时直接返回错误（turn/end reason=error）。
+#[allow(clippy::too_many_arguments)] // 调用面由调度循环固定，拆参数结构会扩散到所有调用点
 pub(super) async fn call_llm_with_retry(
     session_id: &str,
     messages: &[ChatMessage],
@@ -128,6 +129,7 @@ pub(super) async fn call_llm_with_retry(
 ///
 /// `stream_started` 由调用方传入：首个事件到达时置位，
 /// 供重试决策判断"流是否已开始"（开始后不可重试）。
+#[allow(clippy::too_many_arguments)] // 调用面由调度循环固定，拆参数结构会扩散到所有调用点
 async fn call_llm_and_stream(
     session_id: &str,
     messages: &[ChatMessage],

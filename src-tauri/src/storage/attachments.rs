@@ -117,8 +117,9 @@ pub fn sanitize_file_name(name: &str) -> String {
         .chars()
         .filter(|c| {
             let code = *c as u32;
-            !(code <= 0x1f || code == 0x7f)
-                && !matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+            !(code <= 0x1f
+                || code == 0x7f
+                || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
         })
         .collect();
     let trimmed = cleaned.trim().trim_matches('.').trim();

@@ -57,10 +57,7 @@ pub fn clean_wiki(text: &str) -> String {
 /// 多个 popup 各自独立替换。
 pub fn clean_popup(text: &str) -> String {
     let mut result = text.to_string();
-    loop {
-        let Some(start) = find_template(&result, "popup") else {
-            break;
-        };
+    while let Some(start) = find_template(&result, "popup") {
         let Some(end) = find_matching_braces(&result, start) else {
             break;
         };
@@ -85,10 +82,7 @@ pub fn clean_popup(text: &str) -> String {
 /// （嵌套的其他模板）。折叠文字和内容之间的其他参数（如 id、overcss）忽略。
 pub fn clean_fold(text: &str) -> String {
     let mut result = text.to_string();
-    loop {
-        let Some(start) = find_template(&result, "简易折叠") else {
-            break;
-        };
+    while let Some(start) = find_template(&result, "简易折叠") {
         let Some(end) = find_matching_braces(&result, start) else {
             break;
         };
@@ -277,10 +271,7 @@ fn extract_content_param_of_block(block: &str) -> String {
 /// 始终取第一个参数作为输出值。
 fn clean_simple_template(text: &str, template_name: &str) -> String {
     let mut result = text.to_string();
-    loop {
-        let Some(start) = find_template(&result, template_name) else {
-            break;
-        };
+    while let Some(start) = find_template(&result, template_name) {
         let Some(end) = find_simple_template_end(&result, start) else {
             break;
         };

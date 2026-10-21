@@ -167,7 +167,7 @@ impl Tool for RunCommandTool {
                 let raw = v
                     .as_str()
                     .ok_or_else(|| ToolError::Parse("参数类型错误: shell 应为字符串".into()))?;
-                ShellKind::from_str(raw).ok_or_else(|| {
+                ShellKind::parse(raw).ok_or_else(|| {
                     ToolError::Parse(format!("shell 仅支持 auto/powershell/cmd，got: {raw}"))
                 })?
             }

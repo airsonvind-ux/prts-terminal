@@ -141,14 +141,9 @@ fn flatten(
     let mut cells: Vec<(i64, i64)> = next_node.keys().copied().filter(|c| *c != goal).collect();
     cells.sort_by_key(|c| (c.1, c.0));
     for a in cells {
-        loop {
-            let b = match next_node.get(&a) {
-                Some(&b) => b,
-                None => break,
-            };
-            let c = match next_node.get(&b) {
-                Some(&c) => c,
-                None => break,
+        while let Some(&b) = next_node.get(&a) {
+            let Some(&c) = next_node.get(&b) else {
+                break;
             };
             if is_clear(a, c, passable, obstacles, width, height) {
                 next_node.insert(a, c);

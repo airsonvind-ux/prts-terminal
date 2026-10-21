@@ -315,6 +315,7 @@ fn collect_dropped(acc: &mut Vec<String>, incoming: &[String]) {
 }
 
 /// 按 ID 精确查询，返回 (行, dropped_fields)。
+#[allow(clippy::type_complexity)] // 单条/多条查询共用行映射与丢弃字段的双返回结构
 fn query_by_id(
     db: &Database,
     table: &str,
@@ -334,6 +335,7 @@ fn query_by_id(
 /// 类型名不同者以此区分；类型名相同者仅靠效果/buff 文本区分）。
 /// 若命中基础版本（名称不以 -α/-β/-γ 结尾），自动拉取同一主题下的
 /// 多元奇物变体（-α、-β、-γ），按 基础→α→β→γ 顺序返回。
+#[allow(clippy::type_complexity)] // 单条/多条查询共用行映射与丢弃字段的双返回结构
 fn query_by_name_with_variants(
     db: &Database,
     table: &str,

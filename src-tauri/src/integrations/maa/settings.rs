@@ -18,7 +18,6 @@ pub enum Server {
     Bilibili,
 }
 
-
 impl Server {
     /// MAA 侧要的取值（`client_type` / MuMu extras 的 `client_type`）。
     pub fn client_type(self) -> &'static str {

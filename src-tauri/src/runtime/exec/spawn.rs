@@ -70,6 +70,7 @@ impl Spawned {
     /// 进程树回收（阻塞至主进程退出）：
     /// - std：taskkill /PID /T /F + wait 收尸（M3 语义原样）；
     /// - 受限：TerminateJobObject + 收敛等待（Job kill-on-close 兜底）。
+    ///
     /// 供超时 / cancel watchdog 调用；回收后不再读取退出码。
     pub(crate) fn kill_tree(&mut self) {
         match &mut self.inner {

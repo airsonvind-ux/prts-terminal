@@ -265,10 +265,10 @@ fn hash_root(key: &str) -> [u32; 4] {
     ];
     for ch in key.encode_utf16() {
         let value = ch as u32;
-        for i in 0..4usize {
-            h[i] ^= value.wrapping_add((i as u32).wrapping_mul(257));
-            h[i] = h[i].wrapping_mul(16777619);
-            h[i] ^= h[i] >> 13;
+        for (i, slot) in h.iter_mut().enumerate() {
+            *slot ^= value.wrapping_add((i as u32).wrapping_mul(257));
+            *slot = slot.wrapping_mul(16777619);
+            *slot ^= *slot >> 13;
         }
     }
     h
@@ -512,8 +512,7 @@ fn dacl_contains_sid(dacl: *const ACL, sid: &[u8]) -> bool {
             }
             let ace_sid = (ace as *const u8).add(8) as *const core::ffi::c_void;
             let len = GetLengthSid(PSID(ace_sid as *mut core::ffi::c_void)) as usize;
-            if len == sid.len() && std::slice::from_raw_parts(ace_sid as *const u8, len) == sid
-            {
+            if len == sid.len() && std::slice::from_raw_parts(ace_sid as *const u8, len) == sid {
                 return true;
             }
         }

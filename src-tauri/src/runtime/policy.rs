@@ -61,7 +61,7 @@ impl Policy {
     /// - BLOCKED = **数据根整根**（`config::data_dir()`；会话 / 记忆 / 设置 /
     ///   提醒台账 / 密钥 / 日志 / 数据库**运行时副本**都在其中）
     ///   + 随包数据库**种子**（`config::db_seed_path()`：与原来同理由，
-    ///   不允许绕过工具直读数据库）
+    ///     不允许绕过工具直读数据库）
     /// - READ_ONLY = knowledge_dir() + skills_dir()（知识库 + 技能运行根
     ///   data_dir()/skills——内置同步副本与用户技能同住其中）
     /// - protected = 当前工作根下的 `.git`（见 [`Self::is_protected`]：实时派生

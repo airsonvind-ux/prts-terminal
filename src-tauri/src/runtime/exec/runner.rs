@@ -44,7 +44,7 @@ pub enum ShellKind {
 }
 
 impl ShellKind {
-    pub fn from_str(raw: &str) -> Option<Self> {
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw {
             "auto" => Some(Self::Auto),
             "powershell" => Some(Self::PowerShell),

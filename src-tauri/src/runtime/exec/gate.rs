@@ -328,10 +328,9 @@ fn read_target(it: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> 
     }
     let mut tbuf = String::new();
     let mut mode = QuoteMode::None;
-    loop {
+    while let Some(&c) = it.peek() {
         // 流末 = 目标正常结束（重定向目标可为命令末尾词）；
         // 未闭合引号由收尾检查拦（mode != None → None）
-        let Some(&c) = it.peek() else { break };
         match mode {
             QuoteMode::Single => {
                 if c == '\'' {
@@ -751,14 +750,13 @@ fn extract_targets(cls: &Classified, tokens: &[Token]) -> Result<Vec<String>, &'
                     i += 1;
                     continue;
                 }
-                if !after_double_dash && v.starts_with('/')
-                    && lenient {
-                        // robocopy 等：cmd 风格开关跳过（/mir /purge 已由删除门拦）
-                        i += 1;
-                        continue;
-                    }
-                    // strict 面 `/x`：PS/cmd 双态命令中按字面参数收进位置流；
-                    // join 判定 cwd 必在区内，不产生额外放行面（安全方向）。
+                if !after_double_dash && v.starts_with('/') && lenient {
+                    // robocopy 等：cmd 风格开关跳过（/mir /purge 已由删除门拦）
+                    i += 1;
+                    continue;
+                }
+                // strict 面 `/x`：PS/cmd 双态命令中按字面参数收进位置流；
+                // join 判定 cwd 必在区内，不产生额外放行面（安全方向）。
                 if skip_value {
                     skip_value = false;
                 } else {

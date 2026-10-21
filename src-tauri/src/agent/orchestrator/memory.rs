@@ -129,8 +129,10 @@ pub async fn run_experience_pipeline_with(
             .map_err(|e| format!("记忆存储锁获取失败: {e}"))?;
         if let Some(until) = s.cooldown_until(&input.conversation_id) {
             if now < until {
-                let mut o = PipelineOutcome::default();
-                o.skipped = Some("cooldown".into());
+                let o = PipelineOutcome {
+                    skipped: Some("cooldown".into()),
+                    ..Default::default()
+                };
                 return Ok(o);
             }
         }
@@ -138,21 +140,27 @@ pub async fn run_experience_pipeline_with(
 
     // ── 1. 增量（空 / 不足阈值）──
     if input.delta_turns.is_empty() {
-        let mut o = PipelineOutcome::default();
-        o.skipped = Some("no_delta".into());
+        let o = PipelineOutcome {
+            skipped: Some("no_delta".into()),
+            ..Default::default()
+        };
         return Ok(o);
     }
     if !ignore_threshold && input.delta_turns.len() < INCREMENTAL_TURNS {
-        let mut o = PipelineOutcome::default();
-        o.skipped = Some("below_threshold".into());
+        let o = PipelineOutcome {
+            skipped: Some("below_threshold".into()),
+            ..Default::default()
+        };
         return Ok(o);
     }
 
     // ── 2. 读料（可重写组带编号 + 已封存组 + 指纹快照）──
     let delta_text = render_delta(&input.delta_turns);
     if delta_text.trim().is_empty() {
-        let mut o = PipelineOutcome::default();
-        o.skipped = Some("no_delta".into());
+        let o = PipelineOutcome {
+            skipped: Some("no_delta".into()),
+            ..Default::default()
+        };
         return Ok(o);
     }
     let (recent, rewritable_text, sealed_text) = {

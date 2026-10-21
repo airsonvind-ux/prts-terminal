@@ -41,6 +41,7 @@ impl TurnState {
     /// 记录一次 LLM 调用：usage 双轨记账（勿混为一谈）——
     /// - `final_usage` 覆盖式为最后一次调用快照（上下文占用）。
     /// - `total_input/output_tokens` 跨调用求和 = 成本账本。
+    ///
     /// 推理链取最后一次非空值。
     pub(super) fn record_call(&mut self, usage: Option<TokenUsage>, reasoning: Option<String>) {
         if let Some(u) = usage {

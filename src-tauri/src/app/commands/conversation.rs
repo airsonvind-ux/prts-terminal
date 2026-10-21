@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)] // Tauri 命令参数面与前端 invoke 契约固定，拆 struct 会改变 IPC 形状
+
 use super::prelude::*;
 
 // ═══════════════════════════════════════════════════════

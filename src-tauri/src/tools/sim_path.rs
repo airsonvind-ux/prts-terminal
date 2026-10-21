@@ -539,6 +539,7 @@ impl<'a> Simulator<'a> {
 
     /// 正常移动判定（给定方向 → 避障 → 加速度 → 速度 → 位移）。
     /// 纯 float32（对齐游戏语义 / sim_all.py）：全链 f32。
+    #[allow(clippy::type_complexity)] // 单帧移动的位移/速度/加速度三元组；拆结构会增加热路径分配
     fn move_frame(&mut self) -> (Option<(f32, f32)>, (f32, f32), (f32, f32)) {
         self.nav += 1;
         let given = self.given_direction();

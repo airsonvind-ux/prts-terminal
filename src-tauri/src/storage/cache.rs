@@ -230,6 +230,12 @@ impl CacheStores {
     pub fn len(&self) -> usize {
         self.partitions.len()
     }
+
+    /// 当前没有分区。
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.partitions.is_empty()
+    }
 }
 
 #[cfg(test)]

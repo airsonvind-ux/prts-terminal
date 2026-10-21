@@ -908,6 +908,7 @@ fn format_raw_phases(phases: &[ElitePhase], out: &mut String) {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // 属性格式化上下文字段固定，拆结构会扩散到查询工具
 fn compute_stats(
     phase: &ElitePhase,
     level: u32,
@@ -961,8 +962,8 @@ fn compute_stats(
 
     // 3. 潜能加成
     if pot_level > 0 && pot_level as usize <= potentials.len() {
-        for i in 0..pot_level as usize {
-            if let Some((attr_name, val)) = parse_potential_bonus(&potentials[i]) {
+        for potential in potentials.iter().take(pot_level as usize) {
+            if let Some((attr_name, val)) = parse_potential_bonus(potential) {
                 if attr_name == "攻击速度" {
                     stats.atk_speed_bonus += val as f64;
                     stats.atk_speed_sources.push(format!("潜能+{:.0}", val));

@@ -379,6 +379,7 @@ pub(crate) fn format_skill_expanded(
 }
 
 /// 格式化天赋列表。
+#[allow(clippy::too_many_arguments)] // 格式化上下文字段固定，拆结构会扩散到查询工具
 pub(crate) fn format_talents(
     talents: &[Talent],
     elite_phase: Option<usize>,

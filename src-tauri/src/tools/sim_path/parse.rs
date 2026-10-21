@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use super::{Checkpoint, Injection};
 
 /// 数据库路线数组 → (起点, 终点, 生成偏移, 检查点列表)
+#[allow(clippy::type_complexity)] // 路线解析的多返回值；拆结构会改变内部调用面
 pub(super) fn parse_db_route(
     route: &serde_json::Value,
 ) -> Result<(Checkpoint, (i64, i64), (f32, f32), Vec<Checkpoint>), String> {

@@ -277,7 +277,7 @@ fn cleanup(dir: &Path) {
     }
 
     // 新 → 旧；每类超过 KEEP_PER_KIND 的直接删。
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|f| std::cmp::Reverse(f.1));
     let mut per_kind: BTreeMap<String, usize> = BTreeMap::new();
     let mut kept: Vec<(PathBuf, u64)> = Vec::new();
     let mut total = 0u64;
