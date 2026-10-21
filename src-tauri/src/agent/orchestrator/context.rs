@@ -612,7 +612,7 @@ mod tests {
         assert!(direct.starts_with(SYSTEM_PROMPT));
         // 知识库路径/索引文件/死指令不再注入（工具名含 knowledge 子串，
         // 故以路径形态与文件名为锚断言）
-        assert!(!direct.contains("src/knowledge"));
+        assert!(!direct.contains("content/knowledge"));
         assert!(!direct.contains("_index.md"));
         assert!(!direct.contains("list_dir"));
     }
@@ -644,7 +644,7 @@ mod tests {
         // 路径属工具实现细节（KnowledgeIndex 内部消化），不在 system prompt
         // 出现；结构认知由 list_knowledge 框架模式承担，工具描述是唯一通道。
         let prompt = assemble_system_prompt("");
-        assert!(!prompt.contains("src/knowledge"));
+        assert!(!prompt.contains("content/knowledge"));
         assert!(!prompt.contains("_index.md"));
         assert!(!prompt.contains("list_dir"));
         // Base 层 persona 段仍在前

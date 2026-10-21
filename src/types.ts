@@ -1023,7 +1023,7 @@ export interface Conversation {
    * 字段 = undefined，视为已落地（它们的标题本来就来自盘上）。
    *
    * 用途：引导的"对话标题"那条要等真标题落地才出——否则会先框住占位标题，
-   * 等真标题到了再框一次，用户看到闪烁（Air 2026-10-11）。
+   * 等真标题到了再框一次，用户看到闪烁。
    */
   titleGenerated?: boolean;
   /** 每轮的 SessionEvent 序列（投影缓存——后端 log 的事件镜像） */

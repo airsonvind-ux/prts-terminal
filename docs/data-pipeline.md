@@ -7,10 +7,11 @@
 ```text
 data-pipeline/
 ├─ maintenance/     当前增量更新系统（权威入口）
-├─ db_builder/      早期建库与修复脚本，归档，不参与当前更新
 ├─ transform-to-sqlite.py
 └─ verify_db.py
 ```
+
+早期的 `db_builder/` 一次性脚本已从当前仓库移除，需要参考时查 Git 历史。
 
 当前流程、更新顺序、待办和回滚方式以 `data-pipeline/maintenance/README.md` 为准。
 
@@ -37,7 +38,7 @@ data-pipeline/
 - 环境变量（如 `PRTS_DATA_ROOT`）
 - 命令行参数
 
-`db_builder/` 中的历史脚本仍包含开发机路径，属于待归档内容，不应作为新脚本的参考。
+`db_builder/` 中的历史脚本已经移出当前仓库，不再作为新脚本的参考。
 
 ## 更新原则
 

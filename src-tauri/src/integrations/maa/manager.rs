@@ -1184,8 +1184,8 @@ mod tests {
         assert_eq!(ok[1]["params"]["stage"], json!("1-7"));
     }
 
-    /// 本机（Air）配置：B 服。
-    fn air_settings() -> MaaSettings {
+    /// B 服测试配置。
+    fn bilibili_settings() -> MaaSettings {
         MaaSettings {
             server: crate::maa::settings::Server::Bilibili,
             ..MaaSettings::default()
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     #[ignore = "真机验证：耗时校准（会启动并操作游戏；期间勿操作模拟器）"]
     fn wait_budget_timing() {
-        crate::maa::manager::set_settings(air_settings());
+        crate::maa::manager::set_settings(bilibili_settings());
 
         let t0 = Instant::now();
         let outcome = crate::maa::manager::submit(
@@ -1322,7 +1322,7 @@ mod tests {
     #[test]
     #[ignore = "真机验证：OperBox 闭环（需先启动模拟器；期间勿操作模拟器）"]
     fn operbox_round_trip() {
-        crate::maa::manager::set_settings(air_settings());
+        crate::maa::manager::set_settings(bilibili_settings());
 
         // wait=false：先派出去，然后自己轮询等它跑完（不把锁攥在手里）。
         let outcome = crate::maa::manager::submit(&[json!({ "type": "OperBox" })], 0)
@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     #[ignore = "真机验证：哑错误翻译（需先启动模拟器）"]
     fn append_error_is_translated() {
-        crate::maa::manager::set_settings(air_settings());
+        crate::maa::manager::set_settings(bilibili_settings());
 
         let log_path = asst_log_path();
         let before = file_len(&log_path);
@@ -1448,7 +1448,7 @@ mod tests {
     #[test]
     #[ignore = "真机验证：连模拟器（需先启动模拟器）"]
     fn connect_and_introspect() {
-        crate::maa::manager::set_settings(air_settings());
+        crate::maa::manager::set_settings(bilibili_settings());
 
         match crate::maa::manager::status() {
             Ok(v) => println!("bridge status = {v}"),

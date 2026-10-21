@@ -42,7 +42,7 @@ const GUIDE_DELAY_MS = 200;
 
 /**
  * 带 waitFor 时的最低停顿：等动画本身已经是一段过渡式等待，只需给它一个落点，
- * 不再叠加固定延迟（Air 2026-10-11：衔接应当快，动画的收尾已经平缓）。
+ * 不再叠加固定延迟（衔接应当快，动画的收尾已经平缓）。
  */
 const GUIDE_TAIL_FLOOR_MS = 120;
 
@@ -173,7 +173,7 @@ export function GuideHost() {
   // 带 waitFor 的（欢迎卡）：等那个元素的入场动画演完即可，只给一个 120ms 落点——
   // 动画本身就是过渡式等待，再叠加固定延迟就会显得"动画完了还不出"。
   // **同一个表面上的换步不重新等**：否则每点一次「下一步」整层都会消失一下再
-  // 回来，用户看到的是闪一下（Air 2026-10-11）。
+  // 回来，用户看到的是闪一下（实测）。
   const [shown, setShown] = useState(false);
   const shownSurfaceRef = useRef<GuideSurface | null>(null);
   useEffect(() => {
@@ -292,7 +292,7 @@ export function GuideHost() {
   });
 
   // 只有 Esc 退场：曾用"任意键即退"，但用户随手一按就把没读完的引导关掉、还被永久
-  // 记成看过（2026-10-11 Air 实测）。Esc 是标准 dismiss 键，不会误触。
+  // 记成看过（实测）。Esc 是标准 dismiss 键，不会误触。
   useEffect(() => {
     if (activeKey === null) return;
     const onKey = (e: KeyboardEvent) => {
@@ -313,7 +313,7 @@ export function GuideHost() {
 
   // 点遮罩不消费：只有卡片上的按钮与 Esc 能关掉它。
   // 曾经"点遮罩 = 下一步"（对齐覆盖层的"点遮罩关闭面板"），但引导这次点击的意图
-  // 很可能是"我想去点别处"，结果把没读完的引导消耗掉、还永久记成看过（Air 实测）。
+  // 很可能是"我想去点别处"，结果把没读完的引导消耗掉、还永久记成看过（实测）。
 
   /** 主按钮：推进一步；若该步声明了 startKeys（欢迎卡 → 三步），顺带把它们入队。 */
   const handlePrimary = useCallback(() => {
@@ -328,7 +328,7 @@ export function GuideHost() {
   const focus = item.form === "focus";
   const pos = focus && card && face ? place(box, card, face) : null;
   // 欢迎卡（带 startKeys）：它是教程入口，只有一个按钮「开始探索」。
-  // 不再给「跳过」——后续每一步自己就带跳过，这里再放一个只会让人问"跳过什么"（Air 2026-10-11）。
+  // 不再给「跳过」——后续每一步自己就带跳过，这里再放一个只会让人问"跳过什么"。
   const starts = item.startKeys && item.startKeys.length > 0 ? item.startKeys : null;
   const primaryLabel = starts ? "开始探索" : focus ? "下一步" : "知道了";
   const showSkip = focus;
@@ -336,7 +336,7 @@ export function GuideHost() {
     tourKeys && activeKey !== null ? tourKeys.indexOf(activeKey) : -1;
   // 通知卡：在子页内容区里**双向居中**。压暗目标已经换成内容区本身（导航与页标题
   // 都在暗色之外），卡就不再需要绕面板边缘做算术。宽度上限也别再卡成接近内容区的
-  // 固定值——面板随窗口放大时卡得跟着居中，否则会变成靠左的一小块（Air 实测）。
+  // 固定值——面板随窗口放大时卡得跟着居中，否则会变成靠左的一小块（实测）。
   const noticeW = Math.round(
     Math.max(140, Math.min(300, box.width - NOTICE_INSET * 2))
   );

@@ -140,7 +140,7 @@ pub fn get_guide_seen(
 
 /// 记一个引导项为「已看过」（界面态写入）。
 ///
-/// **不受 set_settings 的 busy 闸约束**（Air 2026-10-11 定案）：界面态不是配置，
+/// **不受 set_settings 的 busy 闸约束**（维护者定案）：界面态不是配置，
 /// 且它必须在对话处理中也能落盘——设置页通知随时会触发。落点仍是 settings.json
 /// 的 `ui` 段，tmp+rename 原子替换 + 写后重读校验由 `SettingsStore::save` 保证。
 #[tauri::command]

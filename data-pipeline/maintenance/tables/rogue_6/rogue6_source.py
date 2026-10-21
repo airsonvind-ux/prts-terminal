@@ -41,7 +41,7 @@ T_MAIN = "实托邦·理念（%s）"
 T_SUB = "实托邦·方针"
 T_UTOPIA = "乌托邦"
 
-# 藏品四种角标（Air 给的文本）
+# 藏品四种角标（人工给定文本）
 RELIC_BADGE = {
     "notrade": "不可于【失与得】交换",
     "stack": "可计数叠加层数",
@@ -84,7 +84,7 @@ MANUAL_FIXES = {}
 # ─── 清洗 ─────────────────────────────────────────────────────
 
 def clean(text, scrap=False):
-    """页面文本 → 纯文本。零件上的 {{popup/range}} 按 Air 口径叫「范围」。"""
+    """页面文本 → 纯文本。零件上的 {{popup/range}} 按人工口径叫「范围」。"""
     if text is None:
         return None
     text = RE_VAR.sub("", text)

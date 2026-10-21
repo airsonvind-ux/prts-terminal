@@ -76,7 +76,7 @@ ENEMY_DB = paths.GAMEDATA / "levels" / "enemydata" / "enemy_database.json"
 HANDBOOK = paths.GAMEDATA / "excel" / "enemy_handbook_table.json"
 PAGE_MAP_FILE = paths.MANUAL_SOURCES / "enemies_pages.md"
 
-# 图鉴变体回退：这些 ID 图鉴未收录条目，三字段与本体一致（Air 2026-10-14 定的范围）
+# 图鉴变体回退：这些 ID 图鉴未收录条目，三字段与本体一致（已定范围）
 HB_FALLBACK_IDS = (
     "enemy_1331_cbsisy_3",   # “十字路口”量产型（生息演算特殊版本）
     "enemy_1529_dsdevr_2",   # 屠谕者，大群意志

@@ -41,6 +41,8 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path bridge/Cargo.toml
 ```
 
+CI 覆盖前端测试/构建、Rust 编译和测试编译；依赖 `arknights.db` 的数据契约测试在本地或有数据种子的专用任务中运行。
+
 ## 真实数据
 
 依赖 `arknights.db` 的检查属于数据契约测试，不放进默认单测。它们应该：

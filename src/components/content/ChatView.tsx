@@ -293,7 +293,7 @@ export function ChatView({ onDragHandle }: Props) {
   // ── 引导（说明层）触发 ──
   // ① 欢迎卡：欢迎页真的渲染 + 启动演出已完全撤下 + 没有别的面板开着 + 键集已拉到。
   //    「由表面真的出现过决定」，不看装完第几次启动。
-  //    三步导览不再自动触发，由这张卡上的「开始」启动（Air 2026-10-11）。
+  //    三步导览不再自动触发，由这张卡上的「开始」启动（维护者定案）。
   const guideHydrated = useGuideStore((s) => s.hydrated);
   const enqueueGuide = useGuideStore((s) => s.enqueue);
   useEffect(() => {
@@ -304,7 +304,7 @@ export function ChatView({ onDragHandle }: Props) {
   // ② 首次出现型（对话标题 / 上下文进度环）：元素真的在画面上，且本轮没在生成。
   //    还要等**真标题**落地：createConversation 时 title 就是"首条消息截断"的占位
   //    标题，若那一刻就出，会先框住占位标题、等真标题到了再框一次——用户看到
-  //    闪一下（Air 2026-10-11 实测）。titleGenerated 由 conversation/title 事件置位。
+  //    闪一下（实测）。titleGenerated 由 conversation/title 事件置位。
   const convTitle = activeConv?.title;
   const titleReady =
     activeConv !== undefined && activeConv.titleGenerated !== false;

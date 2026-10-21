@@ -22,7 +22,7 @@
 //! 不阻塞条目加载——索引器/加载器负责告警）。
 
 // 索引模块与内容目录分离：`content/knowledge/` 只放随包 Markdown，
-// Rust 索引代码留在 `src/knowledge/`，避免内容文件被装进二进制或模块树。
+// Rust 索引代码留在 `agent/knowledge/`，避免内容文件被装进二进制或模块树。
 pub mod index;
 
 /// 条目 frontmatter 元数据。

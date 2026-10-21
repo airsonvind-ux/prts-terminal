@@ -9,7 +9,7 @@
 // 口径：
 //   - enabled=false → 返回空串（启动演出期间标题留白，不剧透）
 //   - 文本变化 → 立即清空重打；没有退出动画（旧文本干脆消失）
-//   - 45ms/字（TITLE_CHAR_MS，Air 在演示件里定的手感）
+//   - 45ms/字（TITLE_CHAR_MS，演示中确定的手感）
 
 import { useEffect, useRef, useState } from "react";
 
