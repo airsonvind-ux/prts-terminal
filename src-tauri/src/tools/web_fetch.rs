@@ -400,12 +400,14 @@ fn strip_html_to_text(html: &str) -> String {
 
     use regex::Regex;
 
-    fn regexes() -> &'static [Regex; 6] {
-        static CACHE: OnceLock<[Regex; 6]> = OnceLock::new();
+    fn regexes() -> &'static [Regex; 9] {
+        static CACHE: OnceLock<[Regex; 9]> = OnceLock::new();
         CACHE.get_or_init(|| {
             [
-                Regex::new(r"(?is)<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>")
-                    .expect("静态正则合法"),
+                Regex::new(r"(?is)<script\b[^>]*>.*?</script\s*>").expect("静态正则合法"),
+                Regex::new(r"(?is)<style\b[^>]*>.*?</style\s*>").expect("静态正则合法"),
+                Regex::new(r"(?is)<noscript\b[^>]*>.*?</noscript\s*>").expect("静态正则合法"),
+                Regex::new(r"(?is)<template\b[^>]*>.*?</template\s*>").expect("静态正则合法"),
                 Regex::new(r"(?is)<head\b[^>]*>.*?</head\s*>").expect("静态正则合法"),
                 Regex::new(r"(?s)<!--.*?-->").expect("静态正则合法"),
                 Regex::new(
@@ -418,12 +420,15 @@ fn strip_html_to_text(html: &str) -> String {
         })
     }
 
-    let (scripts, head, comments, blocks, tags, numeric) = {
+    let (scripts, styles, noscripts, templates, head, comments, blocks, tags, numeric) = {
         let r = regexes();
-        (&r[0], &r[1], &r[2], &r[3], &r[4], &r[5])
+        (&r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7], &r[8])
     };
     let mut text = html.to_string();
     text = scripts.replace_all(&text, "").into_owned();
+    text = styles.replace_all(&text, "").into_owned();
+    text = noscripts.replace_all(&text, "").into_owned();
+    text = templates.replace_all(&text, "").into_owned();
     text = head.replace_all(&text, "").into_owned();
     text = comments.replace_all(&text, "").into_owned();
     text = blocks.replace_all(&text, "\n").into_owned();
@@ -822,6 +827,23 @@ mod tests {
         assert!(out.summary.contains("条目卡片3"), "降级输出非空且含内容");
         assert!(!out.summary.contains("<div"), "不应残留原始标签");
         assert!(!out.summary.contains("<a "), "不应残留原始标签");
+    }
+
+    #[test]
+    fn strip_html_to_text_removes_scripts_styles_and_decodes_entities() {
+        let html = r#"<html><head><style>.x{color:red}</style></head><body>
+            <script>alert(1)</script>
+            <noscript>无脚本提示</noscript>
+            <template><p>模板内容</p></template>
+            <!-- 注释 -->
+            <p>正文内容 &amp; 数字实体 &#20320;</p>
+        </body></html>"#;
+        let text = strip_html_to_text(html);
+        for banned in ["alert(1)", ".x{", "无脚本提示", "模板内容", "注释"] {
+            assert!(!text.contains(banned), "应剥除: {banned}\n结果: {text}");
+        }
+        assert!(text.contains("正文内容"), "正文应保留\n结果: {text}");
+        assert!(text.contains('你'), "数字实体应解码\n结果: {text}");
     }
 
     // ── JSON 分流 ──

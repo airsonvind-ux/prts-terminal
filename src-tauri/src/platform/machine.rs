@@ -253,10 +253,10 @@ fn resolve_maa(entries: &[registry::Entry], maa_override: Option<&str>) -> Optio
         }
     }
     // 兜底：各盘根浅扫（便携版 MAA 不在注册表里，这一层真的会用到）
-    for (dir, _marker) in scan_drive_roots(&[MAA_MARKER]) {
-        return Some(dir);
-    }
-    None
+    scan_drive_roots(&[MAA_MARKER])
+        .into_iter()
+        .next()
+        .map(|(dir, _marker)| dir)
 }
 
 /// `<launcher>/games/*` 下含 `Arknights.exe` 的目录（不看目录名——两服不同）。
