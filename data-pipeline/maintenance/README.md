@@ -130,6 +130,6 @@ python push.py
 - 执行器契约见 `lib/table_base.py` 顶部；新表照现有目录写 `update.py` 或 `rebuild.py`，
   给出 `SPEC`，先 `--dry-run` 与旧结果对齐。
 - 通用能力只在第二张表确实需要时才往 `lib/` 提。
-- `data-pipeline/db_builder/` 是建表与修复用的一次性脚本，归档，不修改，也不被 `maintenance/` 依赖。
+- `data-pipeline/db_builder/` 是早期建表与修复用的一次性脚本，已从当前仓库移除；需要参考时查 Git 历史，不作为维护入口。
 - 改含中文的源码用编辑器或 `edit` 工具；PowerShell 的 `Get-Content`/`Set-Content` 与重定向
   默认走本地代码页，会把 UTF-8 中文写坏。

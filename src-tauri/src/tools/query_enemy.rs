@@ -1229,7 +1229,7 @@ mod tests {
         assert!(result.contains("备注"));
     }
 
-    // ── 演示输出（供 scripts/test_enemy.py 交互调用）──
+    // ── 演示输出（供 scripts/manual/test_enemy.py 交互调用）──
 
     #[test]
     fn show_output() {

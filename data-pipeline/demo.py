@@ -6,7 +6,9 @@ PRTS 终端 - 数据管线 Demo
 import json
 import os
 
-DATA = r"F:\Obsidian_notes\60.Dev\prts-terminal\data-source\ArknightsGameData-master\zh_CN\gamedata"
+import paths
+
+DATA = str(paths.GAMEDATA)
 
 # ─── 工具函数 ───────────────────────────────────────────
 

@@ -2,11 +2,9 @@
 重建数据库文件，回收删除/更新产生的碎片空间。
 """
 import sqlite3, os, sys
+from pathlib import Path
 
-DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    'db_builder', 'arknights.db'
-)
+DB_PATH = Path(__file__).resolve().parents[1] / 'maintenance' / 'db' / 'arknights.db'
 
 
 def main():

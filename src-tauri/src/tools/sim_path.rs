@@ -2,7 +2,7 @@
 //!
 //! 基于关卡 ID + 路线序号自动完成该路线的逐帧寻路模拟，支持自定义路线
 //! （route DSL）、强制位移注入（push/block）、避障相位参数（k）、时间轴
-//! 参数（timeAxis）。逻辑与 scripts/sim_tool.py 对齐（float32 逐帧模拟，
+//! 参数（timeAxis）。逻辑与 scripts/sim/sim_tool.py 对齐（float32 逐帧模拟，
 //! 已通过为崖作伥四车逐帧对拍验证）。
 //!
 //! 输出：summary = 格级事件流（相对帧，f0 = 生成帧）；rows = 结构化摘要；

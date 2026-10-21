@@ -18,6 +18,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent            # data-pipeline/
 PROJECT_ROOT = HERE.parent                       # 仓库根
 
+# 旧 db_builder/ 一次性脚本已移出当前仓库；路径统一从这里取。
+
 DATA_SOURCE = Path(
     os.environ.get("PRTS_DATA_SOURCE") or (PROJECT_ROOT / "data-source" / "ArknightsGameData")
 ).resolve()
@@ -29,7 +31,7 @@ LEVELS = GAMEDATA / "levels"
 RESOURCES = PROJECT_ROOT / "src-tauri" / "resources"
 
 MAINT = HERE / "maintenance"
-# 权威副本：数据更新脚本唯一操作对象（db_builder/ 下那份为归档，不再更新）
+# 权威副本：数据更新脚本唯一操作对象（maintenance/db/arknights.db）
 DB_PATH = MAINT / "db" / "arknights.db"
 # 更新系统的产物目录（被 lib/update_common 引用；脚本里不要自己拼）
 BACKUPS = MAINT / "backups"

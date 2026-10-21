@@ -29,7 +29,7 @@ cargo build --release
 ## 运行
 
 ```powershell
-prts-maa-bridge.exe --maa-dir "F:\MAA-v6.17.5-win-x64" --port 41231 [--user-dir <工作目录>]
+prts-maa-bridge.exe --maa-dir "<MAA安装目录>" --port 41231 [--user-dir <工作目录>]
 ```
 
 - `--maa-dir`：用户 MAA 安装目录（内含 `MaaCore.dll` 与 `resource/`）。

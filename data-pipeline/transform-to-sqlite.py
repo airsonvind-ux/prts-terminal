@@ -8,10 +8,12 @@ import os
 import sqlite3
 import sys
 
+import paths
+
 # ─── 路径配置 ───────────────────────────────────────────
 
-DATA_ROOT = r"F:\Obsidian_notes\60.Dev\prts-terminal\data-source\ArknightsGameData-master\zh_CN\gamedata"
-OUTPUT_DB = r"F:\Obsidian_notes\60.Dev\prts-terminal\src-tauri\resources\arknights.db"
+DATA_ROOT = str(paths.GAMEDATA)
+OUTPUT_DB = str(paths.RESOURCES / "arknights.db")
 
 # ─── 工具函数 ───────────────────────────────────────────
 

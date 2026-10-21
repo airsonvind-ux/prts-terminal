@@ -1,7 +1,10 @@
 """验证 arknights.db 内容"""
-import sqlite3, json
+import json
+import sqlite3
 
-DB = r"F:\Obsidian_notes\60.Dev\prts-terminal\src-tauri\resources\arknights.db"
+import paths
+
+DB = paths.RESOURCES / "arknights.db"
 conn = sqlite3.connect(DB)
 
 # 基础统计
