@@ -1,6 +1,7 @@
 // PRTS 终端 · Agent 事件与 IPC 事件合约
 
-import type { Attachment, Mood, MoodIntensity } from "../types";
+import type { Attachment } from "./chat";
+import type { Mood, MoodIntensity } from "../types";
 import type { ExecutionMode } from "./settings";
 import type { TokenUsage, UsageStat } from "./llm";
 
