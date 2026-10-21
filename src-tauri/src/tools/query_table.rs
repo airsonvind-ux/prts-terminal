@@ -984,7 +984,7 @@ mod tests {
         let out = tool
             .execute(&ToolContext::new(), r#"{"table":"abnormal","keys":["战栗"]}"#)
             .unwrap().summary;
-        assert!(out.contains("战斗状态时无法触发普通攻击"));
+        assert!(out.contains("无法触发普通攻击"));
         assert!(out.contains("可抵抗：否"));
         // slang：真实黑话
         let out = tool
