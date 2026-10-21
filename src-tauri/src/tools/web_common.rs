@@ -2,7 +2,7 @@
 //!
 //! web_search / web_fetch 共用的离线可测逻辑，全部为纯函数：
 //! - URL 解析与协议守卫（仅 http/https）
-//! - SSRF 防护：IP 字面量分类 + 域名解析复查（解析失败按私有保守拒）
+//! - SSRF 防护：IP 字面量分类 + 域名解析复查，并把解析结果固定到连接（解析失败按私有保守拒）
 //! - 字符安全截断（UTF-8 char 边界）
 //! - Markdown 链接 absolutize 后处理（相对链接 join base；非 http/https
 //!   协议（javascript:/data:/mailto: 等）剥成纯文本——readabilityrs 的
@@ -46,12 +46,15 @@ pub fn parse_http_url(raw: &str) -> Result<reqwest::Url, UrlReject> {
 // SSRF 防护：IP 字面量分类
 // ═══════════════════════════════════════════════════════
 
-/// 判断 IP 是否属于"不可访问"的私有/本机/链路本地范围。
+/// 判断 IP 是否属于"不可访问"的私有/本机/链路本地/保留范围。
 ///
 /// 覆盖（对齐 M5 定稿清单 + 防御补强）：
 /// - IPv4 回环 127.0.0.0/8、未指定 0.0.0.0/8、RFC1918（10/8、172.16/12、
-///   192.168/16）、链路本地 169.254/16
-/// - IPv6 回环 ::1、未指定 ::、链路本地 fe80::/10、ULA fc00::/7
+///   192.168/16）、链路本地 169.254/16、CGNAT 100.64/10、基准测试
+///   198.18/15、文档/保留段（192.0.0/24、192.0.2/24、198.51.100/24、
+///   203.0.113/24、192.88.99/24）、组播/保留 224.0.0.0/3
+/// - IPv6 回环 ::1、未指定 ::、链路本地 fe80::/10、ULA fc00::/7、
+///   组播 ff00::/8、文档段 2001:db8::/32
 /// - IPv4 映射 IPv6（::ffff:a.b.c.d）按其内嵌 v4 地址复查（否则
 ///   127.0.0.1 经 ::ffff:127.0.0.1 形态可绕过回环判定）
 /// - 其余地址一律放行（公网）
@@ -67,6 +70,8 @@ pub fn is_private_ip(ip: &IpAddr) -> bool {
                 || v6.is_unspecified()
                 || v6.is_unicast_link_local()
                 || v6.is_unique_local()
+                || v6.is_multicast()
+                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
         }
     }
 }
@@ -74,12 +79,22 @@ pub fn is_private_ip(ip: &IpAddr) -> bool {
 fn is_private_ipv4(v4: Ipv4Addr) -> bool {
     let o = v4.octets();
     match o[0] {
-        127 => true,                      // 回环 127.0.0.0/8
-        0 => true,                        // 未指定 0.0.0.0/8（含 0.0.0.0）
-        10 => true,                       // RFC1918 10.0.0.0/8
-        172 => (16..=31).contains(&o[1]), // RFC1918 172.16.0.0/12
-        192 => o[1] == 168,               // RFC1918 192.168.0.0/16
-        169 => o[1] == 254,               // 链路本地 169.254.0.0/16
+        127 => true,                       // 回环 127.0.0.0/8
+        0 => true,                         // 未指定 0.0.0.0/8（含 0.0.0.0）
+        10 => true,                        // RFC1918 10.0.0.0/8
+        100 => (64..=127).contains(&o[1]), // CGNAT 100.64.0.0/10
+        172 => (16..=31).contains(&o[1]),  // RFC1918 172.16.0.0/12
+        192 => match o[1] {
+            168 => true,                 // RFC1918 192.168.0.0/16
+            0 => o[2] == 0 || o[2] == 2, // 保留 192.0.0.0/24 / 文档 192.0.2.0/24
+            88 => o[2] == 99,            // 6to4 中继 192.88.99.0/24
+            _ => false,
+        },
+        198 => (18..=19).contains(&o[1]) || (o[1] == 51 && o[2] == 100), // 基准测试 / TEST-NET-2
+        169 => o[1] == 254,                                              // 链路本地 169.254.0.0/16
+        203 => o[1] == 0 && o[2] == 113, // TEST-NET-3 203.0.113.0/24
+        224..=239 => true,               // 组播 224.0.0.0/4
+        240..=255 => true,               // 保留 240.0.0.0/4（含广播）
         _ => false,
     }
 }
@@ -95,34 +110,55 @@ pub fn resolve_host_all(host: &str) -> io::Result<Vec<IpAddr>> {
     Ok(addrs.into_iter().map(|sa| sa.ip()).collect())
 }
 
-/// host 是否应被拒绝（SSRF 判定总入口）。
+/// host 解析拒绝原因（仅用于内部判定与测试）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostReject {
+    Private,
+    ResolveFailed,
+    Empty,
+}
+
+/// 解析主机并返回一个可连接的 IP；域名会做全量私有段复查。
 ///
-/// - `allowlist`：显式放行主机（M5 测试注入点：生产默认空 = 全拒本机；
-///   测试传 127.0.0.1 供 loopback 罐头服务器使用）。精确字面匹配，
-///   仅作"已知本机测试端点"豁免，不作通配。
-/// - `resolve`：域名解析函数（生产 = [`resolve_host_all`]，测试 = mock）。
-///
-/// 判定顺序：白名单直放 → IP 字面量分类 → 域名全量解析，**任一命中私有
-/// 即拒**（防部分 A/AAAA 记录指向内网）；解析失败（含空结果）按私有保守拒。
+/// 返回的 IP 供 `web_fetch` 固定到客户端（防 DNS 重绑定）：调用方必须用
+/// 同一结果建立连接，不能在连接阶段再次解析。
+pub fn resolve_public_ip(
+    host: &str,
+    allowlist: &[String],
+    resolve: impl Fn(&str) -> io::Result<Vec<IpAddr>>,
+) -> Result<IpAddr, HostReject> {
+    let allowed = allowlist.iter().any(|h| h == host);
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<IpAddr>() {
+        if allowed || !is_private_ip(&ip) {
+            return Ok(ip);
+        }
+        return Err(HostReject::Private);
+    }
+
+    let ips = resolve(host).map_err(|_| HostReject::ResolveFailed)?;
+    if ips.is_empty() {
+        return Err(HostReject::Empty);
+    }
+    if !allowed && ips.iter().any(is_private_ip) {
+        return Err(HostReject::Private);
+    }
+    // 优先 IPv4，避免仅有 AAAA 时在无 IPv6 出口的环境直接失败。
+    ips.iter()
+        .find(|ip| ip.is_ipv4())
+        .or_else(|| ips.first())
+        .copied()
+        .ok_or(HostReject::Empty)
+}
+
+/// 测试用布尔包装：等价于 [`resolve_public_ip`] 是否失败。
+#[cfg(test)]
 pub fn host_is_blocked(
     host: &str,
     allowlist: &[String],
     resolve: impl Fn(&str) -> io::Result<Vec<IpAddr>>,
 ) -> bool {
-    if allowlist.iter().any(|h| h == host) {
-        return false;
-    }
-    // IP 字面量：直接分类，不走 DNS。注意 url crate 的 host_str 对 IPv6
-    // 返回带括号形态（"[::1]"），先剥括号再解析
-    let bare = host.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = bare.parse::<IpAddr>() {
-        return is_private_ip(&ip);
-    }
-    // 域名：全量解析复查；失败/无结果 = 私有保守拒
-    match resolve(host) {
-        Ok(ips) => ips.is_empty() || ips.iter().any(is_private_ip),
-        Err(_) => true,
-    }
+    resolve_public_ip(host, allowlist, resolve).is_err()
 }
 
 // ═══════════════════════════════════════════════════════
@@ -252,6 +288,21 @@ mod tests {
             // 链路本地
             "169.254.169.254",
             "169.254.0.1",
+            // CGNAT / 基准测试 / 文档与保留段
+            "100.64.0.1",
+            "100.127.255.255",
+            "198.18.0.1",
+            "198.19.255.255",
+            "192.0.0.1",
+            "192.0.2.1",
+            "198.51.100.1",
+            "203.0.113.9",
+            "192.88.99.1",
+            // 组播 / 保留
+            "224.0.0.1",
+            "239.255.255.255",
+            "240.0.0.1",
+            "255.255.255.255",
             // IPv6 回环 / 未指定
             "::1",
             "0:0:0:0:0:0:0:1",
@@ -259,6 +310,9 @@ mod tests {
             // IPv6 链路本地 fe80::/10（fe80~febf）
             "fe80::1",
             "febf::abcd",
+            // IPv6 组播 / 文档段
+            "ff02::1",
+            "2001:db8::1",
             // IPv6 ULA fc00::/7（fc00~fdff）
             "fc00::1",
             "fd12:3456:789a::1",
@@ -283,7 +337,7 @@ mod tests {
             "8.8.8.8",
             "1.1.1.1",
             "114.114.114.114",
-            "203.0.113.9",
+            "93.184.216.34",
             // RFC1918 边界外
             "172.15.0.1",
             "172.32.0.1",
@@ -318,6 +372,16 @@ mod tests {
         // IPv6 链路本地 /10 边界：fe80:: 私有，fe7f:: 前 10 位不命中（fe7f::/16 之外）
         assert!(is_private_ip(&ip("fe80::")));
         assert!(!is_private_ip(&ip("fe7f::1")));
+        // 新增非公网段边界
+        assert!(is_private_ip(&ip("100.64.0.0")));
+        assert!(!is_private_ip(&ip("100.63.255.255")));
+        assert!(!is_private_ip(&ip("100.128.0.0")));
+        assert!(is_private_ip(&ip("198.18.0.0")));
+        assert!(!is_private_ip(&ip("198.17.255.255")));
+        assert!(!is_private_ip(&ip("198.20.0.0")));
+        assert!(is_private_ip(&ip("203.0.113.0")));
+        assert!(!is_private_ip(&ip("203.0.112.255")));
+        assert!(!is_private_ip(&ip("203.0.114.0")));
     }
 
     // ── host_is_blocked：白名单 + 字面量 + 域名 mock ──
@@ -385,6 +449,27 @@ mod tests {
         assert!(host_is_blocked("10.0.0.1", &allow_loopback, mock_resolve));
         // 白名单只精确匹配：同值的 localhost 域名不走豁免（DNS 仍拒）
         assert!(host_is_blocked("localhost", &allow_loopback, mock_resolve));
+    }
+
+    #[test]
+    fn resolve_public_ip_returns_pinned_public_address() {
+        let empty: Vec<String> = vec![];
+        assert_eq!(
+            resolve_public_ip("pub.example.com", &empty, mock_resolve).unwrap(),
+            ip("93.184.216.34")
+        );
+        assert_eq!(
+            resolve_public_ip("mixed.example.com", &empty, mock_resolve),
+            Err(HostReject::Private)
+        );
+        assert_eq!(
+            resolve_public_ip("empty.example.com", &empty, mock_resolve),
+            Err(HostReject::Empty)
+        );
+        assert_eq!(
+            resolve_public_ip("nxdomain.invalid", &empty, mock_resolve),
+            Err(HostReject::ResolveFailed)
+        );
     }
 
     // ── truncate_chars ──

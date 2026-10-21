@@ -5,7 +5,8 @@
 //! ## 安全边界（对齐 M5 定稿）
 //! - 仅 http/https（其余协议 Parse 拒绝）
 //! - SSRF：逐跳（含重定向目标）host 校验——IP 字面量分类 + 域名全量解析
-//!   复查（解析失败按私有保守拒）；白名单注入点仅供测试 loopback 服务器
+//!   复查（解析失败按私有保守拒）；解析结果固定到本跳客户端，连接阶段
+//!   不再走 DNS（防重绑定）；白名单注入点仅供测试 loopback 服务器
 //!   （生产默认空 = 全拒内网/本机/链路本地）
 //! - 重定向 manual 逐跳复查，≤ 5 跳，单跳超时 15s（测试可注入短超时）
 //! - 响应体 1MiB 流式字节硬上限（超限断报"页面过大"，不落全量内存）
@@ -22,13 +23,14 @@
 //! 超时/HTTP 错误/体积超限均按 M5 定稿文案返回中文 ToolError。
 
 use std::io::Read;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use serde_json::Value;
 
 use crate::tools::web_common::{
-    absolutize_markdown_links, host_is_blocked, parse_http_url, resolve_host_all, truncate_chars,
-    UrlReject,
+    absolutize_markdown_links, parse_http_url, resolve_host_all, resolve_public_ip, truncate_chars,
+    HostReject, UrlReject,
 };
 use crate::tools::{DisplayLink, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
@@ -211,47 +213,58 @@ impl WebFetchTool {
         let mut current = url.clone();
         let mut hops: usize = 0;
 
-        let mut resp = loop {
-            // 逐跳 SSRF 复查（首跳与每次重定向目标都校验）
-            let host = current
-                .host_str()
-                .ok_or_else(|| FetchError("请求失败：链接缺少主机名".into()))?;
-            if host_is_blocked(host, &self.opts.allowed_hosts, resolve_host_all) {
-                return Err(FetchError(private_host_msg(host)));
-            }
+        let mut resp =
+            loop {
+                // 逐跳 SSRF 复查（首跳与每次重定向目标都校验）
+                let host = current
+                    .host_str()
+                    .ok_or_else(|| FetchError("请求失败：链接缺少主机名".into()))?;
+                // 解析一次并固定到本跳客户端：连接阶段不再走 DNS，封死重绑定窗口。
+                let ip = resolve_public_ip(host, &self.opts.allowed_hosts, resolve_host_all)
+                    .map_err(|reject| match reject {
+                        HostReject::Private => FetchError(private_host_msg(host)),
+                        HostReject::ResolveFailed | HostReject::Empty => {
+                            FetchError(format!("请求失败：无法解析主机名（{host}）"))
+                        }
+                    })?;
+                let port = current.port_or_known_default().unwrap_or(80);
+                let is_literal = host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok();
+                let pin = (!is_literal).then(|| (host, SocketAddr::new(ip, port)));
+                let client = build_client(self.opts.timeout, pin)
+                    .map_err(|_| FetchError(format!("请求失败：{url}", url = current.as_str())))?;
+                let attempt = client.get(current.as_str()).send().map_err(|e| {
+                    classify_transport_error(&e, current.as_str(), self.opts.timeout)
+                })?;
+                let status = attempt.status().as_u16();
 
-            let client = build_client(self.opts.timeout)
-                .map_err(|_| FetchError(format!("请求失败：{url}", url = current.as_str())))?;
-            let attempt = client
-                .get(current.as_str())
-                .send()
-                .map_err(|e| classify_transport_error(&e, current.as_str(), self.opts.timeout))?;
-            let status = attempt.status().as_u16();
-
-            // 非重定向状态：交主流程判定成败
-            if !REDIRECT_CODES.contains(&status) {
-                break attempt;
-            }
-            // 重定向：跳数上限检查 → 取 Location → join 后复查下一跳
-            if hops >= MAX_REDIRECTS {
-                return Err(FetchError(format!(
-                    "重定向次数过多（超过 {MAX_REDIRECTS} 跳）：{url}",
-                    url = current.as_str()
-                )));
-            }
-            let Some(location) = attempt
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|h| h.to_str().ok())
-            else {
-                // 3xx 无 Location：无从跟随，按最终响应交给状态判定
-                break attempt;
+                // 非重定向状态：交主流程判定成败
+                if !REDIRECT_CODES.contains(&status) {
+                    break attempt;
+                }
+                // 重定向：跳数上限检查 → 取 Location → join 后复查下一跳
+                if hops >= MAX_REDIRECTS {
+                    return Err(FetchError(format!(
+                        "重定向次数过多（超过 {MAX_REDIRECTS} 跳）：{url}",
+                        url = current.as_str()
+                    )));
+                }
+                let Some(location) = attempt
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|h| h.to_str().ok())
+                else {
+                    // 3xx 无 Location：无从跟随，按最终响应交给状态判定
+                    break attempt;
+                };
+                current = current
+                    .join(location)
+                    .map_err(|_| FetchError(format!("请求失败：无效的重定向目标 {location}")))?;
+                hops += 1;
             };
-            current = current
-                .join(location)
-                .map_err(|_| FetchError(format!("请求失败：无效的重定向目标 {location}")))?;
-            hops += 1;
-        };
 
         // ── 状态判定（非 2xx 一律按 HTTP 错误返回，不读 body）──
         let status = resp.status();
@@ -304,20 +317,26 @@ impl WebFetchTool {
 
 /// 单跳客户端：超时（生产 15s）+ manual 重定向 + 固定 UA/头 + 禁代理。
 /// 注意：blocking 的 ClientBuilder 无 header()，头一律经 default_headers。
-fn build_client(timeout: Duration) -> Result<reqwest::blocking::Client, reqwest::Error> {
+fn build_client(
+    timeout: Duration,
+    pin: Option<(&str, SocketAddr)>,
+) -> Result<reqwest::blocking::Client, reqwest::Error> {
     use reqwest::header::{
         HeaderMap, HeaderValue, ACCEPT as HDR_ACCEPT, ACCEPT_LANGUAGE as HDR_ACCEPT_LANG,
     };
     let mut headers = HeaderMap::new();
     headers.insert(HDR_ACCEPT, HeaderValue::from_static(ACCEPT));
     headers.insert(HDR_ACCEPT_LANG, HeaderValue::from_static(ACCEPT_LANGUAGE));
-    reqwest::blocking::Client::builder()
+    let mut builder = reqwest::blocking::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(USER_AGENT)
         .default_headers(headers)
-        .no_proxy()
-        .build()
+        .no_proxy();
+    if let Some((host, addr)) = pin {
+        builder = builder.resolve(host, addr);
+    }
+    builder.build()
 }
 
 /// 传输错误分类：超时 → 定稿文案（单跳超时秒数 + 原始目标 URL）；
