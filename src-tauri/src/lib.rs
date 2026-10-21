@@ -5,40 +5,22 @@
 // 旧代码已归档至 src_old/，仅作实现参考
 
 // 模块声明
-mod approval;
-mod attachments;
-mod cache;
-mod config;
-mod credentials;
-mod db;
-mod db_seed;
-mod machine;
-mod notices;
-mod events;
-mod exec;
-mod exec_settings;
-mod knowledge;
-pub mod maa;
-mod memory;
-mod observability;
-mod orchestrator;
-mod path_guard;
-mod policy;
-mod session;
-mod session_store;
-mod settings;
-mod steer_queue;
-mod skills;
-mod skills_index;
-mod skills_install;
-mod skills_snapshot;
-mod prefix_snapshot;
-mod tools;
+mod agent;
+mod app;
+mod integrations;
 mod llm;
-mod commands;
-mod turn_registry;
-mod updater;
-mod workspace;
+mod platform;
+mod runtime;
+mod storage;
+mod tools;
+
+// 分组后的兼容出口：调用方仍使用 crate::session、crate::settings 等路径。
+pub use agent::{knowledge, memory, orchestrator, prefix_snapshot, skills, skills_index, skills_install, skills_snapshot};
+pub use app::{commands, config, db_seed, events, workspace};
+pub use integrations::maa;
+pub use platform::{machine, notices, observability, updater};
+pub use runtime::{approval, exec, exec_settings, path_guard, policy, steer_queue, turn_registry};
+pub use storage::{attachments, cache, credentials, db, session, session_store, settings};
 
 use std::sync::{Arc, Mutex};
 

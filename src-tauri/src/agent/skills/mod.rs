@@ -17,6 +17,10 @@
 //! description 的语义识别决定），frontmatter 不再设独立触发字段；
 //! 旧文件的 when_to_use 等字段按未知字段忽略（向前兼容）。
 
+pub mod index;
+pub mod install;
+pub mod snapshot;
+
 use crate::knowledge::parse_frontmatter_fields;
 
 /// Skill 目录条目元数据。

@@ -3989,7 +3989,7 @@ mod tests {
         let client_registry = Arc::new(client_registry);
         let model_registry = Arc::new(
             crate::llm::ModelRegistry::from_json(
-                include_str!("../../resources/models.json"),
+                include_str!("../../../resources/models.json"),
             )
             .unwrap(),
         );
@@ -4511,7 +4511,7 @@ mod tests {
         let client_registry = Arc::new(client_registry);
         let model_registry = Arc::new(
             crate::llm::ModelRegistry::from_json(
-                include_str!("../../resources/models.json"),
+                include_str!("../../../resources/models.json"),
             )
             .unwrap(),
         );
