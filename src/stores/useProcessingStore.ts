@@ -34,7 +34,6 @@ import {
 import { generateId } from "../utils";
 import {
   stripReminderBlock,
-  defaultTitleFromInput,
 } from "../projection";
 import { useUIStore } from "./useUIStore";
 import { useConversationStore } from "./useConversationStore";
@@ -52,10 +51,9 @@ import {
   accumulateTitleText,
   clearTitleGenState,
   hasTitleGen,
-  conversationNeedsTitle,
   maybeTriggerTitleFallback,
-  registerTitleGen,
 } from "./processingTitle";
+import { ensureActiveConversation } from "./processingConversation";
 import { composeReminderNotice } from "./processingReminder";
 import { buildSendHistory, willOverflowContext } from "./processingRequest";
 import { getModelInfo } from "./processingModelInfo";
@@ -414,41 +412,8 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       return;
     }
 
-    // 创建或更新对话，同时获取 conversationId
-    let conversationId: string;
-    if (isNewNow) {
-      const info = getModelInfo();
-      const dTitle = defaultTitleFromInput(input);
-      conversationId = useConversationStore
-        .getState()
-        .createConversation(
-          dTitle,
-          info?.name,
-          info?.contextLength,
-        );
-      // 自动标题现场注册（仅新对话首轮）：哨兵 + 素材累积起点
-      registerTitleGen(conversationId, dTitle);
-    } else {
-      conversationId = st.activeId!;
-      // 首轮报错后对话已存在，但还没有成功轮：下次正常发送仍要重新挂标题现场。
-      // 哨兵用当前标题（首条错误消息的截断名），生成成功后由事件替换。
-      if (
-        conversationNeedsTitle(conv) &&
-        !hasTitleGen(conversationId)
-      ) {
-        // 首轮错误标题不再作为长期默认：首个正常消息先替换截断名，
-        // 再按正常标题流程生成。CAS 守卫防止覆盖用户已改的标题。
-        const nextDefault = defaultTitleFromInput(input);
-        if (nextDefault && nextDefault !== conv!.title) {
-          useConversationStore
-            .getState()
-            .replaceDefaultTitle(conversationId, nextDefault, conv!.title);
-          registerTitleGen(conversationId, nextDefault);
-        } else {
-          registerTitleGen(conversationId, conv!.title);
-        }
-      }
-    }
+    // 创建或复用对话，并维护自动标题现场
+    const conversationId = ensureActiveConversation(isNewNow, conv, input);
 
     // 游标推进：游标＝payload.seq（快照与增量同口径；含本次未拼入的事件，防下轮补放）。
     if (noticeAdvanceTo > prevNoticeSeq) {
