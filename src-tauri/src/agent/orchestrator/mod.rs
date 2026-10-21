@@ -477,6 +477,7 @@ mod tests {
 
     // ── 测试辅助：双写 sink（内存收集 emit + log）──
 
+    #[allow(clippy::type_complexity)] // 测试 sink 的三元组返回；仅测试辅助，拆类型别名收益低
     fn test_sink() -> (EventSink, Arc<Mutex<Vec<IpcEvent>>>, Arc<Mutex<SessionLog>>) {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = Arc::new(Mutex::new(SessionLog::new()));
@@ -2889,7 +2890,7 @@ mod tests {
                     &approvals,
                     &signal,
                     &steer_queue,
-                    std::path::PathBuf::from(std::env::temp_dir()).join("prts-orch-process-ws"),
+                    std::env::temp_dir().join("prts-orch-process-ws"),
                     move |e: IpcEvent| events_clone.lock().unwrap().push(e),
                 )
                 .await
@@ -3448,7 +3449,7 @@ mod tests {
                     &approvals,
                     &signal,
                     &steer_queue,
-                    std::path::PathBuf::from(std::env::temp_dir()).join("prts-orch-process-ws"),
+                    std::env::temp_dir().join("prts-orch-process-ws"),
                     move |e: IpcEvent| events_clone.lock().unwrap().push(e),
                 )
                 .await
@@ -3563,10 +3564,9 @@ mod tests {
                             e,
                             IpcEvent::Session(SessionEvent::ToolApprovalRequest { .. })
                         )
-                    }) {
-                        if approvals_obs.resolve("s1", "call_rc", UserDecision::Approved) {
-                            return true;
-                        }
+                    }) && approvals_obs.resolve("s1", "call_rc", UserDecision::Approved)
+                    {
+                        return true;
                     }
                     if std::time::Instant::now() >= deadline {
                         return false;

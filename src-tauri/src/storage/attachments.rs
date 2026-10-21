@@ -397,7 +397,7 @@ mod tests {
         let src_bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
         let path = p.to_string_lossy().into_owned();
         let t0 = std::time::Instant::now();
-        let parts = materialize_images(&[path.clone()]);
+        let parts = materialize_images(std::slice::from_ref(&path));
         let dt = t0.elapsed();
         println!("文件 {path}（{src_bytes} 字节）");
         println!(

@@ -11,6 +11,7 @@
 //!   审计位，区内与区外一视同仁 → Auto，reason `no-risk-family`；
 //! - 删除门：可分析走 token 判定，不可分析走 `raw_delete_hit` 词表扫描（仍 ASK）；
 //! - 危险族（网络/安装/进程/配置/undo）与 CRIT 恒拦不变。
+//!
 //! 部分测试函数名沿用旧称（`region_*`），断言已按新语义更新。
 
 use super::*;
@@ -483,7 +484,7 @@ fn run_outside_program_ask() {
         "no-risk-family",
     );
     let myexe = outside.join("my.exe").to_string_lossy().into_owned();
-    assert_auto(&eval(&format!("{myexe}"), None, &ws), "no-risk-family");
+    assert_auto(&eval(&myexe.to_string(), None, &ws), "no-risk-family");
     let v = eval(&format!("python {script}"), None, &ws);
     assert!(v.touched_external);
     let _ = std::fs::remove_dir_all(&ws);

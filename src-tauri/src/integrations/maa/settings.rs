@@ -150,10 +150,12 @@ mod tests {
 
     #[test]
     fn overrides_treat_blank_as_auto() {
-        let mut s = MaaSettings::default();
-        s.auto_detect = false;
-        s.adb_path = " D:\\mumu\\shell\\adb.exe ".to_string();
-        s.emulator = "MuMu 12".to_string();
+        let s = MaaSettings {
+            auto_detect: false,
+            adb_path: " D:\\mumu\\shell\\adb.exe ".to_string(),
+            emulator: "MuMu 12".to_string(),
+            ..MaaSettings::default()
+        };
         let o = s.overrides();
         assert_eq!(o.emulator.as_deref(), Some("MuMu 12"));
         assert_eq!(

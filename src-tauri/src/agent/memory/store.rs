@@ -1307,7 +1307,7 @@ mod tests {
         assert_eq!(s.longterm_version(), 0);
         let v = s.set_longterm("## 先前\n老事".into(), 100, 200).unwrap();
         assert_eq!(v, 1);
-        s.mark_absorbed(&[id.clone()], v).unwrap();
+        s.mark_absorbed(std::slice::from_ref(&id), v).unwrap();
         assert_eq!(s.recent_line_count(), 0, "已吸收不计近期");
         assert_eq!(s.longterm(), "## 先前\n老事");
 

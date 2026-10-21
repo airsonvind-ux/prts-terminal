@@ -643,14 +643,14 @@ mod tests {
 
     #[test]
     fn frame_round_trip() {
-        let (mut client, server) = socket_pair();
+        let (client, server) = socket_pair();
         let value = json!({
             "cmd": "status",
             "id": 7,
             "中文": "值",
             "nested": { "list": [1, 2, 3] }
         });
-        write_frame(&mut client, &value).unwrap();
+        write_frame(&client, &value).unwrap();
         assert_eq!(read_frame(&server).unwrap(), value);
     }
 

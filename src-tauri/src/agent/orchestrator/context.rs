@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn builds_with_system_prompt() {
         let messages = build_context(&[], 0, "");
-        assert!(messages.len() >= 1);
+        assert!(!messages.is_empty());
         assert_eq!(messages[0].role, crate::llm::MessageRole::System);
         // system 消息应包含角色人格
         assert!(messages[0].content.contains("PRTS"));

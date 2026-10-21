@@ -1565,18 +1565,9 @@ mod tests {
         let mut child = spawn_restricted("powershell", &args, &ws, &ws).expect("启动");
         // 等主受限进程完成启动并保持运行（受限 PS 冷启动在全量并行回归中
         // 可能超过 1.5s——给足窗口再 kill，避免脚本未及输出 pid）
-        let mut booted = false;
-        let boot_deadline = std::time::Instant::now() + Duration::from_secs(12);
-        while std::time::Instant::now() < boot_deadline {
-            match child.try_wait().unwrap_or(None) {
-                Some(code) => panic!("主受限进程提前退出 code={code}（脚本异常）"),
-                None => {
-                    booted = true;
-                    break;
-                }
-            }
+        if let Some(code) = child.try_wait().unwrap_or(None) {
+            panic!("主受限进程提前退出 code={code}（脚本异常）");
         }
-        assert!(booted, "主受限进程 12s 内未确认运行");
         // 额外等待脚本启动孙进程并输出 pid
         std::thread::sleep(Duration::from_millis(6000));
         child.kill_tree();

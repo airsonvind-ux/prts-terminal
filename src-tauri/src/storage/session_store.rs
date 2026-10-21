@@ -1321,7 +1321,7 @@ mod tests {
         assert_eq!(v["sessions"][0]["id"], "c2");
         assert_eq!(v["sessions"][0]["title"], "首问标题");
         assert_eq!(v["sessions"][0]["createdAt"], 555);
-        assert_eq!(v["sessions"][0]["updatedAt"].as_u64().unwrap() >= 555, true);
+        assert!(v["sessions"][0]["updatedAt"].as_u64().unwrap() >= 555);
         assert_eq!(v["sessions"][0]["modelName"], serde_json::Value::Null);
         assert_eq!(v["sessions"][0]["lastNoticeSeq"], serde_json::Value::Null);
 
@@ -1396,7 +1396,7 @@ mod tests {
         let mut content = raw; // header + 好轮 1
         content.push_str("garbage{{{not json at all\n"); // 坏行
         content.push_str(&format!("{ev2}\n")); // 好轮 2
-        content.push_str("\n"); // 空行
+        content.push('\n'); // 空行
         std::fs::write(&path, content).unwrap();
 
         let rec = s.get("b1").unwrap();

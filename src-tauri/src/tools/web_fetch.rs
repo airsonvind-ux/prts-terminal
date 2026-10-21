@@ -577,8 +577,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback 绑定失败");
         let port = listener.local_addr().expect("取端口失败").port();
         thread::spawn(move || {
-            let mut idx = 0u32;
-            for stream in listener.incoming() {
+            for (idx, stream) in listener.incoming().enumerate() {
                 let Ok(mut stream) = stream else { break };
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
                 let mut request_line = String::new();
@@ -595,7 +594,7 @@ mod tests {
                         }
                     }
                 }
-                let Some(resp) = handler(idx, request_line.trim()) else {
+                let Some(resp) = handler(idx as u32, request_line.trim()) else {
                     break;
                 };
                 let mut head = format!(
@@ -612,7 +611,6 @@ mod tests {
                 let _ = stream.write_all(head.as_bytes());
                 let _ = stream.write_all(&resp.body);
                 let _ = stream.flush();
-                idx += 1;
             }
         });
         format!("http://127.0.0.1:{port}")

@@ -822,7 +822,7 @@ mod tests {
         let out = t
             .execute(
                 &ToolContext::new(),
-                &format!(r#"{{"command":"Write-Output ('x' * 300000)"}}"#),
+                r#"{"command":"Write-Output ('x' * 300000)"}"#,
             )
             .expect("成功输出但截断");
         assert!(out.canonical["truncated"] == serde_json::json!(true));

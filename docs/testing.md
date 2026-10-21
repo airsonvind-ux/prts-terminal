@@ -40,6 +40,7 @@ npm test
 npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --lib --manifest-path src-tauri/Cargo.toml -- -D warnings
+cargo clippy --tests --lib --manifest-path src-tauri/Cargo.toml -- -D warnings
 cargo test --lib --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path bridge/Cargo.toml
 ```

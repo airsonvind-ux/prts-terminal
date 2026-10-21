@@ -93,6 +93,53 @@ pub fn log_session(session_id: &str, log: &SessionLog) {
     }
 }
 
+/// 调试日志宏。
+///
+/// `PRTS_DEBUG=1` 时输出单行 JSON 到 stderr。
+/// 环境变量未设置时展开为空语句块，运行时仅一次 env var 检查。
+///
+/// # 输出格式
+///
+/// ```text
+/// {"+":"2657ms","round":1,"action":"llm_start"}
+/// ```
+///
+/// `+` 键始终存在，值为自进程启动的毫秒数。
+/// 其余键值对由调用方传入。
+#[macro_export]
+macro_rules! debug {
+    ($($key:expr => $val:expr),* $(,)?) => {
+        if std::env::var("PRTS_DEBUG").as_deref() == Ok("1") {
+            let elapsed_ms = $crate::observability::start_time().elapsed().as_millis();
+            let mut obj = serde_json::Map::new();
+            obj.insert("+".into(), serde_json::Value::String(format!("{}ms", elapsed_ms)));
+            $(
+                obj.insert($key.into(), serde_json::json!($val));
+            )*
+            eprintln!("{}", serde_json::Value::Object(obj));
+        }
+    };
+}
+
+/// 消息级调试宏（预留）。
+///
+/// 语义与 `debug!` 相同，由 `PRTS_TRACE=1` 控制。
+/// 本期不设置调用点。留待上下文衰减实现时用于消息级别的细粒度日志。
+#[macro_export]
+macro_rules! trace {
+    ($($key:expr => $val:expr),* $(,)?) => {
+        if std::env::var("PRTS_TRACE").as_deref() == Ok("1") {
+            let elapsed_ms = $crate::observability::start_time().elapsed().as_millis();
+            let mut obj = serde_json::Map::new();
+            obj.insert("+".into(), serde_json::Value::String(format!("{}ms", elapsed_ms)));
+            $(
+                obj.insert($key.into(), serde_json::json!($val));
+            )*
+            eprintln!("{}", serde_json::Value::Object(obj));
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,51 +198,4 @@ mod tests {
             .iter()
             .any(|l| l.contains("\"type\":\"step/end\"") && l.contains("\"inputTokens\":10")));
     }
-}
-
-/// 调试日志宏。
-///
-/// `PRTS_DEBUG=1` 时输出单行 JSON 到 stderr。
-/// 环境变量未设置时展开为空语句块，运行时仅一次 env var 检查。
-///
-/// # 输出格式
-///
-/// ```text
-/// {"+":"2657ms","round":1,"action":"llm_start"}
-/// ```
-///
-/// `+` 键始终存在，值为自进程启动的毫秒数。
-/// 其余键值对由调用方传入。
-#[macro_export]
-macro_rules! debug {
-    ($($key:expr => $val:expr),* $(,)?) => {
-        if std::env::var("PRTS_DEBUG").as_deref() == Ok("1") {
-            let elapsed_ms = $crate::observability::start_time().elapsed().as_millis();
-            let mut obj = serde_json::Map::new();
-            obj.insert("+".into(), serde_json::Value::String(format!("{}ms", elapsed_ms)));
-            $(
-                obj.insert($key.into(), serde_json::json!($val));
-            )*
-            eprintln!("{}", serde_json::Value::Object(obj));
-        }
-    };
-}
-
-/// 消息级调试宏（预留）。
-///
-/// 语义与 `debug!` 相同，由 `PRTS_TRACE=1` 控制。
-/// 本期不设置调用点。留待上下文衰减实现时用于消息级别的细粒度日志。
-#[macro_export]
-macro_rules! trace {
-    ($($key:expr => $val:expr),* $(,)?) => {
-        if std::env::var("PRTS_TRACE").as_deref() == Ok("1") {
-            let elapsed_ms = $crate::observability::start_time().elapsed().as_millis();
-            let mut obj = serde_json::Map::new();
-            obj.insert("+".into(), serde_json::Value::String(format!("{}ms", elapsed_ms)));
-            $(
-                obj.insert($key.into(), serde_json::json!($val));
-            )*
-            eprintln!("{}", serde_json::Value::Object(obj));
-        }
-    };
 }

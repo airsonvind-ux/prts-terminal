@@ -968,7 +968,7 @@ mod tests {
 
     #[test]
     fn value_to_string_real() {
-        assert_eq!(value_to_string(&rusqlite::types::Value::Real(3.14)), "3.14");
+        assert_eq!(value_to_string(&rusqlite::types::Value::Real(2.5)), "2.5");
     }
 
     #[test]

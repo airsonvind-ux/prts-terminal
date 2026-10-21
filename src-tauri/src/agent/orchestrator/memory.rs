@@ -964,10 +964,11 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("修复"), "got {err}");
-        let s = store.lock().unwrap();
-        assert_eq!(s.watermark("c1"), 0, "整轮报废水位不前移");
-        assert!(s.cooldown_until("c1").is_some(), "设冷却");
-        drop(s);
+        {
+            let s = store.lock().unwrap();
+            assert_eq!(s.watermark("c1"), 0, "整轮报废水位不前移");
+            assert!(s.cooldown_until("c1").is_some(), "设冷却");
+        }
         // 冷却期内再次调用 → 直接跳过（不消耗 mock 响应）
         let client2 = mock_client(vec![]);
         let out = run_experience_pipeline(

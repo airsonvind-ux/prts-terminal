@@ -728,7 +728,7 @@ mod tests {
     }
 
     /// 运行 SSE 解析并收集事件。
-    async fn collect_events<'a>(lines: &'a [String]) -> (Vec<StreamEvent>, StreamResult) {
+    async fn collect_events(lines: &[String]) -> (Vec<StreamEvent>, StreamResult) {
         let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_c = events.clone();
         let on_event = move |e: StreamEvent| {

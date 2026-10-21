@@ -280,14 +280,16 @@ mod tests {
             .await
             .unwrap();
 
-        let e1 = events_1.lock().unwrap();
-        assert_eq!(e1.len(), 2);
-        assert!(matches!(e1[0], StreamEvent::ReasoningDelta { .. }));
-        assert!(matches!(e1[1], StreamEvent::ToolCall { .. }));
-        assert_eq!(r1.tool_calls.len(), 1);
-        assert_eq!(r1.tool_calls[0].function.name, "echo");
-        // 契约不变量 I1~I5（模块 4 P1）
-        super::super::assert_stream_contract(&e1, &r1);
+        {
+            let e1 = events_1.lock().unwrap();
+            assert_eq!(e1.len(), 2);
+            assert!(matches!(e1[0], StreamEvent::ReasoningDelta { .. }));
+            assert!(matches!(e1[1], StreamEvent::ToolCall { .. }));
+            assert_eq!(r1.tool_calls.len(), 1);
+            assert_eq!(r1.tool_calls[0].function.name, "echo");
+            // 契约不变量 I1~I5（模块 4 P1）
+            super::super::assert_stream_contract(&e1, &r1);
+        }
 
         let events_2 = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let events_2_c = events_2.clone();
@@ -375,9 +377,10 @@ mod tests {
 
         // 事件在挂起前已推送（首次 poll 同步触发）
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let events = events.lock().unwrap();
-        assert_eq!(events.len(), 2, "挂起前预设事件应已全部推送");
-        drop(events);
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 2, "挂起前预设事件应已全部推送");
+        }
 
         // 挂起中：任务不完成（timeout 证明仍在跑）
         let pending = tokio::time::timeout(std::time::Duration::from_millis(100), task).await;

@@ -652,7 +652,7 @@ mod tests {
         let dir = unique_temp_dir("spill");
         let stem = format!("spill-test-{}", std::process::id());
         // 生成 > MEM_CAP(256KB) 的输出：300KB 单行文本
-        let cmd = format!("Write-Output ('x' * 300000)");
+        let cmd = "Write-Output ('x' * 300000)".to_string();
         let out = run_command(
             &spec(&cmd, &dir),
             &RunOptions {
