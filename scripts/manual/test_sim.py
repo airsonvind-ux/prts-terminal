@@ -78,8 +78,13 @@ def show_plot(log_path: str):
     if not log_path:
         print("（无 log 文件，跳过绘图）")
         return
+    plot_script = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "sim",
+        "plot_log.py",
+    )
     print(f"打开绘图窗口: {log_path}")
-    subprocess.run([sys.executable, "plot_log.py", log_path])
+    subprocess.run([sys.executable, plot_script, log_path])
 
 
 # ═══════════════════════════════════════════════════════
