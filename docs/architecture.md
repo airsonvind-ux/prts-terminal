@@ -2,6 +2,23 @@
 
 PRTS Terminal 的目标不是把 LLM 包进一个聊天窗口，而是把“模型决策”和“本地执行”分开：模型负责提出下一步，Rust 负责判断这一步能不能做、怎么做、做完留下什么。
 
+## 目录
+
+```text
+src-tauri/src/
+├─ app/          Tauri 适配与命令
+├─ agent/        turn 循环、上下文、记忆、技能、知识索引
+├─ llm/          模型协议适配
+├─ tools/        工具注册表与领域工具
+├─ storage/      会话、数据库、设置、凭据、附件、缓存
+├─ runtime/      审批、沙箱、路径策略、取消、插话
+├─ integrations/ MAA
+├─ platform/     更新、通知、可观测性、机器信息
+└─ content/      知识库、技能、提示词、随包文档
+```
+
+`content/` 是内容资产，不参与 Rust 模块编译；`bridge/` 是独立 AGPL crate。
+
 ## 分层
 
 ```text
