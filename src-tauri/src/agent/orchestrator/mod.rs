@@ -37,20 +37,33 @@ pub mod context;
 pub mod compaction;
 pub mod title;
 pub mod memory;
+mod retry;
+mod turn;
+mod events;
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+pub use retry::{is_retryable, RetryPolicy};
+use turn::TurnState;
+use events::EventSink;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+use std::hash::Hasher;
 
 use crate::approval::{ApprovalRegistry, UserDecision, APPROVAL_WAIT_TIMEOUT};
 use crate::db::Database;
 use crate::debug;
-use crate::events::{AgentEvent, AgentPhase, FrontendMessage, IpcEvent};
+#[cfg(test)]
+use crate::events::AgentEvent;
+#[cfg(test)]
+use crate::llm::TokenUsage;
+
+use crate::events::{AgentPhase, FrontendMessage, IpcEvent};
 use crate::exec_settings::ExecutionMode;
 use crate::llm::{
     ChatMessage, ClientRegistry, LlmClient, LlmConfig, LlmError, ModelRegistry, ReasoningPolicy,
-    StreamEvent, StreamResult, TokenUsage, UsageStat, usage_stat,
+    StreamEvent, StreamResult, UsageStat, usage_stat,
 };
 use crate::session::{
     ApprovalDecision, ApprovalPrivilege, ApprovalRejectReason, ApprovalRisk, ChunkKind,
@@ -112,191 +125,6 @@ enum TurnOutcome {
     /// dispatch_turn 内不写 step/end 与 turn/end（与 error 路径一致）。
     /// 携带中止时已累计的本轮用量（统计诚实性：中止也是真实消耗）。
     Aborted(UsageStat),
-}
-
-// ═══════════════════════════════════════════════════════
-// TurnState —— 单次 turn 的内部状态
-// ═══════════════════════════════════════════════════════
-
-/// 单次 `agent_process` 调用（一个 turn）期间的累积状态。
-/// 不跨轮次——每次 process() 入口创建新实例。
-struct TurnState {
-    /// 工具执行指纹的滑动窗口（N=10）
-    fingerprint_window: Vec<u64>,
-    /// **最后一次** LLM 调用的 token 用量快照（最终上下文状态）。
-    ///
-    /// 缺陷 4 修复：此前跨调用求和被当作"上下文占用"显示，
-    /// 导致第二轮上下文用量低于第一轮。现在 generation_done 携带
-    /// 最后一次调用快照；本轮总成本由各 step/end 事件的 usage 折叠（日志账本）。
-    final_usage: Option<TokenUsage>,
-    /// 本轮总成本（跨调用求和，供遥测/成本展示；与上下文占用区分）
-    total_input_tokens: u32,
-    total_output_tokens: u32,
-    /// 本轮统计增量（缓存口径已按协议归一；随 turn/end 交前端归档）
-    stat: UsageStat,
-    /// 最后一轮 LLM 推理的完整推理链（取最后一次非空值）
-    final_reasoning: Option<String>,
-}
-
-impl TurnState {
-    /// 滑动窗口最大容量
-    const WINDOW_SIZE: usize = 10;
-    /// 同一指纹在窗口内重复出现 ≥ 此值 → 停滞
-    const STAGNATION_THRESHOLD: usize = 5;
-
-    fn new() -> Self {
-        Self {
-            fingerprint_window: Vec::with_capacity(Self::WINDOW_SIZE),
-            final_usage: None,
-            total_input_tokens: 0,
-            total_output_tokens: 0,
-            stat: UsageStat::default(),
-            final_reasoning: None,
-        }
-    }
-
-    /// 记录一次 LLM 调用：usage 双轨记账（勿混为一谈）——
-    /// - `final_usage` 覆盖式为最后一次调用快照（缺陷 4 修复口径：上下文占用）。
-    ///   provider usage.input_tokens = 该次请求完整上下文大小；覆盖式才是
-    ///   真实水位（累计求和会把历史重复计数 → 压缩/contextTokens 虚高误拦，
-    ///   曾为此出缺陷 4）。插话多段轮同理：最后一段请求输入含全部前序段，
-    ///   覆盖值即最终上下文，**不得改累计**。
-    /// - `total_input/output_tokens` 跨调用求和 = 成本账本（遥测/成本展示）。
-    /// 推理链取最后一次非空值。
-    fn record_call(&mut self, usage: Option<TokenUsage>, reasoning: Option<String>) {
-        if let Some(u) = usage {
-            self.final_usage = Some(u);
-            self.total_input_tokens += u.input_tokens;
-            self.total_output_tokens += u.output_tokens;
-        }
-        if reasoning.is_some() {
-            self.final_reasoning = reasoning;
-        }
-    }
-
-    /// 累加一次调用的统计增量（缓存口径已按协议归一）。
-    fn add_stat(&mut self, s: UsageStat) {
-        self.stat.input_tokens += s.input_tokens;
-        self.stat.output_tokens += s.output_tokens;
-        if let Some(h) = s.cache_hit_tokens {
-            self.stat.cache_hit_tokens =
-                Some(self.stat.cache_hit_tokens.unwrap_or(0).saturating_add(h));
-        }
-        if let Some(p) = s.cache_prompt_tokens {
-            self.stat.cache_prompt_tokens =
-                Some(self.stat.cache_prompt_tokens.unwrap_or(0).saturating_add(p));
-        }
-    }
-
-    /// 记录一次工具执行的三元组指纹：(工具名, args, result) 的复合哈希。
-    /// 窗口满时淘汰最早的条目（FIFO）。
-    fn record_fingerprint(&mut self, tool_name: &str, args: &str, result: &str) {
-        let mut hasher = DefaultHasher::new();
-        tool_name.hash(&mut hasher);
-        args.hash(&mut hasher);
-        result.hash(&mut hasher);
-        let fingerprint = hasher.finish();
-
-        if self.fingerprint_window.len() >= Self::WINDOW_SIZE {
-            self.fingerprint_window.remove(0);
-        }
-        self.fingerprint_window.push(fingerprint);
-    }
-
-    /// 检查窗口内是否存在停滞：同一指纹出现次数 ≥ STAGNATION_THRESHOLD。
-    /// 返回 true 时应终止循环。
-    fn check_stagnation(&self) -> bool {
-        use std::collections::HashMap;
-        let mut counts: HashMap<u64, usize> = HashMap::new();
-        for &fp in &self.fingerprint_window {
-            let count = counts.entry(fp).or_insert(0);
-            *count += 1;
-            if *count >= Self::STAGNATION_THRESHOLD {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// 提取聚合结果（借用版）：(推理链, 最后一次调用 token 快照)。
-    ///
-    /// Completed 出口在「可能注入插话后 continue」前调用——不消耗 state
-    /// （注入后需继续累计后续段的 usage 快照）。全程无 usage（Mock 场景）
-    /// 时返回 None。
-    fn snapshot(&self) -> (Option<String>, Option<TokenUsage>) {
-        (self.final_reasoning.clone(), self.final_usage.clone())
-    }
-
-    /// 提取聚合结果：(推理链, 最后一次调用 token 快照)。
-    /// 全程无 usage（Mock 场景）时返回 None。
-    #[allow(dead_code)] // 现行出口用 snapshot（借用版）；本消费版被历史注释块测试引用，保留
-    fn finish(self) -> (Option<String>, Option<TokenUsage>) {
-        (self.final_reasoning, self.final_usage)
-    }
-}
-
-// ═══════════════════════════════════════════════════════
-// EventSink —— 双写：同一事实 → IPC 事件 + 会话日志
-// ═══════════════════════════════════════════════════════
-
-/// 事件双写通道（模块 1：前端 = log 的投影缓存）。
-///
-/// IPC 推 `IpcEvent`（SessionEvent 持久事实 + Phase 瞬时信号），
-/// 与 session log 双写同一事实：
-///
-/// - `emit(...)`：持久事实 → 先入 log 再推 IPC（前端投影缓存消费）
-/// - `ipc_only(...)`：仅推 IPC（流式 tool/call：实时卡片，log 由执行阶段批量写）
-/// - `log_only(...)`：仅写 log（step/start、request/header、批量 tool/call）
-/// - `phase(...)`：仅推 IPC（Phase 是纯 UI 信号，不入 log）
-///
-/// 写 log 先于推 IPC：事实落账优先，IPC 失败不丢账。
-#[derive(Clone)]
-struct EventSink {
-    log: Arc<Mutex<SessionLog>>,
-    emit: Arc<dyn Fn(IpcEvent) + Send + Sync>,
-}
-
-impl EventSink {
-    fn new(
-        log: Arc<Mutex<SessionLog>>,
-        emit: impl Fn(IpcEvent) + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            log,
-            emit: Arc::new(emit),
-        }
-    }
-
-    /// 持久事实双写：先入 log，再推 IPC。
-    fn emit(&self, event: SessionEvent) {
-        self.log.lock().unwrap().append(event.clone());
-        (self.emit)(IpcEvent::Session(event));
-    }
-
-    /// 仅推 IPC（不写 log）。
-    fn ipc_only(&self, event: SessionEvent) {
-        (self.emit)(IpcEvent::Session(event));
-    }
-
-    /// 仅写 log（不推 IPC）。
-    fn log_only(&self, event: SessionEvent) {
-        self.log.lock().unwrap().append(event);
-    }
-
-    /// 追加 request/header 快照（仅变化时真正追加）。
-    ///
-    /// 内部 lock log 调 `SessionLog::push_header`（自带去重：system prompt
-    /// 或工具 schema 未变化时零追加）。调用点位于每 step 起点——Reference
-    /// 缓存条目重组后 prompt 可能变化，变化时才落账，保证"模型到底看到了
-    /// 什么"可审计且不膨胀。
-    fn push_header(&self, session_id: &str, system_prompt: &str, tool_defs: &[crate::llm::ToolDef]) {
-        self.log.lock().unwrap().push_header(session_id, system_prompt, tool_defs);
-    }
-
-    /// 推 Phase 瞬时信号（仅 IPC）。
-    fn phase(&self, session_id: &str, phase: AgentPhase) {
-        (self.emit)(IpcEvent::Agent(AgentEvent::phase(session_id, phase)));
-    }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -829,47 +657,6 @@ async fn dispatch_turn_with_memory(
             );
             return Ok(TurnOutcome::Stagnation);
         }
-    }
-}
-
-// ═══════════════════════════════════════════════════════
-// 单次 LLM 调用（通用重试）+ 流式事件推送（双写）
-// ═══════════════════════════════════════════════════════
-
-/// 通用重试策略（缺陷 3：此前只有 stream_options 降级重试，无通用重试）。
-///
-/// 挂靠点 = step 边界（模块 5 P1，对齐 DSH `agent/request-error`）：
-/// 请求失败 → 重试决策 → 重试或终止。
-#[derive(Debug, Clone, Copy)]
-pub struct RetryPolicy {
-    /// 总尝试次数（1 = 不重试）
-    pub max_attempts: u32,
-    /// 退避基数（毫秒）；第 n 次重试前等待 `base_delay_ms * n`
-    pub base_delay_ms: u64,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            max_attempts: 2,
-            base_delay_ms: 500,
-        }
-    }
-}
-
-/// 可重试错误判定：超时恒可重试；API 错误按状态码（429 限流 / 5xx 服务端）。
-/// 其余（配置/解析）不重试——重试无意义。
-pub fn is_retryable(e: &LlmError) -> bool {
-    match e {
-        LlmError::Timeout(_) => true,
-        LlmError::Api(msg) => {
-            msg.contains("HTTP 429")
-                || msg.contains("HTTP 500")
-                || msg.contains("HTTP 502")
-                || msg.contains("HTTP 503")
-                || msg.contains("HTTP 504")
-        }
-        _ => false,
     }
 }
 
