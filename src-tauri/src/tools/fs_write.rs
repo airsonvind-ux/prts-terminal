@@ -68,6 +68,9 @@ fn map_write_guard_err(raw: &str, e: path_guard::PathGuardError) -> ToolError {
         path_guard::PathGuardError::Protected(_) => {
             ToolError::Execution(format!("工作区保护路径（.git），禁止写入：{raw}"))
         }
+        path_guard::PathGuardError::HardLink(_) => {
+            ToolError::Execution(format!("文件存在多个硬链接，禁止写入：{raw}"))
+        }
         path_guard::PathGuardError::OutsideWorkspace(_) => {
             ToolError::Execution(format!("目标不在工作区内：{raw}"))
         }

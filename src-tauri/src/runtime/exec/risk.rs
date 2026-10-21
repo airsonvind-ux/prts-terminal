@@ -26,7 +26,7 @@ pub struct CritVerdict {
 // ═══════════════════════════════════════════════════════
 
 /// CRIT 规则表：(regex, rule_id)。正则不区分大小写、整串扫描。
-/// 参照 Hanako PREFLIGHT_WIN32_HARD 的 Windows 语境落地（M3-A 设计 §4.1）。
+/// 参照既有 PREFLIGHT_WIN32_HARD 的 Windows 语境落地（M3-A 设计 §4.1）。
 /// 本表语义原样保留（M3-A 设计：crit 恒拦集合逐条语义不变）。
 static CRIT_PATTERNS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
     let pairs: &[(&str, &'static str)] = &[
@@ -156,7 +156,7 @@ const fn strict(kind: OpKind, path_rule: PathRule) -> ProgramSpec {
 /// 删除词全表（M3-A 设计 §5；git rm 单独并入——见 [`is_delete_word`]）。
 const DELETE_WORDS: &[&str] = &[
     "del", "erase", "rm", "rd", "rmdir", "remove-item", "remove-itemproperty",
-    "clear-content",
+    "clear-content", "clear-recyclebin",
 ];
 
 /// 是否命中删除词表（删除门 D；任何位置都 ASK，不论目标在哪）。
@@ -216,10 +216,17 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
         }
 
         // ── 进程控制族（ASK process-control）──
-        "taskkill" | "stop-process" | "kill" => strict(OpKind::ProcessControlOp, PathRule::NoPaths),
+        "taskkill" | "stop-process" | "kill" | "shutdown" | "logoff" | "stop-computer"
+        | "restart-computer" | "start-process" => strict(OpKind::ProcessControlOp, PathRule::NoPaths),
 
         // ── 系统配置族（ASK config-op；netsh/net/route 整命令族保守）──
-        "netsh" | "net" | "route" => strict(OpKind::ConfigOp, PathRule::NoPaths),
+        "netsh" | "net" | "route" | "set-executionpolicy" | "wmic" => {
+            strict(OpKind::ConfigOp, PathRule::NoPaths)
+        }
+
+        // ── 代码执行载体（ASK code-exec）：未在解释器子表覆盖的宿主/脚本宿主 ──
+        "invoke-expression" | "iex" | "add-type" | "rundll32" | "regsvr32" | "mshta"
+        | "cscript" | "wscript" => strict(OpKind::CodeExecOp, PathRule::NoPaths),
 
         // git/reg/解释器走子表特判
         "git" | "reg" | "python" | "python3" | "node" | "npm" | "npx" | "pwsh" | "powershell"

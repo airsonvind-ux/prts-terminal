@@ -44,7 +44,7 @@ pub struct CompactionOutcome {
 /// - 取消：以 `ctxdecay-{conversationId}` 注册 TurnRegistry，前端可经
 ///   abort_turn 中止；注册计入 active_count（压缩中设置写闸同样生效）；
 /// - 失败语义：Err(String) 文案面向用户直显；失败不改变任何状态，幂等可重试；
-/// - 请求形态（2026-09-25 · DSH 形态）：system 与主对话同源（含冻结目录与
+/// - 请求形态（2026-09-25 · 上游形态）：system 与主对话同源（含冻结目录与
 ///   记忆区）、工具面同主请求、指令置折叠区末尾——请求成为主请求的真前缀，
 ///   复用 KV cache。
 /// - 成功语义（批 4）：以活体重刷该对话两份冻结快照（有差才写；best-effort）——
@@ -68,7 +68,7 @@ pub async fn compact_conversation(
     if turn_registry.active_count() > 0 {
         return Err("正在处理对话，请稍后再压缩".into());
     }
-    // ── 请求前缀同源（2026-09-25 裁决 · DSH 形态）：system（含冻结目录与
+    // ── 请求前缀同源（2026-09-25 裁决 · 上游形态）：system（含冻结目录与
     // 记忆区）与工具面同主对话 → 摘要请求成为主请求真前缀（KV cache 复用）。──
     let conversation_key = if request.conversation_id.is_empty() {
         None
@@ -131,7 +131,7 @@ pub async fn compact_conversation(
         &abort,
     )
     .await;
-    turn_registry.unregister(&request.session_id);
+    turn_registry.unregister_if(&request.session_id, &abort);
     result.map(|o| {
         // 批 4 · 压缩并更新：摘要成功（含降级规则产出——上下文同样被替换）→
         // 以活体重刷两份冻结快照（有差才写；best-effort，失败不改变压缩结果）。

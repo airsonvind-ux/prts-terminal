@@ -195,6 +195,22 @@ impl TurnRegistry {
         self.turns.lock().unwrap().remove(session_id);
     }
 
+    /// 注销指定信号对应的 turn（防同名重入的旧 turn 误删新 turn）。
+    ///
+    /// 同一 session_id 重复注册时 `register` 会替换并 abort 旧条目；旧
+    /// process 收尾时若仍按 session_id 注销，会把新条目一起删掉，导致
+    /// busy 口径与 abort 通道提前失效。此入口只在当前条目仍是该信号时
+    /// 删除，旧 process 的迟到注销因此成为 no-op。
+    pub fn unregister_if(&self, session_id: &str, signal: &AbortSignal) {
+        let mut turns = self.turns.lock().unwrap();
+        let is_current = turns
+            .get(session_id)
+            .is_some_and(|turn| Arc::ptr_eq(&turn.signal.flag, &signal.flag));
+        if is_current {
+            turns.remove(session_id);
+        }
+    }
+
     /// 置位中止。返回 true = 找到活动 turn 并已置位；false = 无（幂等，
     /// abort_turn 命令以 Ok(false) 表达，非错误）。
     pub fn abort(&self, session_id: &str) -> bool {
@@ -287,6 +303,25 @@ mod tests {
         // abort 命中新条目
         assert!(reg.abort("s1"));
         assert!(second.is_aborted());
+    }
+
+    #[test]
+    fn stale_unregister_does_not_remove_new_turn() {
+        let reg = TurnRegistry::new();
+        let first = reg.register("s1", "conv-1");
+        let second = reg.register("s1", "conv-1");
+        assert_eq!(reg.active_count(), 1);
+
+        // 旧 turn 迟到收尾：不能把新 turn 的 busy 位删掉
+        reg.unregister_if("s1", &first);
+        assert_eq!(reg.active_count(), 1, "旧信号不得注销新条目");
+        assert!(reg.is_active("s1"));
+
+        // 新 turn 仍可被 abort；正常收尾按自身信号注销
+        assert!(reg.abort("s1"));
+        assert!(second.is_aborted());
+        reg.unregister_if("s1", &second);
+        assert_eq!(reg.active_count(), 0);
     }
 
     #[test]

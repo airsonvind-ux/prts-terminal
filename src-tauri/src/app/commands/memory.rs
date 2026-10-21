@@ -83,7 +83,7 @@ pub async fn finalize_memory(
         },
     )
     .await;
-    turn_registry.unregister(&bg_id);
+    turn_registry.unregister_if(&bg_id, &abort);
     match result {
         Ok(o) => {
             if let Some(u) = o.usage {
@@ -636,7 +636,7 @@ pub async fn memory_tidy(
         true, // 忽略 6 轮阈值
     )
     .await;
-    turn_registry.unregister(&bg_id);
+    turn_registry.unregister_if(&bg_id, &abort);
     if let Ok(o) = &result {
         if let Some(u) = o.usage {
             let stat = usage_stat(&u, llm_config.api_type);

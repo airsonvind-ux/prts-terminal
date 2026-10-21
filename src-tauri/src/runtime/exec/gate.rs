@@ -5,17 +5,17 @@
 //! run_command 命令文本（自动化模式消费；询问模式经 check_crit 后直接弹卡）
 //!   ↓
 //! 0. CRIT 恒拦门（先于一切，任何模式）命中 → BLOCKED(crit-*)
-//! 1. 词法子集门 G：命令 ∉ G → ASK(unanalyzable-syntax)
+//! 1. 词法子集门 G：不可解析 → 删除词扫描命中则 ASK(delete-*)；
+//!    否则 AUTO(syntax-unproven)
 //! 2. 删除语义门 D：任何删除形态 → ASK(delete-always-ask / delete-flag-option)
 //! 3. 程序分类 C：程序名 → 操作族（OpKind）
-//! 4. 地域判定 R：文件/运行目标全 ∈ 工作区 → AUTO(region-in)；
-//!    任一目标 ∉ 工作区 → ASK(region-external / run-external-program)；
-//!    系统查询族 → AUTO(system-query)；代码/网络/安装/进程/配置/undo →
-//!    ASK（各有 reason）
+//! 4. 危险族 → ASK；系统查询 → AUTO(system-query)；其余 → AUTO(no-risk-family)
+//!    工作区外目标只置 touched_external 审计位，不再驱动询问
 //! ```
 //!
 //! 子集 G 为 PowerShell/cmd 通用形态的显式形式化子集（见 [`scan_tokens`]）：
-//! 语法不可穷尽部分显式排除，排除即询问（保守，确定性优先）。
+//! 语法不可穷尽部分显式排除；排除后的放行语义见上（2026-10 换轴后不再
+//! 一律询问——删除词仍由 raw_delete_hit 兜住）。
 //!
 //! 语义族静态数据（命令 → OpKind、命名选项白名单、git/解释器名表）在
 //! `exec::risk`；本模块为判定逻辑（词法、删除门、分类编排、目标提取、

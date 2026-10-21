@@ -63,12 +63,24 @@ const TARGET_BASE64_CHARS: usize = 850 * 1024;
 const MAX_EDGE: u32 = 1568;
 
 /// 会话附件落点目录（不建目录，调用方按需 create_dir_all）。
-pub fn session_files_dir(conversation_id: &str) -> PathBuf {
+///
+/// `conversation_id` 会拼进路径：非空时必须只含字母数字与 `- _`，
+/// 防 `..` / 分隔符 / 盘符把落点带出数据目录。空串仍表示无会话的 uploads。
+pub fn session_files_dir(conversation_id: &str) -> Result<PathBuf, String> {
     if conversation_id.trim().is_empty() {
-        crate::config::data_dir().join("uploads")
-    } else {
-        crate::config::data_dir().join("session-files").join(conversation_id)
+        return Ok(crate::config::data_dir().join("uploads"));
     }
+    if !conversation_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "conversationId 非法（仅允许字母数字与 - _）：{conversation_id:?}"
+        ));
+    }
+    Ok(crate::config::data_dir()
+        .join("session-files")
+        .join(conversation_id))
 }
 
 /// 由扩展名推断 MIME（未知 → application/octet-stream）。
@@ -329,6 +341,18 @@ mod base64_decode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_files_dir_rejects_path_components() {
+        for bad in ["..", "../x", "a/b", "a\\b", "C:\\x", "a b"] {
+            assert!(
+                session_files_dir(bad).is_err(),
+                "conversationId 应拒绝路径成分：{bad:?}"
+            );
+        }
+        assert!(session_files_dir("").is_ok(), "空串 = uploads 仍可用");
+        assert!(session_files_dir("conv-01_a").is_ok());
+    }
 
     /// 性能标定（纯 CPU，不碰游戏）：对数据目录里最新一张 MAA 截图量
     /// 「路径 → 像素」的耗时。跑法：

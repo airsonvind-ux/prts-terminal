@@ -36,6 +36,8 @@ pub enum PathGuardError {
     ReadOnly(String),
     /// protected 区（工作区 .git）写入被拒
     Protected(String),
+    /// 目标文件存在多个硬链接（可能指向工作区外的同一文件）
+    HardLink(String),
     /// 目标在工作区之外（resolve_write）
     OutsideWorkspace(String),
     /// 路径不存在 / IO 失败 / 无法解析
@@ -48,6 +50,7 @@ impl fmt::Display for PathGuardError {
             Self::Blocked(m) => write!(f, "路径受保护，禁止读取：{m}"),
             Self::ReadOnly(m) => write!(f, "只读路径，禁止写入：{m}"),
             Self::Protected(m) => write!(f, "工作区保护路径，禁止写入：{m}"),
+            Self::HardLink(m) => write!(f, "文件存在多个硬链接，禁止写入：{m}"),
             Self::OutsideWorkspace(m) => write!(f, "目标不在工作区内：{m}"),
             Self::Io(m) => write!(f, "{m}"),
         }
@@ -87,25 +90,84 @@ fn check_write_bounds(
     resolved: &Path,
     raw: &str,
 ) -> Result<(), PathGuardError> {
-    if !policy.is_in_workspace(resolved) {
+    // 目标已存在时先解析最终对象：符号链接必须按真实目标判定。
+    // （父目录 canonicalize 不能覆盖“最后一段是符号链接”的形态。）
+    let resolved = resolved
+        .canonicalize()
+        .unwrap_or_else(|_| resolved.to_path_buf());
+    if !policy.is_in_workspace(&resolved) {
         return Err(PathGuardError::OutsideWorkspace(format!(
             "目标不在工作区内：{raw}"
         )));
     }
-    if policy.is_blocked(resolved) {
+    if policy.is_blocked(&resolved) {
         return Err(PathGuardError::Blocked(format!(
             "受保护路径（BLOCKED）：{raw}"
         )));
     }
-    if policy.is_protected(resolved) {
+    if policy.is_protected(&resolved) {
         return Err(PathGuardError::Protected(format!(
             "工作区保护路径（.git）：{raw}"
         )));
     }
-    if policy.is_read_only(resolved) {
+    if policy.is_read_only(&resolved) {
         return Err(PathGuardError::ReadOnly(format!("只读路径：{raw}")));
     }
+    // 硬链接没有“目标路径”可 canonicalize：工作区内的一条硬链接可能
+    // 与工作区外的文件共享同一 inode。写入会直接改到区外文件，故有多个
+    // 链接的文件拒绝覆盖（新建文件与目录不走此分支）。
+    if resolved.is_file() && has_multiple_hard_links(&resolved) {
+        return Err(PathGuardError::HardLink(format!(
+            "目标文件存在多个硬链接，可能指向工作区外：{raw}"
+        )));
+    }
     Ok(())
+}
+
+/// 目标文件是否有多个硬链接。目录的链接计数天然包含子目录，不参与判定。
+#[cfg(unix)]
+fn has_multiple_hard_links(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path)
+        .map(|meta| meta.nlink() > 1)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn has_multiple_hard_links(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        let Ok(handle) = CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            None,
+        ) else {
+            return false;
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        let ok = GetFileInformationByHandle(handle, &mut info).is_ok();
+        let _ = CloseHandle(handle);
+        ok && info.nNumberOfLinks > 1
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn has_multiple_hard_links(_path: &Path) -> bool {
+    false
 }
 
 /// 写路径解析：目标不存在也允许——
@@ -646,9 +708,82 @@ mod tests {
         assert!(e.to_string().contains("只读"));
         let e = PathGuardError::Protected("x".into());
         assert!(e.to_string().contains("保护"));
+        let e = PathGuardError::HardLink("x".into());
+        assert!(e.to_string().contains("硬链接"));
         let e = PathGuardError::OutsideWorkspace("x".into());
         assert!(e.to_string().contains("工作区"));
         let e = PathGuardError::Io("文件不存在：x".into());
         assert!(e.to_string().contains("文件不存在"));
+    }
+
+    /// 工作区内硬链接到工作区外文件：canonicalize 不会暴露区外目标，
+    /// 必须靠链接计数拦截，否则 write_file/edit 会改到区外文件。
+    #[test]
+    fn write_hardlink_to_outside_rejected() {
+        let ws = ws_fixture("wr-hardlink");
+        let policy = make_policy(&ws);
+        let other = unique_temp_dir("wr-hardlink-target");
+        let target = other.join("target.txt");
+        std::fs::write(&target, "outside").unwrap();
+        let link = ws.join("link.txt");
+        if std::fs::hard_link(&target, &link).is_err() {
+            // 文件系统不支持硬链接（极少数目标）时跳过；正常临时目录应支持。
+            let _ = std::fs::remove_dir_all(&other);
+            let _ = std::fs::remove_dir_all(&ws);
+            return;
+        }
+
+        let err = resolve_write(&policy, "link.txt").unwrap_err();
+        assert!(
+            matches!(&err, PathGuardError::HardLink(_)),
+            "硬链接越界应拒绝，got: {err}"
+        );
+        let err2 = resolve_write_create(&policy, "link.txt").unwrap_err();
+        assert!(
+            matches!(&err2, PathGuardError::HardLink(_)),
+            "write_file 的覆盖路径同样应拒绝，got: {err2}"
+        );
+
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// 工作区内软链接到工作区外文件：最终目标 canonicalize 后应判为区外。
+    #[test]
+    fn write_symlink_to_outside_rejected() {
+        let ws = ws_fixture("wr-symlink");
+        let policy = make_policy(&ws);
+        let other = unique_temp_dir("wr-symlink-target");
+        let target = other.join("target.txt");
+        std::fs::write(&target, "outside").unwrap();
+        let link = ws.join("link.txt");
+
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(&target, &link).is_ok();
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let created = false;
+
+        if !created {
+            // Windows 无开发者模式时创建符号链接需要管理员权限；跳过。
+            let _ = std::fs::remove_dir_all(&other);
+            let _ = std::fs::remove_dir_all(&ws);
+            return;
+        }
+
+        let err = resolve_write(&policy, "link.txt").unwrap_err();
+        assert!(
+            matches!(&err, PathGuardError::OutsideWorkspace(_)),
+            "软链接越界应拒绝，got: {err}"
+        );
+        let err2 = resolve_write_create(&policy, "link.txt").unwrap_err();
+        assert!(
+            matches!(&err2, PathGuardError::OutsideWorkspace(_)),
+            "write_file 的覆盖路径同样应拒绝，got: {err2}"
+        );
+
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&ws);
     }
 }

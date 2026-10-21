@@ -488,6 +488,18 @@ fn network_install_process_config_ask() {
     assert_ask(&eval("npm install", None, &ws), "install-op");
     assert_ask(&eval("taskkill /IM notepad.exe", None, &ws), "process-control");
     assert_ask(&eval("stop-process -Name x", None, &ws), "process-control");
+    // 关机/注销/重启/启动进程：原先落在未知程序 Auto，属危险漏档
+    assert_ask(&eval("shutdown /s /t 0", None, &ws), "process-control");
+    assert_ask(&eval("logoff", None, &ws), "process-control");
+    assert_ask(&eval("Stop-Computer", None, &ws), "process-control");
+    assert_ask(&eval("Restart-Computer -Force", None, &ws), "process-control");
+    assert_ask(&eval("Start-Process notepad", None, &ws), "process-control");
+    // 代码宿主与配置写入：不能再落到未知程序 Auto
+    assert_ask(&eval("Invoke-Expression 'calc'", None, &ws), "code-exec");
+    assert_ask(&eval("Add-Type -TypeDefinition 'x'", None, &ws), "code-exec");
+    assert_ask(&eval("rundll32 shell32.dll,Control_RunDLL", None, &ws), "code-exec");
+    assert_ask(&eval("Set-ExecutionPolicy Bypass", None, &ws), "config-op");
+    assert_ask(&eval("Clear-RecycleBin -Force", None, &ws), "delete-always-ask");
     assert_ask(&eval("netsh interface set interface eth0 disabled", None, &ws), "config-op");
     assert_ask(&eval("net use Z: \\\\server\\share", None, &ws), "config-op");
     assert_ask(&eval("route add 10.0.0.0 mask 255.0.0.0 10.0.0.1", None, &ws), "config-op");

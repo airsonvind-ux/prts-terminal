@@ -20,7 +20,7 @@ pub fn upload_attachment(
     if paths.len() > att::MAX_FILES {
         return Err(format!("一次最多上传 {} 个文件", att::MAX_FILES));
     }
-    let dir = att::session_files_dir(&conversation_id.unwrap_or_default());
+    let dir = att::session_files_dir(&conversation_id.unwrap_or_default())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
 
     let mut out = Vec::with_capacity(paths.len());
@@ -67,7 +67,7 @@ pub fn upload_attachment_blob(
             att::MAX_FILE_BYTES / 1024 / 1024
         ));
     }
-    let dir = att::session_files_dir(&conversation_id.unwrap_or_default());
+    let dir = att::session_files_dir(&conversation_id.unwrap_or_default())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {e}"))?;
     att::write_blob_into(&dir, &name, &base64_data, &mime_type)
 }
@@ -125,7 +125,7 @@ pub fn is_openable_target(p: &std::path::Path) -> bool {
 /// 读取随包 LICENSE 全文（关于页“许可证”块展开时调用）。
 ///
 /// 薄命令：按解析出的路径读文本，不改写、不缓存。正文永远来自随包文件——
-/// 不在前端硬编码（Hanako 的“许可证全文”其实是硬编码的短声明，此处避开）。
+/// 不在前端硬编码（既有实现的“许可证全文”其实是硬编码的短声明，此处避开）。
 #[tauri::command]
 pub fn read_license() -> Result<String, String> {
     let path = crate::config::license_path();

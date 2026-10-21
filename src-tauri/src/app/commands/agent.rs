@@ -38,11 +38,12 @@ pub struct AgentRequest {
 struct TurnGuard {
     registry: Arc<TurnRegistry>,
     session_id: String,
+    signal: crate::turn_registry::AbortSignal,
 }
 
 impl Drop for TurnGuard {
     fn drop(&mut self) {
-        self.registry.unregister(&self.session_id);
+        self.registry.unregister_if(&self.session_id, &self.signal);
     }
 }
 
@@ -133,6 +134,7 @@ pub async fn agent_process(
     let _turn_guard = TurnGuard {
         registry: Arc::clone(&turn_registry),
         session_id: session_id.clone(),
+        signal: abort_signal.clone(),
     };
 
     // ── workspace_root（地域性信任门信任根）：settings.workspace 段取一次
@@ -196,7 +198,7 @@ pub async fn agent_process(
 
     // ── 插话保留领取（2026-09-25）：同对话上一轮中止/错误留下的未交付
     // 插话并入本轮队列，dispatch 首个 step 请求前领取注入（轮次边界领取，
-    // 对齐 DSH「turn 边界领取 next-step」）。无 conversation 归属跳过。
+    // 对齐上游「turn 边界领取 next-step」）。无 conversation 归属跳过。
     if !conversation_id.is_empty() {
         steer_queue.adopt(&conversation_id, &session_id);
     }
@@ -224,7 +226,7 @@ pub async fn agent_process(
     // ── 插话队列收尾（保留语义，2026-09-25 修订）：不再无条件清空——
     // 未交付条目在有 conversation 归属时进入保留态：同对话下一轮
     // agent_process 开头 adopt 领取，于首步请求前注入交付（中止/错误也
-    // 不丢字，对齐 DSH keepInbox）。无 conversation 归属（旧前端）保持
+    // 不丢字，对齐上游 keepInbox）。无 conversation 归属（旧前端）保持
     // 原兜底清空；正常轮队列在 turn/end 前已消费至空，此处零行为。
     if steer_queue.len(&session_id) > 0 && !conversation_id.is_empty() {
         steer_queue.preserve(&session_id, &conversation_id);
