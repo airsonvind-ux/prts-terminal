@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(test)]
+#[cfg(test)]
 pub mod mock;
 pub mod openai_compatible;
 pub mod anthropic;

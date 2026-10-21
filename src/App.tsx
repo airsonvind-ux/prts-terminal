@@ -21,9 +21,6 @@ import { useAnimationMapping } from "./hooks/useAnimationMapping";
 import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useUpdaterEvents } from "./hooks/useUpdaterEvents";
 import { useConversationHydration } from "./hooks/useConversationHydration";
-// useMockAgent 仅在后端 Agent 未就绪时用于前端 UI 调试。
-// 后端就绪后必须注释掉，否则 Mock 事件与真实后端事件会在同一 sessionId 上冲突。
-// import { useMockAgent } from "./hooks/useMockAgent";
 import { setModelInfo } from "./stores/useProcessingStore";
 import { useGuideStore } from "./stores/useGuideStore";
 import { thinkingLabel } from "./thinking";
@@ -39,7 +36,6 @@ export function App() {
   // 启动会话恢复（Phase 4）：list → 并行 get → 装载 store + 导航决策。
   // 导航决策收敛于本 hook 单点（欢迎界面/开屏流程改造只改此处）
   useConversationHydration();
-  // useMockAgent(); // 后端就绪后已关闭，避免事件冲突
 
   // ── 引导键集（"看过没"）拉一次：说明层由它去重 ──
   useEffect(() => {
