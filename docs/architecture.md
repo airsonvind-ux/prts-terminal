@@ -20,6 +20,18 @@ src-tauri/
 
 `content/` 是内容资产，不参与 Rust 模块编译；`bridge/` 是独立 AGPL crate。
 
+前端按 feature 组织：
+
+```text
+src/
+├─ app/shell/      窗口外壳与动画
+├─ features/       chat / settings / overlays / guide
+├─ shared/ui/      跨 feature 的通用组件
+├─ stores/         状态与事件投影
+├─ hooks/          生命周期与交互 Hook
+└─ animation/      外壳动画引擎
+```
+
 ## 分层
 
 ```text
