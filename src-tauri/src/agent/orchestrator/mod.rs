@@ -42,6 +42,7 @@ mod turn;
 mod turn_loop;
 mod llm_call;
 mod tool_loop;
+mod token_estimate;
 mod events;
 
 pub use retry::{is_retryable, RetryPolicy};
