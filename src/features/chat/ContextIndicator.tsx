@@ -195,6 +195,8 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
         onMouseEnter={handleRingEnter}
         onMouseLeave={handleRingLeave}
         onClick={handleRingClick}
+        data-compacting={compacting ? "true" : undefined}
+        aria-busy={compacting || undefined}
         role="button"
         tabIndex={shown ? 0 : -1}
         aria-label={compacting ? "压缩进行中，点击取消" : "压缩对话"}

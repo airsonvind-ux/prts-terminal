@@ -952,6 +952,19 @@ mod tests {
     // ── 纯文本分流 ──
 
     #[test]
+    fn pinned_hostname_connects_to_resolved_loopback() {
+        // 域名路径：localhost → 127.0.0.1，解析结果被固定到客户端。
+        let base = spawn_canned(|_, _| Some(canned(200, "text/plain", "pinned-host")));
+        let url = base.replace("127.0.0.1", "localhost");
+        let t = WebFetchTool::new(FetchOptions {
+            timeout: Duration::from_secs(5),
+            allowed_hosts: vec!["localhost".to_string()],
+        });
+        let out = exec(&t, &format!(r#"{{"url":"{url}/probe"}}"#)).unwrap();
+        assert!(out.summary.contains("pinned-host"), "got: {}", out.summary);
+    }
+
+    #[test]
     fn plain_text_passthrough() {
         let base = spawn_canned(|_, _| {
             Some(canned(

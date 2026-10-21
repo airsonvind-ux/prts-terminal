@@ -167,13 +167,10 @@ describe("ContextIndicator · 压缩入口", () => {
     useCompactionStore.setState({ compactingConversationId: "c1" });
     const ui = renderIndicator();
 
-    // 旋转弧点：渲染 track + arcDot 两个 circle（进度环暂隐）；
-    // arcDot = 短弧双值 dasharray（短弧 + 整周空隙）；旋转动画由 CSS
-    // keyframes 驱动（弧点自身 rotate 0→360°，transform-origin 圆心）
-    const circles = container.querySelectorAll("svg circle");
-    expect(circles.length).toBe(2);
-    expect(circles[0].getAttribute("stroke-dasharray")).toBeNull(); // track
-    expect(circles[1].getAttribute("stroke-dasharray")).toMatch(/\s/); // 短弧双值
+    // 压缩中状态：用可观察的 aria/data 状态断言，不绑定 SVG 子节点数量
+    const ring = ui.ring()!;
+    expect(ring.getAttribute("data-compacting")).toBe("true");
+    expect(ring.getAttribute("aria-busy")).toBe("true");
 
     clickRing(ui);
     // 无确认卡：仅一个动作项「取消压缩」
