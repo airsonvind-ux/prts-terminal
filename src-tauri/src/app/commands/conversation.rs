@@ -197,3 +197,36 @@ pub async fn generate_conversation_title(
         }
     }
 }
+
+/// 删除会话：先删持久文件（jsonl + index 条目），再清冻结快照 sidecar
+/// （记忆区 + 技能目录 + 完整前缀三份，同生共死）。
+#[tauri::command]
+pub fn delete_conversation(
+    store: State<'_, Arc<Mutex<SessionStore>>>,
+    snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
+    skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
+    prefix_snapshot_store: State<'_, Arc<Mutex<PrefixSnapshotStore>>>,
+    conversation_id: String,
+) -> Result<(), String> {
+    // 先删会话（失败上抛，不静默）；再清 sidecar（冻结快照同生共死；
+    // 裁决 1：先写快照后归档 → 孤儿在删除侧清扫）。
+    {
+        let mut s = store.lock().map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        s.delete(&conversation_id)?;
+    }
+    {
+        let mut snaps = snapshot_store
+            .lock()
+            .map_err(|e| format!("快照存储锁获取失败: {e}"))?;
+        snaps.remove(&conversation_id);
+    }
+    let mut snaps = skills_snapshot_store
+        .lock()
+        .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
+    snaps.remove(&conversation_id);
+    let mut snaps = prefix_snapshot_store
+        .lock()
+        .map_err(|e| format!("前缀快照存储锁获取失败: {e}"))?;
+    snaps.remove(&conversation_id);
+    Ok(())
+}
