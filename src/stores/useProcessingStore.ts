@@ -35,11 +35,9 @@ import {
 import { generateId } from "../utils";
 import {
   deriveActiveHistory,
-  buildReminderBlock,
   stripReminderBlock,
   defaultTitleFromInput,
   willNextTurnOverflow,
-  type ReminderLine,
 } from "../projection";
 import { useUIStore } from "./useUIStore";
 import { useConversationStore } from "./useConversationStore";
@@ -61,6 +59,7 @@ import {
   maybeTriggerTitleFallback,
   registerTitleGen,
 } from "./processingTitle";
+import { composeReminderNotice } from "./processingReminder";
 
 export { flushPending } from "./processingChunks";
 export { titleExpectedFor } from "./processingTitle";
@@ -397,10 +396,6 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       return;
 
     // ── Reminder：拉取提醒数据（后端 get_reminder_data：快照＝值 + 有界事件）──
-    // 新对话（lastNoticeSeq 为空）：值维度快照——仅 kind === "value" 的
-    //   维度 value，不含事件行；游标＝payload.seq。
-    // 进行中对话：增量——stamp>游标 的维度（note）＋ seq>游标 的事件；
-    //   维度行在上、事件行在下；游标＝payload.seq。
     // 含块版本随轮归档冻结；invoke 失败仅进行中对话回滚（新对话不回滚为 0，
     // 避免重放）。拉取失败 → 静默跳过本轮（游标不动 → 下轮重试）。
     let noticeBlock = "";
@@ -418,29 +413,11 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       const conv = st.activeId !== null
         ? st.conversations.find((c) => c.id === st.activeId)
         : undefined;
-      const cursor = conv?.lastNoticeSeq;
-      const lines: ReminderLine[] = [];
-      if (cursor === undefined || cursor === null) {
-        // 新对话：仅值维度快照（kind === "value"）
-        noticeIsNewConversation = true;
-        for (const d of data.dims) {
-          if (d.kind === "value" && d.value !== "") {
-            lines.push({ title: d.title, detail: d.value });
-          }
-        }
-      } else {
-        prevNoticeSeq = cursor;
-        // 维度行（stamp > 游标）在上
-        for (const d of data.dims) {
-          if (d.stamp > cursor) lines.push({ title: d.title, detail: d.note });
-        }
-        // 事件行（seq > 游标）在下
-        for (const e of data.events) {
-          if (e.seq > cursor) lines.push({ title: e.title, detail: e.detail });
-        }
-      }
-      if (lines.length > 0) noticeBlock = buildReminderBlock(lines);
-      noticeAdvanceTo = data.seq;
+      const notice = composeReminderNotice(data, conv?.lastNoticeSeq);
+      noticeBlock = notice.block;
+      noticeAdvanceTo = notice.advanceTo;
+      prevNoticeSeq = notice.prevSeq;
+      noticeIsNewConversation = notice.isNewConversation;
     } catch {
       // 提醒拉取失败：本轮不带通知，游标未动 → 下轮重试
     }
