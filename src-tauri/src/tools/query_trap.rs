@@ -401,6 +401,10 @@ mod tests {
         assert!(params["properties"].get("extra").is_some());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_default_all() {
         let ctx = make_ctx();
@@ -414,6 +418,10 @@ mod tests {
         assert!(result.contains("属性"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn status_spec_keeps_default_blocks() {
         // extra 状态指定 → 默认区块（基本信息/属性/技能）照常输出
@@ -437,6 +445,10 @@ mod tests {
 
     // ── 状态指定（含 =）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_level_syntax() {
         let ctx = make_ctx();
@@ -454,6 +466,10 @@ mod tests {
         assert!(r2.contains("精0 3级"), "级 后缀应可解析\n结果: {r2}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_level_clamp() {
         // 等级=99 超上限 → clamp 到最高等级（障碍物最高 30 级）
@@ -470,6 +486,10 @@ mod tests {
         assert!(!result.contains("99级"), "不应显示 99 级\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_key_rejected() {
         let ctx = make_ctx();
@@ -482,6 +502,10 @@ mod tests {
         assert!(result.contains("仅限 等级"), "应指路合法键\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_value_rejected() {
         let ctx = make_ctx();
@@ -496,6 +520,10 @@ mod tests {
 
     // ── 旧语法废除 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_legacy_syntax_rejected() {
         // 旧裸写语法不再解析 → 报错指路键=值
@@ -526,6 +554,10 @@ mod tests {
 
     // ── 边界 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_id() {
         let ctx = make_ctx();
@@ -537,6 +569,10 @@ mod tests {
         assert!(result.contains("障碍物"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn not_found() {
         let ctx = make_ctx();
@@ -556,6 +592,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_names_and_ids() {
         let ctx = make_ctx();
@@ -564,6 +604,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn both_ids_and_names_error() {
         let ctx = make_ctx();
@@ -574,6 +618,10 @@ mod tests {
 
     // ── 手动测试入口 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, params: &str) -> String {

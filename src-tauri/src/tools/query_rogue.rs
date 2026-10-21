@@ -672,6 +672,10 @@ mod tests {
             .contains(&serde_json::json!("theme")));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_relic_by_name() {
         let ctx = make_ctx();
@@ -686,6 +690,10 @@ mod tests {
         assert!(result.contains("效果"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_relic_by_id() {
         let ctx = make_ctx();
@@ -697,6 +705,10 @@ mod tests {
         assert!(result.contains("热水壶"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_sa_rogue3() {
         let ctx = make_ctx();
@@ -709,6 +721,10 @@ mod tests {
         assert!(result.contains("探索者的银凇止境"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_sa_rogue4_thought() {
         let ctx = make_ctx();
@@ -721,6 +737,10 @@ mod tests {
         assert!(result.contains("萨卡兹的无终奇语"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_sa_rogue5_coin() {
         let ctx = make_ctx();
@@ -734,6 +754,10 @@ mod tests {
         assert!(result.contains("界园"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_nobuff_item_no_panic() {
         // 剧目类型 buff 为 null — 验证不崩溃
@@ -749,6 +773,10 @@ mod tests {
         assert!(!result.contains("buff："));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_mutation_by_name() {
         let ctx = make_ctx();
@@ -762,6 +790,10 @@ mod tests {
         assert!(result.contains("buff"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_collapse_paradigm() {
         let ctx = make_ctx();
@@ -776,6 +808,10 @@ mod tests {
 
     // ── 多元奇物变体 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn multi_relic_sa_rogue4() {
         let ctx = make_ctx();
@@ -796,6 +832,10 @@ mod tests {
         assert!(result.contains("回复10点"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn multi_relic_sa_rogue3() {
         let ctx = make_ctx();
@@ -809,6 +849,10 @@ mod tests {
         assert!(result.contains("地形图-α"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn multi_relic_variant_direct_search_no_expand() {
         // 直接搜索变体名称时不应再展开
@@ -826,6 +870,10 @@ mod tests {
 
     // ── 同名多条记录 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_same_name_era_all_three_returned() {
         // 萨卡兹年代追忆：同名三条（成型期/扩张期/鼎盛期），全部返回
@@ -841,6 +889,10 @@ mod tests {
         assert!(result.contains("年代追忆（鼎盛期）"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_same_name_shishi_all_four_returned() {
         // 界园岁时：同名四条（朦胧/真切/入髓/醒觉），全部返回
@@ -856,6 +908,10 @@ mod tests {
         assert!(result.contains("岁时（醒觉）"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_same_name_mutation_both_returned() {
         // 水月排异反应：同名两条（mutation_1 / mutation_9），全部返回；
@@ -872,6 +928,10 @@ mod tests {
 
     // ── 特性 JSON 对象（通宝标识）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_coin_identifier_object_formatted() {
         // 界园通宝：特性为 JSON 对象 {"标识": [...]}，应格式化输出
@@ -887,6 +947,10 @@ mod tests {
 
     // ── LIKE 降级路径 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn like_fallback_with_variants() {
         // 名称不完全匹配时走 LIKE：命中基础版并展开 -α/-β/-γ 变体
@@ -902,6 +966,10 @@ mod tests {
         assert!(result.contains("精选兽肉罐头-γ"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn like_fallback_no_match_returns_not_found() {
         // LIKE 也找不到 → 报未找到
@@ -937,6 +1005,10 @@ mod tests {
         assert!(resolve_theme("黑流树海主题").unwrap().table == "rogue_6_entries");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn not_found() {
         let ctx = make_ctx();
@@ -949,6 +1021,10 @@ mod tests {
         assert!(result.contains("未"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_theme() {
         let ctx = make_ctx();
@@ -959,6 +1035,10 @@ mod tests {
         assert!(err.contains("theme"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn invalid_theme() {
         let ctx = make_ctx();
@@ -977,6 +1057,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_both_ids_and_names() {
         let ctx = make_ctx();
@@ -989,6 +1073,10 @@ mod tests {
 
     // ── 手动测试入口 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, theme: &str, params_json: &str) -> String {

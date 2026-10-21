@@ -1227,6 +1227,10 @@ mod tests {
 
     // ── 默认结果 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn default_output_blocks() {
         // 无 extra：名称/备注/描述/职业/职业分支/属性/天赋/模组；技能需点单，不随默认返回
@@ -1258,6 +1262,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_default_stats() {
         let ctx = make_ctx();
@@ -1276,6 +1284,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn skill_output_includes_range_id() {
         // 远山的二技能"命运"开启后攻击范围变为 3-3，
@@ -1292,6 +1304,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn talent_picks_correct_alternative() {
         let ctx = make_ctx();
@@ -1304,6 +1320,10 @@ mod tests {
         assert!(result.contains("额外回复2点技力"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn talent_expand_all_alternatives() {
         // 默认天赋区块：每个天赋只取当前最优备选（不展开全部备选）
@@ -1327,6 +1347,10 @@ mod tests {
 
     // ── 状态指定（含 =）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_level_syntax() {
         let ctx = make_ctx();
@@ -1352,6 +1376,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_potential_syntax() {
         let ctx = make_ctx();
@@ -1373,6 +1401,10 @@ mod tests {
         assert!(r3.contains("0潜"), "0潜\n结果: {r3}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_trust_syntax() {
         let ctx = make_ctx();
@@ -1394,6 +1426,10 @@ mod tests {
         assert!(r3.contains("0%信赖"), "零=0%\n结果: {r3}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_module_syntax() {
         let ctx = make_ctx();
@@ -1415,6 +1451,10 @@ mod tests {
         assert!(!r2.contains("(模组)"), "属性不应有模组来源标注\n结果: {r2}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_same_key_last_wins() {
         let ctx = make_ctx();
@@ -1448,6 +1488,10 @@ mod tests {
         assert!(!r.contains("精2 40级"), "got: {r}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_module_last_wins() {
         let ctx = make_ctx();
@@ -1474,6 +1518,10 @@ mod tests {
         assert!(!r.contains("DWDB-221E"), "got: {r}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_potential_out_of_range_rejected() {
         let ctx = make_ctx();
@@ -1485,6 +1533,10 @@ mod tests {
         assert!(r.contains("超出范围"), "got: {r}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_recomputes_talent() {
         // 状态指定后天赋随练度重算：等级=精一 → 天赋条件标注按精一
@@ -1501,6 +1553,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_key_rejected() {
         let ctx = make_ctx();
@@ -1516,6 +1572,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_value_rejected() {
         let ctx = make_ctx();
@@ -1530,6 +1590,10 @@ mod tests {
 
     // ── 旧语法废除 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_legacy_syntax_rejected() {
         // 旧裸写语法不再作为状态指定解析 → 附加列无法命中 → 报错指路键=值
@@ -1556,6 +1620,10 @@ mod tests {
 
     // ── 技能点单 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_by_name() {
         // 技能名指定 → 只输出该技能最高级
@@ -1576,6 +1644,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_by_name_with_level() {
         // "3级缓蚀" → 缓蚀 Lv3
@@ -1600,6 +1672,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_by_name_with_mastery() {
         // "专2旧日绽放" → 旧日绽放专2
@@ -1614,6 +1690,10 @@ mod tests {
         assert!(!result.contains("专3"), "不应显示专3\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_name_starting_with_jing() {
         // 技能名"精神爆发"以"精"开头，不应被"精N"练度解析误捕获
@@ -1637,6 +1717,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_select_single() {
         // 指定"二技能"，只输出一个技能
@@ -1658,6 +1742,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_level_number() {
         // "3级一技能"，只显示第一个技能 Lv3
@@ -1676,6 +1764,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_mastery() {
         // "专2二技能"，显示专2
@@ -1689,6 +1781,10 @@ mod tests {
         assert!(!result.contains("专3"), "不应显示专3\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_out_of_range() {
         // 指定超出实际技能数的编号
@@ -1701,6 +1797,10 @@ mod tests {
         assert!(result.contains("无第5个技能"), "超界应提示\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_multi_select() {
         // 一次指定多个技能点单，每个独立输出
@@ -1719,6 +1819,10 @@ mod tests {
         assert!(!result.contains("[缓蚀]"), "不应输出一技能\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_mixed_elite_and_skill() {
         // 同时指定精英化和技能选择，默认输出全部区块
@@ -1740,6 +1844,10 @@ mod tests {
 
     // ── 技能/天赋 禁用项 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_skill_list_block_rejected() {
         // "技能列表" 不提供整列获取 → 报错指路点单制
@@ -1759,6 +1867,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_talent_point_rejected() {
         // "天赋二" 天赋点单 → 报错指路
@@ -1771,6 +1883,10 @@ mod tests {
         assert!(result.contains("天赋不提供点单"), "应指路\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_talent_name_rejected() {
         // 天赋名点单（旧"凝固的时光"能力）→ 报错指路
@@ -1783,6 +1899,10 @@ mod tests {
         assert!(result.contains("天赋不提供点单"), "应指路\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_unknown_extra_error() {
         // 完全未知的字符串 → 报错并指路（键=值 / 知识库列名）
@@ -1798,6 +1918,10 @@ mod tests {
 
     // ── 附加列（不含 =）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_common_columns() {
         let ctx = make_ctx();
@@ -1829,6 +1953,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_raw() {
         let ctx = make_ctx();
@@ -1854,6 +1982,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_json() {
         let ctx = make_ctx();
@@ -1875,6 +2007,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_talent_list() {
         // 附加列"天赋列表" → 全部天赋的全部备选展开，与默认天赋区块并存
@@ -1906,6 +2042,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_module_list() {
         // 附加列"模组列表" → 所有模组的全部等级效果，与默认模组区块并存
@@ -1927,6 +2067,10 @@ mod tests {
         assert!(result.contains("Lv3"), "应包含全部等级效果\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_unknown_column_error() {
         let ctx = make_ctx();
@@ -1944,6 +2088,10 @@ mod tests {
 
     // ── 练度/数值相关（语法迁移后的旧用例）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_elite_one() {
         let ctx = make_ctx();
@@ -1956,6 +2104,10 @@ mod tests {
         assert!(!result.contains("精2"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_module_x() {
         let ctx = make_ctx();
@@ -1967,6 +2119,10 @@ mod tests {
         assert!(result.contains("DWDB-221E"), "应显示默认模组");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_potential() {
         let ctx = make_ctx();
@@ -1978,6 +2134,10 @@ mod tests {
         assert!(result.contains("5潜"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_trust() {
         let ctx = make_ctx();
@@ -1989,6 +2149,10 @@ mod tests {
         assert!(result.contains("0%信赖"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn stats_with_trust_visible() {
         // 默认输出插值属性（含信赖、模组来源标注）
@@ -2002,6 +2166,10 @@ mod tests {
         assert!(result.contains("模组"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn talent_with_potential() {
         let ctx = make_ctx();
@@ -2015,6 +2183,10 @@ mod tests {
 
     // ── 边界 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_name_returns_error() {
         let ctx = make_ctx();
@@ -2023,6 +2195,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn not_found_returns_message() {
         let ctx = make_ctx();
@@ -2098,6 +2274,10 @@ mod tests {
         assert!(!is_talent_point_syntax("凝固的时光"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, name: &str, extra: Option<&[&str]>) -> String {

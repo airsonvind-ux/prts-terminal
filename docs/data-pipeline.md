@@ -46,7 +46,7 @@ data-pipeline/
 - 有变化或失败才写更新记录
 - 写库前自动备份，备份不提交
 - 结构哨兵失败时中止，不写入半套数据
-- 更新后运行 `verify_db.py` 和对应的数据契约测试
+- 更新后运行 `verify_db.py`，再运行 `.\scripts\data-contract.ps1`
 
 ## 发布前检查
 

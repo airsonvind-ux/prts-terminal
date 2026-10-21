@@ -94,6 +94,11 @@ windows = { version = "0.61", features = [
 readabilityrs = "=0.1.4"
 tauri-plugin-prevent-default = "5"
 
+[features]
+# 真实数据库数据契约测试。默认关闭：默认套件不依赖本地
+# resources/arknights.db；专用命令见 docs/testing.md。
+data-contract = []
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 

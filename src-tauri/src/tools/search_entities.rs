@@ -294,6 +294,10 @@ mod tests {
         ToolContext::with_db(Arc::new(db))
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn list_mode_returns_names_with_ids() {
         let ctx = make_ctx();
@@ -319,6 +323,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn count_mode_returns_number() {
         let ctx = make_ctx();
@@ -335,6 +343,10 @@ mod tests {
         assert!(count > 0, "领袖敌人数量应 > 0");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn list_mode_default_when_omitted() {
         let ctx = make_ctx();
@@ -351,6 +363,10 @@ mod tests {
         assert!(result.contains("条结果"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn like_search_works() {
         let ctx = make_ctx();
@@ -366,6 +382,10 @@ mod tests {
         assert!(result.contains("源石虫"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn multiple_filters() {
         let ctx = make_ctx();
@@ -382,6 +402,10 @@ mod tests {
         assert!(count > 0);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn cross_table_tokens() {
         let ctx = make_ctx();
@@ -404,6 +428,10 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("数据库未连接"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn invalid_table_returns_error() {
         let ctx = make_ctx();
@@ -412,6 +440,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn empty_result_shows_zero() {
         let ctx = make_ctx();
@@ -427,6 +459,10 @@ mod tests {
         assert!(result.contains("共 0 条"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn custom_limit() {
         let ctx = make_ctx();
@@ -443,6 +479,10 @@ mod tests {
         assert!(result.contains("找到 3 条结果") || result.contains("当前展示 3 条"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn rogue_table_query() {
         let ctx = make_ctx();
@@ -459,6 +499,10 @@ mod tests {
         assert!(count > 0, "界园肉鸽应有藏品");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn rogue_list_with_ids() {
         let ctx = make_ctx();

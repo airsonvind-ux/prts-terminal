@@ -1316,6 +1316,10 @@ mod tests {
         out
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         // 交互/研究入口（test_sim.py 驱动，log 供 plot_log.py 绘图）：
@@ -1367,6 +1371,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_route5_basic() {
         // 与 sim_tool.py 对拍：路线 5，属性移速 1.3（理论 0.65），K=1
@@ -1386,6 +1394,10 @@ mod tests {
         assert!(s.contains("抵达终点"), "应抵达终点\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_route1_basic_k2() {
         // 与 sim_tool.py 对拍：路线 1，K=2，属性移速 1.3
@@ -1405,6 +1417,10 @@ mod tests {
         assert!(s.contains("f3633  抵达终点"), "终点帧不符\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_route3_basic_k1() {
         // 与 sim_tool.py 对拍：路线 3，K=1，属性移速 1.3
@@ -1424,6 +1440,10 @@ mod tests {
         assert!(s.contains("f5525  抵达终点"), "终点帧不符\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_route1_block_tune() {
         // 路线 1 调避障轴（K=2，属性移速 1.3，block@1930 at=(4,1) dur=6 纯偏移）：
@@ -1446,6 +1466,10 @@ mod tests {
         assert!(s.contains("f3649  抵达终点"), "终点帧不符\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_route3_block_verify() {
         // 路线 3 调避障轴（K=1，block@4381 at=(9,5) dur=6）：
@@ -1463,6 +1487,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_custom_route_dsl() {
         // 自定义路线 DSL：START/MOVE/WAIT/END
@@ -1481,6 +1509,10 @@ mod tests {
         assert!(s.contains("抵达终点"), "应抵达终点\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_push_into_hole() {
         // 推拉入坑：路线 5 起点 (10,2) 向左推 3 格 → (7,2) 地穴
@@ -1493,6 +1525,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_block_auto_radial() {
         // block pos 模式直给偏移坐标 + 入坑（偏移过程到位时入坑 (7,3)）
@@ -1505,6 +1541,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_errors() {
         // 越界路线 / 缺少参数
@@ -1514,6 +1554,10 @@ mod tests {
         assert!(s.contains("ERROR"), "应报错：缺 routeIndex\n{s}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn sim_log_override_relative_resolves_under_workspace() {
         // M1 批 2 遗留补测：log 参数相对路径 → workspace_root.join 解析；

@@ -376,6 +376,10 @@ mod tests {
 
     // ── 名单内容形态 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn policy_entries_shape() {
         // blocked 含 db 文件（dev 下真实存在 → canonicalize 成功）

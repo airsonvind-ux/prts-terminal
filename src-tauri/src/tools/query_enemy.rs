@@ -742,6 +742,10 @@ mod tests {
 
     // ── 默认返回 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn default_output_columns() {
         // 无 extra：默认 18 列 + 变体数标注
@@ -785,6 +789,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_exact_match_single_result() {
         let ctx = make_ctx();
@@ -803,6 +811,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn display_name_from_name_map() {
         // 图鉴名与表内数据名不同时：按图鉴名能查到，并注明表里记的是另一个名字。
@@ -829,6 +841,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_like_fallback_picks_best() {
         // 非精确名称，LIKE fallback 取最短匹配
@@ -847,6 +863,10 @@ mod tests {
         assert!(!result.contains("·α"), "不应包含更长变种\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_empty_result() {
         let ctx = make_ctx();
@@ -861,6 +881,10 @@ mod tests {
 
     // ── 特殊列格式化 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn format_ability_list_output() {
         let ctx = make_ctx();
@@ -876,6 +900,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn format_skill_text_output() {
         let ctx = make_ctx();
@@ -894,6 +922,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn format_talent_text_output() {
         let ctx = make_ctx();
@@ -923,6 +955,10 @@ mod tests {
         assert!(cleaned.contains("浅睡的臼齿"), "popup 内容应保留");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn format_abnormal_resistance() {
         let ctx = make_ctx();
@@ -937,6 +973,10 @@ mod tests {
         assert!(result.contains("沉默"), "应包含异常类型\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn format_json_array_simple() {
         let ctx = make_ctx();
@@ -952,6 +992,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn null_column_shows_none() {
         let ctx = make_ctx();
@@ -968,6 +1012,10 @@ mod tests {
 
     // ── 级别（extra 状态指定）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn default_level_zero() {
         let ctx = make_ctx();
@@ -981,6 +1029,10 @@ mod tests {
         assert!(result.contains("级别 0"), "默认应查询级别0\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_level_override() {
         let ctx = make_ctx();
@@ -994,6 +1046,10 @@ mod tests {
         assert!(!result.contains("级别 0"), "不应出现级别0\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_level_switch_variant() {
         // 碎骨有 0/1/2 三级变体：级别=2 查询第二级变体，变体数标注保持一致
@@ -1011,6 +1067,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_duplicate_level_last_wins() {
         // 多条级别指定：后写覆盖（与 query_operator 状态覆盖语义一致）
@@ -1031,6 +1091,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_level_invalid_value_rejected() {
         let ctx = make_ctx();
@@ -1044,6 +1108,10 @@ mod tests {
         assert!(result.contains("无法解析"), "应指路\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_key_rejected() {
         let ctx = make_ctx();
@@ -1059,6 +1127,10 @@ mod tests {
 
     // ── 旧语法废除 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_legacy_level_syntax_rejected() {
         // 旧裸写 "级别1" 不再作为状态指定解析 → 附加列无法命中 → 报错指路键=值
@@ -1081,6 +1153,10 @@ mod tests {
 
     // ── 附加列（不含 =）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_common_columns() {
         // 常用列：天赋文本、技能文本、基础嘲讽等级、目标价值、损伤抗性、元素抗性
@@ -1111,6 +1187,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_json() {
         // 非默认 JSON 列按现有格式化：染污战士关联敌人 ["浆果虫","硕果虫"] → "、"
@@ -1126,6 +1206,10 @@ mod tests {
         assert!(!result.contains("[\""), "不应是 JSON 格式\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_table_column_id() {
         // 其余表列命中即返回：敌人ID（与 query_operator 的 干员ID 先例一致）
@@ -1142,6 +1226,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_unknown_extra_error() {
         // 完全未知的字符串 → 报错并指路（键=值 / 知识库列名）
@@ -1162,6 +1250,10 @@ mod tests {
 
     // ── 错误处理 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_name_returns_error() {
         let ctx = make_ctx();
@@ -1273,6 +1365,10 @@ mod tests {
 
     // ── ID 查询 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_id_exact() {
         let ctx = make_ctx();
@@ -1289,6 +1385,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_id_not_found() {
         let ctx = make_ctx();
@@ -1302,6 +1402,10 @@ mod tests {
 
     // ── 批量查询 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn batch_by_names() {
         let ctx = make_ctx();
@@ -1314,6 +1418,10 @@ mod tests {
         assert!(result.contains("碎骨"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn batch_partial_miss() {
         let ctx = make_ctx();
@@ -1328,6 +1436,10 @@ mod tests {
 
     // ── 互斥校验 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn ids_and_names_mutex_error() {
         let ctx = make_ctx();
@@ -1339,6 +1451,10 @@ mod tests {
 
     // ── 默认备注 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn note_always_returned() {
         let ctx = make_ctx();
@@ -1353,6 +1469,10 @@ mod tests {
 
     // ── 演示输出（供 scripts/manual/test_enemy.py 交互调用）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, name: &str, extra: Option<&[&str]>) -> String {

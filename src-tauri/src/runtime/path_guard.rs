@@ -338,6 +338,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn read_blocked_db_path_rejected() {
         let ws = ws_fixture("rd-blocked");

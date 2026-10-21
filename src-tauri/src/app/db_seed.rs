@@ -51,6 +51,12 @@ pub fn sync(
     if !seed.is_file() {
         return Err(format!("数据库初始副本不存在：{}", seed.display()));
     }
+    let seed_len = std::fs::metadata(seed)
+        .map_err(|e| format!("读取数据库初始副本失败（{}）：{e}", seed.display()))?
+        .len();
+    if seed_len == 0 {
+        return Err(format!("数据库初始副本为空：{}", seed.display()));
+    }
     if let Some(dir) = runtime.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("创建数据根失败（{}）：{e}", dir.display()))?;
@@ -234,6 +240,14 @@ mod tests {
         let marker = dir.join("root").join(DB_APPLIED_MARKER);
         let err = sync(&seed, &runtime, &marker, "1.0.0").unwrap_err();
         assert!(err.contains("初始副本不存在"), "错误应说明种子缺失：{err}");
+    }
+
+    #[test]
+    fn empty_seed_is_an_error() {
+        let _g = LOCK.lock().unwrap();
+        let (_d, seed, runtime, marker) = setup("emptyseed", "");
+        let err = sync(&seed, &runtime, &marker, "1.0.0").unwrap_err();
+        assert!(err.contains("初始副本为空"), "错误应说明种子为空：{err}");
     }
 
     #[test]

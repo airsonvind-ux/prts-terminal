@@ -1,6 +1,14 @@
-# scripts — 手工验证与开发辅助
+# scripts — 专用测试入口与手工验证
 
-这些脚本不是自动化测试，不进入 CI。它们用于驱动 Rust 查询工具的 `show_output`、做真机验证或做轨迹模拟。
+这些脚本大多不是 CI 自动化测试；`data-contract.ps1` 是本地数据契约套件的专用入口。其余脚本用于驱动 Rust 查询工具的 `show_output`、做真机验证或做轨迹模拟。
+
+## 数据契约
+
+| 文件 | 用途 |
+|---|---|
+| `data-contract.ps1` | 检查 `src-tauri/resources/arknights.db`，打印大小与 SHA-256，再以 `data-contract` feature 运行 211 条真实数据契约测试 |
+
+默认 `cargo test --lib` 会跳过这些用例；缺少数据库时本脚本会明确报错。
 
 ## manual — 查询工具人工验证
 

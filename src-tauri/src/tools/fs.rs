@@ -560,6 +560,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn read_file_blocked_db_path_rejected() {
         // BLOCKED（M1）：数据库文件连读都不行——绝对路径直读应被守卫拒绝

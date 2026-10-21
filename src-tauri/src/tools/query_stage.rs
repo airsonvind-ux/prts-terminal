@@ -547,6 +547,10 @@ mod tests {
 
     // ── 名称精确匹配 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_name_exact() {
         let ctx = make_ctx();
@@ -563,6 +567,10 @@ mod tests {
         assert!(result.contains("关卡ID"), "应包含关卡ID\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_name_exact_returns_multiple_variants() {
         // 暴君同时有 main_01-07 和 main_01-07#f#
@@ -587,6 +595,10 @@ mod tests {
 
     // ── 编号精确匹配 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_number_fallback() {
         // 用户输入 "1-7"，关卡名是 "暴君"
@@ -600,6 +612,10 @@ mod tests {
 
     // ── LIKE fallback ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_like_fallback() {
         let ctx = make_ctx();
@@ -610,6 +626,10 @@ mod tests {
         assert!(result.contains("暴君"), "应模糊匹配到暴君\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_not_found() {
         let ctx = make_ctx();
@@ -624,6 +644,10 @@ mod tests {
 
     // ── 特殊字段 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn enemy_list_formatted() {
         let ctx = make_ctx();
@@ -639,6 +663,10 @@ mod tests {
         assert!(!result.contains("[\""), "不应含 JSON 括号\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn enemy_list_with_overrides() {
         // TR-1 有覆写属性的敌人
@@ -656,6 +684,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn description_with_newlines() {
         let ctx = make_ctx();
@@ -669,6 +701,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn intel_wiki_cleaned() {
         // SS-8 情报含 {{ruby}} 和 {{简易折叠}}
@@ -680,6 +716,10 @@ mod tests {
         assert!(!result.contains("{{简易折叠}}"), "简易折叠应已展开");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn unlock_condition_formatted() {
         let ctx = make_ctx();
@@ -699,6 +739,10 @@ mod tests {
 
     // ── 多字段查询 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn multiple_extra_columns() {
         let ctx = make_ctx();
@@ -718,6 +762,10 @@ mod tests {
 
     // ── 默认输出与附加列 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn default_returns_seven_columns() {
         // 默认 7 列：关卡ID、关卡名（header）、关卡编号、关卡描述、关卡类型、情报、levelId
@@ -739,6 +787,10 @@ mod tests {
         assert!(!result.contains("敌人列表"), "结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_common_columns() {
         // 6 个常用列全命中：敌人列表、部署上限、初始费用、费用上限、目标点耐久、待处理目标数量
@@ -757,6 +809,10 @@ mod tests {
         assert!(!result.contains("✗"), "常用列不应报错\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_default_column_ignored() {
         // 默认列重复指定：不报错、不重复输出
@@ -797,6 +853,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn empty_enemy_list() {
         // 有些关卡的敌人列表是空数组
@@ -812,6 +872,10 @@ mod tests {
 
     // ── 错误处理 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_name_returns_error() {
         let ctx = make_ctx();
@@ -821,6 +885,10 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("name"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_state_key_error() {
         // 关卡无状态键：含 = 的项报错指路，不阻塞有效结果
@@ -846,6 +914,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_unknown_column_error() {
         // 未识别列名报错指路，不阻塞有效结果
@@ -878,6 +950,10 @@ mod tests {
 
     // ── 单行显示（无变体）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn single_row_no_variants() {
         // H7-4 只有一条记录，无 #f# 变体
@@ -891,6 +967,10 @@ mod tests {
 
     // ── 交互式输出（PRTS_NAME / PRTS_EXTRA）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, name: &str, extra: Option<&[&str]>) -> String {

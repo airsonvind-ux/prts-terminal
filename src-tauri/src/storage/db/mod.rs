@@ -560,6 +560,10 @@ mod tests {
         assert!(err.contains("数据库不可用"), "错误应说明不可用：{err}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn open_missing_path_reports_instead_of_creating() {
         let dir = std::env::temp_dir().join(format!("prts-db-missing-{}", std::process::id()));
@@ -574,6 +578,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn open_empty_file_is_rejected() {
         let dir = std::env::temp_dir().join(format!("prts-db-empty-{}", std::process::id()));
@@ -587,6 +595,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn open_database_succeeds() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -596,6 +608,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_enemy_by_name() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -616,6 +632,10 @@ mod tests {
         assert!(first.contains_key("最大生命值"), "应包含'最大生命值'列");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_enemy_no_result() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -631,6 +651,10 @@ mod tests {
         assert!(rows.is_empty());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_operator_multiple_results() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -649,6 +673,10 @@ mod tests {
         assert!(rows[0].contains_key("职业"), "应包含'职业'列");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_stage_by_name() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -672,6 +700,10 @@ mod tests {
         assert_eq!(rows[0]["关卡编号"], "1-7");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_level_by_levelid() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -688,6 +720,10 @@ mod tests {
         assert_eq!(rows[0]["levelId"], "level_main_01-07");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_single_field() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -709,6 +745,10 @@ mod tests {
 
     // ── 错误处理 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_nonexistent_table() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -724,6 +764,10 @@ mod tests {
         assert!(result.unwrap_err().contains("未知数据表"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_invalid_filter_field() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -743,6 +787,10 @@ mod tests {
 
     // ── 白名单过滤（返回字段）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn invalid_fields_are_silently_dropped() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -763,6 +811,10 @@ mod tests {
         assert!(!rows[0].contains_key("不存在的列xyz"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn all_invalid_fields_returns_error() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -782,6 +834,10 @@ mod tests {
 
     // ── 其他表 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_token_by_name() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -798,6 +854,10 @@ mod tests {
         assert_eq!(rows[0]["名称"], "触手");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_trap_by_name() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -814,6 +874,10 @@ mod tests {
         assert_eq!(rows[0]["名称"], "障碍物");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_empty_fields_array() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -826,6 +890,10 @@ mod tests {
 
     // ── query_filtered 新增能力 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn filtered_by_numeric_comparison() {
         // 法抗 > 90 的敌人
@@ -847,6 +915,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn filtered_by_equality() {
         // 地位 = 领袖 的敌人
@@ -867,6 +939,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn filtered_multiple_conditions() {
         // 地位 = 精英 AND 级别 = 0
@@ -890,6 +966,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn filtered_no_conditions_returns_all() {
         // 无条件查询 + LIMIT 3
@@ -902,6 +982,10 @@ mod tests {
         assert_eq!(rows.len(), 3);
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_count_by_condition() {
         let db = Database::open(db_path().to_str().unwrap()).unwrap();
@@ -919,6 +1003,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn filtered_no_limit() {
         // 没有 LIMIT（limit=0），name_like 限制范围，不会爆炸

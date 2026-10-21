@@ -1611,6 +1611,10 @@ mod tests {
 
     // ── 地图信息 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_map_basic_1_7() {
         let ctx = make_ctx();
@@ -1649,6 +1653,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_predefines_null_outputs_none() {
         // level_act6d5_04 预置单位为 NULL（DB Null→""），应输出"无"而非解析报错
@@ -1673,6 +1681,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_predefines_1_7() {
         // 1-7 预置单位含障碍物等预设装置
@@ -1806,6 +1818,10 @@ mod tests {
 
     // ── 路线信息 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_routes_1_7() {
         let ctx = make_ctx();
@@ -1821,6 +1837,10 @@ mod tests {
         assert!(result.contains("→"), "应包含箭头链");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_routes_visit_every_checkpoint() {
         let ctx = make_ctx();
@@ -1841,6 +1861,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_routes_without_visit_flag() {
         let ctx = make_ctx();
@@ -1859,6 +1883,10 @@ mod tests {
 
     // ── 波次信息 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_waves_1_7() {
         let ctx = make_ctx();
@@ -1878,6 +1906,10 @@ mod tests {
 
     // ── 全输出 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_all_1_7() {
         let ctx = make_ctx();
@@ -1896,6 +1928,10 @@ mod tests {
         assert!(result.contains("波次信息"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn empty_fields_returns_error() {
         let ctx = make_ctx();
@@ -1907,6 +1943,10 @@ mod tests {
 
     // ── 错误处理 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn nonexistent_level() {
         let ctx = make_ctx();
@@ -1916,6 +1956,10 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("未找到"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_levelid() {
         let ctx = make_ctx();
@@ -1936,6 +1980,10 @@ mod tests {
 
     // ── levelId 不同写法 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_level_with_random_groups() {
         // 1-7 没有随机组，用有随机组的关卡测试
@@ -1954,6 +2002,10 @@ mod tests {
 
     // ── 分支信息 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_level_with_branches() {
         let ctx = make_ctx();
@@ -1972,6 +2024,10 @@ mod tests {
 
     // ── 手动测试入口 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, params: &str) -> String {

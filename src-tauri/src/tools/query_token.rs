@@ -519,6 +519,10 @@ mod tests {
         assert!(params["properties"].get("extra").is_some());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_default_all() {
         // 无 extra：默认输出基本信息 + 属性；触手无技能和天赋，不应有对应区块
@@ -532,6 +536,10 @@ mod tests {
         assert!(!result.contains("── 天赋 ──"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn default_skills_top_level() {
         // 默认：全部技能最高级（不逐级展开）
@@ -547,6 +555,10 @@ mod tests {
         assert!(!result.contains("Lv1"), "默认不应逐级展开\n结果: {result}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn status_spec_keeps_default_blocks() {
         // extra 状态指定 → 默认区块（基本信息/属性/技能）照常输出
@@ -570,6 +582,10 @@ mod tests {
 
     // ── 状态指定（含 =）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_level_syntax() {
         let ctx = make_ctx();
@@ -592,6 +608,10 @@ mod tests {
         assert!(r3.contains("精2 满级"), "省略等级=该阶段满级\n结果: {r3}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_potential_syntax() {
         let ctx = make_ctx();
@@ -625,6 +645,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_same_key_last_wins() {
         let ctx = make_ctx();
@@ -650,6 +674,10 @@ mod tests {
         assert!(!r.contains("精2 40级"), "got: {r}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_potential_out_of_range_rejected() {
         let ctx = make_ctx();
@@ -661,6 +689,10 @@ mod tests {
         assert!(r.contains("超出范围"), "got: {r}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_skill_syntax() {
         let ctx = make_ctx();
@@ -683,6 +715,10 @@ mod tests {
         assert!(!r2.contains("  Lv7:"), "不应显示 Lv7\n结果: {r2}");
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_skill_applies_all_skills() {
         // 技能= 对全部技能统一生效：机械水獭两个技能均输出 Lv3
@@ -701,6 +737,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_skill_full_level_rejected() {
         // "技能=满级"已移除（歧义），技能=8级 / 专4 越界 → 报错指路
@@ -722,6 +762,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_key_rejected() {
         let ctx = make_ctx();
@@ -737,6 +781,10 @@ mod tests {
         );
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_status_invalid_value_rejected() {
         let ctx = make_ctx();
@@ -751,6 +799,10 @@ mod tests {
 
     // ── 旧语法废除 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_legacy_syntax_rejected() {
         // 旧裸写语法不再解析 → 报错指路键=值
@@ -781,6 +833,10 @@ mod tests {
 
     // ── 练度/数值相关（语法迁移后的旧用例）──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_elite_override() {
         // extra 状态指定 等级=精一满级 → 属性块用精1
@@ -797,6 +853,10 @@ mod tests {
         assert!(!result.contains("精2"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn extra_elite_recomputes_talent() {
         // 状态指定 等级=精一 → 属性与天赋按精1 重算，不出现精2 条件
@@ -816,6 +876,10 @@ mod tests {
 
     // ── 边界 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn query_by_id() {
         let ctx = make_ctx();
@@ -827,6 +891,10 @@ mod tests {
         assert!(result.contains("镜中虚影"));
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn not_found() {
         let ctx = make_ctx();
@@ -846,6 +914,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn missing_names_and_ids() {
         let ctx = make_ctx();
@@ -854,6 +926,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn both_ids_and_names_error() {
         let ctx = make_ctx();
@@ -862,6 +938,10 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn token_with_talent() {
         // 有天赋的召唤物：镜中虚影
@@ -879,6 +959,10 @@ mod tests {
 
     // ── 手动测试入口 ──
 
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
     #[test]
     fn show_output() {
         fn call(ctx: &ToolContext, params: &str) -> String {
