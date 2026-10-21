@@ -12,7 +12,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  ChatMessage,
   SessionEvent,
   TokenUsage,
   TurnEndReason,
@@ -34,10 +33,8 @@ import {
 } from "../moodTag";
 import { generateId } from "../utils";
 import {
-  deriveActiveHistory,
   stripReminderBlock,
   defaultTitleFromInput,
-  willNextTurnOverflow,
 } from "../projection";
 import { useUIStore } from "./useUIStore";
 import { useConversationStore } from "./useConversationStore";
@@ -60,6 +57,7 @@ import {
   registerTitleGen,
 } from "./processingTitle";
 import { composeReminderNotice } from "./processingReminder";
+import { buildSendHistory, willOverflowContext } from "./processingRequest";
 import { getModelInfo } from "./processingModelInfo";
 
 export { flushPending } from "./processingChunks";
@@ -393,31 +391,21 @@ export const useProcessingStore = create<ProcessingStore>((set, get) => ({
       : input;
 
     // 准备传给 LLM 的完整对话历史（含本次 user 消息——含块版本随 history
-    // 发送并归档冻结，是 LLM 实际所见）。投影派生：从已归档轮次的
-    // SessionEvent 序列重建 LLM 可见历史，error 事件天然被过滤；user 消息
-    // 保留块（deriveMessages 不剥离——块是冻结历史的一部分）。
+    // 发送并归档冻结，是 LLM 实际所见）。
     const st = useConversationStore.getState();
     const isNewNow = st.activeId === null;
     const conv = isNewNow
       ? undefined
       : st.conversations.find((c) => c.id === st.activeId);
-    const priorMessages: ChatMessage[] = isNewNow
-      ? []
-      : deriveActiveHistory(conv?.turns ?? [], conv?.compaction);
-    const lastUser: ChatMessage = { role: "user", content: displayContent };
-    if (attachments.length > 0) lastUser.attachments = attachments;
-    const history: ChatMessage[] = [...priorMessages, lastUser];
+    const history = buildSendHistory(conv, displayContent, attachments);
 
     // ── 模块 D：上下文窗口硬拦（发送前预估）──
-    // 水位 = 最近 usage 的 inputTokens（provider 权威口径）；下一轮预估 =
-    // user 文本（含 reminder 块）+ output 预留。无窗口信息（未知模型）→ 不拦。
     // 拦截为提示而非自动压缩（共识：手动触发）。
-    const usedInput = conv?.contextTokens?.inputTokens ?? 0;
     const windowSize = getModelInfo()?.contextLength ?? 0;
     if (
       !isNewNow &&
       conv &&
-      willNextTurnOverflow(usedInput, displayContent, windowSize)
+      willOverflowContext(conv, displayContent, windowSize)
     ) {
       showToast("上下文接近窗口上限，请先压缩后再继续", {
         kind: "warning",
