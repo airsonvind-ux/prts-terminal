@@ -53,6 +53,10 @@
 
 use crate::db::{Database, Filter, FilterOp};
 use crate::tools::common::{self, Target};
+use crate::tools::common_fmt::{
+    find_bounding_keyframes, format_skill_expanded, format_talents, parse_json, ComputedStats,
+    ElitePhase, Skill, Talent,
+};
 use crate::tools::display::{array_summary, targets_summary};
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
@@ -260,7 +264,7 @@ fn format_one_operator(
     // ── 天赋（当前练度生效的最优备选，不展开备选列表）──
     if !talents.is_empty() {
         out.push_str("\n── 天赋 ──\n");
-        format_talents(&talents, phase_idx, pot_level, false, out);
+        format_talents(&talents, None, None, phase_idx, pot_level, false, None, out);
     }
 
     // ── 模组（选中模组在当前练度下的解锁状态与完整效果）──
@@ -287,13 +291,13 @@ fn format_one_operator(
                         out.push_str(&format!("（无第{}个技能）\n", idx + 1));
                     } else {
                         out.push('\n');
-                        format_skill_expanded(&skills[idx], req.level, out);
+                        format_skill_expanded(&skills[idx], req.level, false, out);
                     }
                 }
                 (None, Some(name)) => {
                     if let Some(idx) = skills.iter().position(|s| s.name == *name) {
                         out.push('\n');
-                        format_skill_expanded(&skills[idx], req.level, out);
+                        format_skill_expanded(&skills[idx], req.level, false, out);
                     } else if talents.iter().any(|t| t.name == *name) {
                         out.push_str(&format!(
                             "✗ '{name}' 是天赋名：天赋不提供点单，天赋随默认结果或状态指定后的练度呈现\n"
@@ -353,7 +357,7 @@ fn format_one_operator(
                     out.push_str("天赋列表: 无\n");
                 } else {
                     out.push_str("\n── 天赋列表（完整数据）──\n");
-                    format_talents(&talents, phase_idx, pot_level, true, out);
+                    format_talents(&talents, None, None, phase_idx, pot_level, true, None, out);
                 }
             }
             "模组列表" => {
@@ -387,98 +391,6 @@ fn format_one_operator(
 // ═══════════════════════════════════════════════════════
 // 数据模型
 // ═══════════════════════════════════════════════════════
-
-#[derive(Debug, Deserialize)]
-struct ElitePhase {
-    #[serde(rename = "范围ID")]
-    range_id: Option<String>,
-    #[serde(rename = "最高等级")]
-    max_level: u32,
-    #[serde(rename = "关键帧")]
-    keyframes: Vec<Keyframe>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Keyframe {
-    #[serde(rename = "等级")]
-    level: u32,
-    #[serde(rename = "属性")]
-    attrs: HashMap<String, f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Skill {
-    #[serde(rename = "技能ID")]
-    #[allow(dead_code)]
-    skill_id: Option<String>,
-    #[serde(rename = "技能名")]
-    name: String,
-    #[serde(rename = "触发类型")]
-    trigger_type: Option<String>,
-    #[serde(rename = "回复类型")]
-    sp_type: Option<String>,
-    #[serde(rename = "持续类型")]
-    duration_type: Option<String>,
-    #[serde(rename = "持续时间")]
-    #[allow(dead_code)]
-    duration: Option<f64>,
-    #[serde(rename = "各级详情")]
-    details: Vec<SkillDetail>,
-    备注: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SpData {
-    #[serde(rename = "可充能次数")]
-    charges: Option<u32>,
-    #[serde(rename = "技力消耗")]
-    sp_cost: Option<u32>,
-    #[serde(rename = "初始技力")]
-    init_sp: Option<u32>,
-    #[serde(rename = "技力回复速度")]
-    #[allow(dead_code)]
-    sp_recovery: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SkillDetail {
-    #[serde(rename = "等级")]
-    level: u32,
-    #[serde(rename = "范围ID")]
-    range_id: Option<String>,
-    #[serde(rename = "描述")]
-    description: Option<String>,
-    持续时间: Option<f64>,
-    #[serde(rename = "SP")]
-    sp: Option<SpData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Talent {
-    #[allow(dead_code)]
-    序号: Option<String>,
-    #[serde(rename = "天赋名")]
-    name: String,
-    备注: Option<String>,
-    #[serde(rename = "备选")]
-    alternatives: Vec<TalentAlt>,
-}
-
-#[derive(Debug, Deserialize)]
-struct TalentAlt {
-    #[serde(rename = "描述")]
-    description: Option<String>,
-    #[serde(rename = "条件")]
-    condition: TalentCondition,
-}
-
-#[derive(Debug, Deserialize)]
-struct TalentCondition {
-    #[serde(rename = "精英化阶段")]
-    elite: u32,
-    #[serde(rename = "潜能等级")]
-    potential: u32,
-}
 
 #[derive(Debug, Deserialize)]
 struct Module {
@@ -888,28 +800,9 @@ fn query_by_id(
     Ok(result.rows.into_iter().next())
 }
 
-fn parse_json<T: serde::de::DeserializeOwned>(
-    row: &HashMap<String, String>,
-    column: &str,
-) -> Option<T> {
-    let raw = row.get(column)?;
-    if raw.is_empty() || raw == "null" {
-        return None;
-    }
-    serde_json::from_str(raw).ok()
-}
-
 // ═══════════════════════════════════════════════════════
 // 数值计算
 // ═══════════════════════════════════════════════════════
-
-#[derive(Debug, Default)]
-struct ComputedStats {
-    attrs: HashMap<String, (f64, f64, f64, f64)>,
-    atk_speed_bonus: f64,
-    atk_speed_sources: Vec<String>,
-    base_atk_interval: f64,
-}
 
 /// 按模组标识（X/Y/特限）查找 modules 数组中的索引。
 fn find_module_index(modules: &[Module], spec: &str) -> Option<usize> {
@@ -1090,32 +983,6 @@ fn compute_stats(
     stats
 }
 
-fn find_bounding_keyframes<'a>(
-    keyframes: &'a [Keyframe],
-    level: u32,
-) -> (&'a Keyframe, &'a Keyframe) {
-    if keyframes.is_empty() {
-        static DUMMY: std::sync::LazyLock<Keyframe> = std::sync::LazyLock::new(|| Keyframe {
-            level: 1,
-            attrs: HashMap::new(),
-        });
-        return (&DUMMY, &DUMMY);
-    }
-
-    let lo = keyframes
-        .iter()
-        .rev()
-        .find(|kf| kf.level <= level)
-        .unwrap_or(&keyframes[0]);
-
-    let hi = keyframes
-        .iter()
-        .find(|kf| kf.level >= level)
-        .unwrap_or(keyframes.last().unwrap());
-
-    (lo, hi)
-}
-
 fn parse_potential_bonus(text: &str) -> Option<(&str, i32)> {
     let bytes = text.as_bytes();
     let mut i = bytes.len();
@@ -1214,138 +1081,6 @@ fn format_stats(stats: &ComputedStats, out: &mut String) {
 }
 
 /// 输出单个技能。`detail_level` 指定等级（点单带等级前缀），None 输出最高级。
-fn format_skill_expanded(skill: &Skill, detail_level: Option<u32>, out: &mut String) {
-    out.push_str(&format!("[{}]\n", skill.name));
-
-    let mut meta = Vec::new();
-    if let Some(ref t) = skill.trigger_type { meta.push(t.as_str()); }
-    if let Some(ref s) = skill.sp_type { meta.push(s.as_str()); }
-    if let Some(ref d) = skill.duration_type { meta.push(d.as_str()); }
-    if !meta.is_empty() {
-        out.push_str(&format!("  {}\n", meta.join(" / ")));
-    }
-
-    // 辅助函数：输出一行等级信息（含 SP）
-    fn write_level(detail: &SkillDetail, out: &mut String) {
-        let label = level_label(detail.level);
-        let desc = detail.description.as_deref().unwrap_or("（无描述）");
-        out.push_str(&format!("  {label}: {desc}"));
-        if let Some(dur) = detail.持续时间 {
-            if dur > 0.0 {
-                out.push_str(&format!("  持续 {:.0}s", dur));
-            }
-        }
-        if let Some(ref rid) = detail.range_id {
-            out.push_str(&format!("  攻击范围: {rid}"));
-        }
-        out.push('\n');
-        if let Some(ref sp) = detail.sp {
-            let mut sp_parts = Vec::new();
-            if let Some(c) = sp.charges { if c > 1 { sp_parts.push(format!("可充能 {c}")); } }
-            if let Some(c) = sp.sp_cost { sp_parts.push(format!("技力消耗 {c}")); }
-            if let Some(s) = sp.init_sp { sp_parts.push(format!("初始技力 {s}")); }
-            if !sp_parts.is_empty() {
-                out.push_str(&format!("    {}\n", sp_parts.join(" / ")));
-            }
-        }
-    }
-
-    // 展示逻辑：指定等级 > 默认最高级
-    if let Some(lvl) = detail_level {
-        if let Some(detail) = skill.details.iter().find(|d| d.level == lvl) {
-            write_level(detail, out);
-        }
-    } else if let Some(last) = skill.details.last() {
-        write_level(last, out);
-    }
-
-    if let Some(ref note) = skill.备注 {
-        let note = note.trim();
-        if !note.is_empty() {
-            out.push_str(&format!("  技能备注: {note}\n"));
-        }
-    }
-}
-
-fn level_label(lvl: u32) -> String {
-    if lvl > 7 {
-        format!("专{}", lvl - 7)
-    } else {
-        format!("Lv{lvl}")
-    }
-}
-
-/// 天赋输出。默认（expand_all=false）：逐天赋输出当前练度最优备选；
-/// 附加列"天赋列表"（expand_all=true）：全部天赋的全部备选展开。
-fn format_talents(
-    talents: &[Talent],
-    elite_default: usize,
-    pot_default: u32,
-    expand_all: bool,
-    out: &mut String,
-) {
-    for talent in talents {
-        if talent.alternatives.is_empty() {
-            continue;
-        }
-        if expand_all {
-            out.push_str(&format!("[{}]\n", talent.name));
-            for alt in &talent.alternatives {
-                let cond = &alt.condition;
-                let elite_label = if cond.elite == 0 { "精0".to_string() } else if cond.elite == 1 { "精1".to_string() } else { format!("精{}", cond.elite) };
-                let pot_label = if cond.potential > 0 { format!("{}潜", cond.potential) } else { String::new() };
-                let cond_str = if pot_label.is_empty() {
-                    elite_label
-                } else {
-                    format!("{elite_label} {pot_label}")
-                };
-                let desc = alt.description.as_deref().unwrap_or("（无描述）");
-                out.push_str(&format!("  {cond_str}: {desc}\n"));
-            }
-            if let Some(ref note) = talent.备注 {
-                let note = note.trim();
-                if !note.is_empty() {
-                    out.push_str(&format!("  天赋备注: {note}\n"));
-                }
-            }
-        } else {
-            let elite = elite_default as u32;
-            let pot = pot_default;
-            let best = pick_talent_alt(&talent.alternatives, elite, pot);
-            if let Some(alt) = best {
-                let cond = &alt.condition;
-                let elite_label = if cond.elite == 0 { "精0".to_string() } else if cond.elite == 1 { "精1".to_string() } else { format!("精{}", cond.elite) };
-                let pot_label = if cond.potential > 0 { format!("{}潜", cond.potential) } else { String::new() };
-                let cond_str = if pot_label.is_empty() {
-                    format!("（{elite_label}）")
-                } else {
-                    format!("（{elite_label} {pot_label}）")
-                };
-                if let Some(ref desc) = alt.description {
-                    out.push_str(&format!("[{}]{} {}\n", talent.name, cond_str, desc));
-                }
-                if let Some(ref note) = talent.备注 {
-                    let note = note.trim();
-                    if !note.is_empty() {
-                        out.push_str(&format!("  天赋备注: {note}\n"));
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn pick_talent_alt<'a>(
-    alternatives: &'a [TalentAlt],
-    elite: u32,
-    pot: u32,
-) -> Option<&'a TalentAlt> {
-    alternatives
-        .iter()
-        .filter(|a| a.condition.elite <= elite && a.condition.potential <= pot)
-        .max_by_key(|a| (a.condition.elite, a.condition.potential))
-}
-
 /// 模组输出。`filter=true`：只输出 selected 指向的模组（默认/模组=指定）；
 /// `filter=false`：输出全部模组（附加列"模组列表"）。两者均遍历模组全部等级效果（累加展示）。
 fn format_modules(modules: &[Module], selected: usize, filter: bool, out: &mut String) {
