@@ -59,6 +59,12 @@ afterEach(() => {
   container?.remove();
 });
 
+async function flush(ms = 0): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, ms));
+  });
+}
+
 function renderIndicator() {
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -119,7 +125,7 @@ function clickRing(ui: ReturnType<typeof renderIndicator>): void {
 }
 
 describe("ContextIndicator · 压缩入口", () => {
-  it("空闲点击圆环 → 单档压缩菜单；点「压缩」发起 compact_conversation", () => {
+  it("空闲点击圆环 → 单档压缩菜单；点「压缩」发起 compact_conversation", async () => {
     seedConversation(
       { inputTokens: 100, outputTokens: 20 },
       longTurns()
@@ -149,13 +155,14 @@ describe("ContextIndicator · 压缩入口", () => {
       '[role="menu"] button'
     )!;
     act(() => startBtn.click());
+    await flush();
 
     const calls = (globalThis as { __invokeMock: { mock: { calls: unknown[][] } } })
       .__invokeMock.mock.calls;
     expect(calls.some((c) => c[0] === "compact_conversation")).toBe(true);
   });
 
-  it("压缩中：弧点旋转加载；点击 → 单一动作项「取消压缩」→ abort_turn 通道", () => {
+  it("压缩中：弧点旋转加载；点击 → 单一动作项「取消压缩」→ abort_turn 通道", async () => {
     seedConversation();
     useCompactionStore.setState({ compactingConversationId: "c1" });
     const ui = renderIndicator();
@@ -178,6 +185,7 @@ describe("ContextIndicator · 压缩入口", () => {
       '[role="menu"] button'
     )!;
     act(() => cancelBtn.click());
+    await flush();
 
     const calls = (globalThis as { __invokeMock: { mock: { calls: unknown[][] } } })
       .__invokeMock.mock.calls;

@@ -41,7 +41,14 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path bridge/Cargo.toml
 ```
 
-CI 覆盖前端测试/构建、Rust 编译和测试编译；依赖 `arknights.db` 的数据契约测试在本地或有数据种子的专用任务中运行。
+CI 覆盖前端测试/构建、Rust 编译和测试编译；当前 CI **不执行** Rust 单元测试，因为真实数据库未进入仓库。
+
+## 当前实际分层（2026-10-21）
+
+- 默认 `cargo test --lib` 仍包含依赖 `src-tauri/resources/arknights.db` 的数据契约用例；运行前需要本地准备该文件（已被 `.gitignore` 排除）。
+- 这些用例断言具体游戏数据（例如关卡名、干员形态、敌人字段），数据更新后变红是预期行为；不应通过改软断言来“修绿”。
+- 数据契约测试尚未拆成独立命令或固定夹具，这是已知债务；CI 只执行 `cargo test --lib --no-run`，因此不依赖数据库。
+- 没有数据库时，默认 Rust 测试会失败，而不是静默跳过；这是当前有意保留的显式失败。
 
 ## 真实数据
 

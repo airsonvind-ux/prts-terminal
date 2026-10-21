@@ -91,12 +91,13 @@ function clickTab(key: string): void {
   });
 }
 
-function clickRadio(index: number): void {
-  act(() => {
+async function clickRadio(index: number): Promise<void> {
+  await act(async () => {
     const inputs = container!.querySelectorAll<HTMLInputElement>(
       'input[type="radio"][name="execMode"]'
     );
     inputs[index].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
   });
 }
 
@@ -115,18 +116,20 @@ function setSettingsCalls(): Array<{ patch: unknown }> {
 }
 
 function seedBusy(): void {
-  useProcessingStore.setState({
-    processing: {
-      busy_sid: {
-        conversationId: "busy-conv",
-        currentEvents: [
-          { type: "user/message", sessionId: "busy_sid", content: "x" },
-        ],
-        agentPhase: "streaming",
-        mood: "平静",
-        moodIntensity: 0,
+  act(() => {
+    useProcessingStore.setState({
+      processing: {
+        busy_sid: {
+          conversationId: "busy-conv",
+          currentEvents: [
+            { type: "user/message", sessionId: "busy_sid", content: "x" },
+          ],
+          agentPhase: "streaming",
+          mood: "平静",
+          moodIntensity: 0,
+        },
       },
-    },
+    });
   });
 }
 
@@ -189,7 +192,7 @@ describe("SettingsPanel · 即时保存单漏斗（Safety 接线）", () => {
     renderPanel();
     await flush();
     clickTab("safety");
-    clickRadio(1); // 自动化
+    await clickRadio(1); // 自动化
     await flush();
 
     const calls = setSettingsCalls();
@@ -202,7 +205,7 @@ describe("SettingsPanel · 即时保存单漏斗（Safety 接线）", () => {
     renderPanel();
     await flush();
     clickTab("safety");
-    clickRadio(1);
+    await clickRadio(1);
     await flush();
     const before = setSettingsCalls().length;
     expect(before).toBe(1);
@@ -217,7 +220,7 @@ describe("SettingsPanel · 即时保存单漏斗（Safety 接线）", () => {
     await flush();
     clickTab("safety");
     seedBusy();
-    clickRadio(1); // busy 下点自动化
+    await clickRadio(1); // busy 下点自动化
     await flush();
 
     expect(setSettingsCalls().length).toBe(0);
@@ -238,7 +241,7 @@ describe("SettingsPanel · 即时保存单漏斗（Safety 接线）", () => {
     renderPanel();
     await flush();
     clickTab("safety");
-    clickRadio(1);
+    await clickRadio(1);
     await flush();
 
     expect(radioChecked(0)).toBe(true); // 回滚到 ask
@@ -347,6 +350,7 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
     renderPanel();
     await flush();
     clickTab("space");
+    await flush();
     expect(container!.textContent).toContain("工作空间");
     expect(container!.textContent).toContain("F:/ws");
     expect(container!.textContent).not.toContain("未设置");
@@ -384,6 +388,7 @@ describe("SettingsPanel · 空间页（路径只读 + 目录选择 + 目录结�
     renderPanel();
     await flush();
     clickTab("space");
+    await flush();
     // 设置值为空 → 显示 appMeta 的解析路径（默认工作区），并标「默认」
     expect(container!.textContent).toContain("C:/fake/workspace");
     expect(container!.textContent).toContain("默认");
