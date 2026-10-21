@@ -374,7 +374,7 @@ mod tests {
         //
         // 注意：真实库测试**不得**清理目录（无 remove_dir_all）——
         // 曾因照搬 fixture 清理惯用法导致每次测试运行删除真实知识库
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/knowledge");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("content/knowledge");
         let idx = Arc::new(KnowledgeIndex::load(&root).expect("真实知识库加载失败"));
         let tool = ListKnowledgeTool::new(idx);
 
