@@ -208,7 +208,7 @@ export function ChatView({ onDragHandle }: Props) {
 
   // ── 插话提交（生成中）：入队成功（返回条目 id）→ 登记 pending → 清输入；
   // 关窗降级（2026-09-25）：轮恰在提交时收束 → 后端拒绝 → 转普通发送
-  // （对齐 DSH 尽力而为语义，不打扰用户）；其余失败 toast → 保留输入 ──
+  // （对齐上游尽力而为语义，不打扰用户）；其余失败 toast → 保留输入 ──
   const handleSteer = useCallback(
     async (text: string): Promise<boolean> => {
       // 无活动轮（竞态窗口）：直接降级为普通发送

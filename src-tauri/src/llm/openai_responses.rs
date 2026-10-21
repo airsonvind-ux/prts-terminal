@@ -1,6 +1,6 @@
 //! OpenAI Responses API 客户端
 //!
-//! 参考 Hanako `cn()` 中 `openai-responses` 分支。
+//! 参考既有实现 `cn()` 中 `openai-responses` 分支。
 //!
 //! 与 Chat Completions 的核心差异：
 //! - 端点：POST /responses（非 /chat/completions）

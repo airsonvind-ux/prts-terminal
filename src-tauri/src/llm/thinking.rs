@@ -1,17 +1,17 @@
 //! thinking —— 思考强度（thinking level）canonical 解析与请求注入
 //!
-//! 移植自 Hanako（core/session-thinking-level.ts + provider-compat/* + 
+//! 移植自既有实现的思考档位与协议兼容逻辑（
 //! lib/providers/deepseek*.ts）的"canonical 档 → 各族 wire 参数"语义，按
 //! PRTS 的 api_type 三族 + 既有 request_param（resolve_compat）收口：
 //!
 //! - canonical 档：off / low / medium / high / max（白名单由 models.json
 //!   `thinking_levels` 声明；**无声明的 reasoning 模型 = 推断集
-//!   [off, medium, high]，默认 medium**——修正 2，对齐 Hanako）
+//!   [off, medium, high]，默认 medium**——修正 2，对齐既有实现）
 //! - **None = 跟随模型默认档**：resolve 在 reasoning=true 时恒返回一档
 //!   （声明 default 或推断 medium）并注入——默认档即生效档，请求携带显式
 //!   档位（用户可感知、防服务端默认漂移）；非 reasoning / 未知模型 → 不注入
 //!
-//! 各族 wire（逐函数对照 Hanako）：
+//! 各族 wire（逐函数对照既有实现）：
 //! - completions + request_param="thinking"（DeepSeek）：照
 //!   lib/providers/deepseek.ts reasoningEffortForLevel / thinking 形态——
 //!   off → `thinking:{type:"disabled"}` + 删 reasoning_effort；其余 →
@@ -24,9 +24,9 @@
 //!   字段 = 服务端默认；max → 降 high——OpenAI chat effort 无 max）
 //! - anthropic-messages：照 core/provider-compat/anthropic.ts——off →
 //!   `thinking:{type:"disabled"}`；非 off → enabled + budget_tokens
-//!   （PRTS 无 Hanako 的 Pi SDK budget 表，enabled 暂以 8192 起步，
+//!   （PRTS 无既有实现的预算层，enabled 暂以 8192 起步，
 //!   **待 anthropic 推理族声明接入时复核**——见任务书上报原则）
-//! - openai-responses：照 Hanako responses 族——off → `reasoning.effort=
+//! - openai-responses：沿用既有 responses 族——off → `reasoning.effort=
 //!   "none"`；其余 effort 直传（low/medium/high/max）
 
 use serde_json::Value;
@@ -39,22 +39,22 @@ pub const LEVELS: [&str; 5] = ["off", "low", "medium", "high", "max"];
 /// 归一 canonical：未知档返回 None（调用方按"未设置"处理，不臆造）。
 pub fn canonical(level: &str) -> Option<&'static str> {
     let t = level.trim().to_ascii_lowercase();
-    // 兼容别名（Hanako normalize：xhigh 对外即 max 档内部值）
+    // 兼容别名（既有实现 normalize：xhigh 对外即 max 档内部值）
     if t == "xhigh" {
         return Some("max");
     }
     LEVELS.iter().copied().find(|&l| l == t)
 }
 
-/// 推断白名单（无显式声明的 reasoning 模型；照 Hanako DEFAULT_VISIBLE
+/// 推断白名单（无显式声明的 reasoning 模型；沿用既有 DEFAULT_VISIBLE
 /// [off, medium, high] 与全局默认 medium）。
 pub const INFERRED_LEVELS: [&str; 3] = ["off", "medium", "high"];
-/// 推断默认档（Hanako normalizeSessionThinkingLevel 全局默认 medium）。
+/// 推断默认档（既有实现 normalizeSessionThinkingLevel 全局默认 medium）。
 pub const INFERRED_DEFAULT: &str = "medium";
 
 /// 解析本次请求最终思考档。
 ///
-/// 修正 2 语义（对齐 Hanako，替换"未声明不显示/不注入"）：
+/// 修正 2 语义（对齐既有实现，替换"未声明不显示/不注入"）：
 /// - 模型 reasoning=false 或不在注册表 → None（不注入、UI 不显示）
 /// - **reasoning=true 恒返回一档**：requested None → 模型默认档（有声明 =
 ///   声明 default；无声明 = medium 推断默认）——默认档即生效档，请求携带
@@ -152,11 +152,11 @@ fn apply_openai_effort(body: &mut Value, level: &'static str) {
 /// 注入 anthropic-messages 通道 thinking（照 anthropic.ts 语义；预算映射自定）。
 ///
 /// budget_tokens 公开约束：最小值 1024 且必须 < max_tokens（Anthropic/Bedrock
-/// 文档一致）；**无官方档位标准表**（Hanako 的预算在 Pi SDK 内部，PRTS 无此层）。
+/// 文档一致）；**无官方档位标准表**（既有实现的预算在内部，PRTS 无此层）。
 /// 映射按档递增取合理值（裁决①）：low→2048 / medium→8192 / high→16384 /
 /// max→32768，均满足 ≥1024。开启 thinking 时若 max_tokens 不足（PRTS 默认
 /// 4096 会违反 budget < max_tokens），**联动抬升 max_tokens** = max(现值,
-/// budget + 4096)（参考 Hanako max 档抬 max_tokens 的做法）。
+/// budget + 4096)（参考既有 max 档抬 max_tokens 的做法）。
 pub fn apply_anthropic(body: &mut Value, level: &'static str) {
     if level == "off" {
         body["thinking"] = serde_json::json!({"type": "disabled"});
@@ -180,7 +180,7 @@ pub fn apply_anthropic(body: &mut Value, level: &'static str) {
     });
 }
 
-/// 注入 responses 通道 thinking（照 Hanako responses：effort none/low/medium/high/max）。
+/// 注入 responses 通道 thinking（沿用既有 responses：effort none/low/medium/high/max）。
 pub fn apply_responses(body: &mut Value, level: &'static str) {
     // off → effort "none"（Responses 的显式关闭）
     let effort = if level == "off" { "none" } else { level };

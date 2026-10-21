@@ -132,7 +132,7 @@ fn resolve_shell(shell: ShellKind) -> (&'static str, Vec<String>) {
         ShellKind::Auto => {
             #[cfg(windows)]
             {
-                // Windows 默认 PowerShell（与 Hanako win32 默认语义一致）
+                // Windows 默认 PowerShell（与既有 win32 默认语义一致）
                 (
                     "powershell",
                     vec![

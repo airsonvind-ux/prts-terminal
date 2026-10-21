@@ -765,7 +765,7 @@ impl SettingsStore {
             return Err(format!("settings 原子替换失败: {e}"));
         }
 
-        // 写后重读校验（Hanako savePreferences 语义：盘上读回必须可 parse）
+        // 写后重读校验（既有实现 savePreferences 语义：盘上读回必须可 parse）
         match std::fs::read_to_string(&self.path)
             .map_err(|e| format!("settings 写后重读失败: {e}"))
             .and_then(|raw| {

@@ -10,7 +10,7 @@
 //! - 条目携带会话内单调递增序号 id（cancel_steer 定位用）；
 //! - 中止/错误语义（2026-09-25 修订）：不再随中止清队列——命令层收尾把
 //!   未交付条目置保留态（`preserve`，归属 conversationId），同对话下一轮
-//!   `adopt` 领取合并（中止不丢字，对齐 DSH keepInbox）。
+//!   `adopt` 领取合并（中止不丢字，对齐上游 keepInbox）。
 //!
 //! 队列空时零行为变化：dispatch 只在 `take_next` 命中时注入，否则走
 //! 既有 turn/end 收尾，不感知队列存在。

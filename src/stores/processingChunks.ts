@@ -53,7 +53,7 @@ export function flushPending(sessionId: string): void {
   if (buf.timer) clearTimeout(buf.timer);
   buf.timer = null;
   buf.events = [];
-  // 保留 buffer 并推进 lastFlush：节流窗口跨批次持续（Hanako 语义——
+  // 保留 buffer 并推进 lastFlush：节流窗口跨批次持续（既有实现语义——
   // 「距上次 flush ≥ 33ms → 立即 flush」以真实的上次 flush 时间为基准）。
   // 若在此处删除 buffer，下次 append 会重建 lastFlush=now，窗口重置为 0，
   // 永远等满 33ms，与设计不符。
@@ -62,7 +62,7 @@ export function flushPending(sessionId: string): void {
 }
 
 /**
- * 调度 33ms 节流 flush（Hanako scheduleFlush 语义）：
+ * 调度 33ms 节流 flush（既有实现 scheduleFlush 语义）：
  * 距上次 flush ≥ 33ms → 立即 flush；否则按剩余时间安排 setTimeout 补足。
  */
 function scheduleFlush(sessionId: string): void {

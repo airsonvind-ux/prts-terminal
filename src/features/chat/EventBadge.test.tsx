@@ -583,7 +583,7 @@ describe("EventBadge · 展示切片（进行中即显示 / 失败保留 / 链�
 describe("EventBadge · 失败行展示", () => {
   it("失败 summary 单行省略：带省略类 + title 全文（全文仍在 DOM）", () => {
     const summary =
-      "命令执行失败（退出码 1）：[stderr]\nSet-Content : 无法找到路径「F:\\x」";
+      "命令执行失败（退出码 1）：[stderr]\nSet-Content : 无法找到路径「C:\\x」";
     const events = [toolCall("run_command", C1), toolResult(C1, false, summary)];
     const { text, unmount } = renderBadge(events, true);
     openTools();

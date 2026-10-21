@@ -1,6 +1,6 @@
 //! spawn_win32 —— Windows 受限令牌进程启动（M4 降权执行 · 子步 2-4）
 //!
-//! 仅 Windows 编译（exec/mod.rs 以 #[cfg(windows)] 门控）。实现与 Hanako
+//! 仅 Windows 编译（exec/mod.rs 以 #[cfg(windows)] 门控）。实现与既有实现
 //! hana-win-sandbox v3 同构的「写隔离」模型：
 //!
 //! - **Token**：`CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN |
@@ -88,7 +88,7 @@ const FILE_GENERIC_WRITE: u32 = 0x120116;
 const FILE_GENERIC_EXECUTE: u32 = 0x1200A0;
 const DELETE_RIGHT: u32 = 0x0001_0000;
 const FILE_DELETE_CHILD: u32 = 0x0000_0040;
-/// 写放行掩码（同 Hanako WRITE_ALLOW_MASK）。
+/// 写放行掩码（同既有 WRITE_ALLOW_MASK）。
 const WRITE_ALLOW_MASK: u32 = FILE_GENERIC_READ
     | FILE_GENERIC_WRITE
     | FILE_GENERIC_EXECUTE
@@ -665,7 +665,7 @@ fn cache_overrides(workspace_root: &Path) -> Vec<(String, String)> {
 // 受限令牌
 // ═══════════════════════════════════════════════════════
 
-/// 创建受限令牌（Hanako v3 同构参数）。返回令牌句柄（调用方 CloseHandle）。
+/// 创建受限令牌（既有 v3 同构参数）。返回令牌句柄（调用方 CloseHandle）。
 fn create_restricted_token(workspace_root: &Path) -> Result<HANDLE, String> {
     unsafe {
         let mut base: HANDLE = HANDLE(std::ptr::null_mut());
@@ -1429,8 +1429,8 @@ mod tests {
     #[test]
     fn child_path_strips_verbatim_prefix() {
         assert_eq!(
-            child_path(Path::new("\\\\?\\F:\\ws\\x")),
-            PathBuf::from("F:\\ws\\x"),
+            child_path(Path::new("\\\\?\\C:\\ws\\x")),
+            PathBuf::from("C:\\ws\\x"),
             "盘符 verbatim 应剥为普通形式"
         );
         assert_eq!(
@@ -1438,7 +1438,7 @@ mod tests {
             PathBuf::from("\\\\srv\\share\\x"),
             "UNC verbatim 应还原为普通 UNC"
         );
-        assert_eq!(child_path(Path::new("F:\\ws")), PathBuf::from("F:\\ws"));
+        assert_eq!(child_path(Path::new("C:\\ws")), PathBuf::from("C:\\ws"));
         assert_eq!(child_path(Path::new("rel\\x")), PathBuf::from("rel\\x"));
     }
 

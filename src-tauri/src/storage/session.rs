@@ -587,7 +587,7 @@ impl SessionEvent {
 ///
 /// 不变量：
 /// - 事件只能追加，不能删除或修改（`events` 字段私有）。
-/// - `len()` 即下一个 seq；索引即 seq（单调连续，与 DSH `seq = log.length` 对齐）。
+/// - `len()` 即下一个 seq；索引即 seq（单调连续，与上游 `seq = log.length` 对齐）。
 /// - LLM 可见事实必有对应事件（"model-visible means logged"）。
 #[derive(Debug, Default, Clone)]
 pub struct SessionLog {
@@ -624,7 +624,7 @@ impl SessionLog {
     }
 
     /// 追加 request/header 快照——仅当 system prompt 或工具 schema 变化时
-    /// 才真正追加（cache-safe，对齐 DSH `request/header` 的 reason=change 语义）。
+    /// 才真正追加（cache-safe，对齐上游 `request/header` 的 reason=change 语义）。
     pub fn push_header(&mut self, session_id: &str, system_prompt: &str, tool_defs: &[ToolDef]) {
         let changed = match &self.last_header {
             Some((prev_prompt, prev_defs)) => {

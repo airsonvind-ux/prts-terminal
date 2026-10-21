@@ -21,7 +21,7 @@ import { FileLink } from "../../shared/ui/FileLink";
 import type { WorkspaceEntry, WorkspaceSearchHit } from "../../types";
 import styles from "./WorkspaceTree.module.css";
 
-/** 搜索防抖（与 Hanako 工作台同值） */
+/** 搜索防抖（与既有工作台同值） */
 const SEARCH_DEBOUNCE_MS = 180;
 /** 每级缩进（px） */
 const INDENT_PX = 12;

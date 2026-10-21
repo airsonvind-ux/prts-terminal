@@ -48,7 +48,7 @@ const WORKSPACE_SEARCH_SKIP_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-/// 搜索结果上限（照 Hanako 工作台的 WORKSPACE_SEARCH_LIMIT = 80）。
+/// 搜索结果上限（沿用既有工作台的 WORKSPACE_SEARCH_LIMIT = 80）。
 pub(super) const WORKSPACE_SEARCH_LIMIT: usize = 80;
 /// 搜索递归深度上限（根 = 0）。
 const WORKSPACE_SEARCH_MAX_DEPTH: usize = 12;

@@ -433,7 +433,7 @@ fn resolve_op(op: RawOp, recent: &[(String, Fingerprint, String)]) -> Option<Mem
 
 /// 压缩系统提示词。
 ///
-/// 写法参照 Hanako 的 longterm 编译提示词（硬上限放首句、保留/剔除双层清单、
+/// 写法参照既有实现的 longterm 编译提示词（硬上限放首句、保留/剔除双层清单、
 /// 超长时优先概括旧内容）；内容判据换成 PRTS 的工作经历口径。
 async fn compress_longterm(
     llm: &dyn LlmClient,

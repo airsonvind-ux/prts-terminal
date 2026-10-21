@@ -1,4 +1,4 @@
-// 设置页通用组件 · Section（Hanako SettingsSection 形态，PRTS 极简版）
+// 设置页通用组件 · Section（沿用既有 SettingsSection 形态，PRTS 极简版）
 //
 // 结构：可选 title 标题行 + body 主体 + Note/Warning 说明块（页内任意位置使用，
 // 非强制 slot——按内容顺序自然摆放）。说明文字约定：常态一行式 hint 用

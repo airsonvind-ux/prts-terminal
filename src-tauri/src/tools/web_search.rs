@@ -6,7 +6,7 @@
 //! ## 架构
 //! - `WebSearchProvider` trait：搜索后端薄接口（注入形态——测试用 fake
 //!   后端离线确定性覆盖命中/空/限流/错误四型，不触碰真实网络）
-//! - `AnysearchFreeBackend`：免费匿名 anysearch_free 薄封装（仿 Hanako
+//! - `AnysearchFreeBackend`：免费匿名 anysearch_free 薄封装（仿既有实现
 //!   search-providers.ts / web-search.ts；端点 api.anysearch.com/v1/search，
 //!   POST JSON {query, max_results, language:"zh-CN"}，无鉴权头）
 //! - 请求级超时 30s；结果解析为纯函数（可离线单测真实 provider 的
@@ -37,7 +37,7 @@ const MAX_MAX_RESULTS: u32 = 20;
 /// summary 中单条摘要的最大字符数（渲染层裁剪，canonical 保持完整）。
 const SNIPPET_RENDER_CHARS: usize = 300;
 
-/// anysearch_free 免费匿名端点（Hanako 同源参数/结构）。
+/// anysearch_free 免费匿名端点（既有实现同源参数/结构）。
 const ANYSEARCH_URL: &str = "https://api.anysearch.com/v1/search";
 const ANYSEARCH_LANGUAGE: &str = "zh-CN";
 
@@ -60,7 +60,7 @@ impl SearchResult {
         if url.is_empty() {
             return None; // 无目标 URL 的结果对 agent 无用
         }
-        // snippet 优先 content（Hanako 同规则），再退 description/snippet
+        // snippet 优先 content（既有实现同规则），再退 description/snippet
         let snippet = ["content", "description", "snippet"]
             .iter()
             .find_map(|k| item.get(*k).and_then(|v| v.as_str()).filter(|s| !s.is_empty()))
@@ -280,11 +280,11 @@ fn build_anysearch_request(query: &str, max_results: u32) -> (String, Value) {
 }
 
 /// 解析 anysearch 响应体 → 结果列表。
-/// 兼容两种结构（Hanako anySearchResultsFrom 同规则）：
+/// 兼容两种结构（既有实现 anySearchResultsFrom 同规则）：
 /// - envelope：{code, message?, data:{results:[...], metadata?}}
 /// - 扁平：{results:[...]} / {code:0, results:[...]}
 /// code 非 0（业务错误）→ Api(message 或 code)；结果字段 content 优先
-/// description/snippet（Hanako 同规则）；无 url 项丢弃；超出 limit 截断。
+/// description/snippet（既有实现同规则）；无 url 项丢弃；超出 limit 截断。
 fn parse_anysearch_results(bytes: &[u8], limit: u32) -> Result<Vec<SearchResult>, SearchError> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|e| SearchError::Network(format!("响应解析失败：{e}")))?;
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn anysearch_parse_envelope_with_data_results() {
-        // Hanako 主结构：{code:0, data:{results:[{title,url,content,...}], metadata}}
+        // 既有实现主结构：{code:0, data:{results:[{title,url,content,...}], metadata}}
         let body = r#"{
             "code": 0,
             "message": "ok",

@@ -43,7 +43,7 @@ fn slice_chars(s: &str, max: usize) -> String {
 
 /// 组装标题生成的 system + user 消息。
 ///
-/// system 语义对齐 Hanako `summarizeTitle`（约 10 字、语言跟随用户首句、无标点）；
+/// system 语义对齐既有实现 `summarizeTitle`（约 10 字、语言跟随用户首句、无标点）；
 /// user 为 `用户：{首问}\n助手：{首答}`，各截 500 字符。
 pub fn build_title_messages(user_text: &str, assistant_text: &str) -> Vec<ChatMessage> {
     let system = "你是一个对话标题生成器。根据用户和助手的第一轮对话，用一句极短的话概括对话主题。\n\n\

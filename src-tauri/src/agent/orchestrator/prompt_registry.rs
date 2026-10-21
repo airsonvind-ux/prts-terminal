@@ -28,7 +28,7 @@ pub const ORDER_MEMORY: i32 = 150;
 
 /// 静态提示词 section（注册制）。
 ///
-/// 对应 DSH `PromptSection`（name/order/text）的 Rust 近似：
+/// 对应上游 `PromptSection`（name/order/text）的 Rust 近似：
 /// 按 `order` 升序拼接，同名重复注册报错。
 #[derive(Debug, Clone)]
 pub struct PromptSection {
@@ -71,7 +71,7 @@ impl PromptRegistry {
         reg
     }
 
-    /// 注册静态 section。同名重复注册返回错误（对齐 DSH 同名抛错语义）。
+    /// 注册静态 section。同名重复注册返回错误（对齐上游同名抛错语义）。
     pub fn register_section(&mut self, section: PromptSection) -> Result<(), String> {
         if self.sections.iter().any(|s| s.name == section.name) {
             return Err(format!("PromptSection '{}' 重复注册", section.name));

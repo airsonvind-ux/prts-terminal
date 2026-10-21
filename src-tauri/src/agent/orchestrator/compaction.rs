@@ -11,7 +11,7 @@
 //!
 //! 摘要 run 与主对话共享同一 provider/模型（由命令层传入已路由的 client），
 //! 但：system（含记忆区）、工具面、折叠区消息与主请求**逐字节同源**：请求即
-//! 主请求真前缀，复用提供方 KV cache（DSH 形态）；流式事件全部丢弃（不推 IPC）、输出不进入
+//! 主请求真前缀，复用提供方 KV cache（上游形态）；流式事件全部丢弃（不推 IPC）、输出不进入
 //! 任何 log。推理链策略与主对话一致（`Preserve`——裁决：思考强度设置挂账，
 //! 本模块不引入第二策略面）。
 //!
@@ -486,7 +486,7 @@ use super::super::context::assemble_system_prompt_with_memory as asm_system;
 
     #[tokio::test]
     async fn summary_input_replays_catalog_memory_and_tools_for_cache_prefix() {
-        // 前缀同源（2026-09-25 裁决 · DSH 形态）：system 含冻结目录与记忆区、
+        // 前缀同源（2026-09-25 裁决 · 上游形态）：system 含冻结目录与记忆区、
         // 工具面同主请求
         let client = CaptureClient::new();
         let tools = vec![ToolDef::new(

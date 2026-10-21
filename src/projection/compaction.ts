@@ -10,7 +10,7 @@ export const SUMMARY_BLOCK_START = "[对话压缩摘要——非用户输入]";
 /** 摘要消息定界块结束行 */
 export const SUMMARY_BLOCK_END = "[/对话压缩摘要]";
 
-/** 保留段 token 预算（定稿裁决 1：常数 20K，Hanako 同款成熟参数，可配常量） */
+/** 保留段 token 预算（定稿裁决 1：常数 20K，沿用既有成熟参数，可配常量） */
 export const RETAIN_BUDGET_TOKENS = 20_000;
 /** noop 预判：折叠区轮数下限（少于则「对话太短」） */
 export const NOOP_MIN_FOLD_TURNS = 2;

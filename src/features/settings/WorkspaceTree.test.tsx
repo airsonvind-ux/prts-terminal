@@ -21,7 +21,7 @@ import type { WorkspaceEntry, WorkspaceSearchHit } from "../../types";
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-const WS = "F:\\ws";
+const WS = "C:\\ws";
 
 beforeEach(() => {
   __invokeMock.mockClear();

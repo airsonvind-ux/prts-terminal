@@ -320,7 +320,7 @@ fn dir_from_uninstall(s: &str) -> PathBuf {
     let exe = if let Some(rest) = s.strip_prefix('"') {
         rest.split('"').next().unwrap_or("")
     } else {
-        // 裸路径可能含空格（如 `F:\Arknights bilibili\Uninstall.exe`）——以
+        // 裸路径可能含空格（如 `D:\Games\Arknights bilibili\Uninstall.exe`）——以
         // `.exe` 为界，不按空白切分（`to_ascii_lowercase` 保字节长度，索引对齐）。
         let lower = s.to_ascii_lowercase();
         let cut = lower.find(".exe").map(|i| i + 4).unwrap_or(s.len());
@@ -628,8 +628,8 @@ mod tests {
             PathBuf::from("D:\\Netease\\MuMuPlayer-12.0")
         );
         assert_eq!(
-            dir_from_uninstall("F:\\Arknights bilibili\\Uninstall.exe"),
-            PathBuf::from("F:\\Arknights bilibili")
+            dir_from_uninstall("D:\\Games\\Arknights bilibili\\Uninstall.exe"),
+            PathBuf::from("D:\\Games\\Arknights bilibili")
         );
         assert_eq!(dir_from_uninstall(""), PathBuf::new());
     }

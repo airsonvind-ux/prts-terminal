@@ -8,7 +8,7 @@
 //! - 超时消费点：`Tool::timeout()` 提供工具级默认（120s），调用级参数
 //!   timeout 覆盖之（params.timeout > 工具默认；registry 不做全域包装）。
 //!
-//! ## 渲染口径（对齐 Hanako exec_command）
+//! ## 渲染口径（对齐既有 exec_command）
 //!
 //! - 双通道共用一份尾部额度：2000 行 / 50KB，stderr 优先占额；
 //! - 单通道有内容不加标记，双通道带 `[stderr]` / `[stdout]` 标记，顺序统一
@@ -24,7 +24,7 @@ use crate::workspace::WorkspaceRoot;
 
 use super::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
-/// 双通道共用的尾部额度（行 / 字节，与 Hanako exec_command 同口径）。
+/// 双通道共用的尾部额度（行 / 字节，与既有 exec_command 同口径）。
 const MAX_TAIL_LINES: usize = 2000;
 const MAX_TAIL_BYTES: usize = 50 * 1024;
 /// canonical 中通道尾部字段上限（结构化数据，不进模型上下文）。
@@ -256,7 +256,7 @@ struct ChannelSlice {
 }
 
 /// 取尾部：自末尾向上累加，最多 `max_lines` 行且不超过 `max_bytes` 字节；
-/// 单行本身超字节上限时按字符边界取其尾部（对齐 Hanako lastLinePartial）。
+/// 单行本身超字节上限时按字符边界取其尾部（对齐既有 lastLinePartial）。
 fn tail_slice(text: &str, max_lines: usize, max_bytes: usize) -> ChannelSlice {
     let trimmed = text.trim_end();
     if trimmed.is_empty() {
