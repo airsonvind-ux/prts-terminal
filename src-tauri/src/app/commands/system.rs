@@ -84,7 +84,7 @@ pub async fn verify_connection(config: LlmConfig) -> Result<(), String> {
             } else {
                 Some(("authorization", format!("Bearer {}", config.api_key)))
             };
-            (url, auth.map(|(k, v)| (k, v)))
+            (url, auth)
         }
     };
 

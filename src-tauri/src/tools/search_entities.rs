@@ -156,7 +156,7 @@ impl Tool for SearchEntities {
         if mode == "count" {
             let count = db
                 .query_count(table, &filters)
-                .map_err(|e| ToolError::Execution(e))?;
+                .map_err(ToolError::Execution)?;
             return Ok(ToolOutput::json(
                 serde_json::json!({ "count": count }),
                 count.to_string(),
@@ -166,7 +166,7 @@ impl Tool for SearchEntities {
         // ── 6. list 模式：名称+ID 列表 + 总数 ──
         let total = db
             .query_count(table, &filters)
-            .map_err(|e| ToolError::Execution(e))?;
+            .map_err(ToolError::Execution)?;
 
         let result = db
             .query_filtered(
@@ -175,7 +175,7 @@ impl Tool for SearchEntities {
                 &filters,
                 limit,
             )
-            .map_err(|e| ToolError::Execution(e))?;
+            .map_err(ToolError::Execution)?;
 
         let rows = result.rows;
         let dropped_fields = result.dropped_fields;

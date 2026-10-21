@@ -213,7 +213,7 @@ impl Tool for QueryRogue {
         let theme_str = v["theme"]
             .as_str()
             .ok_or_else(|| ToolError::Parse("\"theme\" 参数必填，请指定肉鸽主题".into()))?;
-        let theme = resolve_theme(theme_str).map_err(|e| ToolError::Execution(e))?;
+        let theme = resolve_theme(theme_str).map_err(ToolError::Execution)?;
 
         // ── 2. 解析查询目标 ──
         let targets = common::parse_targets(&v)?;
@@ -266,7 +266,7 @@ impl Tool for QueryRogue {
                             if j > 0 {
                                 output.push('\n');
                             }
-                            format_one_entry(&row, theme.display, &mut output);
+                            format_one_entry(row, theme.display, &mut output);
                         }
                     }
                 }
@@ -323,7 +323,7 @@ fn query_by_id(
     let fields: Vec<String> = ALL_COLS.iter().map(|c| c.to_string()).collect();
     let result = db
         .query_filtered(table, &fields, &[Filter::new("id", FilterOp::Eq, id)], 1)
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     let row = result.rows.into_iter().next();
     Ok((row, result.dropped_fields))
 }
@@ -351,7 +351,7 @@ fn query_by_name_with_variants(
             &[Filter::new("名称", FilterOp::Eq, name)],
             20,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     for d in &exact_result.dropped_fields {
         if !all_dropped.contains(d) {
             all_dropped.push(d.clone());
@@ -376,7 +376,7 @@ fn query_by_name_with_variants(
             &[Filter::new("名称", FilterOp::Like, name)],
             5,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     for d in &like_result.dropped_fields {
         if !all_dropped.contains(d) {
             all_dropped.push(d.clone());
@@ -417,7 +417,7 @@ fn append_with_variants(
                 &[Filter::new("名称", FilterOp::Eq, &variant_name)],
                 1,
             )
-            .map_err(|e| ToolError::Execution(e))?;
+            .map_err(ToolError::Execution)?;
         for d in &variant_result.dropped_fields {
             if !all_dropped.contains(d) {
                 all_dropped.push(d.clone());

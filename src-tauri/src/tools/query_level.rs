@@ -191,7 +191,7 @@ fn act_f64(arr: &[serde_json::Value], idx: usize) -> f64 {
     arr.get(idx).and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
-fn act_str<'a>(arr: &'a [serde_json::Value], idx: usize) -> Option<&'a str> {
+fn act_str(arr: &[serde_json::Value], idx: usize) -> Option<&str> {
     arr.get(idx).and_then(|v| v.as_str())
 }
 
@@ -199,7 +199,7 @@ fn inst_i64(arr: &[serde_json::Value], idx: usize) -> i64 {
     arr.get(idx).and_then(|v| v.as_i64()).unwrap_or(0)
 }
 
-fn inst_str<'a>(arr: &'a [serde_json::Value], idx: usize) -> Option<&'a str> {
+fn inst_str(arr: &[serde_json::Value], idx: usize) -> Option<&str> {
     arr.get(idx).and_then(|v| v.as_str())
 }
 
@@ -397,11 +397,11 @@ impl Tool for QueryLevel {
             return Err(ToolError::Parse("参数 fields 不能为空".into()));
         }
 
-        let show_map = fields.iter().any(|f| *f == "地图");
-        let show_predefines = fields.iter().any(|f| *f == "预置单位");
-        let show_runes = fields.iter().any(|f| *f == "关卡符文");
-        let show_routes = fields.iter().any(|f| *f == "路线");
-        let show_waves = fields.iter().any(|f| *f == "波次");
+        let show_map = fields.contains(&"地图");
+        let show_predefines = fields.contains(&"预置单位");
+        let show_runes = fields.contains(&"关卡符文");
+        let show_routes = fields.contains(&"路线");
+        let show_waves = fields.contains(&"波次");
 
         // ── 2. 查询数据库 ──
         let db = ctx
@@ -425,7 +425,7 @@ impl Tool for QueryLevel {
                 &[Filter::new("levelId", FilterOp::Eq, level_id)],
                 1,
             )
-            .map_err(|e| ToolError::Execution(e))?;
+            .map_err(ToolError::Execution)?;
 
         let row = result
             .rows
@@ -580,7 +580,7 @@ fn group_tile_coords(map: &MapData) -> Vec<TileGroup> {
                     coords: Vec::new(),
                 }
             });
-            group.coords.push((x as i64, y as i64));
+            group.coords.push((x as i64, y));
         }
     }
     let mut out: Vec<TileGroup> = Vec::with_capacity(order.len());
@@ -732,7 +732,7 @@ fn format_predefines(raw: &str, key_cache: &HashMap<String, String>) -> String {
     }
 
     let mut lines = Vec::new();
-    let token_insts = data.get(0).cloned().unwrap_or_default();
+    let token_insts = data.first().cloned().unwrap_or_default();
     let char_insts = data.get(1).cloned().unwrap_or_default();
     let token_cards = data.get(2).cloned().unwrap_or_default();
     let char_cards = data.get(3).cloned().unwrap_or_default();
@@ -1087,7 +1087,7 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
         None => return format!("{idx}(?)"),
     };
 
-    let motion_mode = arr.get(0).and_then(|v| v.as_i64()).unwrap_or(0);
+    let motion_mode = arr.first().and_then(|v| v.as_i64()).unwrap_or(0);
 
     // E_NUM
     if motion_mode == 2 {
@@ -1140,7 +1140,7 @@ fn format_one_route(idx: usize, route: &serde_json::Value) -> String {
             Some(a) => a,
             None => continue,
         };
-        let cp_type = cp_arr.get(0).and_then(|v| v.as_i64()).unwrap_or(0);
+        let cp_type = cp_arr.first().and_then(|v| v.as_i64()).unwrap_or(0);
         let cp_time = cp_arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
         let (cp_row, cp_col) = pos_from_json(cp_arr.get(2));
         let cp_offset = offset_from_json(cp_arr.get(3));
@@ -1340,7 +1340,7 @@ fn format_fragment_actions(
         let pck = act_str(arr, 7);
         let grp = act_str(arr, 6);
         if let Some(pck) = pck {
-            if !pck.is_empty() && grp.map_or(true, |g| g.is_empty()) {
+            if !pck.is_empty() && grp.is_none_or(|g| g.is_empty()) {
                 // 找同 packKey 且有 groupKey 的 action
                 for (aj, act_val2) in actions.iter().enumerate() {
                     if ai == aj {
@@ -1447,8 +1447,8 @@ fn format_random_group(
             // 找该包内带 groupKey 的 action 的 weight
             let mut wt = 0;
             for act in pack_acts {
-                if act_str(*act, 6) == Some(group_key) {
-                    let w = act_i64(*act, 8);
+                if act_str(act, 6) == Some(group_key) {
+                    let w = act_i64(act, 8);
                     if w > 0 {
                         wt = w;
                         break;
@@ -1463,14 +1463,14 @@ fn format_random_group(
         // 处理 null packKey
         if let Some(null_acts) = pack_dict.get(&None) {
             for act in null_acts {
-                if act_str(*act, 6) == Some(group_key) {
-                    let wt = act_i64(*act, 8);
+                if act_str(act, 6) == Some(group_key) {
+                    let wt = act_i64(act, 8);
                     if wt > 0 {
                         lines.push(format!("      权重 {wt}"));
                         format_action_line(act, key_cache, lines, 8);
                         // 跟随的 packKey=null 无 groupKey 的 action
                         for act2 in null_acts {
-                            if act2.len() > 7 && act_str(*act2, 6).map_or(true, |s| s.is_empty()) {
+                            if act2.len() > 7 && act_str(act2, 6).is_none_or(|s| s.is_empty()) {
                                 format_action_line(act2, key_cache, lines, 8);
                             }
                         }
@@ -1482,21 +1482,21 @@ fn format_random_group(
         // 所有 action 的 packKey 相同（全部 None 或全同一值）
         let all_acts: Vec<&&[serde_json::Value]> = pack_dict.values().flatten().collect();
         for act in all_acts {
-            if act_str(*act, 6) != Some(group_key) {
+            if act_str(act, 6) != Some(group_key) {
                 continue;
             }
-            let wt = act_i64(*act, 8);
+            let wt = act_i64(act, 8);
             if wt > 0 {
                 lines.push(format!("      权重 {wt}"));
                 format_action_line(act, key_cache, lines, 8);
                 // 跟随的同 packKey 无 groupKey 的 action
-                let pck = act_str(*act, 7);
+                let pck = act_str(act, 7);
                 for act2 in &indices {
                     let arr2 = match actions[*act2].as_array() {
                         Some(a) => a,
                         None => continue,
                     };
-                    if act_str(arr2, 6).map_or(true, |s| s.is_empty()) && act_str(arr2, 7) == pck {
+                    if act_str(arr2, 6).is_none_or(|s| s.is_empty()) && act_str(arr2, 7) == pck {
                         format_action_line(arr2, key_cache, lines, 8);
                     }
                 }

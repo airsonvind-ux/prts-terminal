@@ -208,7 +208,7 @@ pub async fn agent_process(
         &session_id,
         request.history,
         &tools, // State<Arc<ToolRegistry>> → &Arc<ToolRegistry>（deref 强制）
-        &*llm,  // Arc<dyn LlmClient> → &dyn LlmClient
+        &llm,  // Arc<dyn LlmClient> → &dyn LlmClient
         &llm_config,
         &model_registry,
         db,

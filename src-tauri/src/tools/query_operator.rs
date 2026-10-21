@@ -779,7 +779,7 @@ fn split_level_prefix(s: &str) -> (Option<u32>, &str) {
 }
 
 /// "精一20级" → ("一", "20级"), "精二满级" → ("二", "满级"), "精二" → ("二", "")
-fn split_digits<'a>(s: &'a str) -> (&'a str, &'a str) {
+fn split_digits(s: &str) -> (&str, &str) {
     for (i, c) in s.char_indices() {
         if c.is_ascii_digit() || c == '满' || c == '级' {
             return (&s[..i], &s[i..]);
@@ -946,7 +946,7 @@ fn compute_stats(
     // 2. 信赖加成
     if trust_pct > 0.0 {
         for (trust_attr, raw_val) in trust {
-            let canon = canonical_attr(&trust_attr);
+            let canon = canonical_attr(trust_attr);
             if canon == "攻击速度" {
                 stats.atk_speed_bonus += raw_val * trust_pct;
                 stats

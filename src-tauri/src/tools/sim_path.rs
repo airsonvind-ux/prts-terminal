@@ -468,7 +468,6 @@ impl<'a> Simulator<'a> {
                     || !self.model.passable[cy as usize][cx as usize]
                 {
                     self.finish_cp(f, "MOVE 卡墙跳");
-                    return;
                 }
             }
             "WAIT" => {
@@ -658,7 +657,7 @@ impl<'a> Simulator<'a> {
                         // pos 模式要求触发帧（设定帧下一帧）不处于失衡，否则无效（事件流说明，注入作废）
                         let pos_invalid = inj.pos.is_some()
                             && (frame_has_push
-                                || push_state.as_ref().map_or(false, |ps| {
+                                || push_state.as_ref().is_some_and(|ps| {
                                     f + 1 >= ps.start_f && f + 1 < ps.start_f + ps.dur
                                 }));
                         if pos_invalid {
@@ -705,7 +704,7 @@ impl<'a> Simulator<'a> {
             // 失衡（最高优先级）：设定帧下一帧起持续 dur 帧
             let in_push = push_state
                 .as_ref()
-                .map_or(false, |ps| f >= ps.start_f && f < ps.start_f + ps.dur);
+                .is_some_and(|ps| f >= ps.start_f && f < ps.start_f + ps.dur);
 
             if in_push {
                 let ps = push_state.clone().unwrap();

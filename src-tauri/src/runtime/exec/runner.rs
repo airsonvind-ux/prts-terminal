@@ -291,7 +291,7 @@ pub fn run_command(spec: &CommandSpec, options: &RunOptions) -> RunOutput {
 
     // M4：进程创建收敛到 spawn 抽象（Windows 默认受限令牌 / full 走自身令牌
     // + Job；std 兑底与受限开启判定见 exec/spawn.rs——本层只消费统一视图）
-    let mut argv: Vec<String> = prefix_args.iter().cloned().collect();
+    let mut argv: Vec<String> = prefix_args.to_vec();
     argv.push(spec.command.clone());
     let mut spawned = match spawn::spawn_command(
         program,

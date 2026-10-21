@@ -99,7 +99,7 @@ impl TurnState {
 
     /// 提取聚合结果（借用版）：(推理链, 最后一次调用 token 快照)。
     pub(super) fn snapshot(&self) -> (Option<String>, Option<TokenUsage>) {
-        (self.final_reasoning.clone(), self.final_usage.clone())
+        (self.final_reasoning.clone(), self.final_usage)
     }
 
     /// 提取聚合结果：(推理链, 最后一次调用 token 快照)。

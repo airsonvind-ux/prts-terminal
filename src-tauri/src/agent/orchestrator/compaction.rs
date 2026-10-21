@@ -121,7 +121,7 @@ pub async fn run_summary(
     messages.push(instruction);
 
     // ── 3. 超窗预检与降级链（裁决 D）──
-    let budget = ((context_window as u32 as f64) * MAX_SUMMARY_INPUT_RATIO).floor() as usize;
+    let budget = ((context_window as f64) * MAX_SUMMARY_INPUT_RATIO).floor() as usize;
     if estimate_messages(&messages) > budget {
         strip_reasoning(&mut messages);
         if estimate_messages(&messages) > budget {

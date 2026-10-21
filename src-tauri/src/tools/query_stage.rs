@@ -202,7 +202,7 @@ fn query_stage_by_id(
             &[Filter::new("关卡ID", FilterOp::Eq, id)],
             5,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     Ok(result.rows)
 }
 
@@ -220,7 +220,7 @@ fn query_stage_by_name(
             &[Filter::new("关卡名", FilterOp::Eq, name)],
             5,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     if !r.rows.is_empty() {
         return Ok(r.rows);
     }
@@ -233,7 +233,7 @@ fn query_stage_by_name(
             &[Filter::new("关卡编号", FilterOp::Eq, name)],
             5,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     if !r.rows.is_empty() {
         return Ok(r.rows);
     }
@@ -246,7 +246,7 @@ fn query_stage_by_name(
             &[Filter::new("关卡名", FilterOp::Like, name)],
             0,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
     let best = r
         .rows
         .into_iter()

@@ -295,7 +295,7 @@ fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String
 /// 标准 base64 编码（自实现，避免引入仅此一处所需的依赖）。
 fn base64_encode(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -332,7 +332,7 @@ mod base64_decode {
         }
         // 去掉 data URL 前缀与空白
         let raw = input.trim();
-        let raw = raw.split(',').last().unwrap_or(raw);
+        let raw = raw.split(',').next_back().unwrap_or(raw);
         let filtered: Vec<u8> = raw.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
         let mut out = Vec::with_capacity(filtered.len() / 4 * 3);
         let mut buf = 0u32;

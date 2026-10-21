@@ -153,7 +153,7 @@ pub(crate) fn parse_json<T: serde::de::DeserializeOwned>(
 }
 
 /// 将字符串拆分为头部（中文/字母）和尾部（数字/满/级）。
-pub(crate) fn split_digits<'a>(s: &'a str) -> (&'a str, &'a str) {
+pub(crate) fn split_digits(s: &str) -> (&str, &str) {
     for (i, c) in s.char_indices() {
         if c.is_ascii_digit() || c == '满' || c == '级' {
             return (&s[..i], &s[i..]);
@@ -177,10 +177,10 @@ pub(crate) fn parse_chinese_or_digit(s: &str) -> Option<u32> {
 }
 
 /// 在 keyframes 中找到包围给定等级的两个关键帧（lo ≤ level ≤ hi）。
-pub(crate) fn find_bounding_keyframes<'a>(
-    keyframes: &'a [Keyframe],
+pub(crate) fn find_bounding_keyframes(
+    keyframes: &[Keyframe],
     level: u32,
-) -> (&'a Keyframe, &'a Keyframe) {
+) -> (&Keyframe, &Keyframe) {
     if keyframes.is_empty() {
         static DUMMY: std::sync::LazyLock<Keyframe> = std::sync::LazyLock::new(|| Keyframe {
             level: 1,
@@ -498,11 +498,11 @@ pub(crate) fn level_label(lvl: u32) -> String {
 }
 
 /// 从备选天赋中选最优匹配。
-pub(crate) fn pick_talent_alt<'a>(
-    alternatives: &'a [TalentAlt],
+pub(crate) fn pick_talent_alt(
+    alternatives: &[TalentAlt],
     elite: u32,
     pot: u32,
-) -> Option<&'a TalentAlt> {
+) -> Option<&TalentAlt> {
     alternatives
         .iter()
         .filter(|a| a.condition.elite <= elite && a.condition.potential <= pot)

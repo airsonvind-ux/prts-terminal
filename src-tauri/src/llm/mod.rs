@@ -144,8 +144,10 @@ impl Default for LlmConfig {
 /// 当前仅 OpenAiCompletions 已实现，其余返回错误。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ApiType {
     #[serde(rename = "openai-completions")]
+    #[default]
     OpenAiCompletions,
     #[serde(rename = "anthropic-messages")]
     AnthropicMessages,
@@ -153,11 +155,6 @@ pub enum ApiType {
     OpenAIResponses,
 }
 
-impl Default for ApiType {
-    fn default() -> Self {
-        Self::OpenAiCompletions
-    }
-}
 
 /// 模型所属的 thinking 家族。
 ///

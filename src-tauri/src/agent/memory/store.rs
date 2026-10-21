@@ -682,9 +682,9 @@ impl MemoryStore {
         let target = self
             .growth_get_mut(name)
             .ok_or_else(|| format!("成长页「{name}」不存在；改用 create 新建"))?;
-        let changed = body.map_or(false, |b| b != target.body)
-            || brief.map_or(false, |b| b != target.brief)
-            || tags.as_ref().map_or(false, |t| *t != target.tags);
+        let changed = body.is_some_and(|b| b != target.body)
+            || brief.is_some_and(|b| b != target.brief)
+            || tags.as_ref().is_some_and(|t| *t != target.tags);
         if !changed {
             return Ok(false);
         }

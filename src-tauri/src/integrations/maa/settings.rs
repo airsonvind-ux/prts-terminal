@@ -11,16 +11,13 @@ use super::connection::Overrides;
 /// 账号服务器。喂给任务的 `client_type`，也喂给 MuMu 截图增强的 extras。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum Server {
+    #[default]
     Official,
     Bilibili,
 }
 
-impl Default for Server {
-    fn default() -> Self {
-        Self::Official
-    }
-}
 
 impl Server {
     /// MAA 侧要的取值（`client_type` / MuMu extras 的 `client_type`）。

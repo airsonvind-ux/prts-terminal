@@ -620,7 +620,7 @@ fn query_by_id(
             ],
             1,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
 
     Ok(result.rows.into_iter().next())
 }
@@ -643,7 +643,7 @@ fn query_by_name(
             ],
             1,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
 
     if !exact.rows.is_empty() {
         return Ok(exact.rows.into_iter().next());
@@ -668,7 +668,7 @@ fn query_by_name(
             ],
             0,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
 
     let best = candidates
         .rows
@@ -689,7 +689,7 @@ fn count_variants(db: &Database, enemy_id: &str) -> Result<usize, ToolError> {
             &[Filter::new("敌人ID", FilterOp::Eq, enemy_id)],
             0,
         )
-        .map_err(|e| ToolError::Execution(e))?;
+        .map_err(ToolError::Execution)?;
 
     Ok(result.rows.len())
 }

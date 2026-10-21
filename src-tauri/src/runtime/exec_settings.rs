@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 /// 命令执行模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ExecutionMode {
     /// 操作前询问（默认）：每个 run_command 调用都弹确认
+    #[default]
     Ask,
     /// 自动化：低危自动 / 高危询问 / 极危拒绝
     Auto,
@@ -32,11 +34,6 @@ impl ExecutionMode {
     }
 }
 
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        Self::Ask
-    }
-}
 
 /// 执行设置容器（当前仅模式一项；未来扩展直接加字段）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

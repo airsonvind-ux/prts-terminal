@@ -841,7 +841,7 @@ fn fight_times(frames: &[Value]) -> Option<i64> {
         .iter()
         .filter(|f| f.get("kind").and_then(Value::as_str) == Some("FightTimes"))
         .filter_map(|f| f.get("details")?.get("times_finished")?.as_i64())
-        .last()
+        .next_back()
 }
 
 /// Fight：掉落 + （剿灭进度）+ 理智账 + 用药。没有帧的行不写。

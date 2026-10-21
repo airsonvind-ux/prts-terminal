@@ -751,15 +751,14 @@ fn extract_targets(cls: &Classified, tokens: &[Token]) -> Result<Vec<String>, &'
                     i += 1;
                     continue;
                 }
-                if !after_double_dash && v.starts_with('/') {
-                    if lenient {
+                if !after_double_dash && v.starts_with('/')
+                    && lenient {
                         // robocopy 等：cmd 风格开关跳过（/mir /purge 已由删除门拦）
                         i += 1;
                         continue;
                     }
                     // strict 面 `/x`：PS/cmd 双态命令中按字面参数收进位置流；
                     // join 判定 cwd 必在区内，不产生额外放行面（安全方向）。
-                }
                 if skip_value {
                     skip_value = false;
                 } else {
@@ -946,12 +945,11 @@ pub fn evaluate(command: &str, cwd: &Path, workspace: &Path) -> GateVerdict {
 
     // 无条件 ASK 族与类型放行族先行
     match cls.kind {
-        OpKind::SystemQueryOp => {
+        OpKind::SystemQueryOp
             // 类型放行族：无重定向目标才无条件 AUTO（重定向写盘走地域判定）
-            if targets.is_empty() {
+            if targets.is_empty() => {
                 return GateVerdict::auto("system-query");
             }
-        }
         OpKind::CodeExecOp => return GateVerdict::ask("code-exec"),
         OpKind::NetworkOp => return GateVerdict::ask("network-op"),
         OpKind::InstallOp => return GateVerdict::ask("install-op"),

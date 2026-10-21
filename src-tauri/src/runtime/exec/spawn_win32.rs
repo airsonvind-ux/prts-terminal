@@ -512,7 +512,7 @@ fn dacl_contains_sid(dacl: *const ACL, sid: &[u8]) -> bool {
             }
             let ace_sid = (ace as *const u8).add(8) as *const core::ffi::c_void;
             let len = GetLengthSid(PSID(ace_sid as *mut core::ffi::c_void)) as usize;
-            if len == sid.len() && std::slice::from_raw_parts(ace_sid as *const u8, len) == &sid[..]
+            if len == sid.len() && std::slice::from_raw_parts(ace_sid as *const u8, len) == sid
             {
                 return true;
             }
@@ -958,7 +958,7 @@ fn launch_restricted(
             None,
             None,
         ) {
-            let _ = DeleteProcThreadAttributeList(attr_list);
+            DeleteProcThreadAttributeList(attr_list);
             close_handles(&[
                 stdin_read,
                 stdin_write,
@@ -979,7 +979,7 @@ fn launch_restricted(
             None,
             None,
         ) {
-            let _ = DeleteProcThreadAttributeList(attr_list);
+            DeleteProcThreadAttributeList(attr_list);
             close_handles(&[
                 stdin_read,
                 stdin_write,
@@ -1015,7 +1015,7 @@ fn launch_restricted(
             &mut pi,
         );
 
-        let _ = DeleteProcThreadAttributeList(attr_list);
+        DeleteProcThreadAttributeList(attr_list);
         // 父进程关闭写端与 stdin 空管（子进程独占 → EOF 语义正确）
         close_handles(&[stdin_read, stdin_write, out_write, err_write]);
 

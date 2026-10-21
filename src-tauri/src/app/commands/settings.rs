@@ -187,9 +187,7 @@ pub async fn set_settings(
     guard_config_write(&turn_registry)?;
     let mut st = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
     if st.is_readonly() {
-        return Err(format!(
-            "设置文件 schemaVersion 高于当前，拒绝写入（需升级应用）"
-        ));
+        return Err("设置文件 schemaVersion 高于当前，拒绝写入（需升级应用）".to_string());
     }
     // MAA 运行期间拒绝任何带 maa 段的写入：这项改动会作废连接、关掉桥，
     // 把正在跑的任务腰斩（长任务出轮后仍在跑，属常见情形）。扩展页的只读锁定
@@ -314,9 +312,7 @@ pub fn set_always_on_top(
 
     let mut st = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
     if st.is_readonly() {
-        return Err(format!(
-            "设置文件 schemaVersion 高于当前，拒绝写入（需升级应用）"
-        ));
+        return Err("设置文件 schemaVersion 高于当前，拒绝写入（需升级应用）".to_string());
     }
     let previous = st.settings.window.always_on_top;
     st.settings.window.always_on_top = enabled;
