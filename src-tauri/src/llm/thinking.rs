@@ -121,7 +121,7 @@ pub fn apply_completions(
     match request_param {
         Some("thinking") => apply_deepseek_completions(body, level),
         Some("enable_thinking") => apply_qwen(body, level),
-        Some("zhipu") => apply_zhipu(body, level),
+        Some("zhipu") => apply_zhipu(body, level, model),
         Some("kimi") => apply_kimi(body, level, model),
         Some("volcengine") => apply_volcengine(body, level),
         _ => apply_openai_effort(body, level),
@@ -144,8 +144,32 @@ fn apply_qwen(body: &mut Value, level: &'static str) {
 }
 
 /// 智谱 GLM：thinking.type；保留式思考由 clear_thinking:false 表达。
-fn apply_zhipu(body: &mut Value, level: &'static str) {
+///
+/// GLM-5.3 系列始终开启思考，官方不再接受 `disabled`；它支持
+/// `reasoning_effort` 的 low/high/max（默认 max）。旧模型仍保留 off。
+fn apply_zhipu(body: &mut Value, level: &'static str, model: &str) {
     clear_thinking_fields(body);
+    let model = model.to_ascii_lowercase();
+
+    if model.starts_with("glm-5.3") {
+        let mut thinking = serde_json::json!({"type": "enabled"});
+        // Flash/FlashX 官方推荐始终保留推理链；标准 5.3 在有工具/历史推理时保留。
+        if model.contains("flash") || has_tool_call_or_reasoning_history(body) {
+            thinking["clear_thinking"] = Value::Bool(false);
+        }
+        body["thinking"] = thinking;
+        body["reasoning_effort"] = Value::String(
+            match level {
+                "low" => "low",
+                "max" => "max",
+                "off" => "low", // 5.3 不能关闭；按官方迁移建议降为 low
+                _ => "high",
+            }
+            .into(),
+        );
+        return;
+    }
+
     let enabled = level != "off";
     let mut thinking = serde_json::json!({
         "type": if enabled { "enabled" } else { "disabled" }
@@ -486,6 +510,31 @@ mod tests {
         apply_completions(&mut b, Some("zhipu"), "off", "glm-5");
         assert_eq!(b["thinking"]["type"], "disabled");
         assert!(b["thinking"].get("clear_thinking").is_none());
+    }
+
+    #[test]
+    fn zhipu_53_always_thinks_and_uses_effort() {
+        let mut b = serde_json::json!({"model": "glm-5.3", "messages": []});
+        apply_completions(&mut b, Some("zhipu"), "off", "glm-5.3");
+        assert_eq!(b["thinking"]["type"], "enabled");
+        assert_eq!(b["reasoning_effort"], "low");
+        assert!(b["thinking"].get("clear_thinking").is_none());
+
+        let mut b = serde_json::json!({"model": "glm-5.3-flash", "messages": []});
+        apply_completions(&mut b, Some("zhipu"), "low", "glm-5.3-flash");
+        assert_eq!(b["thinking"]["type"], "enabled");
+        assert_eq!(b["thinking"]["clear_thinking"], false);
+        assert_eq!(b["reasoning_effort"], "low");
+
+        let mut b = serde_json::json!({
+            "model": "glm-5.3",
+            "messages": [
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
+            ]
+        });
+        apply_completions(&mut b, Some("zhipu"), "high", "glm-5.3");
+        assert_eq!(b["thinking"]["clear_thinking"], false);
+        assert_eq!(b["reasoning_effort"], "high");
     }
 
     #[test]

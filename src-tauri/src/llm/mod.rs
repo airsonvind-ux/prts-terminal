@@ -1573,6 +1573,23 @@ mod tests {
     }
 
     #[test]
+    fn real_models_json_zhipu_53_metadata() {
+        let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        let base = reg.get_model("zhipu", "glm-5.3").unwrap();
+        assert_eq!(base.context, 1_000_000);
+        assert_eq!(base.thinking_levels, ["low", "high", "max"]);
+        assert_eq!(base.default_thinking_level.as_deref(), Some("max"));
+        assert!(!base.supports_vision);
+
+        for id in ["glm-5.3-flash", "glm-5.3-flashx"] {
+            let model = reg.get_model("zhipu", id).unwrap();
+            assert_eq!(model.context, 1_000_000, "{id}");
+            assert!(model.supports_vision, "{id} 应支持视觉");
+            assert_eq!(model.default_thinking_level.as_deref(), Some("max"));
+        }
+    }
+
+    #[test]
     fn real_models_json_deepseek_compat_resolves() {
         let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
         let r = reg.get_resolved_compat("deepseek", "deepseek-flash", ApiType::OpenAiCompletions);
