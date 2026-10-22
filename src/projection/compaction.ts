@@ -140,8 +140,9 @@ export function stripLeadingErrorTurns(
 // ═══════════════════════════════════════════════════════
 // 上下文窗口检查（发送前硬拦 + 环预警比例）——纯函数，UI 消费
 // ═══════════════════════════════════════════════════════
-// 定稿裁决 2：纯比例双线（不加绝对值）。水位口径 = usage.inputTokens
-// （provider 权威；output 是成本信息不是水位——ContextIndicator 显示侧修正）。
+// 定稿裁决 2：纯比例双线（不加绝对值）。水位口径 =
+// contextInputTokens ?? inputTokens（Anthropic 需把缓存读写加回完整 prompt；
+// output 是成本信息不是水位——ContextIndicator 显示侧修正）。
 
 /** 环预警比例（≥ 此值 tooltip 追加「接近上限，点击圆环压缩」） */
 export const CONTEXT_WARNING_RATIO = 0.7;

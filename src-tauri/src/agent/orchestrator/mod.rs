@@ -1484,6 +1484,7 @@ mod tests {
         state.record_call(
             Some(TokenUsage {
                 input_tokens: 5000,
+                context_input_tokens: None,
                 output_tokens: 100,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,
@@ -1493,6 +1494,7 @@ mod tests {
         state.record_call(
             Some(TokenUsage {
                 input_tokens: 3000,
+                context_input_tokens: None,
                 output_tokens: 200,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,
@@ -1513,6 +1515,7 @@ mod tests {
         state.record_call(
             Some(TokenUsage {
                 input_tokens: 100,
+                context_input_tokens: None,
                 output_tokens: 50,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,
@@ -1522,6 +1525,7 @@ mod tests {
         state.record_call(
             Some(TokenUsage {
                 input_tokens: 200,
+                context_input_tokens: None,
                 output_tokens: 80,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,
@@ -1697,6 +1701,7 @@ mod tests {
                     reasoning: Some("让我查一下".into()),
                     usage: Some(TokenUsage {
                         input_tokens: 1000,
+                        context_input_tokens: None,
                         output_tokens: 50,
                         cache_hit_tokens: None,
                         cache_miss_tokens: None,
@@ -1714,6 +1719,7 @@ mod tests {
                     reasoning: None,
                     usage: Some(TokenUsage {
                         input_tokens: 1500,
+                        context_input_tokens: None,
                         output_tokens: 30,
                         cache_hit_tokens: None,
                         cache_miss_tokens: None,
@@ -1835,12 +1841,14 @@ mod tests {
             vec![
                 Some(TokenUsage {
                     input_tokens: 1000,
+                    context_input_tokens: None,
                     output_tokens: 50,
                     cache_hit_tokens: None,
                     cache_miss_tokens: None,
                 }),
                 Some(TokenUsage {
                     input_tokens: 1500,
+                    context_input_tokens: None,
                     output_tokens: 30,
                     cache_hit_tokens: None,
                     cache_miss_tokens: None,
@@ -4072,6 +4080,7 @@ mod tests {
                 reasoning: None,
                 usage: Some(TokenUsage {
                     input_tokens: input,
+                    context_input_tokens: None,
                     output_tokens: 10,
                     cache_hit_tokens: None,
                     cache_miss_tokens: None,

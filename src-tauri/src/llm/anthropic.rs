@@ -50,18 +50,20 @@ impl AnthropicMessagesClient {
         let base = config
             .base_url
             .as_deref()
-            .unwrap_or("https://api.anthropic.com");
+            .unwrap_or("https://api.anthropic.com")
+            .trim_end_matches('/');
+        // 用户可能填的是完整端点；已带 messages 时不再重复拼接。
+        if base.ends_with("/v1/messages") || base.ends_with("/messages") {
+            return base.to_string();
+        }
         // 标准化：去除尾部 /v1 避免路径重复
-        let base = base
-            .trim_end_matches('/')
-            .strip_suffix("/v1")
-            .unwrap_or(base.trim_end_matches('/'));
+        let base = base.strip_suffix("/v1").unwrap_or(base);
         // DeepSeek 的 Anthropic 端点路径为 /messages（base 已含 /anthropic），
         // 其他供应商（Anthropic 官方、MiniMax 等）使用 /v1/messages
         if base.contains("api.deepseek.com") {
-            format!("{}/messages", base)
+            format!("{base}/messages")
         } else {
-            format!("{}/v1/messages", base)
+            format!("{base}/v1/messages")
         }
     }
 
@@ -267,7 +269,7 @@ impl AnthropicMessagesClient {
         let thinking_compat =
             self.registry
                 .get_resolved_compat(&config.provider, &config.model, config.api_type);
-        crate::llm::thinking::inject(
+        let _ = crate::llm::thinking::inject(
             &mut body,
             config.api_type,
             &thinking_compat,
@@ -384,8 +386,18 @@ impl AnthropicMessagesClient {
             .get("cache_read_input_tokens")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
+        let cache_creation = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let context_input_tokens = Some(
+            (input as u32)
+                .saturating_add(cache_hit.unwrap_or(0))
+                .saturating_add(cache_creation.unwrap_or(0)),
+        );
         Some(TokenUsage {
             input_tokens: input as u32,
+            context_input_tokens,
             output_tokens: output as u32,
             cache_hit_tokens: cache_hit,
             cache_miss_tokens: None,
@@ -503,6 +515,8 @@ enum AnthropicSseEvent {
         input_tokens: u32,
         /// 缓存读取命中（cache_read_input_tokens；无该字段 → None = 未观测）
         cache_read_input_tokens: Option<u32>,
+        /// 缓存写入（cache_creation_input_tokens；无该字段 → None = 未观测）
+        cache_creation_input_tokens: Option<u32>,
     },
     ContentBlockStart {
         index: usize,
@@ -639,9 +653,14 @@ fn parse_anthropic_frame(frame: &str) -> Option<AnthropicSseEvent> {
                 .and_then(|u| u.get("cache_read_input_tokens"))
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
+            let cache_creation_input_tokens = usage
+                .and_then(|u| u.get("cache_creation_input_tokens"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             Some(AnthropicSseEvent::MessageStart {
                 input_tokens,
                 cache_read_input_tokens,
+                cache_creation_input_tokens,
             })
         }
         "content_block_start" => {
@@ -705,9 +724,16 @@ fn process_anthropic_event(
         AnthropicSseEvent::MessageStart {
             input_tokens,
             cache_read_input_tokens,
+            cache_creation_input_tokens,
         } => {
+            let context_input_tokens = Some(
+                (*input_tokens)
+                    .saturating_add((*cache_read_input_tokens).unwrap_or(0))
+                    .saturating_add((*cache_creation_input_tokens).unwrap_or(0)),
+            );
             *usage = Some(TokenUsage {
                 input_tokens: *input_tokens,
+                context_input_tokens,
                 output_tokens: 0,
                 cache_hit_tokens: *cache_read_input_tokens,
                 cache_miss_tokens: None,
@@ -1321,5 +1347,57 @@ mod tests {
         let resp = AnthropicMessagesClient::parse_chat_response(&body).unwrap();
         assert!(resp.text.is_none());
         assert!(resp.tool_calls.is_none());
+    }
+
+    #[test]
+    fn usage_context_includes_cache_read_and_creation() {
+        let usage = serde_json::json!({
+            "input_tokens": 1000,
+            "output_tokens": 10,
+            "cache_read_input_tokens": 90000,
+            "cache_creation_input_tokens": 500
+        });
+        let parsed = AnthropicMessagesClient::extract_usage(&usage).unwrap();
+        assert_eq!(parsed.input_tokens, 1000, "原始 input 不变");
+        assert_eq!(parsed.context_input_tokens, Some(91500));
+    }
+
+    #[test]
+    fn build_url_keeps_full_messages_endpoint() {
+        let config = LlmConfig {
+            provider: "anthropic".into(),
+            base_url: Some("https://api.anthropic.com/v1/messages".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            AnthropicMessagesClient::build_url(&config),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn build_url_normalizes_v1_base() {
+        let config = LlmConfig {
+            provider: "anthropic".into(),
+            base_url: Some("https://api.anthropic.com/v1/".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            AnthropicMessagesClient::build_url(&config),
+            "https://api.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn build_url_keeps_deepseek_anthropic_path() {
+        let config = LlmConfig {
+            provider: "deepseek".into(),
+            base_url: Some("https://api.deepseek.com/anthropic".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            AnthropicMessagesClient::build_url(&config),
+            "https://api.deepseek.com/anthropic/messages"
+        );
     }
 }

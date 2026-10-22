@@ -53,7 +53,11 @@ function seedConversation(
   id: string,
   turns: SessionEvent[][],
   extra?: {
-    contextTokens?: { inputTokens: number; outputTokens: number };
+    contextTokens?: {
+      inputTokens: number;
+      contextInputTokens?: number;
+      outputTokens: number;
+    };
     lastNoticeSeq?: number;
   }
 ): void {
@@ -353,5 +357,18 @@ describe("sendMessage 与压缩的互斥 + 窗口硬拦", () => {
     setModelInfo({ name: "DeepSeek", contextLength: 64_000 });
     await useProcessingStore.getState().sendMessage("继续聊");
     expect(invokeCount("agent_process")).toBe(1);
+  });
+
+  it("发送前硬拦优先使用 contextInputTokens（Anthropic 缓存命中）", async () => {
+    seedConversation("c1", [userTurn("你好")], {
+      contextTokens: {
+        inputTokens: 100,
+        contextInputTokens: 60_000,
+        outputTokens: 500,
+      },
+    });
+    setModelInfo({ name: "Anthropic", contextLength: 64_000 });
+    await useProcessingStore.getState().sendMessage("继续聊");
+    expect(invokeCount("agent_process")).toBe(0);
   });
 });

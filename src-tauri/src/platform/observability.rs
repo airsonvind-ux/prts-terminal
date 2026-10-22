@@ -171,6 +171,7 @@ mod tests {
             1,
             Some(TokenUsage {
                 input_tokens: 10,
+                context_input_tokens: None,
                 output_tokens: 5,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,

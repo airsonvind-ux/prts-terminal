@@ -271,10 +271,10 @@ pub fn resolve_compat(
             carrier: Some("thinking_blocks".into()),
             ..Default::default()
         },
-        // 智谱 → reasoning_content + enable_thinking
+        // 智谱 → reasoning_content + thinking.type（clear_thinking 由注入层按历史决定）
         (Some(ThinkingFormat::Zhipu), ApiType::OpenAiCompletions) => ResolvedCompat {
             carrier: Some("reasoning_content".into()),
-            request_param: Some("enable_thinking".into()),
+            request_param: Some("zhipu".into()),
             policy: ReasoningPolicy::RequireToolCall,
             ..Default::default()
         },
@@ -282,13 +282,21 @@ pub fn resolve_compat(
         (Some(ThinkingFormat::Qwen), ApiType::OpenAiCompletions) => ResolvedCompat {
             carrier: Some("reasoning_content".into()),
             request_param: Some("enable_thinking".into()),
-            policy: ReasoningPolicy::RequireToolCall,
             ..Default::default()
         },
-        // Kimi → reasoning_content
+        // Kimi → reasoning_content + thinking / reasoning_effort（按模型代际分流）
+        // Kimi 的 Preserved Thinking 要求保留普通 assistant 轮次的推理链，
+        // 因此 final reasoning 不能按 RequireToolCall 丢弃；工具轮回传由
+        // 适配器按 request_param=kimi 单独校验。
         (Some(ThinkingFormat::Kimi), ApiType::OpenAiCompletions) => ResolvedCompat {
             carrier: Some("reasoning_content".into()),
-            policy: ReasoningPolicy::RequireToolCall,
+            request_param: Some("kimi".into()),
+            ..Default::default()
+        },
+        // 火山方舟 → reasoning_content + thinking.type / reasoning_effort
+        (Some(ThinkingFormat::Volcengine), ApiType::OpenAiCompletions) => ResolvedCompat {
+            carrier: Some("reasoning_content".into()),
+            request_param: Some("volcengine".into()),
             ..Default::default()
         },
         // OpenAI Responses → reasoning_items
@@ -580,6 +588,14 @@ pub struct LlmResponse {
 pub struct TokenUsage {
     /// 输入 token 数（prompt + 对话历史 + 系统提示词）
     pub input_tokens: u32,
+    /// 上下文水位专用输入总量。
+    ///
+    /// Anthropic 的 `input_tokens` 只含未命中缓存部分，水位需加上
+    /// `cache_read_input_tokens` 与 `cache_creation_input_tokens`；其他协议
+    /// 与 `input_tokens` 同义，置 None 由前端回退。只用于上下文占用判断，
+    /// 不参与用量统计。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_input_tokens: Option<u32>,
     /// 输出 token 数（LLM 生成的文本 + reasoning）
     pub output_tokens: u32,
     /// 缓存命中 token 数（2026-10-03 缓存观测）。
@@ -1515,6 +1531,47 @@ mod tests {
     /// 键（thinking_format），Compat 结构声明 camelCase——键名错位曾静默落默认档，
     /// 使 carrier=None，出网前误剥离全部推理链。此测试直接从真身文件断言效果层
     /// 配置，堵住「测试只覆盖手搭结构、不读文件」的盲区。
+    #[test]
+    fn real_models_json_provider_compat_matrix() {
+        let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        for (provider, model, carrier, param) in [
+            ("anthropic", "claude-fable-5", "thinking_blocks", None),
+            ("zhipu", "glm-5-turbo", "reasoning_content", Some("zhipu")),
+            ("kimi", "kimi-k3", "reasoning_content", Some("kimi")),
+            (
+                "qwen",
+                "qwen3-max",
+                "reasoning_content",
+                Some("enable_thinking"),
+            ),
+            (
+                "volcengine",
+                "doubao-seed-2-1-pro-260628",
+                "reasoning_content",
+                Some("volcengine"),
+            ),
+        ] {
+            let r = reg.get_resolved_compat(provider, model, ApiType::OpenAiCompletions);
+            assert_eq!(
+                r.carrier.as_deref(),
+                Some(carrier),
+                "{provider}/{model} carrier"
+            );
+            if provider == "kimi" {
+                assert_eq!(
+                    r.policy,
+                    ReasoningPolicy::Preserve,
+                    "Kimi 需要保留普通 assistant 轮次的推理链"
+                );
+            }
+            assert_eq!(
+                r.request_param.as_deref(),
+                param,
+                "{provider}/{model} request_param"
+            );
+        }
+    }
+
     #[test]
     fn real_models_json_deepseek_compat_resolves() {
         let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();

@@ -457,7 +457,10 @@
   "anthropic": {
     "defaults": {
       "api_type": "anthropic-messages",
-      "base_url": "https://api.anthropic.com"
+      "base_url": "https://api.anthropic.com",
+      "compat": {
+        "thinking_format": "anthropic"
+      }
     },
     "models": {
       "claude-fable-5": {
@@ -815,7 +818,10 @@
   "zhipu": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://open.bigmodel.cn/api/paas/v4"
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "compat": {
+        "thinking_format": "zhipu"
+      }
     },
     "models": {
       "glm-4-air": {
@@ -890,31 +896,53 @@
   "kimi": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://api.moonshot.cn/v1"
+      "base_url": "https://api.moonshot.cn/v1",
+      "compat": {
+        "thinking_format": "kimi"
+      }
     },
     "models": {
       "kimi-k2.6": {
         "name": "Kimi K2.6",
         "context": 262144,
         "reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_levels": [
+          "off",
+          "high"
+        ],
+        "default_thinking_level": "high"
       },
       "kimi-k2.7-code": {
         "name": "Kimi K2.7 Code",
-        "context": 262144
+        "context": 262144,
+        "reasoning": true,
+        "thinking_levels": [
+          "high"
+        ],
+        "default_thinking_level": "high"
       },
       "kimi-k3": {
         "name": "Kimi K3",
         "context": 1048576,
         "reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default_thinking_level": "max"
       }
     }
   },
   "qwen": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "compat": {
+        "thinking_format": "qwen"
+      }
     },
     "models": {
       "qwen-max": {
@@ -1020,7 +1048,10 @@
   "volcengine": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://ark.cn-beijing.volces.com/api/v3"
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "compat": {
+        "thinking_format": "volcengine"
+      }
     },
     "models": {
       "doubao-seed-2-0-code-preview-260215": {

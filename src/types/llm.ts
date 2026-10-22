@@ -91,6 +91,11 @@ export interface ModelInfo {
  */
 export interface TokenUsage {
   inputTokens: number;
+  /**
+   * 上下文水位专用输入总量。Anthropic 会加回 cacheRead/cacheCreation；
+   * 其他协议缺省时回退到 inputTokens。仅用于圆环与溢出判断。
+   */
+  contextInputTokens?: number;
   outputTokens: number;
 }
 

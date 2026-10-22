@@ -599,6 +599,7 @@ fn add_usage(
         (x, None) => x,
         (Some(x), Some(y)) => Some(crate::llm::TokenUsage {
             input_tokens: x.input_tokens.saturating_add(y.input_tokens),
+            context_input_tokens: opt(x.context_input_tokens, y.context_input_tokens),
             output_tokens: x.output_tokens.saturating_add(y.output_tokens),
             cache_hit_tokens: opt(x.cache_hit_tokens, y.cache_hit_tokens),
             cache_miss_tokens: opt(x.cache_miss_tokens, y.cache_miss_tokens),

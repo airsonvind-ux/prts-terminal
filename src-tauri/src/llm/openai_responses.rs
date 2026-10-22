@@ -48,8 +48,14 @@ impl OpenAIResponsesClient {
         let base = config
             .base_url
             .as_deref()
-            .unwrap_or("https://api.openai.com/v1");
-        format!("{}/responses", base.trim_end_matches('/'))
+            .unwrap_or("https://api.openai.com/v1")
+            .trim_end_matches('/');
+        // 用户可能填的是完整端点；已带 /responses 时不再重复拼接。
+        if base.ends_with("/responses") {
+            base.to_string()
+        } else {
+            format!("{base}/responses")
+        }
     }
 
     // ── 消息转换 ──
@@ -162,7 +168,7 @@ impl OpenAIResponsesClient {
         let thinking_compat =
             self.registry
                 .get_resolved_compat(&config.provider, &config.model, config.api_type);
-        crate::llm::thinking::inject(
+        let _ = crate::llm::thinking::inject(
             &mut body,
             config.api_type,
             &thinking_compat,
@@ -288,6 +294,7 @@ impl OpenAIResponsesClient {
             .map(|v| v as u32);
         Some(TokenUsage {
             input_tokens: input as u32,
+            context_input_tokens: None,
             output_tokens: output as u32,
             cache_hit_tokens: cache_hit,
             cache_miss_tokens: None,
@@ -865,5 +872,31 @@ mod tests {
         assert!(matches!(events[2], StreamEvent::TextDelta { .. }));
         assert_eq!(result.reasoning, Some("需要查询数据库".into()));
         assert_eq!(result.text, "结果");
+    }
+
+    #[test]
+    fn build_url_keeps_full_responses_endpoint() {
+        let config = LlmConfig {
+            provider: "openai".into(),
+            base_url: Some("https://example.com/v1/responses".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            OpenAIResponsesClient::build_url(&config),
+            "https://example.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn build_url_appends_to_v1_base() {
+        let config = LlmConfig {
+            provider: "openai".into(),
+            base_url: Some("https://example.com/v1/".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            OpenAIResponsesClient::build_url(&config),
+            "https://example.com/v1/responses"
+        );
     }
 }

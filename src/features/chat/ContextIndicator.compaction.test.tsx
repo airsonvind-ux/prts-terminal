@@ -86,6 +86,7 @@ function renderIndicator() {
 
 function seedConversation(contextTokens?: {
   inputTokens: number;
+  contextInputTokens?: number;
   outputTokens: number;
 }, turns?: SessionEvent[][]): void {
   const conv: Record<string, unknown> = {
@@ -217,5 +218,21 @@ describe("ContextIndicator · 水位口径", () => {
     const body = document.body.textContent ?? "";
     expect(body).toContain("上下文 100 / 200 (50%)");
     expect(body).not.toContain("out");
+  });
+
+  it("contextInputTokens 优先于 inputTokens（Anthropic 缓存水位）", () => {
+    seedConversation({
+      inputTokens: 1000,
+      contextInputTokens: 91_000,
+      outputTokens: 900,
+    });
+    setModelInfo({ name: "Anthropic", contextLength: 200_000 });
+    renderIndicator();
+    const ring = container.querySelector<HTMLElement>('[role="button"]')!;
+    act(() => {
+      ring.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    const body = document.body.textContent ?? "";
+    expect(body).toContain("上下文 91K / 200K (46%)");
   });
 });

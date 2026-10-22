@@ -35,8 +35,8 @@ use crate::debug;
 
 use super::{
     default_base_url, AuthMode, ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError,
-    LlmResponse, ModelRegistry, ResolvedCompat, StreamEvent, StreamResult, TokenUsage, ToolCall,
-    ToolCallFunction, ToolDef,
+    LlmResponse, ModelRegistry, ReasoningPolicy, ResolvedCompat, StreamEvent, StreamResult,
+    TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -70,7 +70,12 @@ impl OpenAiCompatibleClient {
             .as_deref()
             .or_else(|| default_base_url(&config.provider))
             .ok_or_else(|| LlmError::Config("未配置 Base URL，请选择供应商".into()))?;
-        Ok(format!("{}/chat/completions", base.trim_end_matches('/')))
+        let base = base.trim_end_matches('/');
+        // 用户可能填的是完整端点；已带 /chat/completions 时不再重复拼接。
+        if base.ends_with("/chat/completions") {
+            return Ok(base.to_string());
+        }
+        Ok(format!("{base}/chat/completions"))
     }
 
     /// carrier 为 "reasoning_content" 表示 API 协议原生支持该字段，不剥离。
@@ -157,10 +162,10 @@ impl OpenAiCompatibleClient {
                 .map_err(|e| LlmError::Parse(format!("工具列表序列化失败: {e}")))?;
         }
 
-        // 思考强度注入（裁决②：未设置 thinking_level = 完全不注入 thinking
-        // 相关参数，含 request_param 附加——旧无条件附加 {"type":"enabled"}
-        // 对 enable_thinking 布尔参数是错误形态，已移除；已设档才进各族 wire）
-        crate::llm::thinking::inject(
+        // 思考强度注入（生效档 = 请求档或模型默认档；非 reasoning / 未知模型
+        // 不注入。旧无条件附加 {"type":"enabled"} 对 enable_thinking 布尔参数
+        // 是错误形态，已移除；各族 wire 由 compat.request_param 分流）
+        let effective_level = crate::llm::thinking::inject(
             &mut body,
             config.api_type,
             &compat,
@@ -170,12 +175,55 @@ impl OpenAiCompatibleClient {
             config.thinking_level.as_deref(),
         );
 
+        // 思考开启时，需要回传真实 reasoning_content 的协议不能带缺失历史出网。
+        // 旧会话/异常轮缺字段时在本地拦截，避免供应商返回难以理解的 400。
+        let requires_tool_call_replay = compat.policy == ReasoningPolicy::RequireToolCall
+            || compat.request_param.as_deref() == Some("kimi");
+        if requires_tool_call_replay && effective_level.is_some_and(|level| level != "off") {
+            Self::ensure_reasoning_replay(&body)?;
+        }
+
         // 流式请求附加 stream_options（用于获取 usage）
         if stream {
             body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
         Ok(body)
+    }
+
+    /// 拒绝把缺少 reasoning_content 的工具轮历史发给要求回传的供应商。
+    ///
+    /// 只检查 assistant 的 tool_calls 消息；普通 assistant 文本不要求推理链。
+    fn ensure_reasoning_replay(body: &Value) -> Result<(), LlmError> {
+        let Some(messages) = body.get("messages").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        for message in messages {
+            let Some(obj) = message.as_object() else {
+                continue;
+            };
+            if obj.get("role").and_then(Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let has_tool_calls = obj
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| !calls.is_empty());
+            if !has_tool_calls {
+                continue;
+            }
+            let has_reasoning = obj
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty());
+            if !has_reasoning {
+                return Err(LlmError::Config(
+                    "当前模型的思考模式要求工具调用轮回传推理内容，但历史中缺失；请压缩会话或新建会话后重试。"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 遍历 messages JSON 数组，逐项移除 `reasoning_content` 键。
@@ -264,6 +312,7 @@ impl OpenAiCompatibleClient {
             .map(|v| v as u32);
         Some(TokenUsage {
             input_tokens: input as u32,
+            context_input_tokens: None,
             output_tokens: output as u32,
             cache_hit_tokens: cache_hit,
             cache_miss_tokens: cache_miss,
@@ -1032,5 +1081,57 @@ mod tests {
             ..Default::default()
         };
         assert!(OpenAiCompatibleClient::should_strip_reasoning(&compat));
+    }
+
+    #[test]
+    fn build_url_keeps_full_chat_completions_endpoint() {
+        let config = LlmConfig {
+            provider: "openai".into(),
+            base_url: Some("https://example.com/v1/chat/completions".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            OpenAiCompatibleClient::build_url(&config).unwrap(),
+            "https://example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn build_url_appends_to_v1_base() {
+        let config = LlmConfig {
+            provider: "openai".into(),
+            base_url: Some("https://example.com/v1/".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            OpenAiCompatibleClient::build_url(&config).unwrap(),
+            "https://example.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn missing_reasoning_on_tool_call_is_rejected() {
+        let body = serde_json::json!({
+            "messages": [
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
+            ]
+        });
+        let err = OpenAiCompatibleClient::ensure_reasoning_replay(&body).unwrap_err();
+        assert!(err.to_string().contains("压缩会话或新建会话"));
+    }
+
+    #[test]
+    fn reasoning_on_tool_call_passes() {
+        let body = serde_json::json!({
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "先查资料",
+                    "tool_calls": [{"id": "c1"}]
+                }
+            ]
+        });
+        assert!(OpenAiCompatibleClient::ensure_reasoning_replay(&body).is_ok());
     }
 }

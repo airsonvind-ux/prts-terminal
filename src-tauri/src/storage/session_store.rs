@@ -1886,6 +1886,7 @@ mod tests {
         r1.context_length = Some(64000);
         r1.context_tokens = Some(TokenUsage {
             input_tokens: 10,
+            context_input_tokens: None,
             output_tokens: 5,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
@@ -1909,6 +1910,7 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 10,
+                context_input_tokens: None,
                 output_tokens: 5,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None
@@ -2336,6 +2338,7 @@ mod tests {
             r.context_tokens,
             Some(TokenUsage {
                 input_tokens: 1,
+                context_input_tokens: None,
                 output_tokens: 2,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None
@@ -2368,6 +2371,7 @@ mod tests {
         r1.created_at = Some(1);
         r1.context_tokens = Some(TokenUsage {
             input_tokens: 100,
+            context_input_tokens: None,
             output_tokens: 10,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
@@ -2379,6 +2383,7 @@ mod tests {
         let mut r2 = req("c12", &ev_user("二"));
         r2.context_tokens = Some(TokenUsage {
             input_tokens: 200,
+            context_input_tokens: None,
             output_tokens: 20,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
@@ -2394,6 +2399,7 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 200,
+                context_input_tokens: None,
                 output_tokens: 20,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None
@@ -2424,6 +2430,7 @@ mod tests {
             list[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 200,
+                context_input_tokens: None,
                 output_tokens: 20,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None
@@ -2557,6 +2564,7 @@ mod tests {
         let mut r = req("c-clr", &ev_user("你好"));
         r.context_tokens = Some(TokenUsage {
             input_tokens: 22_000,
+            context_input_tokens: None,
             output_tokens: 500,
             cache_hit_tokens: None,
             cache_miss_tokens: None,
@@ -2566,6 +2574,7 @@ mod tests {
             s.list().unwrap()[0].context_tokens,
             Some(TokenUsage {
                 input_tokens: 22_000,
+                context_input_tokens: None,
                 output_tokens: 500,
                 cache_hit_tokens: None,
                 cache_miss_tokens: None,

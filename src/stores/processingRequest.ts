@@ -24,8 +24,9 @@ export function buildSendHistory(
 /**
  * 下一轮是否会超出模型上下文窗口。
  *
- * 水位 = 最近 usage 的 inputTokens（provider 权威口径）；下一轮预估 =
- * user 文本（含 reminder 块）+ output 预留。无窗口信息（未知模型）→ 不拦。
+ * 水位 = 最近 usage 的 contextInputTokens ?? inputTokens（Anthropic 缓存
+ * 命中时用完整 prompt）；下一轮预估 = user 文本（含 reminder 块）+ output
+ * 预留。无窗口信息（未知模型）→ 不拦。
  */
 export function willOverflowContext(
   conv: Conversation | undefined,
@@ -33,6 +34,7 @@ export function willOverflowContext(
   windowSize: number
 ): boolean {
   if (!conv) return false;
-  const usedInput = conv.contextTokens?.inputTokens ?? 0;
+  const usedInput =
+    conv.contextTokens?.contextInputTokens ?? conv.contextTokens?.inputTokens ?? 0;
   return willNextTurnOverflow(usedInput, displayContent, windowSize);
 }
