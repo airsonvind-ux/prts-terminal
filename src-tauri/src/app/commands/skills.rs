@@ -50,18 +50,34 @@ pub async fn pick_skill_folder(app: AppHandle) -> Result<Option<String>, String>
 #[tauri::command]
 pub fn install_skill(
     source_path: String,
+    confirm_scripts: bool,
     ledger: State<'_, Arc<Mutex<Notices>>>,
 ) -> Result<SkillEntry, String> {
     let source = std::path::PathBuf::from(&source_path);
     let root = crate::skills_index::skills_dir();
-    let installed = crate::skills_install::install_skill(&source, &root)?;
+    let installed = crate::skills_install::install_skill(&source, &root, confirm_scripts)?;
     diff_skills_now(&root, &ledger);
     Ok(SkillEntry {
         name: installed.name,
         description: installed.description,
         file_path: Some(installed.file_path.to_string_lossy().into_owned()),
         source: installed.source,
+        trust: installed.trust.as_str().to_string(),
+        package_hash: Some(installed.package_hash),
+        resource_dir: installed
+            .resource_dir
+            .map(|p| p.to_string_lossy().into_owned()),
     })
+}
+
+/// 安装前预览：只读扫描，不落盘；前端据此决定是否显示脚本确认块。
+#[tauri::command]
+pub fn preview_skill_source(
+    source_path: String,
+) -> Result<crate::skills_install::SkillPreview, String> {
+    let source = std::path::PathBuf::from(&source_path);
+    let root = crate::skills_index::skills_dir();
+    crate::skills_install::preview_skill(&source, &root)
 }
 
 /// 移除用户技能（内置拒绝；文件夹包整目录删除；确认在前端行内两步完成）。

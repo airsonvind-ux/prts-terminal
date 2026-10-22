@@ -20,6 +20,7 @@
 pub mod index;
 pub mod install;
 pub mod snapshot;
+pub mod trust;
 
 use crate::knowledge::parse_frontmatter_fields;
 

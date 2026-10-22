@@ -6,10 +6,16 @@
 // 移除只对用户技能开放，行内两步确认避免静默删除。
 
 import { useState } from "react";
-import type { SkillEntry } from "../../types";
+import type { SkillEntry, SkillPreview } from "../../types";
 import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
 import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./SettingsSkills.module.css";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export interface SettingsSkillsProps {
   /** 技能清单（Panel 挂载时拉取一次，安装/移除后刷新）；null = 加载中/失败 */
@@ -20,6 +26,12 @@ export interface SettingsSkillsProps {
   onInstallFile: () => void;
   /** 安装技能文件夹（根级含 SKILL.md；Panel 负责选择器、命令与刷新） */
   onInstallFolder: () => void;
+  /** 已预览到脚本、等待用户确认的安装（null = 无待确认） */
+  pendingInstall: SkillPreview | null;
+  /** 正在提交确认安装 */
+  installing: boolean;
+  onConfirmInstall: () => void;
+  onCancelInstall: () => void;
   /** 移除用户技能（Panel 负责命令与刷新；此处只做行内确认） */
   onRemove: (entry: SkillEntry) => void;
 }
@@ -29,6 +41,10 @@ export function SettingsSkills({
   busy = false,
   onInstallFile,
   onInstallFolder,
+  pendingInstall,
+  installing,
+  onConfirmInstall,
+  onCancelInstall,
   onRemove,
 }: SettingsSkillsProps) {
   // 待确认移除的技能名（null = 无在确认态）
@@ -53,6 +69,44 @@ export function SettingsSkills({
             安装技能文件夹
           </button>
         </div>
+        {pendingInstall && (
+          <SectionWarning>
+            <div className={styles.warningTitle}>
+              这个技能包包含可执行/脚本文件
+            </div>
+            <div className={styles.warningText}>
+              安装后仍可使用；执行包内脚本时，即使处于自动化模式也会先弹出确认。
+            </div>
+            <div className={styles.scriptList}>
+              {pendingInstall.scripts.map((file) => (
+                <div key={file.path} className={styles.scriptRow}>
+                  <span className={styles.scriptPath} title={file.path}>
+                    {file.path}
+                  </span>
+                  <span className={styles.scriptSize}>
+                    {formatBytes(file.sizeBytes)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className={styles.actions}>
+              <button
+                className={styles.actionButton}
+                disabled={installing}
+                onClick={onCancelInstall}
+              >
+                取消
+              </button>
+              <button
+                className={styles.actionButton}
+                disabled={installing}
+                onClick={onConfirmInstall}
+              >
+                {installing ? "安装中…" : "仍要安装"}
+              </button>
+            </div>
+          </SectionWarning>
+        )}
       </SettingsSection>
 
       <SettingsSection
@@ -69,6 +123,11 @@ export function SettingsSkills({
           <div className={styles.skillList}>
             {skills.map((s) => {
               const isBuiltin = s.source === "builtin";
+              const sourceLabel = isBuiltin
+                ? "内置"
+                : s.trust === "untrusted"
+                  ? "需确认"
+                  : "用户";
               return (
                 <div key={s.name} className={styles.skillRow}>
                   <FileLink
@@ -81,8 +140,15 @@ export function SettingsSkills({
                     <span className={styles.skillDesc}>{s.description}</span>
                   </FileLink>
                   <div className={styles.skillSide}>
-                    <span className={styles.sourceTag}>
-                      {isBuiltin ? "内置" : "用户"}
+                    <span
+                      className={styles.sourceTag}
+                      title={
+                        s.trust === "untrusted"
+                          ? "执行包内脚本时会再次确认"
+                          : undefined
+                      }
+                    >
+                      {sourceLabel}
                     </span>
                     {!isBuiltin &&
                       (armed === s.name ? (

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// SettingsSafety · 安全页（草案 v2：选项块 = 标题 + 自带说明，静态并存）
+// SettingsSafety · 安全页（两档命令执行模式：选项块 = 标题 + 自带说明，静态并存）
 
 import { describe, expect, it, afterEach, vi } from "vitest";
 import React, { act } from "react";
@@ -41,16 +41,22 @@ describe("SettingsSafety（草案 v2）", () => {
     const text = container!.textContent ?? "";
     expect(text).toContain("操作前询问");
     expect(text).toContain("自动化");
-    // 两条说明同时存在（不随选中切换），文字与草案一致
+    // 两条说明同时存在（不随选中切换）
     expect(text).toContain("每个命令执行前弹确认卡，你确认后才执行");
-    expect(text).toContain("低危命令自动执行；高危与完整权限命令仍会询问");
+    expect(text).toContain(
+      "低风险命令自动执行，可能运行程序或连接网络；高风险与完整权限命令仍会询问"
+    );
+    expect(text).not.toContain("残余风险");
   });
 
-  it("auto 选中态下两说明仍并存", () => {
+  it("auto 选中态下两说明仍并存，不额外叠加提示块", () => {
     render("auto");
     const text = container!.textContent ?? "";
     expect(text).toContain("每个命令执行前弹确认卡，你确认后才执行");
-    expect(text).toContain("低危命令自动执行；高危与完整权限命令仍会询问");
+    expect(text).toContain(
+      "低风险命令自动执行，可能运行程序或连接网络；高风险与完整权限命令仍会询问"
+    );
+    expect(text).not.toContain("PRTS 不会逐条弹出确认卡");
     expect(radios()[1].checked).toBe(true);
   });
 

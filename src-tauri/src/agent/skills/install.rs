@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 
 use crate::memory::store::atomic_write;
 use crate::skills::parse_skill_frontmatter;
+use crate::skills::trust::{self, PackageInspection, SkillScriptFile, SkillTrust};
 use crate::skills_index::SkillIndex;
+use serde::Serialize;
 
 /// 单文件大小上限（正文每轮全量入内存；防手滑选错大文件）。
 const MAX_SINGLE_FILE_BYTES: u64 = 256 * 1024;
@@ -35,10 +37,98 @@ pub struct InstalledSkill {
     pub description: String,
     pub file_path: PathBuf,
     pub source: Option<String>,
+    pub trust: SkillTrust,
+    pub package_hash: String,
+    pub resource_dir: Option<PathBuf>,
+}
+
+/// 安装前预览（只读；前端据此决定是否展示脚本警告）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillPreview {
+    pub name: String,
+    pub description: String,
+    pub source: Option<String>,
+    pub trust: String,
+    pub package_hash: String,
+    pub scripts: Vec<SkillScriptFile>,
+}
+
+/// 已解析的安装源（校验 + 扫描完成，等待落位）。
+struct ResolvedSkill {
+    entry_path: PathBuf,
+    folder: bool,
+    text: String,
+    name: String,
+    description: String,
+    source: Option<String>,
+    inspection: PackageInspection,
 }
 
 /// 安装技能：单 `.md` 文件或技能包文件夹（按源形态自动识别）。
-pub fn install_skill(source: &Path, skills_root: &Path) -> Result<InstalledSkill, String> {
+///
+/// `confirm_scripts=false` 时，含可执行/脚本文件的包会被拒绝；前端必须先
+/// 走 [`preview_skill`] 展示清单并让用户确认。
+pub fn install_skill(
+    source: &Path,
+    skills_root: &Path,
+    confirm_scripts: bool,
+) -> Result<InstalledSkill, String> {
+    let resolved = resolve_skill_source(source, skills_root)?;
+    if !resolved.inspection.scripts.is_empty() && !confirm_scripts {
+        let names = resolved
+            .inspection
+            .scripts
+            .iter()
+            .take(5)
+            .map(|s| s.path.as_str())
+            .collect::<Vec<_>>()
+            .join("、");
+        return Err(format!(
+            "技能包包含可执行/脚本文件（{}），请确认后再安装",
+            names
+        ));
+    }
+
+    let target = prepare_target(skills_root, &resolved.name, resolved.folder)?;
+    if resolved.folder {
+        copy_dir_into(&resolved.entry_path, &target)?;
+    } else {
+        atomic_write(&target, &resolved.text).map_err(|e| format!("写入技能文件失败：{e}"))?;
+    }
+
+    let trust = trust::trust_for(resolved.source.as_deref(), &resolved.inspection.scripts);
+    Ok(InstalledSkill {
+        name: resolved.name,
+        description: resolved.description,
+        file_path: if resolved.folder {
+            target.join("SKILL.md")
+        } else {
+            target.clone()
+        },
+        source: resolved.source,
+        trust,
+        package_hash: resolved.inspection.package_hash,
+        resource_dir: if resolved.folder { Some(target) } else { None },
+    })
+}
+
+/// 安装前预览：校验源并列出脚本载荷，不写盘。
+pub fn preview_skill(source: &Path, skills_root: &Path) -> Result<SkillPreview, String> {
+    let resolved = resolve_skill_source(source, skills_root)?;
+    let trust = trust::trust_for(resolved.source.as_deref(), &resolved.inspection.scripts);
+    Ok(SkillPreview {
+        name: resolved.name,
+        description: resolved.description,
+        source: resolved.source,
+        trust: trust.as_str().to_string(),
+        package_hash: resolved.inspection.package_hash,
+        scripts: resolved.inspection.scripts,
+    })
+}
+
+/// 解析并校验安装源：路径、结构、frontmatter、大小、符号链接、载荷扫描。
+fn resolve_skill_source(source: &Path, skills_root: &Path) -> Result<ResolvedSkill, String> {
     if !source.is_absolute() {
         return Err("安装源必须是绝对路径".into());
     }
@@ -57,66 +147,58 @@ pub fn install_skill(source: &Path, skills_root: &Path) -> Result<InstalledSkill
     let meta =
         std::fs::metadata(&src).map_err(|e| format!("读取安装源失败（{}）：{e}", src.display()))?;
     if meta.is_dir() {
-        install_folder(&src, skills_root)
+        let pkg = find_package_root(&src).ok_or_else(|| {
+            "所选文件夹（含一级子目录）中未找到 SKILL.md——请选择技能包根目录".to_string()
+        })?;
+        assert_no_symlinks(&pkg)?;
+        let total = dir_total_bytes(&pkg)?;
+        if total > MAX_PACKAGE_BYTES {
+            return Err(format!(
+                "技能文件夹过大（合计 {total} 字节，上限 {MAX_PACKAGE_BYTES}）"
+            ));
+        }
+        let text = std::fs::read_to_string(pkg.join("SKILL.md"))
+            .map_err(|e| format!("读取 SKILL.md 失败（需 UTF-8 文本）：{e}"))?;
+        let (name, description, source_tag) = validate_meta(&text)?;
+        let inspection = trust::inspect_package_dir(&pkg)?;
+        Ok(ResolvedSkill {
+            entry_path: pkg,
+            folder: true,
+            text,
+            name,
+            description,
+            source: source_tag,
+            inspection,
+        })
     } else {
-        install_single_file(&src, skills_root)
+        let ext_ok = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("md"))
+            .unwrap_or(false);
+        if !ext_ok {
+            return Err("只支持 .md 单文件或含 SKILL.md 的技能文件夹".into());
+        }
+        let size = meta.len();
+        if size > MAX_SINGLE_FILE_BYTES {
+            return Err(format!(
+                "文件过大（{size} 字节，上限 {MAX_SINGLE_FILE_BYTES}）：请确认选中的是技能文本"
+            ));
+        }
+        let text =
+            std::fs::read_to_string(&src).map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
+        let (name, description, source_tag) = validate_meta(&text)?;
+        let inspection = trust::inspect_skill_path(&src)?;
+        Ok(ResolvedSkill {
+            entry_path: src,
+            folder: false,
+            text,
+            name,
+            description,
+            source: source_tag,
+            inspection,
+        })
     }
-}
-
-/// 单文件安装。
-fn install_single_file(source: &Path, skills_root: &Path) -> Result<InstalledSkill, String> {
-    let ext_ok = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("md"))
-        .unwrap_or(false);
-    if !ext_ok {
-        return Err("只支持 .md 单文件或含 SKILL.md 的技能文件夹".into());
-    }
-    let size = std::fs::metadata(source)
-        .map_err(|e| format!("读取安装源失败（{}）：{e}", source.display()))?
-        .len();
-    if size > MAX_SINGLE_FILE_BYTES {
-        return Err(format!(
-            "文件过大（{size} 字节，上限 {MAX_SINGLE_FILE_BYTES}）：请确认选中的是技能文本"
-        ));
-    }
-    let text =
-        std::fs::read_to_string(source).map_err(|e| format!("读取失败（需 UTF-8 文本）：{e}"))?;
-    let (name, description, source_tag) = validate_meta(&text)?;
-    let target = prepare_target(skills_root, &name, false)?;
-    atomic_write(&target, &text).map_err(|e| format!("写入技能文件失败：{e}"))?;
-    Ok(InstalledSkill {
-        name,
-        description,
-        file_path: target,
-        source: source_tag,
-    })
-}
-
-/// 文件夹包安装。
-fn install_folder(source: &Path, skills_root: &Path) -> Result<InstalledSkill, String> {
-    let pkg = find_package_root(source).ok_or_else(|| {
-        "所选文件夹（含一级子目录）中未找到 SKILL.md——请选择技能包根目录".to_string()
-    })?;
-    assert_no_symlinks(&pkg)?;
-    let total = dir_total_bytes(&pkg)?;
-    if total > MAX_PACKAGE_BYTES {
-        return Err(format!(
-            "技能文件夹过大（合计 {total} 字节，上限 {MAX_PACKAGE_BYTES}）"
-        ));
-    }
-    let text = std::fs::read_to_string(pkg.join("SKILL.md"))
-        .map_err(|e| format!("读取 SKILL.md 失败（需 UTF-8 文本）：{e}"))?;
-    let (name, description, source_tag) = validate_meta(&text)?;
-    let target = prepare_target(skills_root, &name, true)?;
-    copy_dir_into(&pkg, &target)?;
-    Ok(InstalledSkill {
-        name,
-        description,
-        file_path: target.join("SKILL.md"),
-        source: source_tag,
-    })
 }
 
 /// 移除用户技能：`file_path` 取自列表（单文件 = 根级 `.md`；文件夹包 = 包内 `SKILL.md`）。
@@ -366,7 +448,7 @@ mod tests {
         let root = temp_dir("root1");
         let src = temp_dir("src1");
         let file = fixture_skill_md(&src, "whatever.md", "黑话小抄", "术语对照");
-        let out = install_skill(&file, &root).unwrap();
+        let out = install_skill(&file, &root, false).unwrap();
         assert_eq!(out.name, "黑话小抄");
         assert_eq!(out.description, "术语对照");
         assert!(
@@ -378,6 +460,69 @@ mod tests {
         let src_bytes = std::fs::read(&file).unwrap();
         let dst_bytes = std::fs::read(root.join("黑话小抄.md")).unwrap();
         assert_eq!(src_bytes, dst_bytes);
+        assert_eq!(out.trust, SkillTrust::Trusted);
+        assert!(out.package_hash.starts_with("fnv1a64:"));
+        assert!(out.resource_dir.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn script_package_requires_confirmation_before_install() {
+        let root = temp_dir("root-script");
+        let src = temp_dir("src-script");
+        let pkg = src.join("pack");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("SKILL.md"),
+            "---\nname: 带脚本\ndescription: 脚本包\nsource: community\n---\n\n## 正文",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("run.ps1"), "Write-Host hi").unwrap();
+
+        let preview = preview_skill(&src, &root).unwrap();
+        assert_eq!(preview.scripts.len(), 1);
+        assert_eq!(preview.scripts[0].path, "run.ps1");
+        assert_eq!(preview.trust, "untrusted");
+
+        // 未确认 → 拒绝且不落盘
+        let err = install_skill(&src, &root, false).unwrap_err();
+        assert!(err.contains("请确认"), "got: {err}");
+        assert!(!root.join("带脚本").exists());
+
+        // 确认 → 安装，标记 untrusted，保留包目录
+        let out = install_skill(&src, &root, true).unwrap();
+        assert_eq!(out.trust, SkillTrust::Untrusted);
+        assert!(out.package_hash.starts_with("fnv1a64:"));
+        assert!(out
+            .resource_dir
+            .as_deref()
+            .is_some_and(|p| p.ends_with("带脚本")));
+        assert!(root.join("带脚本").join("run.ps1").is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn text_package_preview_has_no_scripts() {
+        let root = temp_dir("root-text");
+        let src = temp_dir("src-text");
+        let pkg = src.join("pack");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("SKILL.md"),
+            "---\nname: 纯文本\ndescription: d\n---\n\n## 正文",
+        )
+        .unwrap();
+        std::fs::write(pkg.join("notes.md"), "reference").unwrap();
+
+        let preview = preview_skill(&src, &root).unwrap();
+        assert!(preview.scripts.is_empty());
+        assert_eq!(preview.trust, "trusted");
+        let out = install_skill(&src, &root, false).unwrap();
+        assert_eq!(out.trust, SkillTrust::Trusted);
+
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&src);
     }
@@ -389,36 +534,40 @@ mod tests {
 
         // 非绝对路径
         let rel = Path::new("rel.md");
-        assert!(install_skill(rel, &root).unwrap_err().contains("绝对路径"));
+        assert!(install_skill(rel, &root, false)
+            .unwrap_err()
+            .contains("绝对路径"));
 
         // 不存在
         let missing = src.join("no-such.md");
-        assert!(install_skill(&missing, &root)
+        assert!(install_skill(&missing, &root, false)
             .unwrap_err()
             .contains("不存在"));
 
         // 非 .md
         let txt = src.join("note.txt");
         std::fs::write(&txt, "x").unwrap();
-        assert!(install_skill(&txt, &root).unwrap_err().contains("只支持"));
+        assert!(install_skill(&txt, &root, false)
+            .unwrap_err()
+            .contains("只支持"));
 
         // 无 name / 无 desc
         let no_name = src.join("noname.md");
         std::fs::write(&no_name, "---\ndescription: d\n---\n\n## x").unwrap();
-        assert!(install_skill(&no_name, &root)
+        assert!(install_skill(&no_name, &root, false)
             .unwrap_err()
             .contains("frontmatter"));
 
         let no_desc = src.join("nodesc.md");
         std::fs::write(&no_desc, "---\nname: 测试\n---\n\n## x").unwrap();
-        assert!(install_skill(&no_desc, &root)
+        assert!(install_skill(&no_desc, &root, false)
             .unwrap_err()
             .contains("description"));
 
         // 非法名（路径分隔符）
         let bad_name = src.join("badname.md");
         std::fs::write(&bad_name, "---\nname: a/b\ndescription: d\n---\n\n## x").unwrap();
-        assert!(install_skill(&bad_name, &root)
+        assert!(install_skill(&bad_name, &root, false)
             .unwrap_err()
             .contains("非法字符"));
 
@@ -429,7 +578,9 @@ mod tests {
             "字".repeat(300 * 1024)
         );
         std::fs::write(&big, big_text).unwrap();
-        assert!(install_skill(&big, &root).unwrap_err().contains("过大"));
+        assert!(install_skill(&big, &root, false)
+            .unwrap_err()
+            .contains("过大"));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&src);
@@ -449,7 +600,7 @@ mod tests {
         std::fs::write(src.join("pack").join("references").join("terms.md"), "词条").unwrap();
 
         // 传上一层（src3）→ 容忍一层包装定位到 pack/
-        let out = install_skill(&src, &root).unwrap();
+        let out = install_skill(&src, &root, false).unwrap();
         assert_eq!(out.name, "黑话小抄");
         assert!(root.join("黑话小抄").join("SKILL.md").is_file());
         assert!(
@@ -462,7 +613,7 @@ mod tests {
         assert!(out.file_path.ends_with("SKILL.md"));
 
         // 二次安装同名 → 拒绝
-        let err = install_skill(&src, &root).unwrap_err();
+        let err = install_skill(&src, &root, false).unwrap_err();
         assert!(err.contains("重名"), "got: {err}");
 
         let _ = std::fs::remove_dir_all(&root);
@@ -474,7 +625,7 @@ mod tests {
         let root = temp_dir("root4");
         let src = temp_dir("src4");
         std::fs::write(src.join("random.md"), "x").unwrap();
-        let err = install_skill(&src, &root).unwrap_err();
+        let err = install_skill(&src, &root, false).unwrap_err();
         assert!(err.contains("SKILL.md"), "got: {err}");
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&src);
@@ -485,7 +636,7 @@ mod tests {
         let root = temp_dir("root5");
         fixture_skill_md(&root, "已有.md", "已有", "d");
         let inside = root.join("已有.md");
-        let err = install_skill(&inside, &root).unwrap_err();
+        let err = install_skill(&inside, &root, false).unwrap_err();
         assert!(err.contains("已在技能目录中"), "got: {err}");
         let _ = std::fs::remove_dir_all(&root);
     }

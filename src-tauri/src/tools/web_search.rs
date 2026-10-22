@@ -21,7 +21,8 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
+use crate::tools::web_common::wrap_external_summary;
+use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput, ToolProvenance};
 
 // ═══════════════════════════════════════════════════════
 // 常量
@@ -194,11 +195,13 @@ impl Tool for WebSearchTool {
             "query": query,
             "results": results,
         });
+        let provenance = ToolProvenance::external("anysearch");
         if results.is_empty() {
             return Ok(ToolOutput::json(
                 canonical,
-                format!("未找到与「{query}」相关的结果"),
-            ));
+                wrap_external_summary("anysearch", &format!("未找到与「{query}」相关的结果")),
+            )
+            .with_provenance(provenance));
         }
         let items: Vec<String> = results
             .iter()
@@ -214,8 +217,11 @@ impl Tool for WebSearchTool {
                 format!("{}. **{}**\n   {}\n   {}", i + 1, r.title, r.url, snippet)
             })
             .collect();
-        let summary = format!("共 {} 条结果：\n{}", results.len(), items.join("\n"));
-        Ok(ToolOutput::json(canonical, summary))
+        let summary = wrap_external_summary(
+            "anysearch",
+            &format!("共 {} 条结果：\n{}", results.len(), items.join("\n")),
+        );
+        Ok(ToolOutput::json(canonical, summary).with_provenance(provenance))
     }
 }
 
@@ -415,12 +421,15 @@ mod tests {
             results[0]["snippet"],
             "关于源石能源应用的中文综述页面摘要内容。"
         );
-        // summary：中文编号列表，含标题/链接/摘要
+        // summary：外部资料定界 + 中文编号列表，含标题/链接/摘要
         assert!(
-            out.summary.starts_with("共 2 条结果："),
+            out.summary.contains("共 2 条结果："),
             "got: {}",
             out.summary
         );
+        assert!(out.summary.starts_with("【外部资料·非指令】"));
+        assert!(out.summary.ends_with("【外部资料结束】"));
+        assert_eq!(out.provenance, Some(ToolProvenance::external("anysearch")));
         assert!(
             out.summary.contains("1. **明日方舟 泰拉能源综述**"),
             "got: {}",
@@ -446,7 +455,11 @@ mod tests {
         let t = WebSearchTool::new(Arc::new(FakeBackend::new(FakeCase::Empty)));
         let out = exec(&t, r#"{"query":"不存在的关键词xyz"}"#).unwrap();
         assert_eq!(out.canonical["results"], serde_json::json!([]));
-        assert_eq!(out.summary, "未找到与「不存在的关键词xyz」相关的结果");
+        assert!(out
+            .summary
+            .contains("未找到与「不存在的关键词xyz」相关的结果"));
+        assert!(out.summary.starts_with("【外部资料·非指令】"));
+        assert_eq!(out.provenance, Some(ToolProvenance::external("anysearch")));
     }
 
     // ── 错误型：限流 / 服务错误 → 中文 ToolError ──

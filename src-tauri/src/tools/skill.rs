@@ -13,6 +13,7 @@
 //! 生命周期：激活后正文留在对话历史中持续生效，不设卸载机制
 //! （历史即上下文，跨轮自然持续；上下文压缩时随旧轮次一起清理）。
 
+use crate::skills::trust::SkillTrust;
 use crate::tools::{
     DisplayLink, SkillEventMark, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput,
 };
@@ -92,6 +93,12 @@ impl Tool for ActivateSkillTool {
                 msg.push_str(&format!("\n可用 Skill：{}", names.join("、")));
             }
             return Err(ToolError::Execution(msg));
+        }
+
+        // R-29：激活不授予执行权，但记录不可信来源——后续 run_command 预检
+        // 在命令未显式引用包路径时以此为兜底强制 Ask。
+        if index.trust(name) == SkillTrust::Untrusted {
+            ctx.mark_active_untrusted_skill(name);
         }
 
         // 命中 → 正文（剥 frontmatter）作为工具结果返回，随 tool_result
@@ -261,6 +268,33 @@ mod tests {
             matches!(&err, ToolError::Execution(m) if m == "Skill 目录不可用"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn activate_untrusted_skill_marks_turn_but_trusted_does_not() {
+        let root = unique_temp_dir("trust");
+        fixture(&root);
+        std::fs::create_dir_all(root.join("脚本技能")).unwrap();
+        std::fs::write(
+            root.join("脚本技能").join("SKILL.md"),
+            "---\nname: 脚本技能\ndescription: d\nsource: community\n---\n\n## 正文",
+        )
+        .unwrap();
+        std::fs::write(root.join("脚本技能").join("run.ps1"), "Write-Host hi").unwrap();
+        let idx = SkillIndex::load(&root).unwrap();
+        let ctx = skill_ctx(idx);
+
+        ActivateSkillTool
+            .execute(&ctx, r#"{"name":"阿尔法"}"#)
+            .unwrap();
+        assert!(ctx.active_untrusted_skill().is_none(), "可信技能不应标记");
+
+        ActivateSkillTool
+            .execute(&ctx, r#"{"name":"脚本技能"}"#)
+            .unwrap();
+        assert_eq!(ctx.active_untrusted_skill().as_deref(), Some("脚本技能"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

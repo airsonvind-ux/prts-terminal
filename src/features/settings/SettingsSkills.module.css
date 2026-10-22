@@ -25,9 +25,15 @@
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-.actionButton:hover {
+.actionButton:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--depth-4);
+}
+
+.actionButton:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.7;
 }
 
 /* 节内说明（安装节与清单节共用） */
@@ -36,6 +42,57 @@
   font-size: 11px;
   color: var(--text-3);
   line-height: 1.4;
+}
+
+/* 含脚本安装警告：紧凑清单，不抢安装入口的层级 */
+.warningTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 2px;
+}
+
+.warningText {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.scriptList {
+  margin-top: 6px;
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-3);
+  max-height: 96px;
+  overflow-y: auto;
+  --scrollbar-inset: 2px;
+}
+
+.scriptRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.scriptRow + .scriptRow {
+  border-top: 1px solid var(--depth-1);
+}
+
+.scriptPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.scriptSize {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 容器内行式清单：成块 + 行分隔 + hover */

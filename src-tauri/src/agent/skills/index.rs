@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::skills::trust::{self, SkillTrust};
 use crate::skills::SkillMeta;
 
 /// Skill 索引：name → 元数据 + 正文（剥 frontmatter）+ 源文件路径。
@@ -33,6 +34,12 @@ pub struct SkillIndex {
     bodies: HashMap<String, String>,
     /// name → 源 md 文件绝对路径（空间页/工具链接打开用；文件名≠name）
     paths: HashMap<String, PathBuf>,
+    /// name → 信任级别（R-29：内置/纯文本可信；含脚本或 community 不可信）
+    trust: HashMap<String, SkillTrust>,
+    /// name → 技能包根目录（单 `.md` 无包目录）
+    resource_dirs: HashMap<String, PathBuf>,
+    /// name → 包指纹（FNV-1a 64；单文件为文件内容指纹）
+    package_hashes: HashMap<String, String>,
 }
 
 impl SkillIndex {
@@ -49,6 +56,9 @@ impl SkillIndex {
         let mut skills: HashMap<String, SkillMeta> = HashMap::new();
         let mut bodies: HashMap<String, String> = HashMap::new();
         let mut paths: HashMap<String, PathBuf> = HashMap::new();
+        let mut trust: HashMap<String, SkillTrust> = HashMap::new();
+        let mut resource_dirs: HashMap<String, PathBuf> = HashMap::new();
+        let mut package_hashes: HashMap<String, String> = HashMap::new();
 
         // 队列式遍历（避免递归深度问题）；read_dir 迭代顺序 OS 依赖：
         // 每层先收集为 Vec、按 file_name() 排序再处理（目录与文件统一按名
@@ -59,7 +69,15 @@ impl SkillIndex {
             // 技能包目录（根级含 SKILL.md，且非运行根自身）：作为一个技能
             // 单元收录，不再下钻——其 references 等资源不产生独立条目。
             if d.as_path() != dir && d.join("SKILL.md").is_file() {
-                register_skill(&mut skills, &mut bodies, &mut paths, &d.join("SKILL.md"))?;
+                register_skill(
+                    &mut skills,
+                    &mut bodies,
+                    &mut paths,
+                    &mut trust,
+                    &mut resource_dirs,
+                    &mut package_hashes,
+                    &d.join("SKILL.md"),
+                )?;
                 continue;
             }
             let rd = std::fs::read_dir(&d)
@@ -93,7 +111,15 @@ impl SkillIndex {
                     continue;
                 }
 
-                register_skill(&mut skills, &mut bodies, &mut paths, &path)?;
+                register_skill(
+                    &mut skills,
+                    &mut bodies,
+                    &mut paths,
+                    &mut trust,
+                    &mut resource_dirs,
+                    &mut package_hashes,
+                    &path,
+                )?;
             }
         }
 
@@ -101,6 +127,9 @@ impl SkillIndex {
             skills,
             bodies,
             paths,
+            trust,
+            resource_dirs,
+            package_hashes,
         })
     }
 
@@ -110,6 +139,9 @@ impl SkillIndex {
             skills: HashMap::new(),
             bodies: HashMap::new(),
             paths: HashMap::new(),
+            trust: HashMap::new(),
+            resource_dirs: HashMap::new(),
+            package_hashes: HashMap::new(),
         }
     }
 
@@ -126,6 +158,33 @@ impl SkillIndex {
     /// 按 name 查源文件路径（空间页/工具链接打开用）。
     pub fn path(&self, name: &str) -> Option<&Path> {
         self.paths.get(name).map(PathBuf::as_path)
+    }
+
+    /// 按 name 查信任级别；未记录（旧/异常条目）按 untrusted 处理。
+    pub fn trust(&self, name: &str) -> SkillTrust {
+        self.trust
+            .get(name)
+            .copied()
+            .unwrap_or(SkillTrust::Untrusted)
+    }
+
+    /// 按 name 查技能包根目录（单 `.md` 条目为 None）。
+    pub fn resource_dir(&self, name: &str) -> Option<&Path> {
+        self.resource_dirs.get(name).map(PathBuf::as_path)
+    }
+
+    /// 按 name 查包指纹（FNV-1a 64；异常条目为空串）。
+    pub fn package_hash(&self, name: &str) -> Option<&str> {
+        self.package_hashes.get(name).map(String::as_str)
+    }
+
+    /// 全部不可信技能包目录（运行时命令路径预检用）。
+    pub fn untrusted_resource_dirs(&self) -> Vec<PathBuf> {
+        self.names()
+            .into_iter()
+            .filter(|name| self.trust(name) == SkillTrust::Untrusted)
+            .filter_map(|name| self.resource_dirs.get(name).cloned())
+            .collect()
     }
 
     /// 全部条目名，按 name 排序（激活工具未命中时报错列目录用）。
@@ -169,10 +228,14 @@ impl SkillIndex {
 }
 
 /// 读取并注册一个技能文件（解析失败 → 告警跳过；重名 → 告警保留先注册的）。
+#[allow(clippy::too_many_arguments)] // 索引各表一一对应，拆结构会扩大改动面
 fn register_skill(
     skills: &mut HashMap<String, SkillMeta>,
     bodies: &mut HashMap<String, String>,
     paths: &mut HashMap<String, PathBuf>,
+    trust_map: &mut HashMap<String, SkillTrust>,
+    resource_dirs: &mut HashMap<String, PathBuf>,
+    package_hashes: &mut HashMap<String, String>,
     path: &Path,
 ) -> Result<(), String> {
     let text = std::fs::read_to_string(path)
@@ -195,9 +258,34 @@ fn register_skill(
     // parse_frontmatter 一致（LF/CRLF 兼容），勿重复实现。
     let name = meta.name.clone();
     let body = crate::knowledge::body_after_frontmatter(&text).to_string();
+    let (trust, resource_dir, package_hash) = match trust::inspect_skill_path(path) {
+        Ok(inspection) => (
+            trust::trust_for(meta.source.as_deref(), &inspection.scripts),
+            inspection.resource_dir,
+            inspection.package_hash,
+        ),
+        Err(e) => {
+            eprintln!(
+                "[skills] 载荷扫描失败，按不可信处理（{}）：{e}",
+                path.display()
+            );
+            let dir = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| *n == "SKILL.md")
+                .and_then(|_| path.parent())
+                .map(Path::to_path_buf);
+            (SkillTrust::Untrusted, dir, String::new())
+        }
+    };
     skills.insert(name.clone(), meta);
     bodies.insert(name.clone(), body);
-    paths.insert(name, path.to_path_buf());
+    paths.insert(name.clone(), path.to_path_buf());
+    trust_map.insert(name.clone(), trust);
+    if let Some(dir) = resource_dir {
+        resource_dirs.insert(name.clone(), dir);
+    }
+    package_hashes.insert(name, package_hash);
     Ok(())
 }
 

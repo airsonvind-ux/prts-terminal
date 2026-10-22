@@ -30,9 +30,11 @@ use serde_json::Value;
 
 use crate::tools::web_common::{
     absolutize_markdown_links, parse_http_url, resolve_host_all, resolve_public_ip, truncate_chars,
-    HostReject, UrlReject,
+    wrap_external_summary, HostReject, UrlReject,
 };
-use crate::tools::{DisplayLink, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
+use crate::tools::{
+    DisplayLink, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput, ToolProvenance,
+};
 
 // ═══════════════════════════════════════════════════════
 // 常量（M5 定稿数值）
@@ -180,8 +182,9 @@ impl Tool for WebFetchTool {
 
         let host = final_url.host_str().unwrap_or("");
         let path = final_url.path();
-        let summary = format!("来源：{host}{path}（{label}）\n{text}");
-        Ok(ToolOutput::text(summary))
+        let source = format!("{host}{path}");
+        let summary = wrap_external_summary(&format!("{source}（{label}）"), &text);
+        Ok(ToolOutput::text(summary).with_provenance(ToolProvenance::external(source)))
     }
 }
 
@@ -710,11 +713,17 @@ mod tests {
         });
         let t = tool(5);
         let out = exec(&t, &format!(r#"{{"url":"{base}/start"}}"#)).unwrap();
-        let head: String = out.summary.chars().take(40).collect();
         assert!(
             out.summary
-                .starts_with("来源：127.0.0.1/docs/article（纯文本）"),
-            "头部应展示最终 URL, got: {head}"
+                .contains("来源：127.0.0.1/docs/article（纯文本）"),
+            "摘要应展示最终 URL, got: {}",
+            out.summary.chars().take(80).collect::<String>()
+        );
+        assert!(out.summary.starts_with("【外部资料·非指令】"));
+        assert!(out.summary.ends_with("【外部资料结束】"));
+        assert_eq!(
+            out.provenance,
+            Some(ToolProvenance::external("127.0.0.1/docs/article"))
         );
         assert!(out.summary.contains("重定向后正文到达"));
     }
@@ -830,9 +839,9 @@ mod tests {
         let out = exec(&t, &format!(r#"{{"url":"{base}/news/energy"}}"#)).unwrap();
         assert!(
             out.summary
-                .starts_with("来源：127.0.0.1/news/energy（网页正文）\n"),
+                .contains("来源：127.0.0.1/news/energy（网页正文）\n"),
             "got head: {}",
-            out.summary.chars().take(40).collect::<String>()
+            out.summary.chars().take(80).collect::<String>()
         );
         assert!(
             out.summary.contains("源石技艺的现代研究最早可追溯到"),
@@ -1005,6 +1014,10 @@ mod tests {
             "缺截断尾标"
         );
         assert!(out.summary.chars().count() < 12400, "截断应生效");
-        assert!(out.summary.ends_with("字符）"), "尾标应在末尾");
+        assert!(out.summary.contains("字符）"), "截断标记应保留");
+        assert!(
+            out.summary.ends_with("【外部资料结束】"),
+            "外部资料收尾标记应在末尾"
+        );
     }
 }

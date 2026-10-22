@@ -64,7 +64,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::llm::ToolDef;
@@ -90,6 +90,9 @@ use crate::turn_registry::AbortSignal;
 /// （与 skill_index 同模式）；执行类工具（run_command）读入自身执行选项
 /// （RunOptions.cancel → runner 轮询 kill）。None = 无中止能力（Mock/
 /// 独立直调场景），执行内核按无取消处理。
+///
+/// `taint` 为本轮来源状态（R-02b）：外部资料 / 区外读取。每次 process 新建
+/// ToolContext 时一并新建，跨轮自动重置；preflight 读、执行成功后写。
 #[derive(Debug)]
 pub struct ToolContext {
     pub(crate) db: Option<Arc<Database>>,
@@ -103,6 +106,11 @@ pub struct ToolContext {
     pub(crate) skill_index: Option<Arc<crate::skills_index::SkillIndex>>,
     /// 中止信号（M3-B；默认 None，dispatch_turn 注入）。
     pub(crate) abort: Option<AbortSignal>,
+    /// 本轮来源状态（R-02b）：外部资料 / 区外读取；跨轮随 ToolContext 重置。
+    pub(crate) taint: Arc<crate::runtime::taint::TaintState>,
+    /// 本轮激活过的不可信 Skill（R-29）：命令不显式引用包路径时的兜底判据。
+    /// 跨轮随 ToolContext 重置。
+    pub(crate) active_untrusted_skill: Mutex<Option<String>>,
 }
 
 impl ToolContext {
@@ -113,6 +121,8 @@ impl ToolContext {
             // conversation_id: None,
             skill_index: None,
             abort: None,
+            taint: Arc::new(crate::runtime::taint::TaintState::default()),
+            active_untrusted_skill: Mutex::new(None),
         }
     }
 
@@ -124,7 +134,29 @@ impl ToolContext {
             // conversation_id: None,
             skill_index: None,
             abort: None,
+            taint: Arc::new(crate::runtime::taint::TaintState::default()),
+            active_untrusted_skill: Mutex::new(None),
         }
+    }
+
+    /// 本轮来源状态（只读观察；写入由 orchestrator 在执行成功后做）。
+    pub(crate) fn taint(&self) -> &crate::runtime::taint::TaintState {
+        &self.taint
+    }
+
+    /// 记录本轮激活过不可信 Skill（R-29；activate_skill 成功后写入）。
+    pub(crate) fn mark_active_untrusted_skill(&self, name: &str) {
+        if let Ok(mut slot) = self.active_untrusted_skill.lock() {
+            *slot = Some(name.to_string());
+        }
+    }
+
+    /// 本轮激活过的不可信 Skill 名（无则 None；run_command 预检兜底用）。
+    pub(crate) fn active_untrusted_skill(&self) -> Option<String> {
+        self.active_untrusted_skill
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     // /// 注入缓存区通道（对话分区 + 对话标识；db 为 None）。
@@ -287,8 +319,56 @@ pub enum SkillEventMark {
 ///
 /// `skill_events` 为 Skill 激活标记（模块 B）：激活工具陈述操作事实，
 /// 由调度中枢统一转为 session log 的 skill/activate 事件。
+///
+/// 工具结果的来源分类。
+///
+/// `external` 只表达“外部来源、非本地权威”，不表达内容真假或敌意。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolTrust {
+    /// 本地权威数据（数据库、知识库等）
+    Authoritative,
+    /// 由本地数据派生/加工
+    Derived,
+    /// 外部资料（网页、搜索结果等）
+    External,
+}
+
+/// 工具结果来源（R-02a 最小契约）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolProvenance {
+    pub trust: ToolTrust,
+    /// 来源标识：URL 的 host+path、数据源名等；不写敏感 query。
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl ToolProvenance {
+    pub fn external(source: impl Into<String>) -> Self {
+        Self {
+            trust: ToolTrust::External,
+            source: source.into(),
+            version: None,
+        }
+    }
+
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+}
+
+/// 工具执行输出。
+///
+/// `provenance` 为结果来源（R-02a）：`external` 表示外部资料，不具本地知识库/
+/// 数据库的权威性，不等于“恶意”；工具未声明时为 None（旧归档同款缺省）。
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolOutput {
+    /// 结果来源；None = 旧工具/旧归档未声明。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<ToolProvenance>,
     /// 结构化 canonical 值（JSON）。执行产生的无损失数据，
     /// 不依赖渲染上下文即可重建。
     pub canonical: serde_json::Value,
@@ -321,6 +401,7 @@ impl ToolOutput {
         Self {
             canonical: serde_json::json!({ "text": summary }),
             summary,
+            provenance: None,
             context_ops: Vec::new(),
             images: Vec::new(),
             cache_events: Vec::new(),
@@ -333,11 +414,18 @@ impl ToolOutput {
         Self {
             canonical,
             summary: summary.into(),
+            provenance: None,
             context_ops: Vec::new(),
             images: Vec::new(),
             cache_events: Vec::new(),
             skill_events: Vec::new(),
         }
+    }
+
+    /// 附加结果来源（外部资料等）。
+    pub fn with_provenance(mut self, provenance: ToolProvenance) -> Self {
+        self.provenance = Some(provenance);
+        self
     }
 }
 
@@ -572,7 +660,7 @@ pub fn register_builtin(
 ) -> Result<(), String> {
     // echo 为测试辅助 dummy（不注册生产，2026-08-31；代码保留供测试）
     reg.register(Box::new(SearchEntities))?;
-    reg.register(Box::new(SimPath::new(policy.workspace_root())))?;
+    reg.register(Box::new(SimPath::new(Arc::clone(&policy))))?;
     reg.register(Box::new(QueryEnemy))?;
     reg.register(Box::new(QueryLevel))?;
     reg.register(Box::new(QueryOperator))?;

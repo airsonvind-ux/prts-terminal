@@ -6,4 +6,5 @@ pub mod exec_settings;
 pub mod path_guard;
 pub mod policy;
 pub mod steer_queue;
+pub mod taint;
 pub mod turn_registry;
