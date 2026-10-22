@@ -307,6 +307,7 @@ export function useModelSettings(
       setModelInfo({
         name: m.displayName,
         contextLength: m.contextLength,
+        supportsVision: m.supportsVision,
         thinking: thinkingLabel(llm.thinking_level, m),
       });
     }

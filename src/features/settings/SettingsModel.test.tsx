@@ -13,6 +13,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { SettingsModel, modelListCache } from "./SettingsModel";
+import { getModelInfo, setModelInfo } from "../../stores/useProcessingStore";
 import { useToastStore } from "../../stores/useToastStore";
 import type { LlmConfig, LlmPatch } from "../../types";
 
@@ -181,6 +182,7 @@ async function fetchAndSelectModel(displayName: string): Promise<void> {
 beforeEach(() => {
   useToastStore.setState({ toasts: [] });
   __invokeMock.mockClear();
+  setModelInfo(null);
   // 清模块级模型列表缓存（防跨用例污染：切供应商 effect 会读缓存跳 fetch）
   for (const k of Object.keys(modelListCache)) delete modelListCache[k];
   onPatch = vi.fn((_p: LlmPatch, _l?: string) => {});
@@ -351,6 +353,14 @@ describe("SettingsModel · 思考强度", () => {
       .map((d) => (d.textContent ?? "").trim())
       .filter((t) => ["关闭", "中（默认）", "高"].includes(t));
     expect(menuTexts).toEqual(["关闭", "中（默认）", "高"]);
+  });
+
+  it("选择视觉模型 → 缓存 supportsVision=true（ChatView 识图提示依据）", async () => {
+    installRoutes([{ ...V4_FLASH, supportsVision: true }]);
+    renderHarness(maskedLlm({ model: "" }));
+    await flush();
+    await fetchAndSelectModel("DeepSeek V4 Flash");
+    expect(getModelInfo()?.supportsVision).toBe(true);
   });
 
   it("非 reasoning 模型：思考强度行隐藏", async () => {
