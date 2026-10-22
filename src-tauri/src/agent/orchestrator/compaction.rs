@@ -415,6 +415,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 })
             })
         }
@@ -685,6 +686,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 },
             }],
             0,
@@ -710,6 +712,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 },
             }],
             0,

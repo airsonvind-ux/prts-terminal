@@ -78,6 +78,34 @@ describe("finishProcessing(sid, 'aborted') 归档语义", () => {
     expect(appendCalls[0][1].contextTokens).toBeNull();
   });
 
+  it("max-tokens 轮：保留半截回答 + 轮尾 turn/truncated 标记", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("截断测试");
+
+    const { sid } = getSingle();
+    store.appendCurrentEvent(chunk(sid, "半截回答"));
+    useProcessingStore.getState().finishProcessing(sid, "max-tokens");
+
+    const conv = useConversationStore.getState().conversations[0];
+    expect(conv.turns).toHaveLength(1);
+    const turn = conv.turns[0];
+    expect(turn[1]).toEqual(chunk(sid, "半截回答"));
+    expect(turn[turn.length - 1]).toEqual({
+      type: "turn/truncated",
+      sessionId: sid,
+    });
+
+    const appendCalls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "append_turn"
+    );
+    expect(appendCalls).toHaveLength(1);
+    const archived = JSON.parse(appendCalls[0][1].eventsJson) as SessionEvent[];
+    expect(archived[archived.length - 1]).toEqual({
+      type: "turn/truncated",
+      sessionId: sid,
+    });
+  });
+
   it("有历史 contextTokens 的对话被中止轮归档后不覆盖", async () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("首轮");

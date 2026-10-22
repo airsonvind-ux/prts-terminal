@@ -1107,6 +1107,7 @@ mod tests {
             tool_calls: vec![call("external_probe", "{}")],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
         let mut messages = vec![ChatMessage::user("测试")];
         let mut state = TurnState::new();

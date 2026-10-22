@@ -11,7 +11,7 @@ import type { TextSegment } from "../../projection";
 // ── 展示项类型 ──
 
 export type DisplayItem =
-  | { type: "message"; role: "user" | "error" | "aborted" | "aborting"; content: string; attachments?: Attachment[] }
+  | { type: "message"; role: "user" | "error" | "aborted" | "aborting" | "truncated"; content: string; attachments?: Attachment[] }
   | {
       type: "message";
       role: "assistant";
@@ -36,6 +36,7 @@ export type DisplayItem =
  *   assistant/message 为权威聚合；无则从 chunks 累积 + tool/call 回溯分段）；
  * - error → 错误气泡（其后内容不渲染；错误轮语义不变）；
  * - turn/aborted 轮中止标记 → 全部段渲染后轮尾追加（不占段）。
+ * - turn/truncated 轮截断标记 → 全部段渲染后轮尾追加（不占段）。
  *
  * 单段轮（现状形态）渲染序列与历史完全一致：user 气泡 → 事件卡 → assistant
  * 气泡（cursor/interactive 仅在正在流的末段）。
@@ -104,6 +105,13 @@ function appendTurnItems(
   // M3-B：轮尾中止标记（半截 chunk 已在上述分支照常展示；标记只追加轮尾）
   if (events.some((e) => e.type === "turn/aborted")) {
     items.push({ type: "message", role: "aborted", content: "该轮已中止" });
+  }
+  if (events.some((e) => e.type === "turn/truncated")) {
+    items.push({
+      type: "message",
+      role: "truncated",
+      content: "回答未完整（达到长度上限）",
+    });
   }
 }
 

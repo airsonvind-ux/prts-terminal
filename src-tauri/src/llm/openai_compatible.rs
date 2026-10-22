@@ -34,8 +34,8 @@ use serde_json::Value;
 use crate::debug;
 
 use super::{
-    default_base_url, AuthMode, ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse,
-    ModelRegistry, ResolvedCompat, StreamEvent, StreamResult, TokenUsage, ToolCall,
+    default_base_url, AuthMode, ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError,
+    LlmResponse, ModelRegistry, ResolvedCompat, StreamEvent, StreamResult, TokenUsage, ToolCall,
     ToolCallFunction, ToolDef,
 };
 
@@ -508,6 +508,7 @@ where
     let mut reasoning = String::new(); // reasoning delta 累积
     let mut tool_call_acc: HashMap<usize, ToolCallAccumulator> = HashMap::new();
     let mut usage: Option<TokenUsage> = None;
+    let mut finish_reason: Option<FinishReason> = None;
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     let read = crate::llm::sse::read_frames(stream, |frame| {
@@ -518,6 +519,7 @@ where
             &mut reasoning,
             &mut tool_call_acc,
             &mut usage,
+            &mut finish_reason,
         );
     })
     .await;
@@ -569,6 +571,7 @@ where
             Some(reasoning)
         },
         usage,
+        finish_reason,
     })
 }
 
@@ -583,6 +586,7 @@ fn process_sse_frame(
     reasoning: &mut String,
     tool_call_acc: &mut HashMap<usize, ToolCallAccumulator>,
     usage: &mut Option<TokenUsage>,
+    finish_reason: &mut Option<FinishReason>,
 ) {
     let Some(payload) = crate::llm::sse::frame_data(frame) else {
         return;
@@ -604,7 +608,15 @@ fn process_sse_frame(
     };
 
     for chunk in &chunks {
-        process_sse_chunk(chunk, on_event, text, reasoning, tool_call_acc, usage);
+        process_sse_chunk(
+            chunk,
+            on_event,
+            text,
+            reasoning,
+            tool_call_acc,
+            usage,
+            finish_reason,
+        );
     }
 }
 
@@ -622,6 +634,7 @@ fn process_sse_chunk(
     reasoning_acc: &mut String,
     tool_call_acc: &mut HashMap<usize, ToolCallAccumulator>,
     usage: &mut Option<TokenUsage>,
+    finish_reason: &mut Option<FinishReason>,
 ) {
     // ── 无条件提取 usage ──
     // 不同供应商在不同 chunk 中返回 usage：有的在单独 chunk（choices 为空或缺失），
@@ -649,6 +662,13 @@ fn process_sse_chunk(
     }
 
     for choice in choices {
+        // finish_reason 可能出现在没有 delta 的收尾 chunk，先于 delta 解析。
+        if let Some(raw) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+            if let Some(reason) = FinishReason::from_openai(raw) {
+                *finish_reason = Some(reason);
+            }
+        }
+
         let Some(delta) = choice.get("delta") else {
             continue;
         };
@@ -801,6 +821,22 @@ mod tests {
 
         assert_eq!(result.text, "你好，博士");
         assert!(result.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finish_reason_length_maps_to_max_tokens() {
+        let lines = vec![
+            text_delta_line("半截回答"),
+            r#"data: {"choices":[{"finish_reason":"length","delta":{}}]}"#.to_string(),
+            done_line(),
+        ];
+        let (_, result) = collect_events(&lines).await;
+
+        assert_eq!(
+            result.finish_reason,
+            Some(crate::llm::FinishReason::MaxTokens)
+        );
+        assert_eq!(result.text, "半截回答");
     }
 
     #[tokio::test]

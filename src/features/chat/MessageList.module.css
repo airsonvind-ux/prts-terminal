@@ -179,6 +179,18 @@
   opacity: 0.75;
 }
 
+/* ── 轮截断提示条（R-07：事实陈述，中性字色，不用警告色） ── */
+.truncated {
+  align-self: center;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11px;
+  text-align: center;
+  padding: 1px 8px;
+  max-width: 90%;
+  opacity: 0.75;
+}
+
 /* ── 插话 pending 气泡（设计定稿） ──
  * 显示在当前输出段之后对话底部：右侧（即将成为下一条 user 消息）
  * 纯样式差异——虚线边框 + 降透明，无任何文字角标；悬停警示色（--danger）

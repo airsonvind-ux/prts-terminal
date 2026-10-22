@@ -52,7 +52,9 @@ export type SessionEvent =
   | CacheRemoveEvent
   // M3-B：轮中止标记（前端私有事件，非后端事件；mood/event 同款先例——
   // derive/展示层不派生内容，仅 MessageList 轮尾展示 + 存储透传）
-  | TurnAbortedEvent;
+  | TurnAbortedEvent
+  // R-07：轮截断标记（前端私有事件，同 aborted 模式）
+  | TurnTruncatedEvent;
 
 /**
  * 轮中止标记（M3-B §4.1 前端私有事件）。
@@ -67,6 +69,18 @@ export type SessionEvent =
  */
 export interface TurnAbortedEvent {
   type: "turn/aborted";
+  sessionId: string;
+}
+
+/**
+ * 轮截断标记（R-07 前端私有事件）。
+ *
+ * 由 finishProcessing(sessionId, "max-tokens") 归档前合成；primary 模式下
+ * hydration 从 turn/end(max-tokens) 重建。消息列表在轮尾展示
+ * “回答未完整（达到长度上限）”，不进入模型历史。
+ */
+export interface TurnTruncatedEvent {
+  type: "turn/truncated";
   sessionId: string;
 }
 

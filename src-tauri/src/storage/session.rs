@@ -38,7 +38,8 @@ pub enum ChunkKind {
 
 /// turn 终止原因（模块 5：终止原因显式化）。
 /// P0 落地：completed / error / stagnation 由调度循环直接产生；
-/// aborted（用户中止）随 stop 生成（P2）落地；max_tokens 为预留词汇。
+/// aborted（用户中止）随 stop 生成（P2）落地；max_tokens 由适配器结束原因
+/// （finish_reason/stop_reason）驱动，在无工具调用时产出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TurnEndReason {
@@ -51,8 +52,7 @@ pub enum TurnEndReason {
     Aborted,
     /// 停滞检测触发（PRTS 独有资产，升格为一等终止原因）
     Stagnation,
-    /// 上下文超限（max_tokens 截断，预留）
-    #[allow(dead_code)] // 预留词汇：随 max-tokens 截断处理落地
+    /// 上下文超限（max_tokens 截断）
     MaxTokens,
 }
 

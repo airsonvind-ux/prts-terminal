@@ -198,6 +198,35 @@ describe("F6 恢复 hydrate", () => {
       readTotal: 0,
     });
   });
+
+  it("primary 日志的 turn/end(max-tokens) 恢复为轮尾截断标记", async () => {
+    const metaX = meta({ id: "t", updatedAt: 2 });
+    const turnLine = JSON.stringify([
+      { type: "user/message", sessionId: "t", content: "长回答" },
+      {
+        type: "assistant/message",
+        sessionId: "t",
+        content: "半截回答",
+        reasoningContent: null,
+        usage: null,
+      },
+      { type: "turn/end", sessionId: "t", reason: "max-tokens" },
+    ]);
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaX]);
+      if (cmd === "get_conversation") {
+        return Promise.resolve({ meta: metaX, turns: [turnLine] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const turns = useConversationStore.getState().conversations[0].turns;
+    expect(turns[0]).toEqual(
+      expect.arrayContaining([{ type: "turn/truncated", sessionId: "t" }])
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════

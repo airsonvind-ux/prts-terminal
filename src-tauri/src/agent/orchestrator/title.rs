@@ -260,6 +260,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 })
             })
         }
@@ -368,6 +369,7 @@ mod tests {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]);
         let out = generate_title(&mock, &LlmConfig::default(), "问", "答").await;

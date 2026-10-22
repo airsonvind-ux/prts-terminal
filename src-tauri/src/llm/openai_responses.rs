@@ -20,8 +20,8 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, StreamEvent,
-    StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry,
+    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -419,6 +419,7 @@ enum ResponsesSseEvent {
     },
     Completed {
         usage: Option<Value>,
+        finish_reason: Option<FinishReason>,
     },
 }
 
@@ -435,6 +436,7 @@ where
     let mut reasoning = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut usage: Option<TokenUsage> = None;
+    let mut finish_reason: Option<FinishReason> = None;
 
     // 按 call_id 累积 tool_call 的 arguments 和 name
     let mut pending_calls: HashMap<String, (Option<String>, String)> = HashMap::new();
@@ -471,9 +473,15 @@ where
                 }
                 entry.1.push_str(&arguments_delta);
             }
-            ResponsesSseEvent::Completed { usage: u } => {
+            ResponsesSseEvent::Completed {
+                usage: u,
+                finish_reason: reason,
+            } => {
                 if let Some(u) = u {
                     usage = OpenAIResponsesClient::extract_usage(&u);
+                }
+                if reason.is_some() {
+                    finish_reason = reason;
                 }
             }
         }
@@ -511,6 +519,7 @@ where
             Some(reasoning)
         },
         usage,
+        finish_reason,
     })
 }
 
@@ -584,8 +593,20 @@ fn parse_responses_frame(frame: &str) -> Option<ResponsesSseEvent> {
             })
         }
         "response.completed" => {
-            let usage = data.get("response").and_then(|r| r.get("usage")).cloned();
-            Some(ResponsesSseEvent::Completed { usage })
+            let response = data.get("response");
+            let usage = response.and_then(|r| r.get("usage")).cloned();
+            let status = response
+                .and_then(|r| r.get("status"))
+                .and_then(|v| v.as_str());
+            let incomplete_reason = response
+                .and_then(|r| r.get("incomplete_details"))
+                .and_then(|d| d.get("reason"))
+                .and_then(|v| v.as_str());
+            let finish_reason = FinishReason::from_responses(status, incomplete_reason);
+            Some(ResponsesSseEvent::Completed {
+                usage,
+                finish_reason,
+            })
         }
         _ => None,
     }
@@ -762,6 +783,27 @@ mod tests {
         assert_eq!(u.output_tokens, 5);
         // 契约不变量 I1~I5（模块 4 P1；I4：usage 先于 finish）
         super::super::assert_stream_contract(&events, &result);
+    }
+
+    #[tokio::test]
+    async fn incomplete_max_output_tokens_maps_to_max_tokens() {
+        let frames = &[
+            (
+                "response.output_text.delta",
+                r#"{"type":"response.output_text.delta","delta":"半截回答"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            ),
+        ];
+        let (_, result) = collect_events(frames).await;
+
+        assert_eq!(
+            result.finish_reason,
+            Some(crate::llm::FinishReason::MaxTokens)
+        );
+        assert_eq!(result.text, "半截回答");
     }
 
     #[tokio::test]

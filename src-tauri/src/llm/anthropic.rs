@@ -22,8 +22,8 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, ProviderBlock,
-    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry,
+    ProviderBlock, StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -517,10 +517,8 @@ enum AnthropicSseEvent {
         index: usize,
     },
     MessageDelta {
-        /// SSE 的 stop_reason（end_turn / tool_use 等）。**当前只解析、无人读取**
-        /// （消费点形如 `stop_reason: _`）；保留以便将来判结束原因，
-        /// 测试也据此断言解析正确。
-        #[allow(dead_code)]
+        /// SSE 的 stop_reason（end_turn / tool_use / max_tokens 等），
+        /// 由 process_anthropic_event 映射为 FinishReason。
         stop_reason: Option<String>,
         output_tokens: u32,
     },
@@ -566,6 +564,7 @@ where
     let mut blocks: HashMap<usize, BlockAccumulator> = HashMap::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut usage: Option<TokenUsage> = None;
+    let mut finish_reason: Option<FinishReason> = None;
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
@@ -581,6 +580,7 @@ where
                 &mut blocks,
                 &mut tool_calls,
                 &mut usage,
+                &mut finish_reason,
             );
         }
     })
@@ -598,6 +598,7 @@ where
             Some(reasoning)
         },
         usage,
+        finish_reason,
     })
 }
 
@@ -689,6 +690,7 @@ fn parse_anthropic_frame(frame: &str) -> Option<AnthropicSseEvent> {
 }
 
 /// 处理单个 Anthropic SSE 事件，转换为 StreamEvent 推送。
+#[allow(clippy::too_many_arguments)]
 fn process_anthropic_event(
     ev: &AnthropicSseEvent,
     on_event: &(dyn Fn(StreamEvent) + Send + Sync),
@@ -697,6 +699,7 @@ fn process_anthropic_event(
     blocks: &mut HashMap<usize, BlockAccumulator>,
     tool_calls: &mut Vec<ToolCall>,
     usage: &mut Option<TokenUsage>,
+    finish_reason: &mut Option<FinishReason>,
 ) {
     match ev {
         AnthropicSseEvent::MessageStart {
@@ -827,9 +830,14 @@ fn process_anthropic_event(
             }
         }
         AnthropicSseEvent::MessageDelta {
-            stop_reason: _,
+            stop_reason,
             output_tokens,
         } => {
+            if let Some(raw) = stop_reason.as_deref() {
+                if let Some(reason) = FinishReason::from_anthropic(raw) {
+                    *finish_reason = Some(reason);
+                }
+            }
             if let Some(ref mut existing) = usage {
                 existing.output_tokens = *output_tokens;
             }
@@ -1008,6 +1016,41 @@ mod tests {
         let u = result.usage.unwrap();
         assert_eq!(u.input_tokens, 10);
         assert_eq!(u.output_tokens, 5);
+    }
+
+    #[tokio::test]
+    async fn max_tokens_stop_reason_is_reported() {
+        let frames = &[
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"id":"msg_max","usage":{"input_tokens":10}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"半截回答"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ];
+
+        let (_, result) = collect_anthropic_events(frames).await;
+
+        assert_eq!(
+            result.finish_reason,
+            Some(crate::llm::FinishReason::MaxTokens)
+        );
+        assert_eq!(result.text, "半截回答");
     }
 
     #[tokio::test]

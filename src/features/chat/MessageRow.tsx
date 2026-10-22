@@ -130,6 +130,17 @@ export const MessageRow = memo(function MessageRow({
           </div>
         );
       }
+      // R-07：轮截断提示（中性轮尾小字，不用警告色；内容保留）
+      if (item.role === "truncated") {
+        return (
+          <div
+            data-message-area
+            className={`${styles.bubble} ${styles.truncated} ${styles.row}`}
+          >
+            {item.content}
+          </div>
+        );
+      }
       // M3-B：轮中止标记条（灰/斜体小字，独立样式——不走 error 分支；
       // 「正在中止…」与「该轮已中止」同一套样式，前者是过程、后者是结果）
       if (item.role === "aborted" || item.role === "aborting") {

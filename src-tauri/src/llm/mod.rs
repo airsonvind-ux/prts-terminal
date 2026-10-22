@@ -675,6 +675,52 @@ pub enum StreamEvent {
     },
 }
 
+/// 一次流式调用结束的原因（R-07）。
+///
+/// `None` 表示适配器未提供结束原因；`Normal` 是明确正常结束。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishReason {
+    Normal,
+    MaxTokens,
+    ToolCalls,
+    ContentFilter,
+}
+
+impl FinishReason {
+    /// OpenAI Chat Completions 的 `finish_reason`。
+    pub fn from_openai(raw: &str) -> Option<Self> {
+        match raw {
+            "stop" => Some(Self::Normal),
+            "length" => Some(Self::MaxTokens),
+            "tool_calls" | "function_call" => Some(Self::ToolCalls),
+            "content_filter" => Some(Self::ContentFilter),
+            _ => None,
+        }
+    }
+
+    /// Anthropic Messages 的 `stop_reason`。
+    pub fn from_anthropic(raw: &str) -> Option<Self> {
+        match raw {
+            "end_turn" | "stop_sequence" => Some(Self::Normal),
+            "max_tokens" => Some(Self::MaxTokens),
+            "tool_use" => Some(Self::ToolCalls),
+            "refusal" => Some(Self::ContentFilter),
+            _ => None,
+        }
+    }
+
+    /// OpenAI Responses 的 `status` + `incomplete_details.reason`。
+    pub fn from_responses(status: Option<&str>, incomplete_reason: Option<&str>) -> Option<Self> {
+        match (status, incomplete_reason) {
+            (Some("completed"), _) => Some(Self::Normal),
+            (Some("incomplete"), Some("max_output_tokens")) => Some(Self::MaxTokens),
+            (Some("incomplete"), Some("content_filter")) => Some(Self::ContentFilter),
+            (Some("incomplete"), _) => None,
+            _ => None,
+        }
+    }
+}
+
 /// 流式调用完成后的聚合产物。
 ///
 /// chat_stream() 结束时返回，供调用方归档：
@@ -682,12 +728,14 @@ pub enum StreamEvent {
 ///   tool_calls — 本轮产出的全部工具调用（空 vec = 未调工具）
 ///   reasoning  — 完整的推理链（推理模型提供，普通模型为 None）
 ///   usage      — 本次 API 调用的 token 用量（Mock 填 None）
+///   finish_reason — 适配器报告的结束原因；None = 未观测
 #[derive(Debug, Clone)]
 pub struct StreamResult {
     pub text: String,
     pub tool_calls: Vec<ToolCall>,
     pub reasoning: Option<String>,
     pub usage: Option<TokenUsage>,
+    pub finish_reason: Option<FinishReason>,
 }
 
 // ═══════════════════════════════════════════════════════

@@ -57,12 +57,15 @@ export function finishProcessingImpl(
 
   // M3-B §4.2：aborted 轮归档前在 currentEvents 末尾合成轮中止标记
   // （前端私有事件——derive/展示层忽略、MessageList 轮尾展示；持久化
-  // 随轮 events_json 原样写盘 → 重启可见）。其余 reason 路径完全不变。
+  // 随轮 events_json 原样写盘 → 重启可见）。R-07 的截断标记同构。
   const abortedMarker: SessionEvent = { type: "turn/aborted", sessionId };
+  const truncatedMarker: SessionEvent = { type: "turn/truncated", sessionId };
   const archiveEvents: SessionEvent[] =
     reason === "aborted"
       ? [...snap.currentEvents, abortedMarker]
-      : snap.currentEvents;
+      : reason === "max-tokens"
+        ? [...snap.currentEvents, truncatedMarker]
+        : snap.currentEvents;
 
   const convStore = useConversationStore.getState();
   // 本次轮是否挂着自动标题现场（失败轮/中止轮会清掉；下一轮正常发送再挂上）。

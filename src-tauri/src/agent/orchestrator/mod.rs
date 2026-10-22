@@ -932,6 +932,7 @@ mod tests {
             tool_calls,
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
         let mut state = TurnState::new();
         let abort = AbortSignal::new();
@@ -1019,6 +1020,7 @@ mod tests {
             tool_calls: tool_calls.clone(),
             reasoning: Some("让我试试echo工具".into()),
             usage: None,
+            finish_reason: None,
         };
 
         let mut state = TurnState::new();
@@ -1102,6 +1104,7 @@ mod tests {
             tool_calls,
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
 
         let mut state = TurnState::new();
@@ -1170,6 +1173,7 @@ mod tests {
             tool_calls,
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
 
         let mut state = TurnState::new();
@@ -1290,6 +1294,7 @@ mod tests {
             tool_calls,
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
 
         let mut state = TurnState::new();
@@ -1344,6 +1349,7 @@ mod tests {
             tool_calls,
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
 
         let mut state = TurnState::new();
@@ -1401,6 +1407,7 @@ mod tests {
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
@@ -1694,6 +1701,7 @@ mod tests {
                         cache_hit_tokens: None,
                         cache_miss_tokens: None,
                     }),
+                    finish_reason: None,
                 },
             },
             MockResponse {
@@ -1710,6 +1718,7 @@ mod tests {
                         cache_hit_tokens: None,
                         cache_miss_tokens: None,
                     }),
+                    finish_reason: None,
                 },
             },
         ]));
@@ -1931,12 +1940,14 @@ mod tests {
             }],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         queue.lock().unwrap().push_back(Ok(StreamResult {
             text: "看完了。".into(),
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
@@ -2018,6 +2029,7 @@ mod tests {
                     }],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 },
             });
         }
@@ -2210,12 +2222,14 @@ mod tests {
             }],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         queue.lock().unwrap().push_back(Ok(StreamResult {
             text: "已载入缓存".into(),
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2324,12 +2338,14 @@ mod tests {
             }],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         queue.lock().unwrap().push_back(Ok(StreamResult {
             text: "已激活，开始推演".into(),
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2420,12 +2436,14 @@ mod tests {
             }],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         queue.lock().unwrap().push_back(Ok(StreamResult {
             text: "已激活".into(),
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         // 第二轮（新 turn）：单次直接答（不重新激活）
         queue.lock().unwrap().push_back(Ok(StreamResult {
@@ -2433,6 +2451,7 @@ mod tests {
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2655,6 +2674,7 @@ mod tests {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]))
     }
@@ -2830,6 +2850,7 @@ mod tests {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }
     }
@@ -2845,6 +2866,68 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn max_tokens_finish_reason_keeps_text_and_sets_turn_reason() {
+        use crate::llm::mock::{MockLlmClient, MockResponse};
+        use crate::llm::ApiType;
+
+        let mock = Arc::new(MockLlmClient::new(vec![MockResponse {
+            events: vec![StreamEvent::TextDelta {
+                content: "半截回答".into(),
+            }],
+            result: StreamResult {
+                text: "半截回答".into(),
+                tool_calls: vec![],
+                reasoning: None,
+                usage: None,
+                finish_reason: Some(crate::llm::FinishReason::MaxTokens),
+            },
+        }]));
+        let tools = Arc::new(ToolRegistry::new());
+        let (sink, _events, log, mut messages, tool_defs, client_registry, _tools) =
+            setup_dispatch_env(tools.clone(), mock, vec![user_msg("问题")]);
+
+        let outcome = dispatch_turn(
+            "s1",
+            &sink,
+            &mut messages,
+            &Arc::new(crate::skills_index::SkillIndex::empty()),
+            &tools,
+            &tool_defs,
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
+            &LlmConfig::default(),
+            None,
+            ReasoningPolicy::Preserve,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &AbortSignal::new(),
+            &SteerQueue::new(),
+            std::path::Path::new(&std::env::temp_dir()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, TurnOutcome::Completed);
+        let log = log.lock().unwrap();
+        assert!(
+            log.events().iter().any(|e| matches!(
+                e,
+                SessionEvent::TurnEnd {
+                    reason: TurnEndReason::MaxTokens,
+                    ..
+                }
+            )),
+            "finish_reason=length 应写 turn/end(max-tokens)"
+        );
+        assert!(
+            log.events().iter().any(|e| matches!(
+                e,
+                SessionEvent::AssistantMessage { content, .. } if content == "半截回答"
+            )),
+            "截断轮仍应保留已生成的回答文本"
+        );
     }
 
     /// 测试辅助工具：等待中止或释放信号后返回（并发安全 → 走并行组）。
@@ -3063,6 +3146,7 @@ mod tests {
                 tool_calls: vec![tool_call],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
         let mut client_registry = ClientRegistry::new();
@@ -3213,6 +3297,7 @@ mod tests {
                 tool_calls: vec![tool_call],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
         let (sink, events, log, mut messages, tool_defs, client_registry, _tools) =
@@ -3353,6 +3438,7 @@ mod tests {
                 tool_calls: tool_calls.clone(),
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
 
@@ -3461,6 +3547,7 @@ mod tests {
                 tool_calls: tool_calls.clone(),
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
         let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3550,6 +3637,7 @@ mod tests {
                 tool_calls: tool_calls.clone(),
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
         let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3752,6 +3840,7 @@ mod tests {
                 tool_calls: vec![tool_call],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]));
         let (sink, events, _log, mut messages, tool_defs, client_registry, _tools) =
@@ -3991,6 +4080,7 @@ mod tests {
                     cache_hit_tokens: None,
                     cache_miss_tokens: None,
                 }),
+                finish_reason: None,
             })
         };
         queue.lock().unwrap().push_back(mk("第一段回答", 100));
@@ -4138,6 +4228,7 @@ mod tests {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             })
         };
         queue.lock().unwrap().push_back(mk("段一"));
@@ -4220,6 +4311,7 @@ mod tests {
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
@@ -4297,12 +4389,14 @@ mod tests {
             }],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         queue.lock().unwrap().push_back(Ok(StreamResult {
             text: "工具步后的收尾回答".into(),
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
         // 第三组仅作旧语义对照留存（新语义不应消费——snapshots.len 断言）
         queue.lock().unwrap().push_back(Ok(StreamResult {
@@ -4310,6 +4404,7 @@ mod tests {
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -4399,6 +4494,7 @@ mod tests {
             tool_calls: vec![],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         }));
 
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));

@@ -197,7 +197,11 @@ pub(super) async fn dispatch_turn_with_memory(
 
             sink.emit(SessionEvent::turn_end_with_usage(
                 session_id,
-                TurnEndReason::Completed,
+                if result.finish_reason == Some(crate::llm::FinishReason::MaxTokens) {
+                    TurnEndReason::MaxTokens
+                } else {
+                    TurnEndReason::Completed
+                },
                 Some(state.stat),
             ));
             return Ok(TurnOutcome::Completed);

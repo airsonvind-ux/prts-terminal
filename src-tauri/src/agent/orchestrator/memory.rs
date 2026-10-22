@@ -749,6 +749,7 @@ mod tests {
                         tool_calls: vec![],
                         reasoning: None,
                         usage: None,
+                        finish_reason: None,
                     },
                 })
                 .collect(),
@@ -789,6 +790,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 })
             })
         }

@@ -103,6 +103,7 @@ impl MockLlmClient {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }])
     }
@@ -249,6 +250,7 @@ mod tests {
                     }],
                     reasoning: Some("需要查询".into()),
                     usage: None,
+                    finish_reason: None,
                 },
             },
             MockResponse {
@@ -260,6 +262,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 },
             },
         ]);
@@ -319,6 +322,7 @@ mod tests {
                 tool_calls: vec![],
                 reasoning: None,
                 usage: None,
+                finish_reason: None,
             },
         }]);
 
@@ -359,6 +363,7 @@ mod tests {
                     tool_calls: vec![],
                     reasoning: None,
                     usage: None,
+                    finish_reason: None,
                 },
             }],
             0, // 第 0 次调用挂起

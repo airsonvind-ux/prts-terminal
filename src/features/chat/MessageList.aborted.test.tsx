@@ -77,6 +77,19 @@ function abortedTurn(sid: string): SessionEvent[] {
   ];
 }
 
+function truncatedTurn(sid: string): SessionEvent[] {
+  return [
+    { type: "user/message", sessionId: sid, content: "长回答" },
+    {
+      type: "assistant/chunk",
+      sessionId: sid,
+      kind: "text",
+      content: "半截回答",
+    },
+    { type: "turn/truncated", sessionId: sid },
+  ];
+}
+
 describe("MessageList · aborted 轮展示", () => {
   it("归档中止轮：半截 chunk 成气泡 + 轮尾「该轮已中止」标记条", () => {
     const { text, messageAreas } = render([abortedTurn("s1")]);
@@ -88,6 +101,18 @@ describe("MessageList · aborted 轮展示", () => {
     const areas = messageAreas();
     const last = areas[areas.length - 1];
     expect(last.textContent).toBe("该轮已中止");
+  });
+
+  it("归档截断轮：保留半截回答 + 轮尾「回答未完整（达到长度上限）」", () => {
+    const { text, messageAreas } = render([truncatedTurn("s-trunc")]);
+
+    expect(text()).toContain("半截回答");
+    expect(text()).toContain("回答未完整（达到长度上限）");
+
+    const areas = messageAreas();
+    expect(areas[areas.length - 1].textContent).toBe(
+      "回答未完整（达到长度上限）"
+    );
   });
 
   it("正常归档轮（无标记）不渲染中止条", () => {

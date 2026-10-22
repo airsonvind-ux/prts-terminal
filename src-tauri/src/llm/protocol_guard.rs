@@ -263,6 +263,7 @@ mod tests {
             ],
             reasoning: None,
             usage: None,
+            finish_reason: None,
         };
 
         guard.sanitize_result(&mut result);
