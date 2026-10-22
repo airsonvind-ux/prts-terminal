@@ -14,9 +14,10 @@
 // - 段边界 re-arm（tool/call、轮内注入）：重置段首与消费位，后续段可再尝试匹配
 // - 每段最多消费一个标签（段边界重置；段内首次成功匹配后关闭本段的匹配机会）
 //
-// ⚠️ 剥离差异声明（既定行为）：归档 turns 与 currentEvents 中的 assistant 文本是
-// 剥离后的版本（情绪标签被移除），而后端 session log 保真保留原始文本。前端是后端
-// log 的投影缓存——展示层剥离情绪标签，事实来源（log）不受影响。
+// 展示/历史双字段：assistant/chunk 的 `content` 是展示文本（情绪标签已剥离），
+// `rawContent` 是模型原始输出（含标签）。展示层只读 content；历史派生优先
+// rawContent，保证模型能看到自己上一轮写过的标签，且轮内/跨轮前缀一致。
+// 旧事件没有 rawContent 时回退 content。
 
 import type { Mood, MoodIntensity } from "./types";
 
@@ -39,8 +40,10 @@ const TAG_RE = /^【mood[:：]([^】]*)】/;
 // ── 类型 ──
 
 export interface ScanResult {
-  /** 剥离后的文本（未命中 → 原样；pending 扣留中 → 空串，不进缓冲） */
+  /** 剥离后的展示文本（未命中 → 原样；pending 扣留中 → 空串，不进缓冲） */
   text: string;
+  /** 本段对应的模型原文（含情绪标签；pending 闭合时包含此前扣留的前缀） */
+  rawText: string;
   /** 命中的情绪（null = 未命中；调用方不更新 mood） */
   mood: Exclude<Mood, "平静"> | null;
   /** 命中的强度档位（0 = 基础/省略；未命中 → 0） */
@@ -99,10 +102,16 @@ export function parseMoodTag(tag: string): ParsedTag {
  */
 export function stripTagFromText(text: string): ScanResult {
   const m = TAG_RE.exec(text);
-  if (!m) return { text, mood: null, intensity: 0 };
+  if (!m) return { text, rawText: text, mood: null, intensity: 0 };
   const parsed = parseMoodTag(m[0]);
-  if (parsed.mood === null) return { text, mood: null, intensity: 0 };
-  return { text: text.slice(m[0].length), mood: parsed.mood, intensity: parsed.intensity };
+  if (parsed.mood === null)
+    return { text, rawText: text, mood: null, intensity: 0 };
+  return {
+    text: text.slice(m[0].length),
+    rawText: text,
+    mood: parsed.mood,
+    intensity: parsed.intensity,
+  };
 }
 
 /** content 是否为 mood 标签前缀的（部分）匹配（含前缀自身） */
@@ -126,7 +135,7 @@ function evaluatePending(state: TagScannerState): ScanResult {
   if (pending.length > MAX_PENDING) {
     state.pending = null;
     state.segmentStarted = true;
-    return { text: pending, mood: null, intensity: 0 };
+    return { text: pending, rawText: pending, mood: null, intensity: 0 };
   }
 
   const tagEnd = pending.indexOf("】");
@@ -139,16 +148,17 @@ function evaluatePending(state: TagScannerState): ScanResult {
       state.segmentConsumed = true;
       return {
         text: pending.slice(tagEnd + 1),
+        rawText: pending,
         mood: parsed.mood,
         intensity: parsed.intensity,
       };
     }
     // 非法值 → 全量放行（标签原样渲染）
-    return { text: pending, mood: null, intensity: 0 };
+    return { text: pending, rawText: pending, mood: null, intensity: 0 };
   }
 
   // 未闭合 → 继续扣留（用户不可见半标签）
-  return { text: "", mood: null, intensity: 0 };
+  return { text: "", rawText: pending, mood: null, intensity: 0 };
 }
 
 // ── 扫描入口 ──
@@ -165,7 +175,8 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
   }
 
   // 本段已消费标签 → 原样放行（每段最多一个）
-  if (state.segmentConsumed) return { text: content, mood: null, intensity: 0 };
+  if (state.segmentConsumed)
+    return { text: content, rawText: content, mood: null, intensity: 0 };
 
   // pending 未闭合：累积后求值
   if (state.pending !== null) {
@@ -174,7 +185,8 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
   }
 
   // 段中已放行文本 → 原样放行（段中标签不剥离）
-  if (state.segmentStarted) return { text: content, mood: null, intensity: 0 };
+  if (state.segmentStarted)
+    return { text: content, rawText: content, mood: null, intensity: 0 };
 
   // 段首：mood 标签前缀？
   if (matchTagPrefix(content)) {
@@ -188,21 +200,22 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
         state.segmentConsumed = true;
         return {
           text: content.slice(tagEnd + 1),
+          rawText: content,
           mood: parsed.mood,
           intensity: parsed.intensity,
         };
       }
       // 非法值 → 全量放行
-      return { text: content, mood: null, intensity: 0 };
+      return { text: content, rawText: content, mood: null, intensity: 0 };
     }
     // 未闭合前缀 → pending 扣留
     state.pending = content;
-    return { text: "", mood: null, intensity: 0 };
+    return { text: "", rawText: content, mood: null, intensity: 0 };
   }
 
   // 非标签开头 → 立即放行（空 chunk 不标记段已开始，段首匹配机会保留）
   if (content.length > 0) state.segmentStarted = true;
-  return { text: content, mood: null, intensity: 0 };
+  return { text: content, rawText: content, mood: null, intensity: 0 };
 }
 
 /** 查询当前段是否已消费情绪标签（assistant/message 分支防重：本段已消费则只剥离不产事件） */

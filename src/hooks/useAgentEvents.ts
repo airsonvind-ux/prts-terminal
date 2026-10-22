@@ -22,8 +22,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProcessingStore, stashTitleUsage, titleExpectedFor } from "../stores/useProcessingStore";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useSteerStore } from "../stores/useSteerStore";
+import { showToast } from "../stores/useToastStore";
 import { defaultTitleForContent } from "../projection";
 import type { AgentEvent, UsageDelta, UserMessageEvent } from "../types";
+
+const staleNotified = new Set<string>();
 
 export function useAgentEvents(): void {
   useEffect(() => {
@@ -130,6 +133,18 @@ export function useAgentEvents(): void {
             // 首轮未归档 → 暂存，随下一次 append_turn 提交
             stashTitleUsage(e.conversationId, titleDelta);
           }
+          break;
+        }
+
+        // ── 旧对话快照提示（R-08）：只陈述事实，不改变本轮前缀 ──
+        case "conversation/snapshot-stale": {
+          if (staleNotified.has(e.conversationId)) break;
+          staleNotified.add(e.conversationId);
+          const suffix = e.appVersion ? `（创建于 v${e.appVersion}）` : "";
+          showToast(`该对话仍使用创建时的工具与技能快照${suffix}。`, {
+            kind: "warning",
+            dedupeKey: `snapshot-stale:${e.conversationId}`,
+          });
           break;
         }
 

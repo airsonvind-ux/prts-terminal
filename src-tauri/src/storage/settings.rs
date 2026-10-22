@@ -62,6 +62,9 @@ pub struct Settings {
     pub workspace: WorkspaceSettings,
     #[serde(default)]
     pub window: WindowSettings,
+    /// 实验开关（默认值见各字段；未知字段由 serde 忽略）。
+    #[serde(default)]
+    pub experimental: ExperimentalSettings,
     /// 界面态（非配置）：引导「已看过」键集等。与配置同文件不同段——它的写入
     /// 不受 set_settings 的 busy 闸约束（那道闸管的是配置），走独立命令。
     #[serde(default)]
@@ -77,8 +80,53 @@ impl Default for Settings {
             maa: MaaSettings::default(),
             workspace: WorkspaceSettings::default(),
             window: WindowSettings::default(),
+            experimental: ExperimentalSettings::default(),
             ui: UiSection::default(),
         }
+    }
+}
+
+/// 会话历史来源模式（C-lite）。
+///
+/// - `legacy`：前端 history + 前端 append_turn（旧路径，回滚用）
+/// - `shadow`：后端写影子日志，仍用前端 history（对比用）
+/// - `primary`：后端读写官方 log，前端 append_turn 只更新元数据
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendHistoryMode {
+    #[default]
+    Legacy,
+    Shadow,
+    Primary,
+}
+
+impl BackendHistoryMode {
+    /// 读取环境变量 `PRTS_BACKEND_HISTORY`；未设置时用 settings 值。
+    pub fn resolved(setting: Self) -> Self {
+        match std::env::var("PRTS_BACKEND_HISTORY")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "legacy" => Self::Legacy,
+            "shadow" => Self::Shadow,
+            "primary" => Self::Primary,
+            _ => setting,
+        }
+    }
+}
+
+/// 实验段。字段用 serde default，新增不升 settings schema。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ExperimentalSettings {
+    #[serde(default)]
+    pub backend_history: BackendHistoryMode,
+}
+
+impl Settings {
+    /// 当前生效的历史模式（env 覆盖 settings）。
+    pub fn backend_history_mode(&self) -> BackendHistoryMode {
+        BackendHistoryMode::resolved(self.experimental.backend_history)
     }
 }
 

@@ -50,7 +50,10 @@ mod turn_loop;
 
 use events::EventSink;
 pub use retry::{is_retryable, RetryPolicy};
-use tool_loop::{execute_tools_and_append, preflight_tool_calls};
+#[allow(unused_imports)] // 旧包装仅测试使用；生产导入 with_blocks
+use tool_loop::{
+    execute_tools_and_append, execute_tools_and_append_with_blocks, preflight_tool_calls,
+};
 use turn::TurnState;
 use turn_loop::dispatch_turn_with_memory;
 
@@ -78,6 +81,7 @@ use crate::session::{
     ApprovalDecision, ApprovalPrivilege, ApprovalRejectReason, ApprovalRisk, ChunkKind,
     SessionEvent, SessionLog, TurnEndReason,
 };
+use crate::session_store::CompactionMeta;
 use crate::steer_queue::SteerQueue;
 use crate::tools::{SkillEventMark, ToolContext, ToolError, ToolRegistry};
 use crate::turn_registry::AbortSignal;
@@ -233,6 +237,59 @@ pub async fn process_with_memory(
     system_prompt: String,
     tool_defs: Vec<crate::llm::ToolDef>,
 ) -> Result<(), OrchestratorError> {
+    let log = Arc::new(Mutex::new(SessionLog::new()));
+    process_with_log(
+        session_id,
+        HistorySeed::Frontend(history),
+        log,
+        tools,
+        registry,
+        config,
+        model_registry,
+        db,
+        mode,
+        approvals,
+        abort,
+        steer_queue,
+        workspace_root,
+        emit,
+        system_prompt,
+        tool_defs,
+    )
+    .await
+}
+
+/// 历史来源：前端 history（legacy）或后端官方 log（primary）。
+pub enum HistorySeed {
+    Frontend(Vec<FrontendMessage>),
+    Log {
+        turns: Vec<Vec<SessionEvent>>,
+        user: Box<SessionEvent>,
+        /// 会话级压缩记录（primary 必须按 retainedFrom + summary 投影）。
+        compaction: Option<CompactionMeta>,
+    },
+}
+
+/// 同 [`process_with_memory`]，但使用调用方传入的 log（primary 写盘需要）。
+#[allow(clippy::too_many_arguments)]
+pub async fn process_with_log(
+    session_id: &str,
+    history: HistorySeed,
+    log: Arc<Mutex<SessionLog>>,
+    tools: &Arc<ToolRegistry>,
+    registry: &ClientRegistry,
+    config: &LlmConfig,
+    model_registry: &ModelRegistry,
+    db: Option<Arc<Database>>,
+    mode: ExecutionMode,
+    approvals: &ApprovalRegistry,
+    abort: &AbortSignal,
+    steer_queue: &SteerQueue,
+    workspace_root: PathBuf,
+    emit: impl Fn(IpcEvent) + Send + Sync + 'static,
+    system_prompt: String,
+    tool_defs: Vec<crate::llm::ToolDef>,
+) -> Result<(), OrchestratorError> {
     // ── 0. 按 ApiType 选择适配器 ──
     let llm = registry.select(&config.api_type).ok_or_else(|| {
         OrchestratorError::Llm(LlmError::Config(format!(
@@ -253,7 +310,6 @@ pub async fn process_with_memory(
     //
     // M1 修复（Reminder 投递机制）：历史完全由前端决定（含块 user 消息由
     // 前端拼装后随请求到达并归档冻结），后端零注入——seed 只做原样播种。
-    let log = Arc::new(Mutex::new(SessionLog::new()));
     // Skill 目录索引：turn 级快照（每 turn 入口重建——Skill 生命周期绑定
     // 本轮对话：轮内激活、轮末随 ActiveContext 自动卸载，跨轮按需重新激活）。
     // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
@@ -269,10 +325,41 @@ pub async fn process_with_memory(
     );
     // 上下文管理修正（2026-08）：Active/Reference 动态层已移除，无状态容器。
     // 动态内容（skill 正文等）一律以工具结果消息进历史，不再进 system prompt。
+    let persist_tool_calls = matches!(&history, HistorySeed::Log { .. });
     {
         let mut log = log.lock().unwrap();
         log.append(SessionEvent::turn_start(session_id));
-        log.seed_from_history(session_id, history);
+        match history {
+            HistorySeed::Frontend(history) => {
+                log.seed_from_history(session_id, history);
+                log.mark_turn_boundary();
+            }
+            HistorySeed::Log {
+                turns,
+                user,
+                compaction,
+            } => {
+                let (kept, summary) = match compaction {
+                    Some(c) if c.retained_from > 0 => {
+                        let start = (c.retained_from as usize).min(turns.len());
+                        (turns[start..].to_vec(), Some(c.summary))
+                    }
+                    _ => (turns, None),
+                };
+                if let Some(summary) = summary {
+                    log.append(SessionEvent::user_message(
+                        session_id,
+                        &SessionLog::compaction_summary_message(&summary),
+                    ));
+                }
+                for turn in kept {
+                    log.seed_events(turn);
+                }
+                log.append(*user);
+                // primary：当前轮从 user 消息开始（历史只用于派生，不写回官方 log）。
+                log.mark_turn_boundary();
+            }
+        }
         log.push_header(session_id, &system_prompt, &tool_defs);
     }
 
@@ -294,7 +381,7 @@ pub async fn process_with_memory(
     // settings.workspace 段取一次注入（与 lib.rs 装配 RunCommandTool/Policy
     // 的来源一致——run_command 工具构造已持有同一 workspace_root）；经
     // dispatch_turn 显式注入 preflight。
-    let sink = EventSink::new(log.clone(), emit);
+    let sink = EventSink::new_with_persist(log.clone(), emit, persist_tool_calls);
     let outcome = dispatch_turn_with_memory(
         session_id,
         &sink,
@@ -462,6 +549,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: Some(vec!["C:/x/shot.png".into()]),
             images: None,
         }];
@@ -497,6 +585,91 @@ mod tests {
                 IpcEvent::Agent(_) => None,
             })
             .collect()
+    }
+
+    /// primary 最小闭环：后端 log 播种 → 处理 → 事件写官方 jsonl → 重新读出派生。
+    /// 这条链就是 C-lite P2 的核心；不依赖前端 history。
+    #[tokio::test]
+    async fn primary_log_roundtrip_uses_backend_history_without_frontend_payload() {
+        use crate::llm::mock::MockLlmClient;
+        use crate::llm::ApiType;
+        use crate::session_store::{AppendTurnReq, SessionStore};
+
+        let dir = std::env::temp_dir().join(format!(
+            "prts-primary-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = SessionStore::new(&dir);
+        store
+            .ensure_conversation("c1", Some("测试"), Some(1), None, None)
+            .unwrap();
+
+        let mock = Arc::new(MockLlmClient::simple_reply("答"));
+        let mut client_registry = ClientRegistry::new();
+        client_registry.register(ApiType::OpenAiCompletions, mock);
+        let tools = Arc::new(ToolRegistry::new());
+        let tool_defs = tools.list_defs();
+        let log = Arc::new(Mutex::new(SessionLog::new()));
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+
+        let seed = HistorySeed::Log {
+            turns: Vec::new(),
+            user: Box::new(SessionEvent::user_message("s1", "你好")),
+            compaction: None,
+        };
+        process_with_log(
+            "s1",
+            seed,
+            Arc::clone(&log),
+            &tools,
+            &client_registry,
+            &LlmConfig::default(),
+            &ModelRegistry::from_json(include_str!("../../../resources/models.json")).unwrap(),
+            None,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &AbortSignal::new(),
+            &SteerQueue::new(),
+            ws,
+            |_| {},
+            "system".into(),
+            tool_defs.clone(),
+        )
+        .await
+        .unwrap();
+
+        let events = log.lock().unwrap().events().to_vec();
+        let req = AppendTurnReq {
+            conversation_id: "c1".into(),
+            events_json: serde_json::to_string(&events).unwrap(),
+            title: Some("测试".into()),
+            created_at: None,
+            model_name: None,
+            context_length: None,
+            context_tokens: None,
+            last_notice_seq: None,
+            usage_deltas: None,
+        };
+        store.append_turn(&req).unwrap();
+
+        let turns = store.load_turns("c1").unwrap();
+        assert_eq!(turns.len(), 1);
+        let mut replay = SessionLog::new();
+        replay.seed_events(turns.into_iter().flatten());
+        let derived = replay.derive_messages(ReasoningPolicy::Preserve);
+        assert!(derived.iter().any(|m| m.content == "你好"));
+        assert!(derived.iter().any(|m| m.content == "答"));
+        assert!(!derived.iter().any(|m| {
+            m.role == crate::llm::MessageRole::Tool && m.content.contains("未执行")
+        }));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── handle_stream_event（双写）──
@@ -536,6 +709,40 @@ mod tests {
             log.events()[0],
             SessionEvent::AssistantChunk { kind: ChunkKind::Text, ref content, .. } if content == "你好"
         ));
+    }
+
+    #[test]
+    fn primary_tool_call_is_logged_immediately_for_abort_recovery() {
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::new(Mutex::new(SessionLog::new()));
+        let events_clone = events.clone();
+        let sink = EventSink::new_with_persist(
+            log.clone(),
+            move |e| {
+                events_clone.lock().unwrap().push(e);
+            },
+            true,
+        );
+        let phase = std::sync::Mutex::new(AgentPhase::Reasoning);
+
+        handle_stream_event(
+            "s1",
+            StreamEvent::ToolCall {
+                id: "c1".into(),
+                name: "echo".into(),
+                arguments: "{}".into(),
+            },
+            &phase,
+            &sink,
+            &ToolRegistry::new(),
+            &ToolContext::new(),
+        );
+
+        let log = log.lock().unwrap();
+        assert!(
+            matches!(log.events().last(), Some(SessionEvent::ToolCall { call_id, .. }) if call_id == "c1"),
+            "primary 必须在流式阶段落 tool/call（preflight 中止才保得住卡片）"
+        );
     }
 
     #[test]
@@ -1436,6 +1643,7 @@ mod tests {
             SessionEvent::UserMessage { .. } => "user/message",
             SessionEvent::AssistantChunk { .. } => "assistant/chunk",
             SessionEvent::AssistantMessage { .. } => "assistant/message",
+            SessionEvent::AssistantProviderBlocks { .. } => "assistant/provider-blocks",
             SessionEvent::ToolCall { .. } => "tool/call",
             SessionEvent::ToolResult { .. } => "tool/result",
             SessionEvent::RequestHeader { .. } => "request/header",
@@ -1446,6 +1654,7 @@ mod tests {
             SessionEvent::SkillActivate { .. } => "skill/activate",
             SessionEvent::ToolApprovalRequest { .. } => "tool/approval-request",
             SessionEvent::ToolApprovalResult { .. } => "tool/approval-result",
+            SessionEvent::Unknown => "unknown",
             // 卸载事件已移除（2026-08：卸载机制取消）
         }
     }

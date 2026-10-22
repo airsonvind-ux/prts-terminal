@@ -24,7 +24,12 @@ import type { TokenUsage, UsageStat } from "./llm";
  * assistant/chunk（kind 区分），轮次结束由 turn/end（显式 reason）表达，
  * 最终归档由 assistant/message（含 content + reasoning + usage 快照）承载。
  */
-export type AgentEvent = SessionEvent | PhaseEvent | ConversationTitleEvent | MemoryUsageEvent;
+export type AgentEvent =
+  | SessionEvent
+  | PhaseEvent
+  | ConversationTitleEvent
+  | ConversationSnapshotStaleEvent
+  | MemoryUsageEvent;
 
 /** 持久事实（后端 session log 的事件镜像，前端投影缓存消费） */
 export type SessionEvent =
@@ -122,14 +127,20 @@ export interface AssistantChunkEvent {
   type: "assistant/chunk";
   sessionId: string;
   kind: ChunkKind;
+  /** 展示文本（情绪标签已剥离；流式半标签期间可为空串）。 */
   content: string;
+  /** 模型原始文本（含情绪标签）；历史派生用，旧事件缺省。 */
+  rawContent?: string;
 }
 
 /** 最终 assistant 消息聚合（归档依据：content + reasoning + usage 快照） */
 export interface AssistantMessageEvent {
   type: "assistant/message";
   sessionId: string;
+  /** 展示文本（情绪标签已剥离）。 */
   content: string;
+  /** 模型原始文本（含情绪标签）；历史派生用，旧事件缺省。 */
+  rawContent?: string;
   reasoningContent: string | null;
   /** 最后一次 LLM 调用的 token 快照（缺陷 4 口径：最终上下文状态） */
   usage: TokenUsage | null;
@@ -181,6 +192,17 @@ export interface MoodEvent {
   intensity: MoodIntensity;
 }
 
+/** 工具结果来源分类：external 表示外部资料，不表达内容真假或敌意 */
+export type ToolTrust = "authoritative" | "derived" | "external";
+
+/** 工具结果来源（R-02a；旧归档缺省） */
+export interface ToolProvenance {
+  trust: ToolTrust;
+  /** 来源标识：URL 的 host+path、数据源名等 */
+  source: string;
+  version?: string;
+}
+
 /** 工具执行结果。toolName 为 null 表示历史播种的旧数据 */
 export interface ToolResultEvent {
   type: "tool/result";
@@ -191,6 +213,8 @@ export interface ToolResultEvent {
   summary: string;
   /** 是否执行成功（失败内容同样回传 LLM，由模型决定下一步） */
   ok: boolean;
+  /** 结果来源；旧归档/未声明工具无此字段 */
+  provenance?: ToolProvenance;
 }
 
 /** 工具审批请求（M3-A §5.1 / M4）：run_command 询问用户确认时后端推送 */
@@ -308,6 +332,17 @@ export interface ConversationTitleEvent {
   title: string;
   /** 本次标题生成用量（未归档时前端携带至下次 append_turn） */
   usage?: UsageStat | null;
+}
+
+/**
+ * 旧对话冻结前缀与当前版本不一致（R-08；非 session log 事实）。
+ * 不改变本轮前缀，只让用户知道这个对话仍基于创建时的工具/技能快照。
+ */
+export interface ConversationSnapshotStaleEvent {
+  type: "conversation/snapshot-stale";
+  conversationId: string;
+  /** 快照创建时的应用版本（旧快照可能为空串） */
+  appVersion: string;
 }
 
 /**

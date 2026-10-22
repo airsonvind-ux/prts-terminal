@@ -47,8 +47,18 @@ async function startTurn(input: string): Promise<string> {
   return sids[0];
 }
 
-function textChunk(sessionId: string, content: string): SessionEvent {
-  return { type: "assistant/chunk", sessionId, kind: "text", content };
+function textChunk(
+  sessionId: string,
+  content: string,
+  rawContent?: string
+): SessionEvent {
+  return {
+    type: "assistant/chunk",
+    sessionId,
+    kind: "text",
+    content,
+    ...(rawContent ? { rawContent } : {}),
+  };
 }
 
 function reasoningChunk(sessionId: string, content: string): SessionEvent {
@@ -114,7 +124,9 @@ describe("场景 1：跨 flush 边界标签", () => {
       mood: "高兴",
       intensity: 0,
     });
-    expect(events[2]).toEqual(textChunk(sid, "好的。")); // 已剥离，无标签残留
+    expect(events[2]).toEqual(
+      textChunk(sid, "好的。", "【mood:高兴】好的。")
+    ); // 展示已剥离，rawContent 保留原文
     expect(moodOf(sid)).toBe("高兴");
     expect(intensityOf(sid)).toBe(0);
 
@@ -192,7 +204,9 @@ describe("场景 3：轮内段边界（工具调用与注入）", () => {
       mood: "困惑",
       intensity: 0,
     });
-    expect(events[4]).toEqual(textChunk(sid, "查到了，让我想想。")); // 已剥离
+    expect(events[4]).toEqual(
+      textChunk(sid, "查到了，让我想想。", "【mood:困惑】查到了，让我想想。")
+    );
     expect(moodOf(sid)).toBe("困惑");
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -221,7 +235,9 @@ describe("场景 3：轮内段边界（工具调用与注入）", () => {
       mood: string;
     }>;
     expect(moodEvents.map((e) => e.mood)).toEqual(["高兴", "沮丧"]);
-    expect(events[5]).toEqual(textChunk(sid, "第二个。")); // 已剥离
+    expect(events[5]).toEqual(
+      textChunk(sid, "第二个。", "【mood:沮丧】第二个。")
+    );
     expect(moodOf(sid)).toBe("沮丧"); // 落点＝最后一段
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -440,14 +456,18 @@ describe("场景 7：扫描器按 session 隔离", () => {
       mood: "高兴",
       intensity: 0,
     });
-    expect(currentEventsOf(sidA)[2]).toEqual(textChunk(sidA, "A 的答案。"));
+    expect(currentEventsOf(sidA)[2]).toEqual(
+      textChunk(sidA, "A 的答案。", "【mood:高兴】A 的答案。")
+    );
     expect(currentEventsOf(sidB)[1]).toEqual({
       type: "mood/event",
       sessionId: sidB,
       mood: "困惑",
       intensity: 0,
     });
-    expect(currentEventsOf(sidB)[2]).toEqual(textChunk(sidB, "B 的答案。"));
+    expect(currentEventsOf(sidB)[2]).toEqual(
+      textChunk(sidB, "B 的答案。", "【mood:困惑】B 的答案。")
+    );
 
     useProcessingStore.getState().finishProcessing(sidA);
     useProcessingStore.getState().finishProcessing(sidB);
@@ -542,7 +562,9 @@ describe("场景 9：mood/event 情绪事件", () => {
       "mood/event",
       "assistant/chunk",
     ]);
-    expect(flushed[2]).toEqual(textChunk(sid, "好的，我明白了。"));
+    expect(flushed[2]).toEqual(
+      textChunk(sid, "好的，我明白了。", "【mood:沮丧:3】好的，我明白了。")
+    );
 
     useProcessingStore.getState().finishProcessing(sid);
   });

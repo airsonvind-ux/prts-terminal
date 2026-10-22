@@ -13,12 +13,15 @@
 //! 内容文件是事实源（header 承载归属与创建快照），index.json 是可重建索引
 //! （缺失/损坏 → 扫 jsonl header 自愈重建）。
 //!
-//! 写盘触发 = 前端轮末归档（append_turn：turn/end 与错误轮都提交）：
+//! 写盘触发：
+//! - `primary`：后端在 agent_process 结束时追加本轮事件（唯一 writer）
+//! - `legacy`/`shadow`：前端轮末归档（append_turn）
+//!
 //! - 首轮（内容文件不存在）→ 写 header + 轮行 + index 插入条目
 //! - 后续轮 → 校验 header 归属（防串写）→ 追加轮行 → index 更新 updatedAt，
 //!   并覆盖随轮提交的非 None contextTokens / lastNoticeSeq（Reminder 游标随会话
 //!   持久，接口见前端 advanceNoticeSeq 随轮提交决策）
-//! - **空对话不落盘**：前端 createConversation 不触发任何 IPC，文件在首轮归档才诞生
+//! - **空对话不落盘**：前端 createConversation 不触发任何 IPC；primary 在首轮发送前 ensure，legacy 在首轮归档才诞生
 //!
 //! 损坏处理：
 //! - 轮行坏行（parse 失败/半行）→ 读取时跳过，其余行照常（get 不整体失败）
@@ -34,12 +37,13 @@
 //! 或整索引损坏时由 list 自愈重建——内容文件为事实源）。
 
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::llm::{TokenUsage, UsageStat};
+use crate::session::SessionEvent;
 
 /// 当前 schema 版本（内容文件 header 与 index.json 共用；升版走迁移，见方案 §1.3）。
 pub const SCHEMA_VERSION: u32 = 1;
@@ -348,8 +352,7 @@ impl SessionStore {
             let header_json =
                 serde_json::to_string(&header).map_err(|e| format!("header 序列化失败: {e}"))?;
             let content = format!("{header_json}\n{events_line}");
-            std::fs::write(&path, content)
-                .map_err(|e| format!("会话文件创建失败（{}）：{e}", path.display()))?;
+            Self::write_atomic(&path, &content)?;
 
             let mut meta = ConversationMeta {
                 id: req.conversation_id.clone(),
@@ -366,12 +369,16 @@ impl SessionStore {
             if let Some(ds) = &req.usage_deltas {
                 merge_usage(&mut meta, ds);
             }
+            index.retain(|m| m.id != req.conversation_id);
             index.push(meta);
             self.write_index(&index);
             return Ok(AppendTurnOutcome { created: true });
         }
 
-        // ── 追加轮：归属校验 → 追加 → index 更新 ──
+        // ── 追加轮：归属校验 → 尾行修复 → 追加 → index 更新 ──
+        // 崩溃可能留下半行；先截到最后一行完整换行，避免下一次 append
+        // 把新行接在半行后面（宁可丢弃未完成的最后一轮，也不污染后续）。
+        self.repair_tail(&path)?;
         let header = self
             .read_header(&path)
             .map_err(|e| format!("会话文件损坏（{}）：{e}", path.display()))?;
@@ -431,6 +438,113 @@ impl SessionStore {
         }
         self.write_index(&index);
         Ok(AppendTurnOutcome { created: false })
+    }
+
+    /// primary 模式的前端归档：只更新元数据，不写轮事件（事件由后端唯一 writer
+    /// 写入）。首轮文件不存在时先建 header，避免前端先于后端落盘的竞态丢元数据。
+    pub fn append_meta_only(&mut self, req: &AppendTurnReq) -> Result<AppendTurnOutcome, String> {
+        let path = self.file_path(&req.conversation_id)?;
+        let created = !path.exists();
+        if created {
+            self.ensure_conversation(
+                &req.conversation_id,
+                req.title.as_deref(),
+                req.created_at,
+                req.model_name.as_deref(),
+                req.context_length,
+            )?;
+        }
+        let usage_deltas: Vec<UsageDelta> = req
+            .usage_deltas
+            .as_ref()
+            .map(|deltas| {
+                deltas
+                    .iter()
+                    .filter(|d| d.category != UsageCategory::Session)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let patch = MetaPatch {
+            title: req.title.clone(),
+            context_tokens: req.context_tokens,
+            last_notice_seq: req.last_notice_seq,
+            usage_deltas,
+            ..MetaPatch::default()
+        };
+        self.update_meta(&req.conversation_id, &patch)?;
+        Ok(AppendTurnOutcome { created })
+    }
+
+    /// 确保会话文件存在（primary 模式下由后端在轮开始前调用）。
+    ///
+    /// 与 `append_turn` 的区别：只写 header + index 元数据，不写轮行。
+    /// 已存在时只校验归属并补齐缺失的 index 条目；不覆盖 title/createdAt。
+    pub fn ensure_conversation(
+        &mut self,
+        conversation_id: &str,
+        title: Option<&str>,
+        created_at: Option<u64>,
+        model_name: Option<&str>,
+        context_length: Option<u64>,
+    ) -> Result<(), String> {
+        let path = self.file_path(conversation_id)?;
+        let mut index = self.load_or_rebuild()?;
+        if path.exists() {
+            let header = self
+                .read_header(&path)
+                .map_err(|e| format!("会话文件损坏（{}）：{e}", path.display()))?;
+            if header.conversation_id != conversation_id {
+                return Err(format!(
+                    "会话文件归属不符：文件 {}.jsonl 的 header conversationId 不一致（防串写）",
+                    conversation_id
+                ));
+            }
+            if index.iter().any(|m| m.id == conversation_id) {
+                return Ok(());
+            }
+            let mut meta = meta_from_header(header);
+            meta.model_name = model_name.map(str::to_string);
+            meta.context_length = context_length;
+            meta.updated_at = now_ms();
+            index.retain(|m| m.id != conversation_id);
+            index.push(meta);
+            self.write_index(&index);
+            return Ok(());
+        }
+
+        let title = title
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(DEFAULT_TITLE)
+            .to_string();
+        let created_at = created_at.unwrap_or_else(now_ms);
+        let header = SessionHeader {
+            kind: HEADER_KIND.to_string(),
+            format: HEADER_FORMAT.to_string(),
+            schema_version: SCHEMA_VERSION,
+            conversation_id: conversation_id.to_string(),
+            created_at,
+            title: title.clone(),
+        };
+        let header_json =
+            serde_json::to_string(&header).map_err(|e| format!("header 序列化失败: {e}"))?;
+        Self::write_atomic(&path, &format!("{header_json}\n"))?;
+        index.retain(|m| m.id != conversation_id);
+        index.push(ConversationMeta {
+            id: conversation_id.to_string(),
+            title,
+            created_at,
+            updated_at: now_ms(),
+            model_name: model_name.map(str::to_string),
+            context_length,
+            context_tokens: None,
+            last_notice_seq: None,
+            compaction: None,
+            usage: None,
+        });
+        self.write_index(&index);
+        Ok(())
     }
 
     /// 更新会话元数据（rename / contextTokens / lastNoticeSeq；只更新非 None 字段，
@@ -659,6 +773,242 @@ impl SessionStore {
         };
         let meta = meta.unwrap_or_else(|| meta_from_header(header));
         Ok(ConversationRecord { meta, turns })
+    }
+
+    /// 读取会话元数据（轻量；不解析轮事件）。
+    pub fn meta(&mut self, conversation_id: &str) -> Result<ConversationMeta, String> {
+        let path = self.file_path(conversation_id)?;
+        let header = self
+            .read_header(&path)
+            .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
+        if header.conversation_id != conversation_id {
+            return Err(format!(
+                "会话文件归属不符（{conversation_id}）：header conversationId 不一致"
+            ));
+        }
+        let index = self.load_or_rebuild()?;
+        Ok(index
+            .into_iter()
+            .find(|m| m.id == conversation_id)
+            .unwrap_or_else(|| meta_from_header(header)))
+    }
+
+    /// 读取并解析官方日志的轮事件（primary 模式的历史来源）。
+    ///
+    /// 每行仍按旧格式校验；单行解析失败只跳过该行并留痕，不整体失败。
+    /// 前端私有事件（mood/turn-aborted 等）解析为 `SessionEvent::Unknown`，
+    /// 投影忽略；旧日志缺字段由 serde default 兜底。
+    pub fn load_turns(&mut self, conversation_id: &str) -> Result<Vec<Vec<SessionEvent>>, String> {
+        let path = self.file_path(conversation_id)?;
+        let header = self
+            .read_header(&path)
+            .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
+        if header.conversation_id != conversation_id {
+            return Err(format!(
+                "会话文件归属不符（{conversation_id}）：header conversationId 不一致"
+            ));
+        }
+        if header.schema_version > SCHEMA_VERSION {
+            return Err(format!(
+                "会话文件 schemaVersion {} 高于当前 {SCHEMA_VERSION}（需升级应用）",
+                header.schema_version
+            ));
+        }
+        let raw_turns = self.read_turns(&path)?;
+        let mut turns = Vec::with_capacity(raw_turns.len());
+        for (i, line) in raw_turns.iter().enumerate() {
+            match serde_json::from_str::<Vec<SessionEvent>>(line) {
+                Ok(events) => turns.push(events),
+                Err(e) => {
+                    let preview: String = line.chars().take(80).collect();
+                    eprintln!(
+                        "[session_store] {} 第 {} 轮事件解析失败，跳过：{}（{e}）",
+                        path.display(),
+                        i + 1,
+                        preview
+                    );
+                }
+            }
+        }
+        Ok(turns)
+    }
+
+    /// 清空影子日志与压缩标记（压缩后重建对照基线）。
+    pub fn reset_shadow(&mut self, conversation_id: &str) -> Result<(), String> {
+        let path = self.shadow_path(conversation_id)?;
+        let marker = self.shadow_compaction_marker_path(conversation_id)?;
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(marker);
+        Ok(())
+    }
+
+    /// 影子日志对应的压缩标记（compaction.at；None = 未记录）。
+    pub fn shadow_compaction_marker(&self, conversation_id: &str) -> Result<Option<u64>, String> {
+        let path = self.shadow_compaction_marker_path(conversation_id)?;
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Ok(raw.trim().parse::<u64>().ok()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("读取影子压缩标记失败（{}）：{e}", path.display())),
+        }
+    }
+
+    /// 写入影子压缩标记。
+    pub fn set_shadow_compaction_marker(
+        &self,
+        conversation_id: &str,
+        at: u64,
+    ) -> Result<(), String> {
+        let path = self.shadow_compaction_marker_path(conversation_id)?;
+        std::fs::write(&path, at.to_string())
+            .map_err(|e| format!("写入影子压缩标记失败（{}）：{e}", path.display()))
+    }
+
+    fn shadow_compaction_marker_path(&self, conversation_id: &str) -> Result<PathBuf, String> {
+        if !Self::valid_id(conversation_id) {
+            return Err(format!(
+                "conversationId 非法（仅允许字母数字与 - _）：{conversation_id:?}"
+            ));
+        }
+        let dir = self.dir.join(".shadow");
+        std::fs::create_dir_all(&dir).ok();
+        Ok(dir.join(format!("{conversation_id}.compaction")))
+    }
+
+    /// 读取影子日志的轮事件（shadow 模式对比用）。
+    pub fn load_shadow_turns(
+        &mut self,
+        conversation_id: &str,
+    ) -> Result<Vec<Vec<SessionEvent>>, String> {
+        let path = self.shadow_path(conversation_id)?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取影子日志失败（{}）：{e}", path.display()))?;
+        let mut turns = Vec::new();
+        for line in raw.split('\n') {
+            let line = line.trim_end_matches('\r');
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(events) = serde_json::from_str::<Vec<SessionEvent>>(line) {
+                turns.push(events);
+            }
+        }
+        Ok(turns)
+    }
+
+    /// 追加一条影子轮事件（不污染官方 log）。
+    pub fn append_shadow_events(
+        &mut self,
+        conversation_id: &str,
+        events_json: &str,
+    ) -> Result<(), String> {
+        if serde_json::from_str::<Vec<serde_json::Value>>(events_json).is_err() {
+            return Err("影子日志事件不是合法 JSON 数组".into());
+        }
+        let path = self.shadow_path(conversation_id)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("打开影子日志失败（{}）：{e}", path.display()))?;
+        file.write_all(format!("{}\n", events_json.trim_end_matches(['\r', '\n'])).as_bytes())
+            .map_err(|e| format!("写入影子日志失败（{}）：{e}", path.display()))
+    }
+
+    /// 记录 shadow 对比结果（追加，便于跨轮审计）。
+    pub fn append_shadow_diff(&mut self, text: &str) -> Result<(), String> {
+        let dir = self.dir.join(".shadow");
+        std::fs::create_dir_all(&dir).ok();
+        let path = dir.join("shadow-diff.log");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("打开 shadow-diff 失败（{}）：{e}", path.display()))?;
+        file.write_all(text.as_bytes())
+            .map_err(|e| format!("写入 shadow-diff 失败（{}）：{e}", path.display()))
+    }
+
+    /// 原子创建文件：先写同目录临时文件，再 rename。首轮/空会话建文件用。
+    fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
+        let tmp = path.with_file_name(format!(
+            ".{}.tmp-{}",
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("session"),
+            std::process::id()
+        ));
+        std::fs::write(&tmp, content)
+            .map_err(|e| format!("写临时会话文件失败（{}）：{e}", tmp.display()))?;
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("会话文件落位失败（{}）：{e}", path.display()));
+        }
+        Ok(())
+    }
+
+    /// 截掉文件末尾未以换行结束的半行（崩溃恢复）。
+    /// 只从尾部向前扫，不整文件读入（长对话每轮 append 的常见路径）。
+    fn repair_tail(&self, path: &Path) -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| format!("打开会话文件修复失败（{}）：{e}", path.display()))?;
+        let len = file
+            .metadata()
+            .map_err(|e| format!("读取会话文件大小失败（{}）：{e}", path.display()))?
+            .len();
+        if len == 0 {
+            return Ok(());
+        }
+        file.seek(SeekFrom::End(-1))
+            .map_err(|e| format!("定位会话文件末尾失败（{}）：{e}", path.display()))?;
+        let mut last = [0u8; 1];
+        file.read_exact(&mut last)
+            .map_err(|e| format!("读取会话文件末尾失败（{}）：{e}", path.display()))?;
+        if last[0] == b'\n' {
+            return Ok(());
+        }
+
+        // 从尾部按块向前找最后一个换行；找到即截断到它后面。
+        let mut end = len;
+        let mut keep = 0u64;
+        let mut buf = [0u8; 8192];
+        'scan: while end > 0 {
+            let start = end.saturating_sub(buf.len() as u64);
+            let n = (end - start) as usize;
+            file.seek(SeekFrom::Start(start))
+                .map_err(|e| format!("定位会话文件失败（{}）：{e}", path.display()))?;
+            file.read_exact(&mut buf[..n])
+                .map_err(|e| format!("读取会话文件失败（{}）：{e}", path.display()))?;
+            if let Some(pos) = buf[..n].iter().rposition(|b| *b == b'\n') {
+                keep = start + pos as u64 + 1;
+                break 'scan;
+            }
+            end = start;
+        }
+        file.set_len(keep)
+            .map_err(|e| format!("截断会话文件失败（{}）：{e}", path.display()))?;
+        eprintln!(
+            "[session_store] {} 末尾有未完成行，已截断 {} 字节",
+            path.display(),
+            len.saturating_sub(keep)
+        );
+        Ok(())
+    }
+
+    fn shadow_path(&self, conversation_id: &str) -> Result<PathBuf, String> {
+        if !Self::valid_id(conversation_id) {
+            return Err(format!(
+                "conversationId 非法（仅允许字母数字与 - _）：{conversation_id:?}"
+            ));
+        }
+        let dir = self.dir.join(".shadow");
+        std::fs::create_dir_all(&dir).ok();
+        Ok(dir.join(format!("{conversation_id}.jsonl")))
     }
 
     // ── 内部辅助 ──
@@ -982,6 +1332,7 @@ fn merge_chunks_in_events(events: Vec<serde_json::Value>) -> Option<String> {
                     && last.get("kind") == ev.get("kind");
                 if same_kind {
                     let add = ev.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let kind = ev.get("kind").and_then(|v| v.as_str());
                     if !add.is_empty() {
                         let cur = last
                             .get("content")
@@ -989,6 +1340,21 @@ fn merge_chunks_in_events(events: Vec<serde_json::Value>) -> Option<String> {
                             .unwrap_or("")
                             .to_string();
                         last["content"] = serde_json::Value::String(format!("{cur}{add}"));
+                    }
+                    // 展示文本被情绪标签剥离过时，rawContent 必须同步拼接；
+                    // 否则读出侧合并后历史会丢回原文。
+                    if kind == Some("text")
+                        && (last.get("rawContent").is_some() || ev.get("rawContent").is_some())
+                    {
+                        let raw_cur = last
+                            .get("rawContent")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| last.get("content").and_then(|v| v.as_str()))
+                            .unwrap_or("")
+                            .to_string();
+                        let raw_add = ev.get("rawContent").and_then(|v| v.as_str()).unwrap_or(add);
+                        last["rawContent"] =
+                            serde_json::Value::String(format!("{raw_cur}{raw_add}"));
                     }
                     merged = true;
                     continue;
@@ -1030,6 +1396,16 @@ mod tests {
         assert_eq!(evs[1]["content"], "想一下");
         assert_eq!(evs[4]["content"], "完");
         assert_eq!(evs[3]["type"], "tool/call", "其它事件类型与顺序原样保留");
+    }
+
+    #[test]
+    fn coalesce_chunks_merges_raw_content_for_history() {
+        let line = r#"[{"type":"assistant/chunk","kind":"text","content":"晚上好","rawContent":"【mood:高兴】晚上好"},{"type":"assistant/chunk","kind":"text","content":"，博士","rawContent":"，博士"}]"#;
+        let out = coalesce_chunks_line(line).expect("应合并");
+        let evs: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0]["content"], "晚上好，博士");
+        assert_eq!(evs[0]["rawContent"], "【mood:高兴】晚上好，博士");
     }
 
     #[test]
@@ -1155,6 +1531,85 @@ mod tests {
             last_notice_seq: None,
             usage_deltas: None,
         }
+    }
+
+    #[test]
+    fn ensure_conversation_creates_empty_file_then_load_turns_parses_mixed_events() {
+        let dir = unique_temp_dir("ensure-load");
+        let mut s = SessionStore::new(&dir);
+        s.ensure_conversation("p1", Some("测试"), Some(123), Some("model"), Some(1000))
+            .unwrap();
+        assert_eq!(s.get("p1").unwrap().turns.len(), 0);
+
+        // 旧事件 + 前端私有事件同轮：后端读取时未知事件应被跳过，不整体失败。
+        let line = r#"[{"type":"user/message","sessionId":"s1","content":"你好"},{"type":"mood/event","sessionId":"s1","mood":"平静"},{"type":"turn/end","sessionId":"s1","reason":"completed"}]"#;
+        let mut r = req("p1", line);
+        r.model_name = Some("model".into());
+        s.append_turn(&r).unwrap();
+
+        let turns = s.load_turns("p1").unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].len(), 3);
+        assert!(matches!(turns[0][1], SessionEvent::Unknown));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_meta_only_updates_meta_without_writing_events() {
+        let dir = unique_temp_dir("meta-only");
+        let mut s = SessionStore::new(&dir);
+        s.ensure_conversation("m1", Some("旧"), Some(1), None, None)
+            .unwrap();
+        let mut r = req("m1", &ev_user("不应落盘"));
+        r.title = Some("新标题".into());
+        r.usage_deltas = Some(vec![UsageDelta {
+            category: UsageCategory::Session,
+            input_tokens: 100,
+            output_tokens: 10,
+            cache_hit_tokens: None,
+            cache_prompt_tokens: None,
+        }]);
+        let outcome = s.append_meta_only(&r).unwrap();
+        assert!(!outcome.created);
+        assert_eq!(s.get("m1").unwrap().turns.len(), 0);
+        let meta = s
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == "m1")
+            .unwrap();
+        assert_eq!(meta.title, "新标题");
+        assert!(
+            meta.usage.is_none(),
+            "primary 的 session 用量由后端写，meta-only 不能重复累加"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn append_turn_repairs_half_written_tail_before_appending() {
+        let dir = unique_temp_dir("tail-repair");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("t1", &ev_user("一"))).unwrap();
+
+        // 模拟崩溃：末尾粘了半行（没有换行）
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(dir.join("sessions").join("t1.jsonl"))
+                .unwrap();
+            write!(f, "[{{\"type\":\"user/message\"").unwrap();
+        }
+        s.append_turn(&req("t1", &ev_user("二"))).unwrap();
+
+        let lines = read_lines(&dir, "t1");
+        assert_eq!(lines.len(), 3, "header + 两条完整轮行");
+        assert!(serde_json::from_str::<Vec<serde_json::Value>>(&lines[1]).is_ok());
+        assert!(serde_json::from_str::<Vec<serde_json::Value>>(&lines[2]).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

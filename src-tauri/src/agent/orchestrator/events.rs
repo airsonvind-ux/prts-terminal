@@ -23,17 +23,34 @@ use super::AgentPhase;
 pub(super) struct EventSink {
     pub(super) log: Arc<Mutex<SessionLog>>,
     emit: Arc<dyn Fn(IpcEvent) + Send + Sync>,
+    /// primary 模式：tool/call 在流式回调即写 log（中止轮也要保留卡片事实）；
+    /// legacy 模式仍由 execute 阶段批量写，避免测试/旧行为改变。
+    persist_tool_calls: bool,
 }
 
 impl EventSink {
+    #[allow(dead_code)] // 测试夹具使用；生产走 new_with_persist
     pub(super) fn new(
         log: Arc<Mutex<SessionLog>>,
         emit: impl Fn(IpcEvent) + Send + Sync + 'static,
     ) -> Self {
+        Self::new_with_persist(log, emit, false)
+    }
+
+    pub(super) fn new_with_persist(
+        log: Arc<Mutex<SessionLog>>,
+        emit: impl Fn(IpcEvent) + Send + Sync + 'static,
+        persist_tool_calls: bool,
+    ) -> Self {
         Self {
             log,
             emit: Arc::new(emit),
+            persist_tool_calls,
         }
+    }
+
+    pub(super) fn persists_tool_calls(&self) -> bool {
+        self.persist_tool_calls
     }
 
     /// 持久事实双写：先入 log，再推 IPC。

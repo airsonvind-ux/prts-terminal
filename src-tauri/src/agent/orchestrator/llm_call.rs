@@ -64,6 +64,7 @@ fn push_notice(content: &mut String, notice: &str) {
 /// 一旦流已开始（chunk/tool 已双写入 log 与 IPC），重试会造成
 /// 重复事件污染回放，此时直接返回错误（turn/end reason=error）。
 #[allow(clippy::too_many_arguments)] // 调用面由调度循环固定，拆参数结构会扩散到所有调用点
+#[allow(dead_code)] // 测试兼容包装；生产走 call_llm_with_retry_collect
 pub(super) async fn call_llm_with_retry(
     session_id: &str,
     messages: &[ChatMessage],
@@ -74,6 +75,37 @@ pub(super) async fn call_llm_with_retry(
     tools: &Arc<ToolRegistry>,
     tool_ctx: &Arc<ToolContext>,
     policy: RetryPolicy,
+) -> Result<crate::llm::StreamResult, OrchestratorError> {
+    call_llm_with_retry_collect(
+        session_id,
+        messages,
+        tool_defs,
+        llm,
+        config,
+        sink,
+        tools,
+        tool_ctx,
+        policy,
+        Arc::new(std::sync::Mutex::new(Vec::new())),
+    )
+    .await
+}
+
+/// 同 `call_llm_with_retry`，额外收集本次调用的 provider 原始块（thinking）。
+/// 收集器用于把 anthropic thinking 挂到本轮内存消息上（同一 turn 的下一步请求
+/// 需要原样回传）；log 记录由事件通道独立完成。
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn call_llm_with_retry_collect(
+    session_id: &str,
+    messages: &[ChatMessage],
+    tool_defs: &[crate::llm::ToolDef],
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    sink: &EventSink,
+    tools: &Arc<ToolRegistry>,
+    tool_ctx: &Arc<ToolContext>,
+    policy: RetryPolicy,
+    provider_blocks: Arc<std::sync::Mutex<Vec<crate::llm::ProviderBlock>>>,
 ) -> Result<crate::llm::StreamResult, OrchestratorError> {
     let mut attempt: u32 = 0;
 
@@ -92,6 +124,7 @@ pub(super) async fn call_llm_with_retry(
             stream_started.clone(),
             tools,
             tool_ctx,
+            Arc::clone(&provider_blocks),
         )
         .await
         {
@@ -140,6 +173,7 @@ async fn call_llm_and_stream(
     stream_started: Arc<std::sync::atomic::AtomicBool>,
     tools: &Arc<ToolRegistry>,
     tool_ctx: &Arc<ToolContext>,
+    provider_blocks: Arc<std::sync::Mutex<Vec<crate::llm::ProviderBlock>>>,
 ) -> Result<crate::llm::StreamResult, OrchestratorError> {
     // ── 用 Arc 共享可变状态到回调闭包中 ──
     // Mutex 保护的原因：chat_stream 的 on_event 回调是 Box<dyn Fn + Send + Sync>，
@@ -171,6 +205,7 @@ async fn call_llm_and_stream(
     let sink_tail = sink.clone();
     let tools_tail = Arc::clone(tools);
     let tool_ctx_tail = Arc::clone(tool_ctx);
+    let provider_blocks_tail = Arc::clone(&provider_blocks);
 
     let on_event = Box::new(move |event: StreamEvent| {
         stream_started_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -180,13 +215,14 @@ async fn call_llm_and_stream(
             Err(_) => vec![event],
         };
         for event in passed {
-            handle_stream_event(
+            handle_stream_event_collect(
                 &session_id_owned,
                 event,
                 &phase_state_clone,
                 &sink_for_closure,
                 &tools_for_closure,
                 &tool_ctx_for_closure,
+                &provider_blocks,
             );
         }
     });
@@ -201,13 +237,14 @@ async fn call_llm_and_stream(
         Err(_) => Vec::new(),
     };
     for event in tail {
-        handle_stream_event(
+        handle_stream_event_collect(
             &session_id_tail,
             event,
             &phase_state_tail,
             &sink_tail,
             &tools_tail,
             &tool_ctx_tail,
+            &provider_blocks_tail,
         );
     }
 
@@ -234,6 +271,7 @@ async fn call_llm_and_stream(
 ///
 /// reasoning_done 已删除：推理结束由后续事件（text chunk / tool/call /
 /// turn/end）隐式表达，前端从事件序列推断。
+#[allow(dead_code)] // 测试兼容包装；生产走 handle_stream_event_collect
 pub(super) fn handle_stream_event(
     session_id: &str,
     event: StreamEvent,
@@ -241,6 +279,27 @@ pub(super) fn handle_stream_event(
     sink: &EventSink,
     tools: &ToolRegistry,
     tool_ctx: &ToolContext,
+) {
+    let provider_blocks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    handle_stream_event_collect(
+        session_id,
+        event,
+        phase_state,
+        sink,
+        tools,
+        tool_ctx,
+        &provider_blocks,
+    );
+}
+
+pub(super) fn handle_stream_event_collect(
+    session_id: &str,
+    event: StreamEvent,
+    phase_state: &std::sync::Mutex<AgentPhase>,
+    sink: &EventSink,
+    tools: &ToolRegistry,
+    tool_ctx: &ToolContext,
+    provider_blocks: &Arc<std::sync::Mutex<Vec<crate::llm::ProviderBlock>>>,
 ) {
     match event {
         StreamEvent::ReasoningDelta { content } => {
@@ -250,6 +309,17 @@ pub(super) fn handle_stream_event(
                 session_id,
                 ChunkKind::Reasoning,
                 &content,
+            ));
+        }
+
+        StreamEvent::ProviderBlock { block } => {
+            // 只进 log，不推 IPC：thinking 块是回传凭据，不是 UI 内容。
+            if let Ok(mut collector) = provider_blocks.lock() {
+                collector.push(block.clone());
+            }
+            sink.log_only(SessionEvent::assistant_provider_blocks(
+                session_id,
+                vec![block],
             ));
         }
 
@@ -263,9 +333,16 @@ pub(super) fn handle_stream_event(
             // 展示切片：在此（tool/call 发出前）解析——用户于调用发起时即见对象/
             // 文件链接；失败同链保留（挂在 call 侧数据上）
             let display = tools.display_for(&name, &arguments, tool_ctx);
-            sink.ipc_only(SessionEvent::tool_call_with_display(
-                session_id, &id, &name, &arguments, display,
-            ));
+            let event =
+                SessionEvent::tool_call_with_display(session_id, &id, &name, &arguments, display);
+            if sink.persists_tool_calls() {
+                // primary：流式阶段就落 log——即使 preflight 中止，UI 卡片事实
+                // 也在官方日志里；投影会补齐/丢弃不完整配对（R-26）。
+                sink.emit(event);
+            } else {
+                // legacy：执行阶段批量写 log，这里只推 IPC（保持旧测试口径）。
+                sink.ipc_only(event);
+            }
         }
 
         StreamEvent::TextDelta { content } => {

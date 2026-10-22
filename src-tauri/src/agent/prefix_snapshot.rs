@@ -38,6 +38,36 @@ pub struct PrefixSnapshot {
     pub system: String,
     /// 工具定义（tools 数组原文）。
     pub tool_defs: Vec<ToolDef>,
+    /// 创建快照时的应用版本（R-08；旧快照缺省空串）。
+    #[serde(default)]
+    pub app_version: String,
+    /// system + tools 的内容指纹（R-08；旧快照缺省空串）。
+    #[serde(default)]
+    pub content_hash: String,
+}
+
+impl PrefixSnapshot {
+    fn fresh(system: &str, tool_defs: &[ToolDef]) -> Self {
+        let mut raw = system.to_string();
+        for tool in tool_defs {
+            raw.push_str(&serde_json::to_string(tool).unwrap_or_default());
+        }
+        Self {
+            system: system.to_string(),
+            tool_defs: tool_defs.to_vec(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            content_hash: crate::observability::fnv1a64_hex(raw.as_bytes()),
+        }
+    }
+
+    /// 与当前活体前缀比，是否已过版本（旧快照无指纹 → 不误报）。
+    pub fn is_stale_against(&self, system: &str, tool_defs: &[ToolDef]) -> bool {
+        if self.content_hash.is_empty() {
+            return false;
+        }
+        let live = Self::fresh(system, tool_defs);
+        self.content_hash != live.content_hash || self.app_version != live.app_version
+    }
 }
 
 /// 完整前缀冻结快照存储：内存缓存 + 盘上 sidecar。
@@ -71,10 +101,7 @@ impl PrefixSnapshotStore {
         live_system: &str,
         live_tools: &[ToolDef],
     ) -> PrefixSnapshot {
-        let live = || PrefixSnapshot {
-            system: live_system.to_string(),
-            tool_defs: live_tools.to_vec(),
-        };
+        let live = || PrefixSnapshot::fresh(live_system, live_tools);
         let cid = match conversation_id {
             Some(c) if is_safe_id(c) => c,
             _ => return live(),
@@ -125,10 +152,7 @@ impl PrefixSnapshotStore {
         if !is_safe_id(conversation_id) {
             return false;
         }
-        let live = PrefixSnapshot {
-            system: live_system.to_string(),
-            tool_defs: live_tools.to_vec(),
-        };
+        let live = PrefixSnapshot::fresh(live_system, live_tools);
         let current = self.cache.get(conversation_id).cloned().or_else(|| {
             std::fs::read_to_string(self.sidecar_path(conversation_id))
                 .ok()
@@ -302,6 +326,27 @@ mod tests {
                 .system,
             "系统 B",
             "刷新后读回新值"
+        );
+    }
+
+    #[test]
+    fn stale_detection_uses_content_hash_and_ignores_legacy_empty_hash() {
+        let sessions = temp_dir("stale");
+        let mut snaps = PrefixSnapshotStore::new(&sessions);
+        let snap = snaps.get_or_freeze(Some("c1"), "系统 A", &defs("描述 A"));
+        assert!(!snap.is_stale_against("系统 A", &defs("描述 A")));
+        assert!(snap.is_stale_against("系统 B", &defs("描述 A")));
+        assert!(snap.is_stale_against("系统 A", &defs("描述 B")));
+
+        let legacy = PrefixSnapshot {
+            system: "旧系统".into(),
+            tool_defs: defs("旧描述"),
+            app_version: String::new(),
+            content_hash: String::new(),
+        };
+        assert!(
+            !legacy.is_stale_against("新系统", &defs("新描述")),
+            "旧快照没有指纹，不应误报"
         );
     }
 

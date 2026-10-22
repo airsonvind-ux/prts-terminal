@@ -53,6 +53,15 @@ pub enum AgentEvent {
         usage: Option<crate::llm::UsageStat>,
     },
 
+    /// 旧对话的冻结前缀与当前应用版本/工具面不一致（R-08）。
+    /// 旁路信号：不改变本轮前缀，只告知用户这个对话仍基于旧快照。
+    #[serde(rename = "conversation/snapshot-stale", rename_all = "camelCase")]
+    ConversationSnapshotStale {
+        conversation_id: String,
+        /// 快照创建时的应用版本（旧快照可能为空）。
+        app_version: String,
+    },
+
     /// 记忆管线用量（后端内部累加后推送；前端仅镜像进投影用于展示，不回写）。
     /// 与 conversation/title 同属旁路信号平面（非 session log 事实）。
     #[serde(rename = "memory/usage", rename_all = "camelCase")]
@@ -103,6 +112,14 @@ impl AgentEvent {
             conversation_id: conversation_id.to_string(),
             title: title.to_string(),
             usage,
+        }
+    }
+
+    /// 构造旧快照提示事件。
+    pub fn conversation_snapshot_stale(conversation_id: &str, app_version: &str) -> Self {
+        AgentEvent::ConversationSnapshotStale {
+            conversation_id: conversation_id.to_string(),
+            app_version: app_version.to_string(),
         }
     }
 

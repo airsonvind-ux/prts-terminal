@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useProcessingStore, flushPending } from "../useProcessingStore";
 import { useConversationStore } from "../useConversationStore";
 import { useUIStore } from "../useUIStore";
+import { resetBackendHistoryModeCache } from "../processingHistoryMode";
 import type { ReminderData, SessionEvent } from "../../types";
 
 // ── 类型 ──
@@ -42,6 +43,7 @@ function resetAllStores(): void {
   });
   // 清理跨测试累积的 invoke 调用记录，确保每个测试独立验证
   __invokeMock.mockClear();
+  resetBackendHistoryModeCache();
 }
 
 /** 获取当前唯一的 processing 快照，断言正好一个 */
@@ -91,11 +93,12 @@ describe("场景 1：新建对话发送消息", () => {
     expect(snap.agentPhase).toBe("processing");
 
     // invoke 调用参数正确
-    // 命令序列：[get_reminder_data（拉提醒数据）, agent_process]
+    // 命令序列：[get_reminder_data, get_backend_history_mode, agent_process]
     // setup.ts 将 invoke mock 暴露在 globalThis.__invokeMock
     const invokeCalls = __invokeMock.mock.calls;
-    expect(invokeCalls).toHaveLength(2);
+    expect(invokeCalls).toHaveLength(3);
     expect(invokeCalls[0][0]).toBe("get_reminder_data"); // 提醒拉取先于发送
+    expect(invokeCalls[1][0]).toBe("get_backend_history_mode");
     const agentInvoke = invokeCalls.find((c) => c[0] === "agent_process")!;
     const requestArg = agentInvoke[1].request;
     expect(requestArg.input).toBe("查询 1-7");
@@ -104,6 +107,33 @@ describe("场景 1：新建对话发送消息", () => {
     expect(requestArg.conversationId).toBe(convs.conversations[0].id);
     expect(requestArg.history).toHaveLength(1);
     expect(requestArg.history[0]).toEqual({ role: "user", content: "查询 1-7" });
+  });
+});
+
+// ═══════════════════════════════════════════════
+// 场景 1b：primary 模式
+// ═══════════════════════════════════════════════
+
+describe("场景 1b：primary 历史模式", () => {
+  it("不再发送完整 history，只带本轮 userContent", async () => {
+    const original = __invokeMock.getMockImplementation();
+    __invokeMock.mockImplementation((cmd: string, args?: unknown) =>
+      cmd === "get_backend_history_mode"
+        ? Promise.resolve("primary")
+        : original!(cmd, args)
+    );
+
+    await useProcessingStore.getState().sendMessage("查询 1-7");
+    const agentInvoke = __invokeMock.mock.calls.find(
+      (c) => c[0] === "agent_process"
+    )!;
+    const request = agentInvoke[1].request;
+    expect(request.history).toEqual([]);
+    expect(request.userContent).toBe("查询 1-7");
+    expect(request.conversationId).toBeTruthy();
+
+    __invokeMock.mockImplementation(original!);
+    resetBackendHistoryModeCache();
   });
 });
 
@@ -126,9 +156,9 @@ describe("场景 2：同一对话并发保护", () => {
     const { sid } = getSingleSnapshot();
     expect(sid).toBe(firstSid);
 
-    // invoke：首次 sendMessage = [get_reminder_data, agent_process]；
+    // invoke：首次 sendMessage = [get_reminder_data, get_backend_history_mode, agent_process]；
     // 第二次被并发保护挡下（不新增调用）
-    expect(__invokeMock.mock.calls).toHaveLength(2);
+    expect(__invokeMock.mock.calls).toHaveLength(3);
 
     // conversation 未归档任何轮次（user 消息仍在快照中）
     const conv = useConversationStore.getState().conversations[0];

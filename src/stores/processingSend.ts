@@ -17,6 +17,7 @@ import { showToast } from "./useToastStore";
 import { ensureActiveConversation } from "./processingConversation";
 import { composeReminderNotice } from "./processingReminder";
 import { buildSendHistory, willOverflowContext } from "./processingRequest";
+import { backendHistoryEnabled } from "./processingHistoryMode";
 import { getModelInfo } from "./processingModelInfo";
 import type { ProcessingState, ProcessingStore } from "./useProcessingStore";
 
@@ -99,6 +100,10 @@ export async function sendProcessingMessage(
     ? `${noticeBlock}\n\n${input}`
     : input;
 
+  // primary 模式下历史由后端官方 log 派生，前端不再发送完整 history；
+  // legacy/shadow 仍走原路径（shadow 需要对照旧行为）。
+  const primaryHistory = await backendHistoryEnabled();
+
   // 准备传给 LLM 的完整对话历史（含本次 user 消息——含块版本随 history
   // 发送并归档冻结，是 LLM 实际所见）。
   const st = useConversationStore.getState();
@@ -106,7 +111,9 @@ export async function sendProcessingMessage(
   const conv = isNewNow
     ? undefined
     : st.conversations.find((c) => c.id === st.activeId);
-  const history = buildSendHistory(conv, displayContent, attachments);
+  const history = primaryHistory
+    ? []
+    : buildSendHistory(conv, displayContent, attachments);
 
   // ── 模块 D：上下文窗口硬拦（发送前预估）──
   // 拦截为提示而非自动压缩（共识：手动触发）。
@@ -125,6 +132,9 @@ export async function sendProcessingMessage(
 
   // 创建或复用对话，并维护自动标题现场
   const conversationId = ensureActiveConversation(isNewNow, conv, input);
+  const convNow = useConversationStore
+    .getState()
+    .conversations.find((c) => c.id === conversationId);
 
   // 游标推进：游标＝payload.seq（快照与增量同口径；含本次未拼入的事件，防下轮补放）。
   if (noticeAdvanceTo > prevNoticeSeq) {
@@ -158,7 +168,22 @@ export async function sendProcessingMessage(
   // 缓存区按对话分区（模块 C）：每轮随请求携带 conversationId，
   // 后端据此定位本对话的静态/动态桶（跨轮持久）。
   // sessionId 每轮重新生成，不能作为分区键；旧后端不读此字段。
-  const request: AgentRequest = { input, history, sessionId, conversationId };
+  const metaNow = useConversationStore
+    .getState()
+    .conversations.find((c) => c.id === conversationId);
+  const request: AgentRequest = {
+    input,
+    history,
+    sessionId,
+    conversationId,
+    userContent: displayContent,
+    userAttachments: attachments,
+    conversationTitle: metaNow?.title ?? convNow?.title,
+    conversationCreatedAt: metaNow?.createdAt,
+    modelName: metaNow?.modelName,
+    contextLength: metaNow?.contextLength,
+    lastNoticeSeq: metaNow?.lastNoticeSeq,
+  };
   invoke("agent_process", { request }).catch((err) => {
     // invoke 本身的异常（后端进程崩溃、网络不可达等）：后端未跑 →
     // 回滚通知游标（下轮重拉重拼，防丢失）。错误轮归档剥离块

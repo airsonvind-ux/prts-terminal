@@ -14,17 +14,20 @@
 //! 跨轮对话持久化已由 session_store.rs 承担（前端归档轮视图存档，见
 //! 后端-软件工程 §十二）——本 log 的“持久化 seam 留 Phase 4”表述作废。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::events::FrontendMessage;
-use crate::llm::{ChatMessage, ReasoningPolicy, TokenUsage, ToolCall, ToolDef, UsageStat};
+use crate::llm::{
+    ChatMessage, ProviderBlock, ReasoningPolicy, TokenUsage, ToolCall, ToolDef, UsageStat,
+};
+use crate::tools::ToolProvenance;
 
 // ═══════════════════════════════════════════════════════
 // 事件词汇表
 // ═══════════════════════════════════════════════════════
 
 /// 增量片段类型（assistant/chunk 的判别字段）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChunkKind {
     /// 最终回答文本增量
@@ -36,7 +39,7 @@ pub enum ChunkKind {
 /// turn 终止原因（模块 5：终止原因显式化）。
 /// P0 落地：completed / error / stagnation 由调度循环直接产生；
 /// aborted（用户中止）随 stop 生成（P2）落地；max_tokens 为预留词汇。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TurnEndReason {
     /// 正常完成：LLM 不再请求工具
@@ -55,7 +58,7 @@ pub enum TurnEndReason {
 
 /// 工具审批请求的危险度（M3-A §5.1）。
 /// crit 恒拦不产生审批请求，但其判定结果事件（blocked）需要档位字段，故含三档。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalRisk {
     /// 低危（自动化模式自动放行，不产生询问）
@@ -68,7 +71,7 @@ pub enum ApprovalRisk {
 
 /// 命令执行身份面（M4 §：privilege 与 ApprovalRisk 正交——risk 是 mode 面
 /// 分类，privilege 是本命令请求的进程身份）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalPrivilege {
     /// 默认：受限身份执行（restricted token + Job）
@@ -78,7 +81,7 @@ pub enum ApprovalPrivilege {
 }
 
 /// 工具审批/策略判定结果（M3-A §5.1）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalDecision {
     /// 用户确认执行
@@ -92,7 +95,7 @@ pub enum ApprovalDecision {
 }
 
 /// 拒绝原因（decision = Rejected 时携带）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalRejectReason {
     /// 用户点击拒绝
@@ -104,7 +107,7 @@ pub enum ApprovalRejectReason {
 }
 
 /// 缓存桶判别（模块 7：静态桶常驻提醒 / 动态桶会话级）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[allow(dead_code)] // 第三轮 cache_* 工具接线启用
 pub enum CacheBucket {
@@ -121,7 +124,7 @@ pub enum CacheBucket {
 /// serde 输出 `{ "type": "turn/start", ... }` 形式，与 IPC 合约一致。
 /// 每个事件携带 session_id 用于路由；`seq` 不落字段——由
 /// `SessionLog` 中的位置隐式给出（索引即 seq，单调连续）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SessionEvent {
     /// turn 开始：一次 agent_process 处理周期
@@ -153,6 +156,7 @@ pub enum SessionEvent {
     StepEnd {
         session_id: String,
         step: u32,
+        #[serde(default)]
         usage: Option<TokenUsage>,
         elapsed_ms: u64,
     },
@@ -173,7 +177,11 @@ pub enum SessionEvent {
     AssistantChunk {
         session_id: String,
         kind: ChunkKind,
+        /// 展示文本（情绪标签已剥离；流式半标签期间可为空串）。
         content: String,
+        /// 模型原始文本（含情绪标签）；历史派生用，旧事件缺省。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_content: Option<String>,
     },
 
     /// 最终 assistant 消息聚合（turn 结束时追加，供回放/遥测与前端归档；
@@ -182,9 +190,23 @@ pub enum SessionEvent {
     #[serde(rename = "assistant/message", rename_all = "camelCase")]
     AssistantMessage {
         session_id: String,
+        /// 展示文本（情绪标签已剥离）。
         content: String,
+        /// 模型原始文本（含情绪标签）；历史派生用，旧事件缺省。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_content: Option<String>,
+        #[serde(default)]
         reasoning_content: Option<String>,
+        #[serde(default)]
         usage: Option<TokenUsage>,
+    },
+
+    /// 供应商原始块（R-27）：Anthropic thinking / redacted_thinking。
+    /// 位于 assistant 正文之后、tool/call 之前；派生时挂到当前 assistant 消息上。
+    #[serde(rename = "assistant/provider-blocks", rename_all = "camelCase")]
+    AssistantProviderBlocks {
+        session_id: String,
+        blocks: Vec<ProviderBlock>,
     },
 
     /// 工具调用请求（arguments 为模型原始 JSON 字符串）
@@ -209,6 +231,9 @@ pub enum SessionEvent {
         tool_name: Option<String>,
         summary: String,
         ok: bool,
+        /// 结果来源（R-02a）：外部资料等；旧归档缺省 None。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provenance: Option<ToolProvenance>,
         /// 工具产物的图片附件引用（如 MAA 截图）。派生时在工具结果之后
         /// 补一条带图 user 消息——与轮内内存形态同源，故跟轮可重建。
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -234,6 +259,7 @@ pub enum SessionEvent {
         session_id: String,
         key: String,
         bucket: CacheBucket,
+        #[serde(default)]
         source_entry: Option<String>,
     },
 
@@ -280,10 +306,12 @@ pub enum SessionEvent {
         risk: ApprovalRisk,
         mode: crate::exec_settings::ExecutionMode,
         /// 出卡族 reason 码（地域性信任门；None = 无门信息，前端不显示类别）
+        #[serde(default)]
         rule_id: Option<String>,
         /// 请求身份：restricted（默认）/ full（完整权限）
         privilege: ApprovalPrivilege,
         /// full 档的一句话理由（前端展示；restricted 档为 None）
+        #[serde(default)]
         justification: Option<String>,
     },
 
@@ -298,7 +326,9 @@ pub enum SessionEvent {
         decision: ApprovalDecision,
         risk: ApprovalRisk,
         mode: crate::exec_settings::ExecutionMode,
+        #[serde(default)]
         rule_id: Option<String>,
+        #[serde(default)]
         reason: Option<ApprovalRejectReason>,
         privilege: ApprovalPrivilege,
     },
@@ -333,6 +363,11 @@ pub enum SessionEvent {
         message: String,
         recoverable: bool,
     },
+
+    /// 未知事件（前端私有事件、未来版本新增事件）。
+    /// 读取旧/混合日志时兜底，投影忽略；不参与派生。
+    #[serde(other)]
+    Unknown,
 }
 
 // ─── 构造器 ──────────────────────────────────────────
@@ -408,6 +443,7 @@ impl SessionEvent {
             session_id: session_id.to_string(),
             kind,
             content: content.to_string(),
+            raw_content: None,
         }
     }
     pub fn assistant_message(
@@ -419,8 +455,15 @@ impl SessionEvent {
         Self::AssistantMessage {
             session_id: session_id.to_string(),
             content: content.to_string(),
+            raw_content: None,
             reasoning_content,
             usage,
+        }
+    }
+    pub fn assistant_provider_blocks(session_id: &str, blocks: Vec<ProviderBlock>) -> Self {
+        Self::AssistantProviderBlocks {
+            session_id: session_id.to_string(),
+            blocks,
         }
     }
     pub fn tool_call(session_id: &str, call_id: &str, tool_name: &str, params: &str) -> Self {
@@ -461,6 +504,7 @@ impl SessionEvent {
             tool_name: tool_name.map(|s| s.to_string()),
             summary: summary.to_string(),
             ok,
+            provenance: None,
             attachments: Vec::new(),
         }
     }
@@ -480,8 +524,20 @@ impl SessionEvent {
             tool_name: tool_name.map(|s| s.to_string()),
             summary: summary.to_string(),
             ok,
+            provenance: None,
             attachments,
         }
+    }
+
+    /// 附加结果来源（保持旧构造器的调用方不变）。
+    pub fn with_provenance(mut self, provenance: Option<ToolProvenance>) -> Self {
+        if let Self::ToolResult {
+            provenance: slot, ..
+        } = &mut self
+        {
+            *slot = provenance;
+        }
+        self
     }
     pub fn request_header(session_id: &str, system_prompt: &str, tool_defs: Vec<ToolDef>) -> Self {
         Self::RequestHeader {
@@ -622,6 +678,8 @@ pub struct SessionLog {
     events: Vec<SessionEvent>,
     /// 最近一次 request/header 快照，用于"仅变化时追加"去重。
     last_header: Option<(String, Vec<ToolDef>)>,
+    /// 本轮事件起点（legacy 播种完历史后设置；primary 从 0 开始）。
+    turn_boundary: usize,
 }
 
 impl SessionLog {
@@ -651,6 +709,16 @@ impl SessionLog {
         &self.events
     }
 
+    /// 标记本轮事件起点（播种历史之后调用；primary 不调用，保持 0）。
+    pub fn mark_turn_boundary(&mut self) {
+        self.turn_boundary = self.events.len();
+    }
+
+    /// 本轮事件（不含 legacy 播种的历史）。
+    pub fn turn_events(&self) -> &[SessionEvent] {
+        &self.events[self.turn_boundary.min(self.events.len())..]
+    }
+
     /// 追加 request/header 快照——仅当 system prompt 或工具 schema 变化时
     /// 才真正追加（cache-safe，对齐上游 `request/header` 的 reason=change 语义）。
     pub fn push_header(&mut self, session_id: &str, system_prompt: &str, tool_defs: &[ToolDef]) {
@@ -667,6 +735,25 @@ impl SessionLog {
                 tool_defs.to_vec(),
             ));
             self.last_header = Some((system_prompt.to_string(), tool_defs.to_vec()));
+        }
+    }
+
+    /// 用已持久化的事件播种日志（后端读官方 jsonl 的入口）。
+    ///
+    /// 与 `seed_from_history` 的差别：事件原样保留（含 tool/call、thinking block、
+    /// request/header），只更新 header 去重状态。未知事件由 `SessionEvent::Unknown`
+    /// 兜底，投影时忽略。
+    pub fn seed_events(&mut self, events: impl IntoIterator<Item = SessionEvent>) {
+        for event in events {
+            if let SessionEvent::RequestHeader {
+                system_prompt,
+                tool_defs,
+                ..
+            } = &event
+            {
+                self.last_header = Some((system_prompt.clone(), tool_defs.clone()));
+            }
+            self.append(event);
         }
     }
 
@@ -738,6 +825,13 @@ impl SessionLog {
                 }
             }
         }
+    }
+
+    /// 压缩摘要消息正文（与前端 `buildSummaryUserMessage` 逐字一致）。
+    pub fn compaction_summary_message(summary: &str) -> String {
+        format!(
+            "[对话压缩摘要——非用户输入]\n以下是你（PRTS）与博士的对话概要。这段对话已被压缩归档，仅在本消息中呈现，用于保持任务连续性；其细节（含工具查询结果）已不再可用，需要时可重新查询。压缩点之后的消息是完整保留的近期对话，请以它们为准继续。\n\n{summary}\n[/对话压缩摘要]"
+        )
     }
 
     /// 工具返回图片时那条 user 消息的文本。轮内（orchestrator 追加）与
@@ -822,6 +916,7 @@ impl SessionLog {
         let mut text_buf = String::new();
         let mut reasoning_buf = String::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
+        let mut pending_provider_blocks: Vec<ProviderBlock> = Vec::new();
 
         for event in &self.events {
             match event {
@@ -835,14 +930,23 @@ impl SessionLog {
                         &mut text_buf,
                         &mut reasoning_buf,
                         &mut pending_tool_calls,
+                        &mut pending_provider_blocks,
                         policy,
                     );
                     out.push(Self::derive_user_message(content, attachments));
                 }
-                SessionEvent::AssistantChunk { kind, content, .. } => match kind {
-                    ChunkKind::Text => text_buf.push_str(content),
+                SessionEvent::AssistantChunk {
+                    kind,
+                    content,
+                    raw_content,
+                    ..
+                } => match kind {
+                    ChunkKind::Text => text_buf.push_str(raw_content.as_deref().unwrap_or(content)),
                     ChunkKind::Reasoning => reasoning_buf.push_str(content),
                 },
+                SessionEvent::AssistantProviderBlocks { blocks, .. } => {
+                    pending_provider_blocks.extend(blocks.iter().cloned());
+                }
                 SessionEvent::ToolCall {
                     call_id,
                     tool_name,
@@ -870,6 +974,7 @@ impl SessionLog {
                         &mut text_buf,
                         &mut reasoning_buf,
                         &mut pending_tool_calls,
+                        &mut pending_provider_blocks,
                         policy,
                     );
                     out.push(ChatMessage::tool_result(call_id.clone(), summary.clone()));
@@ -890,9 +995,81 @@ impl SessionLog {
             &mut text_buf,
             &mut reasoning_buf,
             &mut pending_tool_calls,
+            &mut pending_provider_blocks,
             policy,
         );
+        repair_tool_pairs(&mut out);
         out
+    }
+}
+
+/// 修复不完整的工具调用配对，保证送进 LLM 的历史协议合法。
+///
+/// 旧归档/中止轮可能留下“assistant tool_call 没有对应 tool/result”。
+/// 这里补一条事实性的未执行结果（不删调用），并清掉找不到调用的孤立 result。
+/// 这样既不把非法历史送进 provider，也不改动磁盘上的原文。
+fn repair_tool_pairs(messages: &mut Vec<ChatMessage>) {
+    use std::collections::HashSet;
+
+    // 先收集所有 assistant 声明过的 call id（同一 id 只保留一次）。
+    let mut declared: HashSet<String> = HashSet::new();
+    for msg in messages.iter() {
+        if let Some(calls) = &msg.tool_calls {
+            for call in calls {
+                declared.insert(call.id.clone());
+            }
+        }
+    }
+
+    // 清掉没有对应 assistant 调用的 tool 消息（历史损坏时可能出现）。
+    messages.retain(|msg| {
+        if msg.role != crate::llm::MessageRole::Tool {
+            return true;
+        }
+        msg.tool_call_id
+            .as_ref()
+            .is_some_and(|id| declared.contains(id))
+    });
+
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role != crate::llm::MessageRole::Assistant {
+            i += 1;
+            continue;
+        }
+        let required: Vec<String> = messages[i]
+            .tool_calls
+            .as_ref()
+            .map(|calls| calls.iter().map(|c| c.id.clone()).collect())
+            .unwrap_or_default();
+        if required.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // 只检查紧跟在 assistant 后面的连续 tool 消息；tool 图片 user 消息
+        // 允许夹在结果后，不参与配对。
+        let mut found: HashSet<String> = HashSet::new();
+        let mut insert_at = i + 1;
+        let mut j = i + 1;
+        while j < messages.len() && messages[j].role == crate::llm::MessageRole::Tool {
+            if let Some(id) = &messages[j].tool_call_id {
+                if required.contains(id) {
+                    found.insert(id.clone());
+                }
+            }
+            j += 1;
+            insert_at = j;
+        }
+
+        for id in required.iter().filter(|id| !found.contains(*id)) {
+            messages.insert(
+                insert_at,
+                ChatMessage::tool_result(id.clone(), "工具未执行（本轮中止或历史不完整）"),
+            );
+            insert_at += 1;
+        }
+        i = insert_at.max(i + 1);
     }
 }
 
@@ -928,10 +1105,11 @@ fn flush_assistant(
     text_buf: &mut String,
     reasoning_buf: &mut String,
     pending_tool_calls: &mut Vec<ToolCall>,
+    pending_provider_blocks: &mut Vec<ProviderBlock>,
     policy: ReasoningPolicy,
 ) {
     let has_content = !text_buf.is_empty() || !reasoning_buf.is_empty();
-    if !has_content && pending_tool_calls.is_empty() {
+    if !has_content && pending_tool_calls.is_empty() && pending_provider_blocks.is_empty() {
         return;
     }
 
@@ -952,6 +1130,11 @@ fn flush_assistant(
         tool_calls: None,
         tool_call_id: None,
         reasoning_content: reasoning,
+        provider_blocks: if pending_provider_blocks.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(pending_provider_blocks))
+        },
         image_paths: None,
         images: None,
     };
@@ -1537,5 +1720,144 @@ mod tests {
         assert!(matches!(events[0], SessionEvent::TurnStart { .. }));
         assert!(matches!(events[1], SessionEvent::UserMessage { .. }));
         assert!(matches!(events[2], SessionEvent::TurnEnd { .. }));
+    }
+
+    #[test]
+    fn derive_uses_raw_content_for_model_history() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::AssistantChunk {
+            session_id: "s1".into(),
+            kind: ChunkKind::Text,
+            content: "\n\n晚上好".into(),
+            raw_content: Some("【mood:高兴】\n\n晚上好".into()),
+        });
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived[0].content, "【mood:高兴】\n\n晚上好");
+    }
+
+    #[test]
+    fn compaction_summary_message_keeps_frontend_delimiters() {
+        let text = SessionLog::compaction_summary_message("## Goal\n查 1-7");
+        assert!(text.starts_with("[对话压缩摘要——非用户输入]\n"));
+        assert!(text.contains("以下是你（PRTS）与博士的对话概要"));
+        assert!(text.contains("## Goal\n查 1-7"));
+        assert!(text.ends_with("\n[/对话压缩摘要]"));
+    }
+
+    #[test]
+    fn stored_events_roundtrip_and_unknown_frontend_events_are_ignored() {
+        let line = r#"[
+            {"type":"turn/start","sessionId":"s1","extra":1},
+            {"type":"mood/event","sessionId":"s1","mood":"平静"},
+            {"type":"user/message","sessionId":"s1","content":"你好"},
+            {"type":"turn/end","sessionId":"s1","reason":"completed"}
+        ]"#;
+        let events: Vec<SessionEvent> = serde_json::from_str(line).expect("旧/混合日志可读");
+        assert!(matches!(events[1], SessionEvent::Unknown));
+
+        let mut log = SessionLog::new();
+        log.seed_events(events);
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].content, "你好");
+    }
+
+    #[test]
+    fn derive_repairs_orphan_tool_call_without_rewriting_log() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::user_message("s1", "查一下"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "我查查",
+        ));
+        log.append(SessionEvent::tool_call("s1", "c1", "query_enemy", "{}"));
+        // 没有 tool/result（模拟中止轮）
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 3);
+        assert_eq!(derived[1].tool_calls.as_ref().unwrap()[0].id, "c1");
+        assert_eq!(derived[2].role, crate::llm::MessageRole::Tool);
+        assert_eq!(derived[2].tool_call_id.as_deref(), Some("c1"));
+        assert!(derived[2].content.contains("未执行"));
+        // 诊断投影不得改原文：log 仍然只有三个事件，没有补写 result。
+        assert_eq!(log.len(), 3);
+    }
+
+    #[test]
+    fn derive_drops_orphan_tool_result_without_declared_call() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "答"));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "ghost",
+            Some("echo"),
+            "结果",
+            true,
+        ));
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].role, crate::llm::MessageRole::Assistant);
+    }
+
+    #[test]
+    fn provider_blocks_attach_to_assistant_message_in_order() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "查"));
+        log.append(SessionEvent::assistant_provider_blocks(
+            "s1",
+            vec![
+                ProviderBlock::AnthropicThinking {
+                    thinking: "想".into(),
+                    signature: "sig".into(),
+                },
+                ProviderBlock::AnthropicRedactedThinking {
+                    data: "redacted".into(),
+                },
+            ],
+        ));
+        log.append(SessionEvent::tool_call("s1", "c1", "query_enemy", "{}"));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("query_enemy"),
+            "好",
+            true,
+        ));
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        let blocks = derived[0]
+            .provider_blocks
+            .as_ref()
+            .expect("thinking 应挂载");
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0],
+            ProviderBlock::AnthropicThinking { ref signature, .. } if signature == "sig"
+        ));
+        assert!(matches!(
+            blocks[1],
+            ProviderBlock::AnthropicRedactedThinking { ref data } if data == "redacted"
+        ));
+    }
+
+    #[test]
+    fn tool_result_provenance_is_optional_and_serializes_camel_case() {
+        let plain = SessionEvent::tool_result("s1", "c1", Some("echo"), "结果", true);
+        let value = serde_json::to_value(&plain).unwrap();
+        assert!(
+            value.get("provenance").is_none(),
+            "无来源的结果不应写出 provenance 字段"
+        );
+
+        let external = SessionEvent::tool_result("s1", "c2", Some("web_fetch"), "正文", true)
+            .with_provenance(Some(crate::tools::ToolProvenance::external(
+                "example.com/docs",
+            )));
+        let value = serde_json::to_value(&external).unwrap();
+        assert_eq!(value["provenance"]["trust"], "external");
+        assert_eq!(value["provenance"]["source"], "example.com/docs");
+        assert!(
+            value["provenance"].get("version").is_none(),
+            "version 为空时不应序列化"
+        );
     }
 }

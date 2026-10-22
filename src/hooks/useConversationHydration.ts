@@ -109,8 +109,21 @@ async function runRestore(): Promise<void> {
         id: r.meta.id,
         title: r.meta.title,
         createdAt: r.meta.createdAt,
-        // 轮行原文逐行 parse——后端保证每行可 parse（坏行已在读取侧跳过）
-        turns: r.turns.map((line) => JSON.parse(line) as SessionEvent[]),
+        // 轮行原文逐行 parse——后端保证每行可 parse（坏行已在读取侧跳过）。
+        // primary 的官方日志没有前端私有 turn/aborted；按 turn/end 原因补回，
+        // 保证重启后中止标记仍可见。
+        turns: r.turns.map((line) => {
+          const turn = JSON.parse(line) as SessionEvent[];
+          const aborted = turn.some(
+            (e) => e.type === "turn/end" && e.reason === "aborted"
+          );
+          if (!aborted || turn.some((e) => e.type === "turn/aborted")) return turn;
+          const end = turn.find((e) => e.type === "turn/end");
+          return [
+            ...turn,
+            { type: "turn/aborted", sessionId: end?.sessionId ?? "" },
+          ];
+        }),
         // null → undefined 适配（后端可缺省字段以 null 表达）
         modelName: r.meta.modelName ?? undefined,
         contextLength: r.meta.contextLength ?? undefined,

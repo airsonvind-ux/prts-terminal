@@ -88,6 +88,22 @@ describe("deriveMessages", () => {
     expect(msgs[1]).toEqual({ role: "assistant", content: "你好博士" });
   });
 
+  it("历史派生优先使用 rawContent：模型能看到自己写的 MOOD 标签", () => {
+    const turns: SessionEvent[][] = [
+      [
+        user("s1", "你好"),
+        {
+          type: "assistant/chunk",
+          sessionId: "s1",
+          kind: "text",
+          content: "\n\n晚上好",
+          rawContent: "【mood:高兴】\n\n晚上好",
+        },
+      ],
+    ];
+    expect(deriveMessages(turns)[1].content).toBe("【mood:高兴】\n\n晚上好");
+  });
+
   it("多轮：user + assistant + user + assistant", () => {
     const turns: SessionEvent[][] = [
       [user("s1", "第一问"), textChunk("s1", "第一答"), turnEnd("s1")],

@@ -49,6 +49,7 @@ pub fn get_conversation(
 #[tauri::command]
 pub fn append_turn(
     store: State<'_, Arc<Mutex<SessionStore>>>,
+    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
     conversation_id: String,
     events_json: String,
     title: Option<String>,
@@ -70,10 +71,20 @@ pub fn append_turn(
         last_notice_seq,
         usage_deltas,
     };
+    let primary = {
+        let st = settings_store
+            .lock()
+            .map_err(|e| format!("设置锁获取失败: {e}"))?;
+        st.settings.backend_history_mode() == crate::settings::BackendHistoryMode::Primary
+    };
     let mut s = store
         .lock()
         .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
-    s.append_turn(&req)
+    if primary {
+        s.append_meta_only(&req)
+    } else {
+        s.append_turn(&req)
+    }
 }
 
 /// 更新会话元数据（rename / contextTokens / lastNoticeSeq / compaction；

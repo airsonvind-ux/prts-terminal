@@ -1,4 +1,4 @@
-use super::llm_call::{call_llm_with_retry, prepare_request_images};
+use super::llm_call::{call_llm_with_retry_collect, prepare_request_images};
 use super::*;
 
 /// 调度循环：turn 内反复执行 step（调 LLM → 判断是否需要工具 → 执行工具 → 继续），
@@ -104,13 +104,16 @@ pub(super) async fn dispatch_turn_with_memory(
         // （drop llm future → reqwest 流断开；重试 sleep 同理被取消）。
         debug!("step" => step, "action" => "llm_start");
         let t0 = std::time::Instant::now();
+        // Anthropic thinking 原始块：本轮收集后挂到内存 assistant 消息，
+        // 同 turn 的下一步工具续跑必须原序回传（R-27）。
+        let provider_blocks = Arc::new(std::sync::Mutex::new(Vec::new()));
         let result = tokio::select! {
             biased;
             _ = abort.wait_abort() => {
                 debug!("step" => step, "action" => "llm_aborted");
                 return Ok(TurnOutcome::Aborted(state.stat));
             }
-            res = call_llm_with_retry(
+            res = call_llm_with_retry_collect(
                 session_id,
                 messages.as_slice(),
                 tool_defs,
@@ -120,13 +123,19 @@ pub(super) async fn dispatch_turn_with_memory(
                 tools,
                 &tool_ctx,
                 RetryPolicy::default(),
+                Arc::clone(&provider_blocks),
             ) => res?,
         };
+        let step_provider_blocks = provider_blocks
+            .lock()
+            .map(|blocks| blocks.clone())
+            .unwrap_or_default();
         debug!(
             "step" => step,
             "action" => "llm_done",
             "elapsed_ms" => t0.elapsed().as_millis(),
-            "tool_calls" => result.tool_calls.len()
+            "tool_calls" => result.tool_calls.len(),
+            "provider_blocks" => step_provider_blocks.len()
         );
 
         // 记录调用：usage 快照（缺陷 4）+ 推理链
@@ -147,6 +156,9 @@ pub(super) async fn dispatch_turn_with_memory(
                 };
                 let mut final_msg = ChatMessage::assistant(result.text.clone());
                 final_msg.reasoning_content = final_reasoning;
+                if !step_provider_blocks.is_empty() {
+                    final_msg.provider_blocks = Some(step_provider_blocks.clone());
+                }
                 messages.push(final_msg);
             }
             debug!(
@@ -202,6 +214,7 @@ pub(super) async fn dispatch_turn_with_memory(
             approvals,
             abort,
             workspace_root,
+            &tool_ctx,
         )
         .await;
 
@@ -211,7 +224,7 @@ pub(super) async fn dispatch_turn_with_memory(
         }
 
         // ── 执行工具，结果追加到上下文，记录指纹 ──
-        execute_tools_and_append(
+        execute_tools_and_append_with_blocks(
             session_id,
             messages,
             &result,
@@ -221,6 +234,7 @@ pub(super) async fn dispatch_turn_with_memory(
             &mut state,
             Some(&verdicts),
             abort,
+            &step_provider_blocks,
         );
 
         // ── M3-B 中止出口：不写 step/end（与 error 路径一致，log 容忍悬挂 step/start）──

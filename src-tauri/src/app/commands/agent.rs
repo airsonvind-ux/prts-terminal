@@ -2,6 +2,11 @@
 
 use super::prelude::*;
 
+use crate::attachments::Attachment;
+use crate::orchestrator::HistorySeed;
+use crate::session::{SessionEvent, SessionLog};
+use crate::settings::BackendHistoryMode;
+
 // ═══════════════════════════════════════════════════════
 // 请求类型
 // ═══════════════════════════════════════════════════════
@@ -10,15 +15,15 @@ use super::prelude::*;
 ///
 /// 对应 `types.ts` 的 AgentRequest：
 ///   input            — 用户原始输入
-///   history          — 完整对话历史（含本轮 user 消息）
+///   history          — legacy/shadow 的完整历史；primary 传空数组
 ///   sessionId        — 本次请求的唯一标识，随所有 AgentEvent 回传
 ///   conversationId   — 对话标识（模块 C：缓存区按此分区；可选字段，
 ///                      旧前端不传时后端用 sessionId 兜底）
 ///
 /// rename_all = "camelCase" 将 Rust 的 snake_case 字段名
 /// 自动映射为前端传来的 camelCase JSON key，无需手动 rename。
-/// 2026-08：input / conversation_id 当前未被后端消费（input 为协议预留字段；
-/// conversation_id 随缓存系统停用暂不消费），保留以兼容前端协议。
+/// 2026-10（C-lite）：conversation_id 与 user_content 在 primary 模式被消费；
+/// input 仍是纯用户输入（不含 reminder 块），legacy 兼容保留。
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -29,6 +34,25 @@ pub struct AgentRequest {
     /// 对话标识（可选：旧前端不传 → 反序列化为空串，命令层兜底为 session_id）
     #[serde(default)]
     pub conversation_id: String,
+    /// 本轮 user 消息的完整正文（含 `[prts_reminder]` 块）。
+    /// primary 模式下写入官方 log 的就是这一份；legacy 模式仍用 history。
+    #[serde(default)]
+    pub user_content: String,
+    /// 本轮 user 消息附件（primary 模式入 log）。
+    #[serde(default)]
+    pub user_attachments: Vec<Attachment>,
+    /// 首轮建文件用的会话元数据（primary 模式）。
+    #[serde(default)]
+    pub conversation_title: Option<String>,
+    #[serde(default)]
+    pub conversation_created_at: Option<u64>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub context_length: Option<u64>,
+    /// 环境通知游标（primary 模式随轮写 index）。
+    #[serde(default)]
+    pub last_notice_seq: Option<u64>,
 }
 
 // ═══════════════════════════════════════════════════════
@@ -86,6 +110,7 @@ pub async fn agent_process(
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
     prefix_snapshot_store: State<'_, Arc<Mutex<PrefixSnapshotStore>>>,
+    store: State<'_, Arc<Mutex<SessionStore>>>,
 ) -> Result<(), String> {
     // ── Clone Arc：从 State 引用中获得可移入 async 上下文的独立所有权 ──
     let tools = Arc::clone(&tools);
@@ -185,7 +210,7 @@ pub async fn agent_process(
     // 刷新点＝新对话 ＋ 压缩（见 refresh_frozen_snapshots）。
     // 人格/界面段是编译期常量、工具面来自注册表，两者随版本变——冻结住
     // 创建时的那份，旧对话前缀才不会因升级而破。
-    let (system_prompt, tool_defs) = {
+    let (system_prompt, tool_defs, snapshot_stale) = {
         let live_system = crate::orchestrator::context::assemble_system_prompt_with_memory(
             &skill_catalog,
             &memory_block,
@@ -195,8 +220,24 @@ pub async fn agent_process(
             .lock()
             .map_err(|e| format!("前缀快照存储锁获取失败: {e}"))?;
         let snap = snaps.get_or_freeze(conversation_key, &live_system, &live_tools);
-        (snap.system, snap.tool_defs)
+        let stale = snap.is_stale_against(&live_system, &live_tools);
+        (
+            snap.system,
+            snap.tool_defs,
+            stale.then_some(snap.app_version),
+        )
     };
+    if let Some(version) = snapshot_stale {
+        if let Err(e) = app_handle.emit(
+            "agent-event",
+            crate::events::IpcEvent::Agent(crate::events::AgentEvent::conversation_snapshot_stale(
+                &conversation_id,
+                &version,
+            )),
+        ) {
+            eprintln!("[commands] 旧快照提示推送失败: {e}");
+        }
+    }
 
     // ── 插话保留领取（2026-09-25）：同对话上一轮中止/错误留下的未交付
     // 插话并入本轮队列，dispatch 首个 step 请求前领取注入（轮次边界领取，
@@ -205,10 +246,67 @@ pub async fn agent_process(
         steer_queue.adopt(&conversation_id, &session_id);
     }
 
+    // ── 历史来源（C-lite）：primary 从官方 log 读，legacy 仍用前端 history ──
+    let history_mode = {
+        let st = settings_store
+            .lock()
+            .map_err(|e| format!("设置锁获取失败: {e}"))?;
+        st.settings.backend_history_mode()
+    };
+    let primary_history =
+        matches!(history_mode, BackendHistoryMode::Primary) && !conversation_id.is_empty();
+
+    let log = Arc::new(Mutex::new(SessionLog::new()));
+    let user_content = if request.user_content.is_empty() {
+        request.input.as_str()
+    } else {
+        request.user_content.as_str()
+    };
+    let user_event = if request.user_attachments.is_empty() {
+        SessionEvent::user_message(&session_id, user_content)
+    } else {
+        SessionEvent::user_message_with_attachments(
+            &session_id,
+            user_content,
+            request.user_attachments.clone(),
+        )
+    };
+    let history_seed = if primary_history {
+        let title = request.conversation_title.as_deref().unwrap_or("新对话");
+        {
+            let mut s = store
+                .lock()
+                .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+            s.ensure_conversation(
+                &conversation_id,
+                Some(title),
+                request.conversation_created_at,
+                request.model_name.as_deref(),
+                request.context_length,
+            )?;
+        }
+        let (turns, compaction) = {
+            let mut s = store
+                .lock()
+                .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+            let turns = s.load_turns(&conversation_id)?;
+            let compaction = s.meta(&conversation_id)?.compaction;
+            (turns, compaction)
+        };
+        HistorySeed::Log {
+            turns,
+            user: Box::new(user_event.clone()),
+            compaction,
+        }
+    } else {
+        HistorySeed::Frontend(request.history)
+    };
+
     // ── 调用调度中枢（abort 透传：取消点消费；冻结目录 + 记忆区注入 system）──
-    let result = orchestrator::process_with_memory(
+    let result = orchestrator::process_with_log(
         &session_id,
-        request.history,
+        history_seed,
+        Arc::clone(&log),
         &tools, // State<Arc<ToolRegistry>> → &Arc<ToolRegistry>（deref 强制）
         &llm,   // Arc<dyn LlmClient> → &dyn LlmClient
         &llm_config,
@@ -224,6 +322,115 @@ pub async fn agent_process(
         tool_defs,
     )
     .await;
+
+    // ── shadow：写影子日志并对比派生消息；仍走 legacy 读写，不影响用户 ──
+    if matches!(history_mode, BackendHistoryMode::Shadow) && !conversation_id.is_empty() {
+        let events = log
+            .lock()
+            .map_err(|e| format!("会话日志锁获取失败: {e}"))?
+            .events()
+            .to_vec();
+        let mut current = log
+            .lock()
+            .map_err(|e| format!("会话日志锁获取失败: {e}"))?
+            .turn_events()
+            .to_vec();
+        // legacy 播种时当前 user 在 history 里，turn_events 不含它；
+        // 影子日志按轮追加时必须补回，否则相邻轮会被派生合并。
+        current.insert(0, user_event.clone());
+        if !events.is_empty() {
+            let mut s = store
+                .lock()
+                .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+            // 压缩是对话级状态转换：legacy 从摘要 + 保留段重新开始，
+            // shadow 也必须用同一基线，不能继续拿完整历史对比。
+            if let Some(compaction) = s.meta(&conversation_id)?.compaction {
+                let marker = s.shadow_compaction_marker(&conversation_id)?;
+                if marker != Some(compaction.at) {
+                    s.reset_shadow(&conversation_id)?;
+                    s.set_shadow_compaction_marker(&conversation_id, compaction.at)?;
+                }
+            }
+            let prior = s.load_shadow_turns(&conversation_id)?;
+            let line = if prior.is_empty() { &events } else { &current };
+            if !line.is_empty() {
+                let json =
+                    serde_json::to_string(line).map_err(|e| format!("影子事件序列化失败: {e}"))?;
+                s.append_shadow_events(&conversation_id, &json)?;
+            }
+            let policy = model_registry
+                .get_resolved_compat(&llm_config.provider, &llm_config.model, llm_config.api_type)
+                .policy;
+            let legacy = log
+                .lock()
+                .map_err(|e| format!("会话日志锁获取失败: {e}"))?
+                .derive_messages(policy);
+            let mut shadow_log = SessionLog::new();
+            for turn in s.load_shadow_turns(&conversation_id)? {
+                shadow_log.seed_events(turn);
+            }
+            let shadow = shadow_log.derive_messages(policy);
+            if serde_json::to_value(&legacy).ok() != serde_json::to_value(&shadow).ok() {
+                let legacy_json = serde_json::to_string(&legacy).unwrap_or_default();
+                let shadow_json = serde_json::to_string(&shadow).unwrap_or_default();
+                let diff = format!(
+                    "[{}] shadow diff\nlegacy: {}\nshadow: {}\n\n",
+                    conversation_id, legacy_json, shadow_json
+                );
+                let _ = s.append_shadow_diff(&diff);
+                eprintln!("[shadow] 派生消息不一致：{conversation_id}");
+            }
+        }
+    }
+
+    // ── primary：本轮事件写官方 log（唯一 writer；前端 append_turn 在 primary
+    // 只更新元数据，见 conversation 命令）──
+    if primary_history {
+        let mut events: Vec<SessionEvent> = vec![SessionEvent::turn_start(&session_id)];
+        {
+            let log = log.lock().map_err(|e| format!("会话日志锁获取失败: {e}"))?;
+            events.extend(log.turn_events().iter().cloned());
+        }
+        if events.len() <= 1 {
+            return Err("本轮没有产生可落盘的事件".into());
+        }
+        let events_json =
+            serde_json::to_string(&events).map_err(|e| format!("本轮事件序列化失败: {e}"))?;
+        let context_tokens = events.iter().rev().find_map(|event| match event {
+            SessionEvent::AssistantMessage { usage, .. } => *usage,
+            SessionEvent::StepEnd { usage, .. } => *usage,
+            _ => None,
+        });
+        let usage_deltas = events.iter().find_map(|event| match event {
+            SessionEvent::TurnEnd { usage, .. } => usage.map(|stat| UsageDelta {
+                category: UsageCategory::Session,
+                input_tokens: stat.input_tokens,
+                output_tokens: stat.output_tokens,
+                cache_hit_tokens: stat.cache_hit_tokens,
+                cache_prompt_tokens: stat.cache_prompt_tokens,
+            }),
+            _ => None,
+        });
+        let req = AppendTurnReq {
+            conversation_id: conversation_id.clone(),
+            events_json,
+            title: request.conversation_title.clone(),
+            created_at: request.conversation_created_at,
+            model_name: request
+                .model_name
+                .clone()
+                .or_else(|| Some(llm_config.model.clone())),
+            context_length: request.context_length,
+            context_tokens,
+            last_notice_seq: request.last_notice_seq,
+            usage_deltas: usage_deltas.map(|delta| vec![delta]),
+        };
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        s.append_turn(&req)
+            .map_err(|e| format!("本轮历史落盘失败：{e}"))?;
+    }
 
     // ── 插话队列收尾（保留语义，2026-09-25 修订）：不再无条件清空——
     // 未交付条目在有 conversation 归属时进入保留态：同对话下一轮

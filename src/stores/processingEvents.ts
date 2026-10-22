@@ -53,9 +53,10 @@ export function appendCurrentEventImpl(
     // text / reasoning 两种 kind 均缓冲——EventBadge 的推理累积与
     // deriveTextSegments 的文本累积都只读 currentEvents，序列不变。
     if (event.kind === "text") {
-      // 情绪标签扫描（批 2-D）：进缓冲前剥离标签并更新 mood。
-      // pending 扣留的文本（扫描返回空串）不进缓冲——用户不可见半标签。
-      const scan = scanTextChunk(event.sessionId, event.content);
+      // 情绪标签扫描（批 2-D）：展示层剥离标签并更新 mood；
+      // rawContent 保留模型原文，供下一轮历史使用（模型能看到自己写过的标签）。
+      const rawContent = event.content;
+      const scan = scanTextChunk(event.sessionId, rawContent);
       if (scan.mood) {
         // 情绪事件先落位（时序：前段文本 → 情绪卡片 → 本段剥离文本）
         appendImmediate({
@@ -67,7 +68,10 @@ export function appendCurrentEventImpl(
         setProcessingMood(set, event.sessionId, scan.mood, scan.intensity);
       }
       if (scan.text.length === 0) return;
-      event = { ...event, content: scan.text };
+      event =
+        scan.rawText !== scan.text
+          ? { ...event, content: scan.text, rawContent: scan.rawText }
+          : { ...event, content: scan.text };
     }
     // reasoning chunk 不进扫描器，原样缓冲。
     pushChunk(event);
@@ -81,7 +85,8 @@ export function appendCurrentEventImpl(
   if (event.type === "assistant/message") {
     // 一次性剥离（防止归档瞬间标签复活）：assistant/message 是后端原始聚合，
     // 流式期间标签已在 chunk 层剥离，此处用同一套剥离保证归档 turns 干净。
-    const { text, mood, intensity } = stripTagFromText(event.content);
+    const rawContent = event.content;
+    const { text, mood, intensity } = stripTagFromText(rawContent);
     if (mood) {
       // 防重：本段（聚合所属的末段）已消费（流式已产 mood/event）→ 只同步 mood；
       // 未消费（异常路径：流式未匹配但聚合带标签）→ 补插事件，保证归档完整。
@@ -95,7 +100,9 @@ export function appendCurrentEventImpl(
       }
       setProcessingMood(set, event.sessionId, mood, intensity);
     }
-    if (text !== event.content) event = { ...event, content: text };
+    if (text !== rawContent) {
+      event = { ...event, content: text, rawContent };
+    }
     appendImmediate(event);
     return;
   }

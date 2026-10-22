@@ -350,6 +350,11 @@ pub struct ChatMessage {
     /// None 时序列化自动省略；Some 时携带，由 LlmClient 实现按 provider 决定是否剥离。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Anthropic thinking / redacted_thinking 原始块（R-27）。
+    /// 只对 Anthropic 请求回传；其他协议忽略。不参与 ChatMessage 的 JSON
+    /// 序列化（OpenAI 适配器直接序列化整条消息，不能把该字段发出去）。
+    #[serde(skip)]
+    pub provider_blocks: Option<Vec<ProviderBlock>>,
     /// 本消息附带的图像文件路径（来自 user/message 事件的附件）。
     /// 仅供请求前物化（路径 → base64），不序列化、不进 API。
     #[serde(skip)]
@@ -382,6 +387,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         }
@@ -394,6 +400,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         }
@@ -407,6 +414,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: Some(image_paths),
             images: None,
         }
@@ -419,6 +427,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         }
@@ -435,9 +444,18 @@ impl ChatMessage {
             tool_calls: Some(tool_calls),
             tool_call_id: None,
             reasoning_content,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         }
+    }
+
+    /// 附加 Anthropic thinking 原始块（R-27 回传用）。
+    pub fn with_provider_blocks(mut self, blocks: Vec<ProviderBlock>) -> Self {
+        if !blocks.is_empty() {
+            self.provider_blocks = Some(blocks);
+        }
+        self
     }
 
     /// 工具执行结果消息。tool_call_id 用于 LLM API 侧匹配对应的 tool_call。
@@ -448,10 +466,24 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         }
     }
+}
+
+/// 供应商原始内容块（R-27）。
+///
+/// 只存需要原序回传的 Anthropic thinking 块；普通 text/tool_use 仍由
+/// `ChatMessage.content` / `tool_calls` 表达。其他供应商不产生该枚举。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ProviderBlock {
+    #[serde(rename = "anthropic-thinking", rename_all = "camelCase")]
+    AnthropicThinking { thinking: String, signature: String },
+    #[serde(rename = "anthropic-redacted-thinking", rename_all = "camelCase")]
+    AnthropicRedactedThinking { data: String },
 }
 
 /// LLM 返回的单个工具调用请求（对应 OpenAI function calling 的 tool_calls 数组元素）
@@ -626,6 +658,11 @@ pub fn usage_stat(usage: &TokenUsage, api_type: ApiType) -> UsageStat {
 pub enum StreamEvent {
     ReasoningDelta {
         content: String,
+    },
+    /// 供应商原始内容块（当前仅 Anthropic thinking）。
+    /// 不参与增量正文；由上层写入 log，下一轮按原序回传。
+    ProviderBlock {
+        block: ProviderBlock,
     },
     ToolCall {
         /// 工具调用唯一 id（LLM API 分配，用于匹配 tool_result）

@@ -22,8 +22,8 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, StreamEvent,
-    StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    ChatMessage, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, ProviderBlock,
+    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -122,31 +122,57 @@ impl AnthropicMessagesClient {
                     }
                 }
                 MessageRole::Assistant => {
-                    if let Some(ref tcs) = msg.tool_calls {
-                        // 含 tool_calls 的 assistant → content 数组
+                    // Anthropic 要求 thinking / redacted_thinking 按原序回到
+                    // assistant content 开头；缺签名会导致工具续跑 400（R-27）。
+                    let has_provider_blocks = msg
+                        .provider_blocks
+                        .as_ref()
+                        .is_some_and(|blocks| !blocks.is_empty());
+                    if has_provider_blocks || msg.tool_calls.is_some() {
                         let mut blocks: Vec<Value> = Vec::new();
+                        if let Some(provider_blocks) = &msg.provider_blocks {
+                            for block in provider_blocks {
+                                match block {
+                                    ProviderBlock::AnthropicThinking {
+                                        thinking,
+                                        signature,
+                                    } => blocks.push(serde_json::json!({
+                                        "type": "thinking",
+                                        "thinking": thinking,
+                                        "signature": signature,
+                                    })),
+                                    ProviderBlock::AnthropicRedactedThinking { data } => blocks
+                                        .push(serde_json::json!({
+                                            "type": "redacted_thinking",
+                                            "data": data,
+                                        })),
+                                }
+                            }
+                        }
                         if !msg.content.is_empty() {
                             blocks.push(serde_json::json!({
                                 "type": "text",
                                 "text": msg.content,
                             }));
                         }
-                        for tc in tcs {
-                            let input: Value = serde_json::from_str(&tc.function.arguments)
-                                .unwrap_or(Value::Object(Default::default()));
-                            blocks.push(serde_json::json!({
-                                "type": "tool_use",
-                                "id": tc.id,
-                                "name": tc.function.name,
-                                "input": input,
-                            }));
+                        if let Some(ref tcs) = msg.tool_calls {
+                            for tc in tcs {
+                                let input: Value = serde_json::from_str(&tc.function.arguments)
+                                    .unwrap_or(Value::Object(Default::default()));
+                                blocks.push(serde_json::json!({
+                                    "type": "tool_use",
+                                    "id": tc.id,
+                                    "name": tc.function.name,
+                                    "input": input,
+                                }));
+                            }
                         }
                         anthropic_msgs.push(serde_json::json!({
                             "role": "assistant",
                             "content": blocks,
                         }));
                     } else {
-                        // 纯文本 assistant → 字符串 content
+                        // 纯文本 assistant → 字符串 content（与既有输出逐字节一致）
                         anthropic_msgs.push(serde_json::json!({
                             "role": "assistant",
                             "content": msg.content,
@@ -516,6 +542,10 @@ struct BlockAccumulator {
     input_json: String,
     /// thinking block → 累积推理文本
     thinking: String,
+    /// thinking block → 签名（signature_delta 累积）
+    signature: String,
+    /// redacted_thinking block → 原始 data
+    redacted: Option<String>,
 }
 
 /// 解析 Anthropic SSE 字节流。
@@ -692,15 +722,32 @@ fn process_anthropic_event(
             );
             let acc = blocks.entry(*index).or_default();
             acc.block_type = block_type.clone();
-            if block_type == "tool_use" {
-                acc.tool_id = block_data
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                acc.tool_name = block_data
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+            match block_type.as_str() {
+                "tool_use" => {
+                    acc.tool_id = block_data
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    acc.tool_name = block_data
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+                "thinking" => {
+                    if let Some(t) = block_data.get("thinking").and_then(|v| v.as_str()) {
+                        acc.thinking.push_str(t);
+                    }
+                    if let Some(s) = block_data.get("signature").and_then(|v| v.as_str()) {
+                        acc.signature.push_str(s);
+                    }
+                }
+                "redacted_thinking" => {
+                    acc.redacted = block_data
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+                _ => {}
             }
         }
         AnthropicSseEvent::ContentBlockDelta { index, delta } => {
@@ -732,27 +779,50 @@ fn process_anthropic_event(
                         });
                     }
                 }
+                "signature_delta" => {
+                    if let Some(s) = delta.get("signature").and_then(|v| v.as_str()) {
+                        acc.signature.push_str(s);
+                    }
+                }
                 _ => {}
             }
         }
         AnthropicSseEvent::ContentBlockStop { index } => {
             if let Some(acc) = blocks.remove(index) {
-                if acc.block_type == "tool_use" {
-                    if let (Some(id), Some(name)) = (acc.tool_id, acc.tool_name) {
-                        tool_calls.push(ToolCall {
-                            id: id.clone(),
-                            call_type: "function".into(),
-                            function: ToolCallFunction {
-                                name: name.clone(),
-                                arguments: acc.input_json.clone(),
+                match acc.block_type.as_str() {
+                    "tool_use" => {
+                        if let (Some(id), Some(name)) = (acc.tool_id, acc.tool_name) {
+                            tool_calls.push(ToolCall {
+                                id: id.clone(),
+                                call_type: "function".into(),
+                                function: ToolCallFunction {
+                                    name: name.clone(),
+                                    arguments: acc.input_json.clone(),
+                                },
+                            });
+                            on_event(StreamEvent::ToolCall {
+                                id,
+                                name,
+                                arguments: acc.input_json,
+                            });
+                        }
+                    }
+                    "thinking" if !acc.signature.is_empty() => {
+                        on_event(StreamEvent::ProviderBlock {
+                            block: ProviderBlock::AnthropicThinking {
+                                thinking: acc.thinking,
+                                signature: acc.signature,
                             },
                         });
-                        on_event(StreamEvent::ToolCall {
-                            id,
-                            name,
-                            arguments: acc.input_json,
-                        });
                     }
+                    "redacted_thinking" => {
+                        if let Some(data) = acc.redacted {
+                            on_event(StreamEvent::ProviderBlock {
+                                block: ProviderBlock::AnthropicRedactedThinking { data },
+                            });
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -859,6 +929,7 @@ mod tests {
             tool_calls: Some(vec![tc]),
             tool_call_id: None,
             reasoning_content: None,
+            provider_blocks: None,
             image_paths: None,
             images: None,
         };
@@ -1087,6 +1158,76 @@ mod tests {
         assert!(matches!(events[1], StreamEvent::TextDelta { .. }));
         assert_eq!(result.reasoning, Some("需要查询数据库".into()));
         assert_eq!(result.text, "结果如下");
+    }
+
+    #[tokio::test]
+    async fn thinking_signature_is_emitted_and_roundtrips_to_request() {
+        let frames = &[
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":5}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-abc"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"t1","name":"echo","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":1}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":15}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ];
+
+        let (events, _result) = collect_anthropic_events(frames).await;
+        let block = events
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::ProviderBlock {
+                    block:
+                        ProviderBlock::AnthropicThinking {
+                            thinking,
+                            signature,
+                        },
+                } => Some((thinking.as_str(), signature.as_str())),
+                _ => None,
+            })
+            .expect("thinking 签名应随流式事件发出");
+        assert_eq!(block, ("想", "sig-abc"));
+
+        let mut msg = ChatMessage::assistant("继续");
+        msg.provider_blocks = Some(vec![ProviderBlock::AnthropicThinking {
+            thinking: "想".into(),
+            signature: "sig-abc".into(),
+        }]);
+        let (_sys, msgs) = AnthropicMessagesClient::convert_messages(&[msg]);
+        let blocks = msgs[0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["signature"], "sig-abc");
+        assert_eq!(blocks[1]["type"], "text");
     }
 
     // ── 响应解析 ──

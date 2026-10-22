@@ -209,7 +209,7 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
           break;
         }
         case "assistant/chunk":
-          if (e.kind === "text") textBuf += e.content;
+          if (e.kind === "text") textBuf += e.rawContent ?? e.content;
           else reasoningBuf += e.content;
           break;
         case "tool/call":
