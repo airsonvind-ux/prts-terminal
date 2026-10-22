@@ -492,18 +492,19 @@ enum TargetMode {
 }
 
 /// 版本探测形态：`<probe> --version|-v|-?|/?`（系统查询类型放行）。
+///
+/// 只接受“命令 + 唯一版本参数”。旧实现扫描任意位置，导致
+/// `python -v -c ...` 在代码执行分类之前被短路放行。
 fn is_version_probe(tokens: &[Token]) -> bool {
     let Some(first) = tokens.first() else {
         return false;
     };
     let name = first.norm_name();
-    if !risk::PROBE_EXECUTABLES.contains(&name.as_str()) {
+    if !risk::PROBE_EXECUTABLES.contains(&name.as_str()) || tokens.len() != 2 {
         return false;
     }
-    tokens.iter().skip(1).any(|t| {
-        let v = t.value.to_lowercase();
-        v == "--version" || v == "-v" || v == "-?" || v == "/?"
-    })
+    let v = tokens[1].value.to_lowercase();
+    v == "--version" || v == "-v" || v == "-?" || v == "/?"
 }
 
 /// git 子命令分类（§6 git 子表；含 undo/网络/只读面）。
@@ -515,11 +516,12 @@ fn classify_git(tokens: &[Token]) -> Classified {
             .skip(1)
             .any(|t| t.value.to_lowercase() == needle)
     };
-    let any_prefix = |prefix: &str| {
-        tokens
-            .iter()
-            .skip(1)
-            .any(|t| t.value.to_lowercase().starts_with(prefix))
+    // 组合短开关：-xdf / -df / -D 等，按字符集合判断；长开关单独看。
+    let has_short = |flag: char| {
+        tokens.iter().skip(1).any(|t| {
+            let v = t.value.to_lowercase();
+            v.starts_with('-') && !v.starts_with("--") && v.chars().skip(1).any(|c| c == flag)
+        })
     };
     match sub.as_str() {
         // 只读子命令（§6：status/log/diff/show → SystemQueryOp AUTO）
@@ -527,8 +529,8 @@ fn classify_git(tokens: &[Token]) -> Classified {
             Classified::new(OpKind::SystemQueryOp, TargetMode::None)
         }
         "branch" => {
-            if any_prefix("-d") {
-                // -d/-D 删除分支 → 丢内容面（git-undo）
+            if has_short('d') || has("--delete") {
+                // -d/-D/--delete 删除分支 → 丢内容面（git-undo）
                 Classified::ask(OpKind::UndoOp, "git-undo")
             } else if has("-v") || has("-vv") || tokens.len() == 2 {
                 Classified::new(OpKind::SystemQueryOp, TargetMode::None)
@@ -559,7 +561,7 @@ fn classify_git(tokens: &[Token]) -> Classified {
             }
         }
         "checkout" => {
-            if any_prefix("-f") {
+            if has_short('f') || has("--force") {
                 Classified::ask(OpKind::UndoOp, "git-undo")
             } else {
                 // 无 -f：切分支 / checkout -- file（恢复路径）
@@ -568,8 +570,8 @@ fn classify_git(tokens: &[Token]) -> Classified {
         }
         "reset" => Classified::ask(OpKind::UndoOp, "git-undo"),
         "clean" => {
-            // 无 -f 时 git clean 仅预览不删除；有 -f 丢内容
-            if any_prefix("-f") {
+            // 无 -f 时 git clean 仅预览不删除；组合短开关/长开关同样丢内容
+            if has_short('f') || has("--force") {
                 Classified::ask(OpKind::UndoOp, "git-undo")
             } else {
                 Classified::new(OpKind::FileWriteOp, TargetMode::None)
@@ -594,8 +596,21 @@ fn classify_reg(tokens: &[Token]) -> Classified {
 
 /// 解释器特判（M3-A 设计 §4 解释器/代码执行规约）。
 fn classify_interpreter(name: &str, tokens: &[Token]) -> Option<Classified> {
-    let second = tokens
+    // python/bash 的 -v/--verbose 可以出现在脚本前；此时按脚本执行分类，
+    // 避免“版本探测只允许唯一参数”后误伤正常脚本调用。
+    let mut arg_index = 1;
+    let first_arg = tokens
         .get(1)
+        .map(|t| t.value.to_lowercase())
+        .unwrap_or_default();
+    if matches!(name, "python" | "python3" | "bash" | "sh")
+        && matches!(first_arg.as_str(), "-v" | "--verbose")
+        && tokens.get(2).is_some_and(|t| !t.value.starts_with('-'))
+    {
+        arg_index = 2;
+    }
+    let second = tokens
+        .get(arg_index)
         .map(|t| t.value.to_lowercase())
         .unwrap_or_default();
     match name {

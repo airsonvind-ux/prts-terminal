@@ -674,9 +674,14 @@ fn git_undo_network_ask() {
     assert_ask(&eval("git reset --hard HEAD", None, &ws), "git-undo");
     assert_ask(&eval("git clean -f", None, &ws), "git-undo");
     assert_ask(&eval("git clean -fd", None, &ws), "git-undo");
+    assert_ask(&eval("git clean -xdf", None, &ws), "git-undo");
+    assert_ask(&eval("git clean -df", None, &ws), "git-undo");
+    assert_ask(&eval("git clean --force", None, &ws), "git-undo");
     assert_ask(&eval("git checkout -f main", None, &ws), "git-undo");
+    assert_ask(&eval("git checkout --force main", None, &ws), "git-undo");
     assert_ask(&eval("git branch -d old", None, &ws), "git-undo");
     assert_ask(&eval("git branch -D old", None, &ws), "git-undo");
+    assert_ask(&eval("git branch --delete old", None, &ws), "git-undo");
     assert_ask(&eval("git push", None, &ws), "network-op");
     assert_ask(&eval("git push origin main", None, &ws), "network-op");
     assert_ask(&eval("git fetch origin", None, &ws), "network-op");
@@ -691,6 +696,45 @@ fn git_undo_network_ask() {
     );
     assert_ask(&eval("git rebase main", None, &ws), "git-undo");
     assert_ask(&eval("git stash drop", None, &ws), "git-undo");
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn delete_aliases_ask() {
+    let ws = ws_fixture("alias");
+    assert_ask(&eval("ri a.txt", None, &ws), "delete-always-ask");
+    assert_ask(&eval("clc a.txt", None, &ws), "delete-always-ask");
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn version_probe_does_not_short_circuit_code_or_install() {
+    let ws = ws_fixture("probe");
+    assert_ask(
+        &eval("python -v -c \"print(1)\"", None, &ws),
+        "unlisted-option",
+    );
+    assert_ask(&eval("node -v -e \"1\"", None, &ws), "unlisted-option");
+    assert_ask(
+        &eval("powershell -v -Command \"echo 1\"", None, &ws),
+        "unlisted-option",
+    );
+    assert_ask(&eval("npm -v install", None, &ws), "install-op");
+    let _ = std::fs::remove_dir_all(&ws);
+}
+
+#[test]
+fn benign_script_and_git_forms_stay_auto() {
+    let ws = ws_fixture("benign");
+    assert_auto(&eval("python script.py", None, &ws), "no-risk-family");
+    assert_auto(&eval("python -v script.py", None, &ws), "no-risk-family");
+    assert_auto(&eval("node script.js", None, &ws), "no-risk-family");
+    assert_auto(
+        &eval("powershell -File script.ps1", None, &ws),
+        "no-risk-family",
+    );
+    assert_auto(&eval("git clean", None, &ws), "no-risk-family");
+    assert_auto(&eval("git clean -n", None, &ws), "no-risk-family");
     let _ = std::fs::remove_dir_all(&ws);
 }
 

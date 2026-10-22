@@ -169,8 +169,10 @@ const DELETE_WORDS: &[&str] = &[
     "rm",
     "rd",
     "rmdir",
+    "ri",
     "remove-item",
     "remove-itemproperty",
+    "clc",
     "clear-content",
     "clear-recyclebin",
 ];
@@ -233,8 +235,10 @@ fn command_spec(name: &str) -> Option<ProgramSpec> {
         | "rm"
         | "rd"
         | "rmdir"
+        | "ri"
         | "remove-item"
         | "remove-itemproperty"
+        | "clc"
         | "clear-content" => strict(OpKind::FileDeleteOp, PathRule::NoPaths),
 
         // ── 网络族（ASK network-op）──
