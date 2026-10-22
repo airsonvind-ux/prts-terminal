@@ -37,6 +37,10 @@ export function SettingsPanel() {
     handleChooseEmulatorDir,
     handleChooseAdbFile,
     handleInstallSkill,
+    pendingSkillInstall,
+    installingSkill,
+    handleConfirmSkillInstall,
+    handleCancelSkillInstall,
     handleRemoveSkill,
     switchTab,
   } = useSettingsPanel();
@@ -118,6 +122,10 @@ export function SettingsPanel() {
               busy={settingsBusy}
               onInstallFile={() => handleInstallSkill("file")}
               onInstallFolder={() => handleInstallSkill("folder")}
+              pendingInstall={pendingSkillInstall?.preview ?? null}
+              installing={installingSkill}
+              onConfirmInstall={handleConfirmSkillInstall}
+              onCancelInstall={handleCancelSkillInstall}
               onRemove={handleRemoveSkill}
             />
           )}

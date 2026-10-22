@@ -195,6 +195,53 @@ pub fn license_path() -> PathBuf {
     }
 }
 
+/// bridge 的 AGPL 许可证全文（随包资源）。
+///
+/// 开发构建 = 仓库根 `bridge/LICENSE`；发布构建 = 程序目录下
+/// `LICENSES/bridge-AGPL-3.0.txt`（`bundle.resources` 的映射目标）。
+pub fn bridge_license_path() -> PathBuf {
+    if is_dev() {
+        resource_root().join("..").join("bridge").join("LICENSE")
+    } else {
+        resource_root().join("LICENSES").join("bridge-AGPL-3.0.txt")
+    }
+}
+
+/// 第三方组件与随包内容声明（随包资源）。
+///
+/// 开发构建 = 仓库根 `THIRD_PARTY_NOTICES.md`；发布构建 = 程序目录下
+/// `THIRD_PARTY_NOTICES.md`。
+pub fn third_party_notices_path() -> PathBuf {
+    if is_dev() {
+        resource_root().join("..").join("THIRD_PARTY_NOTICES.md")
+    } else {
+        resource_root().join("THIRD_PARTY_NOTICES.md")
+    }
+}
+
+/// 数据工件清单（随包资源；与 `arknights.db` 同目录）。
+///
+/// 开发构建 = `src-tauri/resources/DATA_MANIFEST.json`；发布构建 = 程序目录下
+/// `DATA_MANIFEST.json`（`bundle.resources` 的映射目标）。
+pub fn data_manifest_path() -> PathBuf {
+    if is_dev() {
+        resource_root().join("resources").join("DATA_MANIFEST.json")
+    } else {
+        resource_root().join("DATA_MANIFEST.json")
+    }
+}
+
+/// 数据与内容声明（随包资源）。
+///
+/// 开发构建 = 仓库根 `DATA_NOTICE.md`；发布构建 = 程序目录下 `DATA_NOTICE.md`。
+pub fn data_notice_path() -> PathBuf {
+    if is_dev() {
+        resource_root().join("..").join("DATA_NOTICE.md")
+    } else {
+        resource_root().join("DATA_NOTICE.md")
+    }
+}
+
 // ═══════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════
@@ -235,6 +282,29 @@ mod tests {
             license_path().starts_with(resource_root().parent().unwrap()),
             "开发构建的 LICENSE 应取仓库根那份"
         );
+    }
+
+    #[test]
+    fn bridge_license_and_notices_target_repo_files_in_dev() {
+        assert_eq!(
+            bridge_license_path().file_name().unwrap().to_string_lossy(),
+            "LICENSE"
+        );
+        assert_eq!(
+            third_party_notices_path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            "THIRD_PARTY_NOTICES.md"
+        );
+        #[cfg(debug_assertions)]
+        {
+            assert!(bridge_license_path().exists(), "bridge/LICENSE 应存在");
+            assert!(
+                third_party_notices_path().exists(),
+                "THIRD_PARTY_NOTICES.md 应存在"
+            );
+        }
     }
 
     #[test]

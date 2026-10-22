@@ -51,14 +51,28 @@ mod tests {
 
     #[test]
     fn read_license_returns_full_text_in_dev() {
-        // 开发构建下应能读到仓库根的 LICENSE 全文（不是简短声明）
-        let text = read_license().expect("开发构建的 LICENSE 应可读");
-        assert!(text.contains("Apache License"), "应是 Apache 许可证");
+        // 开发构建下应能读到核心、bridge 与第三方声明（不是简短声明）
+        let sections = read_license().expect("开发构建的许可证文件应可读");
+        assert_eq!(sections.len(), 3, "应返回核心、bridge、第三方三段");
+        assert_eq!(sections[0].id, "core");
+        assert!(sections[0].text.contains("Apache License"));
+        assert_eq!(sections[1].id, "bridge");
+        assert!(sections[1]
+            .text
+            .contains("GNU AFFERO GENERAL PUBLIC LICENSE"));
+        assert_eq!(sections[2].id, "third-party");
+        assert!(sections[2].text.contains("Third-Party Notices"));
         assert!(
-            text.len() > 5000,
-            "应是全文而非简短声明，实际 {} 字节",
-            text.len()
+            sections.iter().map(|s| s.text.len()).sum::<usize>() > 40000,
+            "应是全文而非简短声明"
         );
+    }
+
+    #[test]
+    fn read_data_notice_returns_bundled_notice() {
+        let text = read_data_notice().expect("开发构建的数据声明应可读");
+        assert!(text.contains("非官方"));
+        assert!(text.contains("CC BY-NC-SA 4.0"));
     }
 
     fn exp_entry(id: &str, ts: u64, title: &str) -> crate::memory::schema::ExperienceEntry {
@@ -162,6 +176,9 @@ mod tests {
             description: "d".into(),
             file_path: Some("F:/skills/数值计算.md".into()),
             source: Some("builtin".into()),
+            trust: "trusted".into(),
+            package_hash: Some("fnv1a64:0".into()),
+            resource_dir: None,
         };
         let v = serde_json::to_value(&entry).unwrap();
         assert!(
@@ -183,6 +200,9 @@ mod tests {
             Some("builtin"),
             "source 应原样透出（前端据此显示来源与删除门控）"
         );
+        assert_eq!(v.get("trust").and_then(|x| x.as_str()), Some("trusted"));
+        assert!(v.get("packageHash").is_some());
+        assert!(v.get("resourceDir").map(|x| x.is_null()).unwrap_or(true));
     }
 
     #[test]

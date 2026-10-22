@@ -22,6 +22,10 @@ export interface Settings {
   maa: MaaSettings;
   workspace: WorkspaceSettings;
   window: WindowSettings;
+  /** 实验段（C-lite 历史模式等；旧后端缺省）。 */
+  experimental?: {
+    backend_history?: "legacy" | "shadow" | "primary";
+  };
 }
 
 // ── MAA 段（settings.json 的 maa 段；snake_case 对齐后端 MaaSettings）──
@@ -251,10 +255,19 @@ export interface AppMeta {
   /** 默认工作区路径（主目录下的 PRTS-WorkSpace）：恒定，与设置无关。 */
   defaultWorkspaceRoot: string;
   dbPath: string;
+  /** 当前运行时数据库的 meta；旧库或读取失败时为 null。 */
+  dbMeta?: {
+    dataVersion: string;
+    generatedAt: string;
+    sourceCommit: string;
+    schemaVersion: number;
+  } | null;
   knowledgeDir: string;
   skillsDir: string;
   /** 《使用说明》文档路径（随包资源；关于页入口用）。 */
   userGuidePath: string;
+  /** 数据与内容声明路径（随包资源）。 */
+  dataNoticePath?: string;
 }
 
 /** list_skills / open_path 载荷（技能页技能清单；来源 skills md frontmatter）
@@ -269,6 +282,28 @@ export interface SkillEntry {
   filePath?: string | null;
   /** 来源分层（后端 frontmatter source 原样透出；"builtin" = 内置，其余视为用户） */
   source?: string | null;
+  /** R-29 信任级别；旧后端无此字段时按 trusted 展示 */
+  trust?: "trusted" | "untrusted";
+  /** 包指纹（FNV-1a 64；单文件为文件内容指纹） */
+  packageHash?: string | null;
+  /** 技能包根目录（单 `.md` = null） */
+  resourceDir?: string | null;
+}
+
+/** 安装预览：脚本文件清单（R-29） */
+export interface SkillScriptFile {
+  path: string;
+  sizeBytes: number;
+}
+
+/** 安装预览结果（preview_skill_source） */
+export interface SkillPreview {
+  name: string;
+  description: string;
+  source?: string | null;
+  trust: "trusted" | "untrusted";
+  packageHash: string;
+  scripts: SkillScriptFile[];
 }
 
 /** 空间页 · 工作区树节点（list_workspace_dir 载荷；字段对齐 Rust camelCase） */

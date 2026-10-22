@@ -1,8 +1,9 @@
 // 设置页 · "关于"子页
 //
-// 三段式：应用身份 / 更新控制台 / 随包资源。
+// 四段式：应用身份 / 更新控制台 / 数据 / 随包资源。
 // - 应用：图标、名称、版本居中，作为页首落款，不承载操作。
 // - 更新：一条状态线 + 按阶段替换的动作；错误就地显示，不弹窗。
+// - 数据：数据日期与声明入口，不展示内部版本号或哈希。
 // - 资源：使用说明与许可证，低频入口后置。
 //
 // version 与 userGuidePath 都来自 get_app_meta（静态事实，面板挂载时拉一次）。
@@ -23,25 +24,60 @@ export interface SettingsAboutProps {
   meta: AppMeta | null;
 }
 
+/** read_license 返回的一段许可证文档。 */
+interface LicenseSection {
+  id: string;
+  title: string;
+  license: string;
+  text: string;
+}
+
 export function SettingsAbout({ meta }: SettingsAboutProps) {
   const updater = useUpdaterStore((s) => s.status);
   const updaterAction = useUpdaterStore((s) => s.action);
   const updaterError = useUpdaterStore((s) => s.actionError);
   const blockers = useUpdaterStore((s) => s.blockers);
 
-  // ── 许可证全文：默认折叠；展开时才读随包文件，成功即缓存，失败可重试 ──
+  // ── 许可证与第三方声明：外层入口默认折叠；展开时才读随包文件，成功即缓存 ──
+  // 内层再按核心 / bridge / 第三方分段折叠，避免把三份文档铺成一面墙。
   const [licenseOpen, setLicenseOpen] = useState(false);
-  const [licenseText, setLicenseText] = useState<string | null>(null);
+  const [licenseSections, setLicenseSections] = useState<LicenseSection[] | null>(
+    null
+  );
+  const [openLicenseId, setOpenLicenseId] = useState<string | null>(null);
   const [licenseError, setLicenseError] = useState("");
+
+  // ── 数据与内容声明：同样按需读取，展开后缓存 ──
+  const [dataNoticeOpen, setDataNoticeOpen] = useState(false);
+  const [dataNoticeText, setDataNoticeText] = useState<string | null>(null);
+  const [dataNoticeError, setDataNoticeError] = useState("");
 
   const toggleLicense = () => {
     const next = !licenseOpen;
     setLicenseOpen(next);
-    if (next && licenseText === null) {
+    if (!next) {
+      setOpenLicenseId(null);
+    }
+    if (next && licenseSections === null) {
       setLicenseError("");
-      invoke<string>("read_license")
-        .then((t) => setLicenseText(t))
+      invoke<LicenseSection[]>("read_license")
+        .then((sections) => setLicenseSections(sections))
         .catch((e: unknown) => setLicenseError(String(e)));
+    }
+  };
+
+  const toggleLicenseSection = (id: string) => {
+    setOpenLicenseId((current) => (current === id ? null : id));
+  };
+
+  const toggleDataNotice = () => {
+    const next = !dataNoticeOpen;
+    setDataNoticeOpen(next);
+    if (next && dataNoticeText === null) {
+      setDataNoticeError("");
+      invoke<string>("read_data_notice")
+        .then((text) => setDataNoticeText(text))
+        .catch((e: unknown) => setDataNoticeError(String(e)));
     }
   };
 
@@ -188,6 +224,45 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
         )}
       </SettingsSection>
 
+      <SettingsSection title="数据">
+        {meta?.dbMeta && (
+          <div className={styles.dataRow}>
+            <span className={styles.dataLabel}>数据更新至</span>
+            <span className={styles.dataValue}>
+              {meta.dbMeta.dataVersion}
+            </span>
+          </div>
+        )}
+
+        <div className={styles.resourceRow}>
+          <div className={styles.resourceText}>
+            <span className={styles.resourceLabel}>数据与内容声明</span>
+            <span className={styles.resourceHint}>
+              数据来源、许可与非官方说明
+            </span>
+          </div>
+          <button
+            className={styles.resourceBtn}
+            onClick={toggleDataNotice}
+            aria-expanded={dataNoticeOpen}
+            aria-label={
+              dataNoticeOpen ? "收起数据与内容声明" : "查看数据与内容声明"
+            }
+          >
+            {dataNoticeOpen ? "收起" : "查看"}
+          </button>
+        </div>
+
+        {dataNoticeOpen &&
+          (dataNoticeError ? (
+            <div className={styles.licenseError}>{dataNoticeError}</div>
+          ) : dataNoticeText === null ? (
+            <div className={styles.licenseLoading}>读取中…</div>
+          ) : (
+            <pre className={styles.dataNoticeText}>{dataNoticeText}</pre>
+          ))}
+      </SettingsSection>
+
       <SettingsSection title="资源">
         <div className={styles.resourceRow}>
           <div className={styles.resourceText}>
@@ -209,8 +284,10 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
 
         <div className={styles.resourceRow}>
           <div className={styles.resourceText}>
-            <span className={styles.resourceLabel}>许可证</span>
-            <span className={styles.resourceHint}>Apache License 2.0</span>
+            <span className={styles.resourceLabel}>许可证与第三方声明</span>
+            <span className={styles.resourceHint}>
+              Apache 2.0 · AGPL 3.0 · 第三方组件
+            </span>
           </div>
           <button
             className={styles.resourceBtn}
@@ -225,10 +302,44 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
         {licenseOpen &&
           (licenseError ? (
             <div className={styles.licenseError}>{licenseError}</div>
-          ) : licenseText === null ? (
+          ) : licenseSections === null ? (
             <div className={styles.licenseLoading}>读取中…</div>
           ) : (
-            <pre className={styles.licenseText}>{licenseText}</pre>
+            <div className={styles.licenseSections}>
+              {licenseSections.map((section) => {
+                const expanded = openLicenseId === section.id;
+                return (
+                  <div className={styles.licenseSection} key={section.id}>
+                    <button
+                      type="button"
+                      className={styles.licenseSectionHead}
+                      onClick={() => toggleLicenseSection(section.id)}
+                      aria-expanded={expanded}
+                      aria-label={
+                        expanded
+                          ? `收起${section.title}`
+                          : `展开${section.title}`
+                      }
+                    >
+                      <span className={styles.licenseSectionTitle}>
+                        {section.title}
+                      </span>
+                      <span className={styles.licenseSectionMeta}>
+                        {section.license}
+                      </span>
+                      <span className={styles.licenseSectionAction}>
+                        {expanded ? "收起" : "展开"}
+                      </span>
+                    </button>
+                    {expanded && (
+                      <pre className={styles.licenseSectionText}>
+                        {section.text}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ))}
       </SettingsSection>
     </div>

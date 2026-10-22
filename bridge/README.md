@@ -11,7 +11,7 @@ PRTS 与 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)�
 
 ## 许可
 
-**AGPL-3.0-or-later**。
+**AGPL-3.0-or-later**。全文见 [`LICENSE`](LICENSE)。
 
 桥因运行时链接 `MaaCore`（AGPL-3.0）而成为 AGPL 组件。这是本仓库中**唯一**带 AGPL 标签的部分；PRTS 核心保持原许可，二者只经进程间通信（IPC）交互，属「聚合」而非「合成作品」。
 

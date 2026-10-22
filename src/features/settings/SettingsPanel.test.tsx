@@ -633,12 +633,24 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
         return Promise.resolve(SKILL_FIXTURE);
       }
       if (cmd === "pick_skill_file") return Promise.resolve("F:/picked/新技能.md");
+      if (cmd === "preview_skill_source")
+        return Promise.resolve({
+          name: "新技能",
+          description: "来自文件",
+          source: null,
+          trust: "trusted",
+          packageHash: "fnv1a64:0",
+          scripts: [],
+        });
       if (cmd === "install_skill")
         return Promise.resolve({
           name: "新技能",
           description: "来自文件",
           filePath: "C:/fake/skills/新技能.md",
           source: null,
+          trust: "trusted",
+          packageHash: "fnv1a64:0",
+          resourceDir: null,
         });
       return Promise.resolve(undefined);
     });
@@ -657,12 +669,75 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
 
     const installCalls = __invokeMock.mock.calls.filter((c) => c[0] === "install_skill");
     expect(installCalls).toHaveLength(1);
-    expect((installCalls[0][1] as { sourcePath: string }).sourcePath).toBe(
-      "F:/picked/新技能.md"
-    );
+    const installArgs = installCalls[0][1] as {
+      sourcePath: string;
+      confirmScripts: boolean;
+    };
+    expect(installArgs.sourcePath).toBe("F:/picked/新技能.md");
+    expect(installArgs.confirmScripts).toBe(false);
     expect(listCalls).toBeGreaterThanOrEqual(2); // 挂载 + 安装后刷新
     const toasts = useToastStore.getState().toasts;
     expect(toasts.some((t) => t.message.includes("已安装技能「新技能」"))).toBe(true);
+  });
+
+  it("安装含脚本技能：先列清单，确认后才调用 install_skill", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+      if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
+      if (cmd === "pick_skill_folder") return Promise.resolve("F:/picked/脚本包");
+      if (cmd === "preview_skill_source")
+        return Promise.resolve({
+          name: "脚本包",
+          description: "含脚本",
+          source: "community",
+          trust: "untrusted",
+          packageHash: "fnv1a64:1",
+          scripts: [{ path: "run.ps1", sizeBytes: 13 }],
+        });
+      if (cmd === "install_skill")
+        return Promise.resolve({
+          name: "脚本包",
+          description: "含脚本",
+          filePath: "C:/fake/skills/脚本包/SKILL.md",
+          source: "community",
+          trust: "untrusted",
+          packageHash: "fnv1a64:1",
+          resourceDir: "C:/fake/skills/脚本包",
+        });
+      return Promise.resolve(undefined);
+    });
+    renderPanel();
+    await flush();
+    clickTab("skills");
+
+    const btn = Array.from(container!.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("安装技能文件夹")
+    )!;
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    expect(container!.textContent).toContain("包含可执行/脚本文件");
+    expect(container!.textContent).toContain("run.ps1");
+    expect(
+      __invokeMock.mock.calls.filter((c) => c[0] === "install_skill")
+    ).toHaveLength(0);
+
+    const confirm = Array.from(container!.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("仍要安装")
+    )!;
+    act(() => {
+      confirm.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    await flush();
+
+    const installCalls = __invokeMock.mock.calls.filter((c) => c[0] === "install_skill");
+    expect(installCalls).toHaveLength(1);
+    expect((installCalls[0][1] as { confirmScripts: boolean }).confirmScripts).toBe(true);
+    expect(container!.textContent).not.toContain("包含可执行/脚本文件");
   });
 
   it("安装取消（选择器返回 null）：不调用 install_skill", async () => {
@@ -693,6 +768,15 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
       if (cmd === "get_settings") return Promise.resolve(defaultSettings());
       if (cmd === "list_skills") return Promise.resolve(SKILL_FIXTURE);
       if (cmd === "pick_skill_file") return Promise.resolve("F:/picked/重名.md");
+      if (cmd === "preview_skill_source")
+        return Promise.resolve({
+          name: "重名",
+          description: "d",
+          source: null,
+          trust: "trusted",
+          packageHash: "fnv1a64:0",
+          scripts: [],
+        });
       if (cmd === "install_skill")
         return Promise.reject("与现有技能重名：「数值计算」。请先移除旧条目");
       return Promise.resolve(undefined);

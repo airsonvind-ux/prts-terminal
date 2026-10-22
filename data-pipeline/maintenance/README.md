@@ -59,10 +59,10 @@ enemies → stages → enemy_name_map（按需）→ operators → tokens → tr
 
 ### 1. 同步数据源
 
-数据源是浅克隆，位于 `data-pipeline/data-source/ArknightsGameData`：
+数据源是浅克隆，位于仓库根目录的 `data-source/ArknightsGameData`：
 
 ```powershell
-cd data-pipeline\data-source\ArknightsGameData
+cd data-source\ArknightsGameData
 git fetch --depth 1 origin master
 git reset --hard FETCH_HEAD
 git log -1 --format="%h %cs"
@@ -98,11 +98,28 @@ git log -1 --format="%h %cs"
 
 ```powershell
 cd data-pipeline\maintenance\tools
-python push.py --dry-run   # 先看两边行数
-python push.py
+python push.py --dry-run --data-version 2026.10.18 --source-commit <数据源提交>
+python push.py --data-version 2026.10.18 --source-commit <数据源提交>
 ```
 
-`push.py` 只推数据库种子。五张 JSON 表由各自脚本直接写进 `src-tauri/resources/`，不需要推送。
+`push.py` 只推数据库种子，并在发布副本里写入 `meta` 表、生成
+`src-tauri/resources/DATA_MANIFEST.json`。`--data-version` 必填，格式
+`YYYY.MM.DD[.N]`；`--source-commit` 填数据源提交或维护快照标识。
+
+数据源不在本机时，用明确的快照标识并补 `--source-note`，不要让
+`sourceCommit` 成为无法解释的孤立值。
+
+推送后跑发布库的 data-contract，再把结果写回清单：
+
+```powershell
+cd ..\..\..
+.\scripts\data-contract.ps1
+python data-pipeline\maintenance\tools\push.py --manifest-only `
+  --data-contract-status passed --data-contract-passed 1252 `
+  --data-contract-ignored 21 --source-note "<与推送时一致>"
+```
+
+五张 JSON 表由各自脚本直接写进 `src-tauri/resources/`，不需要推送。
 
 ## 五、运行后会留下什么
 

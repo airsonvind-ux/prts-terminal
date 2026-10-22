@@ -118,6 +118,20 @@ pub fn get_settings(
     Ok(out)
 }
 
+/// 当前生效的会话历史模式（C-lite；env 覆盖 settings）。前端据此决定是否
+/// 发送完整 history。返回值：`legacy` / `shadow` / `primary`。
+#[tauri::command]
+pub fn get_backend_history_mode(
+    store: State<'_, Arc<Mutex<SettingsStore>>>,
+) -> Result<String, String> {
+    let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+    Ok(match s.settings.backend_history_mode() {
+        crate::settings::BackendHistoryMode::Legacy => "legacy".into(),
+        crate::settings::BackendHistoryMode::Shadow => "shadow".into(),
+        crate::settings::BackendHistoryMode::Primary => "primary".into(),
+    })
+}
+
 /// 引导「已看过」键集（界面态，只读；不设闸）。见 `settings::UiSection`。
 #[tauri::command]
 pub fn get_guide_seen(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<Vec<String>, String> {
@@ -413,30 +427,52 @@ pub fn get_boot_status(
 /// 当前生效工作区由前端自算：设置值非空则用它，否则用默认工作区。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DbMetaInfo {
+    pub data_version: String,
+    pub generated_at: String,
+    pub source_commit: String,
+    pub schema_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppMeta {
     pub version: &'static str,
     pub data_dir: String,
     /// 默认工作区路径（`<主目录>/PRTS-WorkSpace`）：恒定的，与设置无关。
     pub default_workspace_root: String,
     pub db_path: String,
+    /// 当前运行时数据库的 meta；旧库或读取失败时为 None。
+    pub db_meta: Option<DbMetaInfo>,
     pub knowledge_dir: String,
     pub skills_dir: String,
     /// 《使用说明》文档路径（随包资源）。
     pub user_guide_path: String,
+    /// 数据与内容声明路径（随包资源）。
+    pub data_notice_path: String,
 }
 
 #[tauri::command]
 pub fn get_app_meta(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<AppMeta, String> {
     let st = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
+    let db_path = crate::config::resolve_db_path();
+    let db_meta = crate::db_seed::read_meta(&db_path)
+        .ok()
+        .flatten()
+        .map(|meta| DbMetaInfo {
+            data_version: meta.data_version,
+            generated_at: meta.generated_at,
+            source_commit: meta.source_commit,
+            schema_version: meta.schema_version,
+        });
     Ok(AppMeta {
         version: env!("CARGO_PKG_VERSION"),
         data_dir: st.data_dir().to_string_lossy().into_owned(),
         default_workspace_root: crate::config::default_workspace_path()
             .to_string_lossy()
             .into_owned(),
-        db_path: crate::config::resolve_db_path()
-            .to_string_lossy()
-            .into_owned(),
+        db_path: db_path.to_string_lossy().into_owned(),
+        db_meta,
         knowledge_dir: crate::knowledge::index::knowledge_dir()
             .to_string_lossy()
             .into_owned(),
@@ -445,6 +481,9 @@ pub fn get_app_meta(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<AppMe
             .into_owned(),
         user_guide_path: crate::config::bundled_docs_dir()
             .join("使用说明.md")
+            .to_string_lossy()
+            .into_owned(),
+        data_notice_path: crate::config::data_notice_path()
             .to_string_lossy()
             .into_owned(),
     })

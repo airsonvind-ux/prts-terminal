@@ -12,3 +12,5 @@
 - MAA 独立桥进程（AGPL）与可选集成
 - 签名更新：Gitee 主源、GitHub 兜底、磁盘预检与失败阶段区分
 - 上下文指示器按 `step/end` 实时更新
+- 关于页可查看核心 Apache-2.0、bridge AGPL-3.0 与第三方声明
+- 数据工件带 `meta`（dataVersion/generatedAt/sourceCommit/schemaVersion）与 `DATA_MANIFEST.json`（SHA-256、data-contract 结果）；`db_seed` 按 dataVersion 替换运行时库

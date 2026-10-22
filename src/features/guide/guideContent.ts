@@ -149,7 +149,7 @@ export const GUIDE_ITEMS: Record<string, GuideItem> = {
   "settings.about": {
     form: "notice",
     surface: "settings",
-    body: "PRTS应用的基本信息与更新管理。",
+    body: "PRTS应用的基本信息、数据版本与更新管理。",
   },
 
   // ── 首次出现型（元素真的出现，且本轮生成已结束、界面空闲） ──

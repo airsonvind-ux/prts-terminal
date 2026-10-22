@@ -124,6 +124,27 @@ fn precheck_install_surface() {
     let seed = config::db_seed_path();
     if !seed.is_file() {
         missing.push(format!("数据库初始副本：{}", seed.display()));
+    } else {
+        match crate::db_seed::read_meta(&seed) {
+            Ok(Some(_)) => {}
+            Ok(None) => missing.push(format!(
+                "数据库 meta 表（dataVersion/schemaVersion）：{}",
+                seed.display()
+            )),
+            Err(error) => missing.push(error),
+        }
+    }
+    if !config::data_manifest_path().is_file() {
+        missing.push(format!(
+            "数据工件清单：{}",
+            config::data_manifest_path().display()
+        ));
+    }
+    if !config::data_notice_path().is_file() {
+        missing.push(format!(
+            "数据与内容声明：{}",
+            config::data_notice_path().display()
+        ));
     }
     if crate::maa::bridge::resolve_exe().is_err() {
         missing.push("MAA 桥可执行文件：prts-maa-bridge.exe".to_string());
@@ -528,7 +549,24 @@ pub fn run() {
     let steer_queue = Arc::new(SteerQueue::new());
 
     // ── 装配 Tauri Builder ──
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // 单实例闸必须在其它插件之前：第二实例要在其余初始化和文件写入前被拦截。
+    // 回调把已有主窗口还原、显示并聚焦。
+    // dev/HMR 只重载前端，不会重启 Rust 进程，因此不会被误判；dev 与 release
+    // 共用 identifier 时，后启动者会让位给已运行的那个（插件按 identifier 识别）。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // 应用内更新：插件只提供清单检查、签名校验与安装能力；
@@ -609,6 +647,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::agent_process,
             commands::get_settings,
+            commands::get_backend_history_mode,
             commands::get_guide_seen,
             commands::mark_guide_seen,
             commands::set_settings,
@@ -628,10 +667,13 @@ pub fn run() {
             commands::list_skills,
             commands::pick_skill_file,
             commands::pick_skill_folder,
+            commands::preview_skill_source,
             commands::install_skill,
             commands::remove_skill,
             commands::open_path,
             commands::read_license,
+            commands::read_data_notice,
+            commands::read_data_manifest,
             commands::open_url,
             commands::set_always_on_top,
             commands::choose_workspace_directory,

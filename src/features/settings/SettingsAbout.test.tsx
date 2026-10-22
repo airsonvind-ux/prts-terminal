@@ -1,12 +1,5 @@
 // @vitest-environment jsdom
-// SettingsAbout · 关于页（应用身份 + 更新控制台 + 资源入口）
-//
-// 覆盖：
-//   - 应用节：图标 / 名称 / 版本
-//   - 许可证默认折叠：不请求 read_license
-//   - 展开：请求一次并显示全文；再折叠再展开命中缓存，不重复请求
-//   - 读取失败：就地显示错误，不弹窗
-
+// SettingsAbout: app identity + license sections.
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -19,16 +12,48 @@ import type { AppMeta } from "../../types";
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-const LICENSE_PLACEHOLDER = "Apache License\n\nVersion 2.0, January 2004\n";
+interface LicenseSection {
+  id: string;
+  title: string;
+  license: string;
+  text: string;
+}
+
+const LICENSE_SECTIONS: LicenseSection[] = [
+  {
+    id: "core",
+    title: "核心许可",
+    license: "Apache License 2.0",
+    text: "Apache License\n\nVersion 2.0, January 2004\n",
+  },
+  {
+    id: "bridge",
+    title: "Bridge 许可",
+    license: "AGPL-3.0-or-later",
+    text: "GNU AFFERO GENERAL PUBLIC LICENSE\n",
+  },
+  {
+    id: "third-party",
+    title: "第三方声明",
+    license: "组件与随包内容",
+    text: "Third-Party Notices\n",
+  },
+];
 
 const META: AppMeta = {
   version: "0.1.0",
   dataDir: "C:/tmp/.prts-dev",
   defaultWorkspaceRoot: "C:/tmp/PRTS-WorkSpace",
   dbPath: "C:/tmp/.prts-dev/arknights.db",
+  dbMeta: {
+    dataVersion: "2026.10.18",
+    generatedAt: "2026-10-22T05:11:04Z",
+    sourceCommit: "bee3f83",
+    schemaVersion: 1,
+  },
   knowledgeDir: "C:/tmp/resources/knowledge",
   skillsDir: "C:/tmp/resources/skills",
-  userGuidePath: "C:/tmp/resources/docs/使用说明.md",
+  userGuidePath: "C:/tmp/resources/docs/guide.md",
 };
 
 function renderAbout(meta: AppMeta | null = META): void {
@@ -47,7 +72,15 @@ function licenseToggle(): HTMLButtonElement {
   const btn = container.querySelector(
     'button[aria-label="查看许可证"], button[aria-label="收起许可证"]'
   );
-  if (!btn) throw new Error("未找到许可证折叠行");
+  if (!btn) throw new Error("license toggle not found");
+  return btn as HTMLButtonElement;
+}
+
+function sectionToggle(title: string): HTMLButtonElement {
+  const btn = container.querySelector(
+    `button[aria-label="展开${title}"], button[aria-label="收起${title}"]`
+  );
+  if (!btn) throw new Error(`license section toggle not found: ${title}`);
   return btn as HTMLButtonElement;
 }
 
@@ -66,7 +99,10 @@ beforeEach(() => {
   root = createRoot(container);
   __invokeMock.mockReset();
   __invokeMock.mockImplementation((cmd: string) => {
-    if (cmd === "read_license") return Promise.resolve(LICENSE_PLACEHOLDER);
+    if (cmd === "read_license") return Promise.resolve(LICENSE_SECTIONS);
+    if (cmd === "read_data_notice") {
+      return Promise.resolve("数据与内容声明\n\n非官方数据工件。");
+    }
     return Promise.resolve(undefined);
   });
 });
@@ -76,8 +112,8 @@ afterEach(() => {
   container.remove();
 });
 
-describe("SettingsAbout · 应用身份", () => {
-  it("图标、名称、版本居中显示", async () => {
+describe("SettingsAbout · app identity", () => {
+  it("shows icon, name and version", async () => {
     renderAbout();
     await flush();
 
@@ -89,37 +125,74 @@ describe("SettingsAbout · 应用身份", () => {
   });
 });
 
-describe("SettingsAbout · 许可证块", () => {
-  it("默认折叠：不请求 read_license，页面上没有全文", async () => {
+describe("SettingsAbout · data", () => {
+  it("shows the data date and loads the notice once", async () => {
     renderAbout();
     await flush();
+
+    expect(container.textContent).toContain("数据更新至");
+    expect(container.textContent).toContain("2026.10.18");
+    expect(container.querySelector("pre")).toBeNull();
+
+    const toggle = container.querySelector(
+      'button[aria-label="查看数据与内容声明"]'
+    ) as HTMLButtonElement;
+    await click(toggle);
+    expect(container.textContent).toContain("非官方数据工件");
+    expect(
+      __invokeMock.mock.calls.filter((c) => c[0] === "read_data_notice")
+    ).toHaveLength(1);
+
+    await click(toggle);
+    expect(container.querySelector("pre")).toBeNull();
+    await click(toggle);
+    expect(
+      __invokeMock.mock.calls.filter((c) => c[0] === "read_data_notice")
+    ).toHaveLength(1);
+  });
+});
+
+describe("SettingsAbout · license sections", () => {
+  it("is collapsed by default and does not request the license", async () => {
+    renderAbout();
+    await flush();
+
     expect(readLicenseCalls()).toBe(0);
     expect(container.querySelector("pre")).toBeNull();
     expect(licenseToggle().getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("展开：请求一次并显示全文；再折叠再展开命中缓存，不重复请求", async () => {
+  it("loads once, then expands each document independently", async () => {
     renderAbout();
     await flush();
 
     await click(licenseToggle());
     expect(readLicenseCalls()).toBe(1);
+    expect(container.textContent).toContain("核心许可");
+    expect(container.textContent).toContain("Bridge 许可");
+    expect(container.textContent).toContain("第三方声明");
+    expect(container.querySelector("pre")).toBeNull();
+
+    await click(sectionToggle("核心许可"));
     expect(container.querySelector("pre")?.textContent).toContain(
       "Apache License"
     );
-    expect(licenseToggle().getAttribute("aria-expanded")).toBe("true");
+    expect(sectionToggle("核心许可").getAttribute("aria-expanded")).toBe(
+      "true"
+    );
 
-    // 折叠再展开：文本已缓存，不应再次请求
+    await click(sectionToggle("核心许可"));
+    expect(container.querySelector("pre")).toBeNull();
+
+    // Collapse and reopen the outer block: cached sections, no second request.
     await click(licenseToggle());
     expect(container.querySelector("pre")).toBeNull();
     await click(licenseToggle());
     expect(readLicenseCalls()).toBe(1);
-    expect(container.querySelector("pre")?.textContent).toContain(
-      "Apache License"
-    );
+    expect(sectionToggle("Bridge 许可")).toBeTruthy();
   });
 
-  it("读取失败：就地显示错误，不弹窗", async () => {
+  it("shows a read error in place without a pre block", async () => {
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "read_license") {
         return Promise.reject("读取许可证文件失败（C:/tmp/LICENSE）：拒绝访问");

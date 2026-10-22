@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "prts.terminal",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:sidecar && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && python src-tauri/build-sidecar.py",
+    "beforeBuildCommand": "npm run build && npm run build:sidecar",
     "frontendDist": "../dist"
   },
   "app": {
@@ -58,10 +58,14 @@
     "publisher": "AirsonVind",
     "resources": {
       "resources/arknights.db": "./",
+      "resources/DATA_MANIFEST.json": "./DATA_MANIFEST.json",
       "content/knowledge/": "resources/knowledge/",
       "content/skills/": "resources/skills/",
       "content/docs/": "resources/docs/",
-      "../LICENSE": "./LICENSE"
+      "../LICENSE": "./LICENSE",
+      "../DATA_NOTICE.md": "./DATA_NOTICE.md",
+      "../bridge/LICENSE": "./LICENSES/bridge-AGPL-3.0.txt",
+      "../THIRD_PARTY_NOTICES.md": "./THIRD_PARTY_NOTICES.md"
     },
     "externalBin": [
       "binaries/prts-maa-bridge"

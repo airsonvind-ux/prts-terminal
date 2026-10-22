@@ -15,6 +15,7 @@ import type {
   Settings,
   SettingsPatch,
   SkillEntry,
+  SkillPreview,
 } from "../../types";
 import {
   isProcessingBusy,
@@ -36,6 +37,12 @@ export function useSettingsPanel() {
   const [appMeta, setAppMeta] = useState<AppMeta | null>(null);
   // 技能清单（技能页；null = 加载中/失败）
   const [skills, setSkills] = useState<SkillEntry[] | null>(null);
+  // 待确认的含脚本技能（选择器已选、预览已有脚本清单；null = 无待确认）
+  const [pendingSkillInstall, setPendingSkillInstall] = useState<{
+    sourcePath: string;
+    preview: SkillPreview;
+  } | null>(null);
+  const [installingSkill, setInstallingSkill] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTabKey>(
     () => useUIStore.getState().settingsInitialTab
   );
@@ -270,7 +277,7 @@ export function useSettingsPanel() {
       .catch((e) => console.error("[settings] list_skills 失败", e));
   }, []);
 
-  /** 技能页「安装」：选择器（文件 / 文件夹）→ install_skill → 刷新 + 可见反馈 */
+  /** 技能页「安装」：选择器 → 只读预览 → 无脚本直接装 / 有脚本先确认 */
   const handleInstallSkill = useCallback(
     async (kind: "file" | "folder") => {
       try {
@@ -278,8 +285,17 @@ export function useSettingsPanel() {
           kind === "file" ? "pick_skill_file" : "pick_skill_folder"
         );
         if (!picked) return; // 用户取消
+        setPendingSkillInstall(null); // 新选择覆盖旧的待确认安装
+        const preview = await invoke<SkillPreview>("preview_skill_source", {
+          sourcePath: picked,
+        });
+        if (preview.scripts.length > 0) {
+          setPendingSkillInstall({ sourcePath: picked, preview });
+          return;
+        }
         const entry = await invoke<SkillEntry>("install_skill", {
           sourcePath: picked,
+          confirmScripts: false,
         });
         showToast(`已安装技能「${entry.name}」`, { kind: "info" });
         refreshSkills();
@@ -289,6 +305,29 @@ export function useSettingsPanel() {
     },
     [refreshSkills]
   );
+
+  /** 含脚本技能：用户已在警告块确认，带 confirmScripts=true 重试安装 */
+  const handleConfirmSkillInstall = useCallback(async () => {
+    if (!pendingSkillInstall || installingSkill) return;
+    setInstallingSkill(true);
+    try {
+      const entry = await invoke<SkillEntry>("install_skill", {
+        sourcePath: pendingSkillInstall.sourcePath,
+        confirmScripts: true,
+      });
+      setPendingSkillInstall(null);
+      showToast(`已安装技能「${entry.name}」`, { kind: "info" });
+      refreshSkills();
+    } catch (e) {
+      showToast(`安装失败：${String(e)}`, { kind: "warning" });
+    } finally {
+      setInstallingSkill(false);
+    }
+  }, [installingSkill, pendingSkillInstall, refreshSkills]);
+
+  const handleCancelSkillInstall = useCallback(() => {
+    if (!installingSkill) setPendingSkillInstall(null);
+  }, [installingSkill]);
 
   /** 技能页「移除」：行内两步确认后调用（内置技能不走到这里） */
   const handleRemoveSkill = useCallback(
@@ -327,6 +366,10 @@ export function useSettingsPanel() {
     handleChooseEmulatorDir,
     handleChooseAdbFile,
     handleInstallSkill,
+    pendingSkillInstall,
+    installingSkill,
+    handleConfirmSkillInstall,
+    handleCancelSkillInstall,
     handleRemoveSkill,
     switchTab,
   };

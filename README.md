@@ -38,13 +38,22 @@ PRTS Terminal 不是聊天壳，而是一个带工具循环的领域 Agent：
 - Windows 10/11 x64
 - Node.js 20+
 - Rust stable（MSVC toolchain）
-- Python 3.11+（只在维护数据管线时需要）
+- Python 3.11+（构建 MAA 桥需要；维护数据管线也需要）
 
 ### 开发
 
 ```powershell
 npm ci
 npm run tauri dev
+```
+
+`npm run tauri dev` 会先按需构建 MAA 桥；桥源码没变时直接复用已有产物。
+
+只跑 Rust 检查时，先构建桥（干净克隆必须做这一步）：
+
+```powershell
+npm run build:sidecar
+cargo test --lib --manifest-path src-tauri/Cargo.toml
 ```
 
 只跑前端：
@@ -63,10 +72,13 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 ### 数据
 
-应用运行时需要 `src-tauri/resources/arknights.db`。这个文件由 `data-pipeline/` 从公开游戏数据与 Wiki 内容生成，不随源码仓库提交。
+应用运行时需要 `src-tauri/resources/arknights.db`。它是维护者生成的发布工件，随安装包分发，不随源码仓库提交，也不承诺从公开源码重建。
+
+发布副本带 `meta` 表（`dataVersion`、`generatedAt`、`sourceCommit`、`schemaVersion`）和 `DATA_MANIFEST.json`（DB SHA-256、`dataVersion`、data-contract 结果）。源码可以无数据构建和跑测试；完整应用与发布包需要维护者提供的 DB。
 
 - 数据更新流程：`data-pipeline/maintenance/README.md`
-- 数据源、建库和推送：`docs/data-pipeline.md`
+- 数据源、工件与推送：`docs/data-pipeline.md`
+- 版本规则：`docs/release-versioning.md`
 
 缺少数据库时，应用会以降级状态启动，查询工具返回明确错误，而不是直接崩溃。
 
@@ -74,6 +86,7 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1
 
 ```powershell
 npm test
+npm run build:sidecar
 cargo test --lib --manifest-path src-tauri/Cargo.toml
 ```
 
@@ -101,8 +114,9 @@ MAA 是可选的。未安装 MAA 时，相关工具报告不可用，应用其�
 ## 许可证
 
 - PRTS 核心：Apache-2.0，见 `LICENSE`
-- `bridge/`：AGPL-3.0-or-later
-- MAA 本体不随本项目分发
+- `bridge/`：AGPL-3.0-or-later，全文见 `bridge/LICENSE`
+- 第三方组件与随包内容：见 `THIRD_PARTY_NOTICES.md`
+- MAA 本体不随本项目分发；bridge 只在运行时加载用户已安装的 MaaCore
 
 ## 参与
 

@@ -82,6 +82,12 @@ pub struct SkillEntry {
     pub file_path: Option<String>,
     /// 来源分层（frontmatter source 原样透出；缺省 = 用户）
     pub source: Option<String>,
+    /// 信任级别（R-29）：trusted / untrusted
+    pub trust: String,
+    /// 包指纹（FNV-1a 64；单文件为文件内容指纹）
+    pub package_hash: Option<String>,
+    /// 技能包根目录（单 `.md` = None）
+    pub resource_dir: Option<String>,
 }
 
 /// 技能清单（空间页技能节只读展示）：name + description，按 name 排序。
@@ -107,6 +113,11 @@ pub(super) fn list_skills_from(dir: &std::path::Path) -> Result<Vec<SkillEntry>,
                 .unwrap_or_default(),
             file_path: idx.path(name).map(|p| p.to_string_lossy().into_owned()),
             source: idx.resolve(name).and_then(|m| m.source.clone()),
+            trust: idx.trust(name).as_str().to_string(),
+            package_hash: idx.package_hash(name).map(str::to_string),
+            resource_dir: idx
+                .resource_dir(name)
+                .map(|p| p.to_string_lossy().into_owned()),
         })
         .collect())
 }
@@ -118,19 +129,73 @@ pub fn is_openable_target(p: &std::path::Path) -> bool {
     p.is_absolute() && p.is_file()
 }
 
-/// 用系统默认应用打开一个文件（tauri-plugin-opener）。
-/// 入参 = 工具卡片/设置页给出的文件绝对路径；校验存在后放行（无白名单）。
-/// 读取随包 LICENSE 全文（关于页“许可证”块展开时调用）。
-///
-/// 薄命令：按解析出的路径读文本，不改写、不缓存。正文永远来自随包文件——
-/// 不在前端硬编码（既有实现的“许可证全文”其实是硬编码的短声明，此处避开）。
-#[tauri::command]
-pub fn read_license() -> Result<String, String> {
-    let path = crate::config::license_path();
-    std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取许可证文件失败（{}）：{e}", path.display()))
+/// 关于页“许可证与第三方声明”的一段许可证文档。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LicenseSection {
+    /// 稳定的段标识（前端展开状态用）。
+    pub id: String,
+    /// 段标题。
+    pub title: String,
+    /// 许可证标识或内容类型。
+    pub license: String,
+    /// 文件全文。
+    pub text: String,
 }
 
+/// 读取随包许可证与第三方声明（关于页“许可证与第三方声明”块展开时调用）。
+///
+/// 返回三段结构化文档，前端按段折叠展示；正文永远来自随包文件，不在前端硬编码。
+/// 薄命令：不改写、不缓存。
+#[tauri::command]
+pub fn read_license() -> Result<Vec<LicenseSection>, String> {
+    let core = crate::config::license_path();
+    let bridge = crate::config::bridge_license_path();
+    let notices = crate::config::third_party_notices_path();
+    let read = |path: &std::path::Path| {
+        std::fs::read_to_string(path)
+            .map_err(|e| format!("读取许可证文件失败（{}）：{e}", path.display()))
+    };
+    Ok(vec![
+        LicenseSection {
+            id: "core".into(),
+            title: "核心许可".into(),
+            license: "Apache License 2.0".into(),
+            text: read(&core)?,
+        },
+        LicenseSection {
+            id: "bridge".into(),
+            title: "Bridge 许可".into(),
+            license: "AGPL-3.0-or-later".into(),
+            text: read(&bridge)?,
+        },
+        LicenseSection {
+            id: "third-party".into(),
+            title: "第三方声明".into(),
+            license: "组件与随包内容".into(),
+            text: read(&notices)?,
+        },
+    ])
+}
+
+/// 读取随包数据与内容声明（关于页数据声明入口用）。
+#[tauri::command]
+pub fn read_data_notice() -> Result<String, String> {
+    let path = crate::config::data_notice_path();
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取数据声明失败（{}）：{e}", path.display()))
+}
+
+/// 读取随包数据工件清单（关于页展示 dataVersion / SHA-256 用）。
+#[tauri::command]
+pub fn read_data_manifest() -> Result<String, String> {
+    let path = crate::config::data_manifest_path();
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取数据清单失败（{}）：{e}", path.display()))
+}
+
+/// 用系统默认应用打开一个文件（tauri-plugin-opener）。
+/// 入参 = 工具卡片/设置页给出的文件绝对路径；校验存在后放行（无白名单）。
 /// 失败 Err 上抛（前端 FileLink 弹可见 toast——点击必有可见结果契约）。
 #[tauri::command]
 pub fn open_path(app: AppHandle, path: String) -> Result<(), String> {

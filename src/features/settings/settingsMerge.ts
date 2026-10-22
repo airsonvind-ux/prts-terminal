@@ -11,7 +11,11 @@ import type { ApiType, Settings, SettingsPatch } from "../../types";
 export const MASKED_SECRET = "********";
 
 export function mergeSettings(cur: Settings, patch: SettingsPatch): Settings {
-  const next: Settings = { ...cur, workspace: { ...cur.workspace }, window: { ...cur.window } };
+  const next: Settings = {
+    ...cur,
+    workspace: { ...cur.workspace },
+    window: { ...cur.window },
+  };
   if (patch.llm) {
     const p = patch.llm;
     const llm: Settings["llm"] = {
