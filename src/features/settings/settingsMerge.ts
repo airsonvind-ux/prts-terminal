@@ -43,7 +43,7 @@ export function mergeSettings(cur: Settings, patch: SettingsPatch): Settings {
         // 掩码占位不覆盖；明文 / 空串都归一成「后端会回给我们的形态」：
         // 非空明文在本地只留掩码。原因有二——① 明文不常驻面板态（诚实镜像
         // get_settings 的掩码下发）；② 「已配 key」这一事实由
-        // api_key === MASKED_SECRET 表达，👁 可用性靠它（曾因本地持明文而
+        // api_key === MASKED_SECRET 表达，复制按钮可用性靠它（曾因本地持明文而
         // 把按钮禁用，2026-10-11 实测 bug）。
         if (pp.api_key !== undefined && pp.api_key !== MASKED_SECRET) {
           entry.api_key = pp.api_key === "" ? "" : MASKED_SECRET;

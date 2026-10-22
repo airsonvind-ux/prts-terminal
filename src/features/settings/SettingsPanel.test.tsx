@@ -908,8 +908,8 @@ describe("mergeSettings · 纯函数", () => {
   });
 
   it("api_key：明文写入在本地归一为掩码；掩码占位不覆盖；空串清除", () => {
-    // 面板态持掩码（明文只在 👁 期间存在）——否则明文常驻，且 👁 会因
-    // "api_key !== 掩码" 被判为无可查看而禁用（2026-10-11 实测 bug）。
+    // 面板态持掩码（完整钥值不回前端）——否则明文常驻，且复制按钮会因
+    // "api_key !== 掩码" 被判为无可复制而禁用（2026-10-11 实测 bug）。
     const seeded = mergeSettings(base, {
       llm: { providers: { deepseek: { api_key: "sk-real" } } },
     });

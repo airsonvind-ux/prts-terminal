@@ -51,8 +51,8 @@ export function useModelSettings(
   // ── API Key 编辑态（mask 契约）──
   const [keyEdited, setKeyEdited] = useState(false);
   const [keyDraft, setKeyDraft] = useState("");
-  const [revealing, setRevealing] = useState(false);
-  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  const [copying, setCopying] = useState(false);
+  const [keyLast4, setKeyLast4] = useState<string | null>(null);
 
   // ── UI 状态 ──
   const [verifyStatus, setVerifyStatus] = useState<VerifyStatus>("idle");
@@ -60,6 +60,10 @@ export function useModelSettings(
 
   const llmRef = useRef(llm);
   llmRef.current = llm;
+
+  // 拉模型/验证连接时读取最新编辑态（避免闭包捕获旧 keyDraft）。
+  const keyStateRef = useRef({ edited: keyEdited, draft: keyDraft });
+  keyStateRef.current = { edited: keyEdited, draft: keyDraft };
 
   /** 家字段 patch 包装（写入 active 供应商条目；懒建由后端处理） */
   const home = useCallback(
@@ -73,6 +77,11 @@ export function useModelSettings(
     setBaseUrlDraft(llm.base_url ?? "");
     if (!keyEdited) setKeyDraft("");
   }, [llm, keyEdited]);
+
+  // 换供应商或密钥保存结果变化后，旧的末 4 位提示不再对应当前钥值。
+  useEffect(() => {
+    setKeyLast4(null);
+  }, [llm.provider, llm.api_key]);
 
   // active 是否自定义（非预设且非空），或处于"自定义草稿"态
   const isCustom = useMemo(() => {
@@ -94,7 +103,7 @@ export function useModelSettings(
       });
   }, []);
 
-  // ── 模型列表拉取（掩码态先 reveal 明文）──
+  // ── 模型列表拉取（掩码态只传 null，后端从凭据层取钥）──
   // quiet = 自动拉取（方案 b）：失败静默回 idle（保留手动入口），不弹错
   const fetchModels = useCallback(async (quiet = false) => {
     const { provider, api_key, base_url, api_type } = llmRef.current;
@@ -105,16 +114,17 @@ export function useModelSettings(
       }
       return;
     }
-    let effectiveKey = api_key;
-    if (api_key === MASKED_SECRET) {
-      try {
-        effectiveKey =
-          (await invoke<string>("reveal_api_key", { provider })) ?? "";
-      } catch {
-        effectiveKey = "";
-      }
-    }
-    if (!effectiveKey) {
+    // 编辑中的草稿是用户显式输入；掩码态传 null 让后端补钥。
+    const typedKey = keyStateRef.current.edited
+      ? keyStateRef.current.draft
+      : null;
+    const apiKeyArg =
+      typedKey !== null
+        ? typedKey
+        : api_key === MASKED_SECRET
+          ? null
+          : api_key;
+    if (apiKeyArg === "") {
       if (!quiet) {
         setModelListError("请先填写 API Key");
         setModelListStatus("error");
@@ -126,7 +136,7 @@ export function useModelSettings(
     try {
       const list = await invoke<ModelInfo[]>("list_models", {
         provider,
-        apiKey: effectiveKey,
+        apiKey: apiKeyArg,
         baseUrl: base_url,
         apiType: api_type,
       });
@@ -234,56 +244,51 @@ export function useModelSettings(
     onPatch(patch, label);
   };
 
-  // ── API Key 瞬态查看（provider = active）──
-  const toggleReveal = async () => {
-    if (revealedKey !== null) {
-      setRevealedKey(null);
-      return;
-    }
+  // ── API Key 复制（provider = active；完整钥值不进入前端）──
+  const copyKey = async () => {
     if (llmRef.current.api_key !== MASKED_SECRET) return;
-    setRevealing(true);
+    if (keyStateRef.current.edited) return;
+    setCopying(true);
     try {
-      const plain = await invoke<string>("reveal_api_key", {
+      const suffix = await invoke<string>("copy_api_key", {
         provider: llmRef.current.provider,
       });
-      setRevealedKey(plain || "");
+      setKeyLast4(suffix || null);
+      showToast(
+        suffix
+          ? `API Key 已复制到剪贴板（末 4 位：${suffix}）`
+          : "API Key 已复制到剪贴板",
+        { kind: "info" }
+      );
     } catch (e) {
-      showToast(`获取密钥失败：${String(e)}`, { kind: "warning" });
+      showToast(`复制 API Key 失败：${String(e)}`, { kind: "warning" });
     } finally {
-      setRevealing(false);
+      setCopying(false);
     }
   };
 
-  // ── 验证连接 ──
+  // ── 验证连接（保存态由后端补钥；编辑中的新钥作为 override）──
   const handleVerify = async () => {
     setVerifyStatus("loading");
     setVerifyError("");
-    let effectiveKey = llmRef.current.api_key;
-    if (effectiveKey === MASKED_SECRET) {
-      try {
-        effectiveKey =
-          (await invoke<string>("reveal_api_key", {
-            provider: llmRef.current.provider,
-          })) ?? "";
-      } catch (e) {
-        setVerifyStatus("error");
-        setVerifyError(String(e));
-        setTimeout(() => setVerifyStatus("idle"), 3000);
-        return;
-      }
+    let keyOverride: string | null;
+    if (keyStateRef.current.edited) {
+      keyOverride = keyStateRef.current.draft;
+    } else if (llmRef.current.api_key === MASKED_SECRET) {
+      keyOverride = null;
+    } else {
+      keyOverride = llmRef.current.api_key;
     }
-    if (!effectiveKey) {
+    if (keyOverride === "") {
       setVerifyStatus("error");
       setVerifyError("请先填写 API Key");
       setTimeout(() => setVerifyStatus("idle"), 3000);
       return;
     }
     try {
-      await invoke("verify_connection", {
-        config: { ...llmRef.current, api_key: effectiveKey } as unknown as Record<
-          string,
-          unknown
-        >,
+      await invoke("verify_saved_connection", {
+        config: llmRef.current as unknown as Record<string, unknown>,
+        keyOverride,
       });
       setVerifyStatus("success");
       setTimeout(() => setVerifyStatus("idle"), 2000);
@@ -316,25 +321,20 @@ export function useModelSettings(
     );
   }, [isCustom, llm.provider, providers]);
 
-  const keyDisplayValue =
-    revealedKey !== null
-      ? revealedKey
-      : keyEdited
-        ? keyDraft
-        : llm.api_key;
+  const keyDisplayValue = keyEdited ? keyDraft : llm.api_key;
 
   const fieldDisabled = busy || !llm.provider || customDraft;
-  // 👁 可用性：有密钥即可查看（面板态一律持掩码）；编辑中不可查看——
-  // 否则"显示旧值"会盖住正在输入的新值，失焦还会把它吞掉。
-  const canReveal = !busy && !keyEdited && llm.api_key !== "";
-  const keyToggleTitle =
-    revealedKey !== null
-      ? "隐藏"
-      : llm.api_key === ""
-        ? "暂无密钥"
-        : keyEdited
-          ? "编辑中不可查看"
-          : "显示";
+  // 复制可用性：有密钥即可复制（面板态一律持掩码）；编辑中不可复制——
+  // 用户正在输入的新钥尚未保存，复制旧值会误导。
+  const canCopy =
+    !busy && !keyEdited && !copying && llm.api_key !== "";
+  const keyToggleTitle = copying
+    ? "复制中…"
+    : llm.api_key === ""
+      ? "暂无密钥"
+      : keyEdited
+        ? "编辑中不可复制"
+        : "复制";
 
   return {
     providers,
@@ -356,9 +356,9 @@ export function useModelSettings(
     setKeyEdited,
     keyDraft,
     setKeyDraft,
-    revealing,
-    revealedKey,
-    setRevealedKey,
+    copying,
+    keyLast4,
+    setKeyLast4,
     verifyStatus,
     verifyError,
     handleProviderChange,
@@ -366,7 +366,7 @@ export function useModelSettings(
     handleApiTypeChange,
     fetchModels,
     commitOnBlur,
-    toggleReveal,
+    copyKey,
     handleVerify,
     selectModel,
     isCustom,
@@ -374,7 +374,7 @@ export function useModelSettings(
     providerDisplayName,
     keyDisplayValue,
     fieldDisabled,
-    canReveal,
+    canCopy,
     keyToggleTitle,
     home,
     llmRef,

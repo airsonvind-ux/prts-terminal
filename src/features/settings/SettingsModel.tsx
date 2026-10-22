@@ -9,8 +9,9 @@
 // - 切供应商 → active_provider
 // - 思考档 → thinking_level（段顶层全局）
 //
-// mask 契约：get_settings 逐家掩码；👁 reveal_api_key 带 provider 参数。
-// **明文只在 👁 期间存在**：本页与面板态一律持掩码（写入后由 Panel 归一为掩码，
+// mask 契约：get_settings 逐家掩码；设置页只请求后端把完整钥值复制到
+// 系统剪贴板（copy_api_key），前端只拿末 4 位提示。
+// **明文不回前端**：本页与面板态一律持掩码（写入后由 Panel 归一为掩码，
 // 见 mergeSettings），故「已配 key」= api_key === MASKED_SECRET。
 // headers / max_tokens 内部参数不暴露 UI（settings.json 手动写入保留）。
 
@@ -30,19 +31,11 @@ const API_TYPES: { value: ApiType; label: string }[] = [
   { value: "openai-responses", label: "OpenAI Responses" },
 ];
 
-// 密码显隐图标（通行 eye / eye-off 描边 SVG）
-const ICON_EYE = (
+// 复制图标（两个错开的圆角方块，动作语义比剪贴板更明确）
+const ICON_COPY = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-const ICON_EYE_OFF = (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-    <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-    <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
-    <line x1="1" y1="1" x2="23" y2="23" />
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
   </svg>
 );
 
@@ -75,9 +68,9 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     setKeyEdited,
     keyDraft,
     setKeyDraft,
-    revealing,
-    revealedKey,
-    setRevealedKey,
+    copying,
+    keyLast4,
+    setKeyLast4,
     verifyStatus,
     verifyError,
     handleProviderChange,
@@ -85,7 +78,7 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     handleApiTypeChange,
     fetchModels,
     commitOnBlur,
-    toggleReveal,
+    copyKey,
     handleVerify,
     selectModel,
     isCustom,
@@ -93,7 +86,7 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     providerDisplayName,
     keyDisplayValue,
     fieldDisabled,
-    canReveal,
+    canCopy,
     keyToggleTitle,
     home,
   } = useModelSettings(llm, busy, onPatch);
@@ -190,35 +183,21 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
         <div className={styles.keyRow}>
           <input
             className={styles.input}
-            type={revealedKey !== null ? "text" : "password"}
+            type="password"
             disabled={fieldDisabled}
-            readOnly={revealedKey !== null}
             value={keyDisplayValue}
-            onCopy={(e) => {
-              if (revealedKey !== null) e.preventDefault();
-            }}
-            onCut={(e) => {
-              if (revealedKey !== null) e.preventDefault();
-            }}
-            onPaste={(e) => {
-              if (revealedKey !== null) e.preventDefault();
-            }}
             placeholder="sk-..."
             onFocus={(e) => {
               // 聚焦**不清空**，只全选（首键即替换）：否则"点一下内容就没了"
               // 看起来像把密钥删了。keyEdited 只由真实输入置位。
-              if (revealedKey === null) e.currentTarget.select();
+              e.currentTarget.select();
             }}
             onChange={(e) => {
-              if (revealedKey !== null) return;
               setKeyEdited(true);
               setKeyDraft(e.target.value);
+              setKeyLast4(null);
             }}
             onBlur={() => {
-              if (revealedKey !== null) {
-                setRevealedKey(null);
-                return;
-              }
               // 只有真正编辑过才上送：判据是「动过」而非「与现值不同」——
               // 掩码态下把内容清空是「清除密钥」这一明确意图，必须能上送
               // （与现值比较时空串会被误判为"未改"，永远清不掉）。
@@ -229,19 +208,20 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
             }}
           />
           <button
-            className={`${styles.keyToggle} ${revealedKey !== null ? styles.keyToggleActive : ""}`}
+            className={styles.keyToggle}
             type="button"
-            disabled={!canReveal}
-            onClick={() => void toggleReveal()}
+            disabled={!canCopy}
+            onClick={() => void copyKey()}
             title={keyToggleTitle}
           >
-            {revealing
-              ? "…"
-              : revealedKey !== null
-                ? ICON_EYE_OFF
-                : ICON_EYE}
+            {copying ? "…" : ICON_COPY}
           </button>
         </div>
+        {keyLast4 && (
+          <span className={styles.keyHint} role="status">
+            已复制，末 4 位：{keyLast4}
+          </span>
+        )}
       </label>
 
       {/* ── 模型（家字段） ── */}

@@ -107,7 +107,7 @@ const __defaultInvokeImpl = (cmd: string) => {
   // 模型页：供应商列表默认空（测试按需 mockImplementation）
   if (cmd === "list_providers") return Promise.resolve([]);
   if (cmd === "list_models") return Promise.resolve([]);
-  if (cmd === "reveal_api_key") return Promise.resolve("");
+  if (cmd === "copy_api_key") return Promise.resolve("");
   // 记忆页（Phase 4 任务二 · 批 3）：默认空总览/空列表；写命令 resolve undefined
   if (cmd === "memory_overview") {
     return Promise.resolve({

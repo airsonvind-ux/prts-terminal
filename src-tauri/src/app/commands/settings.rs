@@ -14,7 +14,7 @@ pub(super) const CONFIG_WRITE_GUARD_MSG: &str = "对话处理中不能修改设�
 ///
 /// 调用先于配置锁获取——registry 短暂持锁即释放，再取配置锁（无嵌套锁序，
 /// 不引入死锁面）。供 set_settings 写命令消费；
-/// get_settings / reveal_api_key / get_app_meta / verify_connection /
+/// get_settings / copy_api_key / get_app_meta / verify_saved_connection /
 /// list_models 等只读命令不拦截。
 ///
 /// 快照隔离事实：轮内 config 是 turn 起始快照（agent_process 已 clone），
@@ -95,7 +95,8 @@ pub async fn pick_adb_file(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 /// 读取设置全量（get_settings）。返回 Settings 结构（snake_case），
-/// **逐家 api_key 掩码下发**（明文经 reveal_api_key 瞬态获取）。只读不设闸。
+/// **逐家 api_key 掩码下发**（完整钥值只留在后端，设置页复制时由
+/// `copy_api_key` 写入系统剪贴板）。只读不设闸。
 #[tauri::command]
 pub fn get_settings(
     store: State<'_, Arc<Mutex<SettingsStore>>>,
@@ -153,10 +154,11 @@ pub fn mark_guide_seen(
     s.mark_guide_seen(&key)
 }
 
-/// 显式读取某供应商 api_key 明文（瞬态查看用）。provider 缺省 = 当前
-/// active 供应商。前端展示后即弃，不落持久明文态。
+/// 把某供应商 api_key 复制到系统剪贴板（R-18）。provider 缺省 = 当前
+/// active 供应商。完整明文只在本进程与系统剪贴板之间存在，IPC 只返回
+/// 末 4 位供界面核对，不返回完整钥值。
 #[tauri::command]
-pub fn reveal_api_key(
+pub fn copy_api_key(
     store: State<'_, Arc<Mutex<SettingsStore>>>,
     credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     provider: Option<String>,
@@ -165,13 +167,20 @@ pub fn reveal_api_key(
         let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
         provider.unwrap_or_else(|| s.settings.llm.active_provider.clone())
     };
-    let creds = credentials
-        .lock()
-        .map_err(|e| format!("凭据锁获取失败: {e}"))?;
-    Ok(creds
-        .get(&crate::credentials::provider_key_ref(&name))
-        .unwrap_or_default()
-        .to_string())
+    let key = {
+        let creds = credentials
+            .lock()
+            .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+        creds
+            .get(&crate::credentials::provider_key_ref(&name))
+            .unwrap_or_default()
+            .to_string()
+    };
+    if key.is_empty() {
+        return Err("尚未配置 API Key".into());
+    }
+    crate::platform::clipboard::set_text(&key)?;
+    Ok(crate::platform::clipboard::last_four(&key))
 }
 
 /// 局部 patch 写设置（per-field：字段缺席 = 不更新；显式 null = 清除回默认；

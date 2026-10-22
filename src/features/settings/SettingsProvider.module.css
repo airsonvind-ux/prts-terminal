@@ -115,9 +115,10 @@
   border-color: var(--text-3);
 }
 
-.keyToggleActive {
-  color: var(--accent);
-  border-color: var(--accent);
+.keyHint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
 }
 
 /* ── Headers 文本框 ── */

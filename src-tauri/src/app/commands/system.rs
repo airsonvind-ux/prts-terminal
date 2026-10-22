@@ -42,16 +42,40 @@ pub fn quit_app(app_handle: AppHandle) {
 // verify_connection —— 验证 LLM 连接
 // ═══════════════════════════════════════════════════════
 
-/// 验证 LLM 供应商连接是否可用。
+/// 验证 LLM 供应商连接是否可用（调用方显式提供钥值）。
 ///
-/// 用传入的 LlmConfig 发起一次模型列表请求（5 秒超时），验证连通性与凭据。
-///
-/// 分流：Anthropic 走 `{root}/v1/models`（`x-api-key`，`strip_api_path` 剥掉已带
-/// 的路径段）；其余按 OpenAI 兼容走 `{base}/models`（`Authorization: Bearer`，空 key
-/// 不发）。状态映射：200 → Ok；401/403 → “API Key 无效”；404 → “API 端点不存在”。
-/// 成功：返回 Ok。失败：返回可读的错误描述。
-#[tauri::command]
+/// 设置页不再把已保存的明文取回前端：正常路径走 `verify_saved_connection`，
+/// 由后端从凭据层补钥。本函数保留给测试/内部调用，不在 invoke 白名单中。
 pub async fn verify_connection(config: LlmConfig) -> Result<(), String> {
+    let api_key = config.api_key.clone();
+    verify_connection_with_key(config, api_key).await
+}
+
+/// 验证连接（保存态路径）：key_override 为 None 时按 provider 从凭据层取钥；
+/// 用户正在输入、尚未保存的新钥通过 Some 覆盖。返回值仍只有 Ok/错误文案。
+#[tauri::command]
+pub async fn verify_saved_connection(
+    config: LlmConfig,
+    key_override: Option<String>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
+) -> Result<(), String> {
+    let api_key = match key_override {
+        Some(key) => key,
+        None => {
+            let creds = credentials
+                .lock()
+                .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+            creds
+                .get(&crate::credentials::provider_key_ref(&config.provider))
+                .unwrap_or_default()
+                .to_string()
+        }
+    };
+    verify_connection_with_key(config, api_key).await
+}
+
+async fn verify_connection_with_key(mut config: LlmConfig, api_key: String) -> Result<(), String> {
+    config.api_key = api_key;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -157,6 +181,9 @@ pub fn list_providers(model_registry: State<'_, Arc<ModelRegistry>>) -> Vec<Prov
 
 /// 获取指定供应商的可用模型列表。
 ///
+/// `api_key`: None = 按 provider 从凭据层取钥；Some("") = 不带钥请求；
+/// Some(值) = 使用调用方显式提供的钥（用户刚输入、尚未保存）。
+///
 /// 按 api_type 分流：
 /// - OpenAI 兼容协议：GET {base_url}/models + Bearer
 /// - Anthropic 协议：GET {root}/v1/models + x-api-key
@@ -165,11 +192,24 @@ pub fn list_providers(model_registry: State<'_, Arc<ModelRegistry>>) -> Vec<Prov
 #[tauri::command]
 pub async fn list_models(
     provider: String,
-    api_key: String,
+    api_key: Option<String>,
     base_url: Option<String>,
     api_type: Option<String>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     model_registry: State<'_, Arc<ModelRegistry>>,
 ) -> Result<Vec<ModelInfo>, String> {
+    let api_key = match api_key {
+        Some(key) => key,
+        None => {
+            let creds = credentials
+                .lock()
+                .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+            creds
+                .get(&crate::credentials::provider_key_ref(&provider))
+                .unwrap_or_default()
+                .to_string()
+        }
+    };
     let base = base_url
         .as_deref()
         .or_else(|| model_registry.get_base_url(&provider));

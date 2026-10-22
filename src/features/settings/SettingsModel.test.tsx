@@ -3,7 +3,7 @@
 //
 // 覆盖：
 //   - API Key mask：掩码常态显示；编辑失焦提交；未编辑失焦不上送（不误清）
-//   - 👁 瞬态查看：reveal_api_key → 明文 readOnly；复原不提交
+//   - API Key 复制：copy_api_key 只回末 4 位；输入框保持掩码；不调用 reveal
 //   - 供应商/API 类型切换 → 即时 patch（llm 段）
 //   - 思考强度：声明集（deepseek v4 [off,low,high,max] 默认 high 高亮）/
 //     推断集（无声明 [off,medium,high] 默认 medium）/ 非 reasoning 隐藏
@@ -59,7 +59,7 @@ function installRoutes(list_models: unknown[] = [V4_FLASH]): void {
   __invokeMock.mockImplementation((cmd: string) => {
     if (cmd === "list_providers") return Promise.resolve(PROVIDERS);
     if (cmd === "list_models") return Promise.resolve(list_models);
-    if (cmd === "reveal_api_key") return Promise.resolve("sk-real-secret");
+    if (cmd === "copy_api_key") return Promise.resolve("cret");
     return Promise.resolve(undefined);
   });
 }
@@ -131,7 +131,7 @@ function renderHarness(llm: LlmConfig, busy = false): void {
 }
 
 function keyInput(): HTMLInputElement {
-  // type 随 reveal 在 password/text 间切换——用 placeholder 稳定定位
+  // 用 placeholder 稳定定位（输入框始终是 password 掩码）
   return container!.querySelector<HTMLInputElement>(
     'input[placeholder="sk-..."]'
   )!;
@@ -214,58 +214,62 @@ describe("SettingsModel · API Key mask 契约", () => {
     );
   });
 
-  it("👁 瞬态查看：reveal 明文 readOnly；复原不提交", async () => {
+  it("复制：只调用 copy_api_key，输入保持掩码；提示末 4 位", async () => {
     renderModel(maskedLlm());
     await flush();
-    // 点 👁（keyToggle）
-    const toggle = container!.querySelector("button[title='显示']") as HTMLButtonElement;
-    act(() => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='复制']");
+    act(() => toggle!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
+
+    expect(__invokeMock).toHaveBeenCalledWith("copy_api_key", {
+      provider: "deepseek",
+    });
+    expect(
+      __invokeMock.mock.calls.some((c) => c[0] === "reveal_api_key")
+    ).toBe(false);
+
     const input = keyInput();
-    expect(input.value).toBe("sk-real-secret");
-    expect(input.readOnly).toBe(true);
-    // 修复断言：reveal 后 type 必须切 text（否则密码框按明文长度遮挡成星号）
-    expect(input.type).toBe("text");
-    // blur 复原（readOnly 失焦触发 onBlur → revealed null）——不产生 patch
-    blur(input);
-    await flush();
-    expect(keyInput().value).toBe("********");
-    expect(keyInput().type).toBe("password");
-    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.value).toBe("********");
+    expect(input.type).toBe("password");
+    expect(input.readOnly).toBe(false);
+    expect(container!.textContent).toContain("已复制，末 4 位：cret");
+    expect(
+      useToastStore.getState().toasts.some((t) => t.message.includes("cret"))
+    ).toBe(true);
   });
 
-  it("👁 可用性：已配 key（掩码）可用；编辑中不可用", async () => {
+  it("复制可用性：已配 key（掩码）可用；编辑中不可用", async () => {
     renderModel(maskedLlm());
     await flush();
-    const toggle = container!.querySelector<HTMLButtonElement>("button[title='显示']");
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='复制']");
     expect(toggle?.disabled).toBe(false);
 
-    // 编辑中不可查看（否则"显示旧值"会盖住正在输入的新值，失焦还会把它吞掉）
+    // 编辑中不可复制：新钥尚未保存，复制旧值会误导
     typeInto(keyInput(), "sk-x");
     await flush();
     const editing = container!.querySelector<HTMLButtonElement>(
-      "button[title='编辑中不可查看']"
+      "button[title='编辑中不可复制']"
     );
     expect(editing?.disabled).toBe(true);
   });
 
-  it("👁 未配 key 时禁用（title 表达原因）", async () => {
+  it("未配 key 时复制按钮禁用（title 表达原因）", async () => {
     renderModel(maskedLlm({ api_key: "" }));
     await flush();
     const toggle = container!.querySelector<HTMLButtonElement>("button[title='暂无密钥']");
     expect(toggle?.disabled).toBe(true);
   });
 
-  it("保存后回掩码：输入 key 失焦 → 显示掩码且 👁 恢复可用（面板归一）", async () => {
+  it("保存后回掩码：输入 key 失焦 → 显示掩码且复制恢复可用（面板归一）", async () => {
     renderHarness(maskedLlm({ api_key: "" }));
     await flush();
     typeInto(keyInput(), "sk-new");
     await flush();
     blur(keyInput());
     await flush();
-    // 明文不常驻面板态 → 回掩码；👁 因"有密钥"而可用
+    // 明文不常驻面板态 → 回掩码；复制按钮因"有密钥"而可用
     expect(keyInput().value).toBe("********");
-    const toggle = container!.querySelector<HTMLButtonElement>("button[title='显示']");
+    const toggle = container!.querySelector<HTMLButtonElement>("button[title='复制']");
     expect(toggle?.disabled).toBe(false);
   });
 });
@@ -412,10 +416,13 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
 });
 
 describe("SettingsModel · 自动拉取模型列表（方案 b）", () => {
-  function listModelsCalls(): Array<{ provider: string | undefined }> {
+  function listModelsCalls(): Array<{ provider: string | undefined; apiKey: unknown }> {
     return __invokeMock.mock.calls
       .filter((c) => c[0] === "list_models")
-      .map((c) => ({ provider: (c[1] as { provider?: string }).provider }));
+      .map((c) => ({
+        provider: (c[1] as { provider?: string }).provider,
+        apiKey: (c[1] as { apiKey?: unknown }).apiKey,
+      }));
   }
 
   it("已配 key（掩码）且无缓存 → 挂载自动拉取并显示列表（无需手动点击）", async () => {
@@ -424,6 +431,11 @@ describe("SettingsModel · 自动拉取模型列表（方案 b）", () => {
     const calls = listModelsCalls();
     expect(calls.length).toBeGreaterThanOrEqual(1);
     expect(calls[0].provider).toBe("deepseek");
+    // 掩码态只传 null，后端补钥；前端不再取回明文
+    expect(calls[0].apiKey).toBeNull();
+    expect(
+      __invokeMock.mock.calls.some((c) => c[0] === "reveal_api_key")
+    ).toBe(false);
     // 自动拉成功 → loaded：模型行已显示（无「获取模型列表」按钮）
     expect(container!.textContent).toContain("DeepSeek V4 Flash");
     expect(
@@ -447,7 +459,6 @@ describe("SettingsModel · 自动拉取模型列表（方案 b）", () => {
   it("自动拉失败 → 静默回 idle（无 toast、手动按钮保留）", async () => {
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_providers") return Promise.resolve(PROVIDERS);
-      if (cmd === "reveal_api_key") return Promise.resolve("sk-real-secret");
       if (cmd === "list_models") return Promise.reject("网络错误");
       return Promise.resolve(undefined);
     });
