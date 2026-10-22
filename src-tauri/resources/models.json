@@ -871,6 +871,9 @@
         "name": "GLM-5.3",
         "context": 1000000,
         "reasoning": true,
+        "compat": {
+          "reasoning_policy": "preserve"
+        },
         "thinking_levels": [
           "low",
           "high",
@@ -883,6 +886,9 @@
         "context": 1000000,
         "reasoning": true,
         "supports_vision": true,
+        "compat": {
+          "reasoning_policy": "preserve"
+        },
         "thinking_levels": [
           "low",
           "high",
@@ -895,6 +901,9 @@
         "context": 1000000,
         "reasoning": true,
         "supports_vision": true,
+        "compat": {
+          "reasoning_policy": "preserve"
+        },
         "thinking_levels": [
           "low",
           "high",

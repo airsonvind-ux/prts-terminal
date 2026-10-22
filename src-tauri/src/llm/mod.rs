@@ -155,6 +155,17 @@ pub enum ApiType {
     OpenAIResponses,
 }
 
+impl ApiType {
+    /// 协议名（与 serde 字面量一致，供错误信息与日志使用）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiCompletions => "openai-completions",
+            Self::AnthropicMessages => "anthropic-messages",
+            Self::OpenAIResponses => "openai-responses",
+        }
+    }
+}
+
 /// 模型所属的 thinking 家族。
 ///
 /// 来自既有实现 `fa()` 的检测结果，在 models.json 中显式声明。
@@ -169,6 +180,38 @@ pub enum ThinkingFormat {
     Kimi,
     Volcengine,
     Openrouter,
+}
+
+impl ThinkingFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Deepseek => "deepseek",
+            Self::Anthropic => "anthropic",
+            Self::Zhipu => "zhipu",
+            Self::Qwen => "qwen",
+            Self::Kimi => "kimi",
+            Self::Volcengine => "volcengine",
+            Self::Openrouter => "openrouter",
+        }
+    }
+
+    /// 该 thinking 家族能否在当前协议上工作。
+    ///
+    /// 家族格式与 wire 协议绑定：把 zhipu 的 thinking.type 写到 Anthropic
+    /// 协议上不会被适配器读取，加载期就应报错，而不是静默落默认档。
+    fn supports(self, api_type: ApiType) -> bool {
+        match self {
+            // DeepSeek 同时提供 OpenAI 兼容与 Anthropic 兼容两种入口。
+            Self::Deepseek => matches!(
+                api_type,
+                ApiType::OpenAiCompletions | ApiType::AnthropicMessages
+            ),
+            Self::Anthropic => api_type == ApiType::AnthropicMessages,
+            Self::Zhipu | Self::Qwen | Self::Kimi | Self::Volcengine | Self::Openrouter => {
+                api_type == ApiType::OpenAiCompletions
+            }
+        }
+    }
 }
 
 /// 声明层 compat —— 存于 models.json，描述模型的「原因」属性。
@@ -193,6 +236,34 @@ pub struct Compat {
     /// 认证方式。None = 默认 "bearer"。"none" = 不发送 Authorization header
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthMode>,
+    /// 推理链多轮回传策略覆盖。None = 由 thinking_format 家族默认决定。
+    /// models.json 手写键为 snake_case（reasoning_policy），序列化按容器
+    /// rename_all 输出 camelCase（前端契约）。
+    #[serde(
+        default,
+        alias = "reasoning_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reasoning_policy: Option<ReasoningPolicy>,
+}
+
+impl Compat {
+    /// 校验声明字段是否适用于当前协议。
+    ///
+    /// P1 先覆盖 thinking_format；后续新增协议专属字段时在这里补 match 臂。
+    /// 校验放在加载期，避免“写了但适配器读不到”的假开关。
+    fn validate(&self, api_type: ApiType, at: &str, problems: &mut Vec<String>) {
+        if let Some(format) = self.thinking_format {
+            if !format.supports(api_type) {
+                problems.push(format!(
+                    "{at}: thinking_format {} 不适用于协议 {}",
+                    format.as_str(),
+                    api_type.as_str()
+                ));
+            }
+        }
+        // reasoning_policy 是跨协议的重放策略，不需要协议 gate。
+    }
 }
 
 /// 效果层 compat —— 由 resolve_compat() 运行时计算，不序列化到 JSON。
@@ -222,7 +293,8 @@ impl Default for ResolvedCompat {
 }
 
 /// 推理链多轮回传策略。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningPolicy {
     /// 始终保留推理链在历史中
     Preserve,
@@ -1019,10 +1091,24 @@ impl ModelRegistry {
             if pj.defaults.base_url.trim().is_empty() {
                 problems.push(format!("{pid}: defaults.base_url 为空"));
             }
+            if let Some(ref compat) = pj.defaults.compat {
+                compat.validate(
+                    pj.defaults.api_type,
+                    &format!("{pid}: defaults.compat"),
+                    &mut problems,
+                );
+            }
             for (mid, m) in pj.models.iter() {
                 let at = format!("{pid}/{mid}");
                 if m.name.trim().is_empty() {
                     problems.push(format!("{at}: name 为空"));
+                }
+                if let Some(ref compat) = m.compat {
+                    compat.validate(
+                        pj.defaults.api_type,
+                        &format!("{at}: compat"),
+                        &mut problems,
+                    );
                 }
                 if m.context == 0 {
                     problems.push(format!("{at}: context 为 0"));
@@ -1135,6 +1221,9 @@ impl ModelRegistry {
                 if mc.auth.is_some() {
                     merged.auth = mc.auth;
                 }
+                if mc.reasoning_policy.is_some() {
+                    merged.reasoning_policy = mc.reasoning_policy;
+                }
             }
         }
 
@@ -1159,13 +1248,10 @@ impl ModelRegistry {
             .unwrap_or(false);
 
         let mut resolved = resolve_compat(compat.thinking_format, api_type, has_reasoning);
-        // GLM-5.3 在 low 档下可能不返回 reasoning_content；本地 fail-closed
-        // 会把合法的工具调用轮直接拦掉。5.3 的保留策略交给供应商判断，
-        // 不把“缺失”当成配置错误。
-        if provider.eq_ignore_ascii_case("zhipu")
-            && normalize_model_id(model).starts_with("glm-5.3")
-        {
-            resolved.policy = ReasoningPolicy::Preserve;
+        // 模型级 policy 覆盖 thinking_format 家族默认值。GLM-5.3 的
+        // preserve 由 models.json 声明，不再按 provider/model 名硬编码。
+        if let Some(policy) = compat.reasoning_policy {
+            resolved.policy = policy;
         }
         // auth 不参与 resolve_compat 计算——从声明层直通效果层
         resolved.auth = compat.auth;
@@ -1533,6 +1619,7 @@ mod tests {
         let c = Compat {
             thinking_format: Some(ThinkingFormat::Deepseek),
             auth: Some(AuthMode::None),
+            reasoning_policy: Some(ReasoningPolicy::Preserve),
         };
         let json = serde_json::to_string(&c).unwrap();
         assert!(
@@ -1540,14 +1627,52 @@ mod tests {
             "Expected camelCase thinkingFormat, got: {json}"
         );
         assert!(json.contains("\"auth\""), "Expected auth, got: {json}");
+        assert!(
+            json.contains("\"reasoningPolicy\":\"preserve\""),
+            "Expected camelCase reasoningPolicy, got: {json}"
+        );
     }
 
     #[test]
     fn compat_deserializes_camelcase() {
-        let json = r#"{"thinkingFormat":"deepseek","auth":"none"}"#;
+        let json = r#"{"thinkingFormat":"deepseek","auth":"none","reasoningPolicy":"preserve"}"#;
         let c: Compat = serde_json::from_str(json).unwrap();
         assert_eq!(c.thinking_format, Some(ThinkingFormat::Deepseek));
         assert_eq!(c.auth, Some(AuthMode::None));
+        assert_eq!(c.reasoning_policy, Some(ReasoningPolicy::Preserve));
+    }
+
+    #[test]
+    fn compat_deserializes_snake_case_models_json_keys() {
+        let json = r#"{"thinking_format":"zhipu","reasoning_policy":"require_tool_call"}"#;
+        let c: Compat = serde_json::from_str(json).unwrap();
+        assert_eq!(c.thinking_format, Some(ThinkingFormat::Zhipu));
+        assert_eq!(c.reasoning_policy, Some(ReasoningPolicy::RequireToolCall));
+    }
+
+    #[test]
+    fn compat_rejects_thinking_format_for_wrong_protocol() {
+        let json = r#"{"anthropic":{"defaults":{"api_type":"anthropic-messages","base_url":"https://x"},"models":{"m":{"name":"M","context":1,"compat":{"thinking_format":"qwen"}}}}}"#;
+        let err = ModelRegistry::from_json(json).unwrap_err();
+        assert!(err.contains("thinking_format qwen"), "got: {err}");
+        assert!(
+            err.contains("不适用于协议 anthropic-messages"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_model_policy_overrides_provider_default() {
+        let json = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x","compat":{"thinking_format":"zhipu","reasoning_policy":"require_tool_call"}},"models":{"m":{"name":"M","context":1,"reasoning":true,"compat":{"reasoning_policy":"preserve"}}}}}"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+
+        let c = reg.get_compat("p", "m");
+        assert_eq!(c.thinking_format, Some(ThinkingFormat::Zhipu));
+        assert_eq!(c.reasoning_policy, Some(ReasoningPolicy::Preserve));
+
+        let r = reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions);
+        assert_eq!(r.carrier.as_deref(), Some("reasoning_content"));
+        assert_eq!(r.policy, ReasoningPolicy::Preserve);
     }
 
     #[test]
@@ -1560,6 +1685,7 @@ mod tests {
             default_compat: Compat {
                 thinking_format: Some(ThinkingFormat::Deepseek),
                 auth: None,
+                reasoning_policy: None,
             },
         };
         let json = serde_json::to_string(&info).unwrap();
@@ -1635,6 +1761,12 @@ mod tests {
             assert_eq!(model.context, 1_000_000, "{id}");
             assert!(model.supports_vision, "{id} 应支持视觉");
             assert_eq!(model.default_thinking_level.as_deref(), Some("max"));
+            assert_eq!(
+                reg.get_resolved_compat("zhipu", id, ApiType::OpenAiCompletions)
+                    .policy,
+                ReasoningPolicy::Preserve,
+                "{id} 的 preserve 应由 models.json 声明，不再按模型名硬编码"
+            );
         }
     }
 

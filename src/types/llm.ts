@@ -45,13 +45,15 @@ export type ThinkingFormat =
 export interface Compat {
   thinkingFormat?: ThinkingFormat;
   auth?: "bearer" | "none";
+  /** 推理链多轮回传策略覆盖；缺省 = 由 thinkingFormat 家族默认决定 */
+  reasoningPolicy?: "preserve" | "require_tool_call";
 }
 
 /** 效果层 compat（resolve_compat 运行时计算，不序列化到 JSON） */
 export interface ResolvedCompat {
   carrier: string | null;
   requestParam: string | null;
-  policy: "preserve" | "require-tool-call";
+  policy: "preserve" | "require_tool_call";
   clearable: boolean;
   auth: "bearer" | "none" | null;
 }
