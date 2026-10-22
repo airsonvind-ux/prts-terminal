@@ -59,19 +59,20 @@ tools → storage / integrations
 
 ## 一次 turn 的生命周期
 
-1. 前端提交对话历史、模型配置和工作区信息。
-2. `app` 层检查是否有活跃 turn，组装冻结的 system prompt 与工具定义。
+1. 前端提交本轮输入与会话元数据；`primary` 模式下不再提交完整历史。
+2. `app` 层检查是否有活跃 turn，从官方 session log 读取历史（legacy 模式退回前端 history），组装冻结的 system prompt 与工具定义。
 3. `agent` 播种会话日志，进入 step 循环。
 4. LLM 流式返回 reasoning、文本和工具调用；`EventSink` 把持久事实写入 session log，同时推送 IPC。
 5. 工具调用进入审批与执行阶段：权限判断、路径检查、命令沙箱、取消点。
 6. 工具结果回填上下文，进入下一个 step，直到模型不再请求工具或触发停滞/取消。
-7. `turn/end` 记录终止原因；前端把本轮事件投影为消息与状态。
+7. `turn/end` 记录终止原因；后端把本轮事件追加到官方 log，前端把事件投影为消息与状态。
 
 ## 事件契约
 
 会话日志是事实来源，IPC 是给前端的投影缓存。
 
 - `assistant/chunk`、`tool/call`、`tool/result`、`step/end`、`turn/end` 属于持久事实
+- `assistant/chunk.content` 是展示文本（情绪标签已剥离）；`rawContent` 是模型原文，历史派生优先用它
 - `phase` 是纯 UI 信号，不写入日志
 - `step/end` 必须同时写日志和推 IPC；只写日志会让前端的上下文指示器停在上一轮
 - 前端不得自行推断“后端一定已经收到/处理了某个事件”
@@ -87,6 +88,8 @@ tools → storage / integrations
 ## 存储
 
 - `session log` 追加写入，按 turn 归档；派生消息由日志计算，不在两处维护
+- `primary` 模式下后端是唯一 writer；前端 `append_turn` 只更新元数据
+- 首轮建文件原子替换；追加前修复末尾半行；旧 jsonl 只读兼容
 - SQLite 保存领域数据，启动时从随包种子同步到用户数据目录
 - 设置、凭据、附件和记忆各自有明确的数据根与迁移规则
 - 凭据使用本机用户绑定的加密存储，明文不落盘

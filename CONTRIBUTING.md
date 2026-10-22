@@ -5,7 +5,7 @@
 - Windows 10/11 x64
 - Node.js 20+
 - Rust stable（MSVC）
-- Python 3.11+（只在维护数据管线时需要）
+- Python 3.11+（构建 MAA 桥需要；维护数据管线也需要）
 
 ```powershell
 npm ci
@@ -17,6 +17,7 @@ npm run tauri dev
 ```powershell
 npm test
 npm run build
+npm run build:sidecar
 cargo test --lib --manifest-path src-tauri/Cargo.toml
 ```
 

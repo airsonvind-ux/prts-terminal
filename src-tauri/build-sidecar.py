@@ -2,6 +2,7 @@
 
 用法（项目根目录）：
     python src-tauri/build-sidecar.py
+    python src-tauri/build-sidecar.py --force   # 忽略时间戳，强制重编
 
 为什么需要这一步：`tauri.conf.json` 的 `bundle.externalBin` 声明了
 `binaries/prts-maa-bridge`，Tauri 要求该文件按 `<名>-<目标三元组>.exe` 命名，
@@ -18,6 +19,20 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+
+def newest_bridge_input(bridge_dir: Path, script: Path) -> float:
+    """桥源码的最新修改时间；目标比它新时说明不必重编。"""
+    candidates = [
+        bridge_dir / "Cargo.toml",
+        bridge_dir / "Cargo.lock",
+        bridge_dir / "build.rs",
+        script,
+    ]
+    src_dir = bridge_dir / "src"
+    if src_dir.is_dir():
+        candidates.extend(p for p in src_dir.rglob("*") if p.is_file())
+    return max((p.stat().st_mtime for p in candidates if p.is_file()), default=0.0)
 
 
 def host_triple() -> str:
@@ -43,6 +58,13 @@ def main() -> int:
     win = sys.platform == "win32"
     exe_name = "prts-maa-bridge.exe" if win else "prts-maa-bridge"
     dest = out_dir / f"prts-maa-bridge-{host_triple()}{'.exe' if win else ''}"
+    force = "--force" in sys.argv[1:] or "-f" in sys.argv[1:]
+
+    if not force and dest.is_file():
+        newest = newest_bridge_input(bridge_dir, here)
+        if dest.stat().st_mtime >= newest:
+            print(f"· sidecar 已是最新，跳过：{dest.name}")
+            return 0
 
     print(f"· 编译桥（release）：{bridge_dir}")
     result = subprocess.run(
@@ -58,7 +80,9 @@ def main() -> int:
         return 1
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
+    # 不用 copy2：它会连源产物的旧 mtime 一起复制，导致下一次判断仍以为
+    # sidecar 比源码旧，每次启动都重编。这里让目标时间反映“本次就位”。
+    shutil.copyfile(src, dest)
     print(f"· sidecar 就位：{dest.name}（{src.stat().st_size} 字节）")
     return 0
 

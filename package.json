@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:sidecar": "python src-tauri/build-sidecar.py",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",

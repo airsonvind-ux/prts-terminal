@@ -32,6 +32,11 @@ tauri-build = { version = "2", features = [] }
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.0"
 
+# 单实例闸（R-15）：桌面目标才编译；第二实例由插件在进入 Builder 前拦截。
+# 插件必须在其它插件之前注册（见 lib.rs）。
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"

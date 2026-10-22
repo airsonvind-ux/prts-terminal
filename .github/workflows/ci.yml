@@ -25,9 +25,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            bridge
+      - name: Build MAA sidecar
+        run: python src-tauri/build-sidecar.py
       - name: Format
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Clippy

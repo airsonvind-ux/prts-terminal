@@ -32,6 +32,8 @@ data-pipeline/**/*.db
 exec-test-dir/
 sim_logs/
 src-tauri/resources/*.db
+# 发布数据清单由维护者用 push.py 生成，含 DB 哈希，不入源码库（2026-10-22）
+src-tauri/resources/DATA_MANIFEST.json
 # 数据更新脚本的自动备份（每份 43 MB，绝不入库，2026-10-13）
 data-pipeline/maintenance/backups/
 # 更新记录（变更史，入库可查；2026-10-17 改为入库）
