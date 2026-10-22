@@ -245,6 +245,14 @@ pub struct Compat {
         skip_serializing_if = "Option::is_none"
     )]
     pub reasoning_policy: Option<ReasoningPolicy>,
+    /// 流式响应是否接受 `stream_options.include_usage`。
+    /// None = 当前行为（发送，失败后降级重试）；false = 直接不发。
+    #[serde(
+        default,
+        alias = "supports_usage_in_streaming",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supports_usage_in_streaming: Option<bool>,
 }
 
 impl Compat {
@@ -261,6 +269,11 @@ impl Compat {
                     api_type.as_str()
                 ));
             }
+        }
+        if self.supports_usage_in_streaming.is_some() && api_type != ApiType::OpenAiCompletions {
+            problems.push(format!(
+                "{at}: supports_usage_in_streaming 仅适用于协议 openai-completions"
+            ));
         }
         // reasoning_policy 是跨协议的重放策略，不需要协议 gate。
     }
@@ -279,6 +292,8 @@ pub struct ResolvedCompat {
     pub policy: ReasoningPolicy,
     /// 认证方式（直通自 Compat.auth）
     pub auth: Option<AuthMode>,
+    /// 流式响应是否发送 `stream_options.include_usage`（默认 true，保持旧行为）
+    pub supports_usage_in_streaming: bool,
 }
 
 impl Default for ResolvedCompat {
@@ -288,6 +303,7 @@ impl Default for ResolvedCompat {
             request_param: None,
             policy: ReasoningPolicy::Preserve,
             auth: None,
+            supports_usage_in_streaming: true,
         }
     }
 }
@@ -1224,6 +1240,9 @@ impl ModelRegistry {
                 if mc.reasoning_policy.is_some() {
                     merged.reasoning_policy = mc.reasoning_policy;
                 }
+                if mc.supports_usage_in_streaming.is_some() {
+                    merged.supports_usage_in_streaming = mc.supports_usage_in_streaming;
+                }
             }
         }
 
@@ -1252,6 +1271,9 @@ impl ModelRegistry {
         // preserve 由 models.json 声明，不再按 provider/model 名硬编码。
         if let Some(policy) = compat.reasoning_policy {
             resolved.policy = policy;
+        }
+        if let Some(supports) = compat.supports_usage_in_streaming {
+            resolved.supports_usage_in_streaming = supports;
         }
         // auth 不参与 resolve_compat 计算——从声明层直通效果层
         resolved.auth = compat.auth;
@@ -1620,6 +1642,7 @@ mod tests {
             thinking_format: Some(ThinkingFormat::Deepseek),
             auth: Some(AuthMode::None),
             reasoning_policy: Some(ReasoningPolicy::Preserve),
+            supports_usage_in_streaming: Some(false),
         };
         let json = serde_json::to_string(&c).unwrap();
         assert!(
@@ -1630,6 +1653,10 @@ mod tests {
         assert!(
             json.contains("\"reasoningPolicy\":\"preserve\""),
             "Expected camelCase reasoningPolicy, got: {json}"
+        );
+        assert!(
+            json.contains("\"supportsUsageInStreaming\":false"),
+            "Expected camelCase supportsUsageInStreaming, got: {json}"
         );
     }
 
@@ -1662,6 +1689,30 @@ mod tests {
     }
 
     #[test]
+    fn compat_rejects_usage_streaming_for_wrong_protocol() {
+        let json = r#"{"anthropic":{"defaults":{"api_type":"anthropic-messages","base_url":"https://x","compat":{"supports_usage_in_streaming":false}},"models":{"m":{"name":"M","context":1}}}}"#;
+        let err = ModelRegistry::from_json(json).unwrap_err();
+        assert!(
+            err.contains("supports_usage_in_streaming 仅适用于协议 openai-completions"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_model_usage_streaming_overrides_provider_default() {
+        let json = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x","compat":{"supports_usage_in_streaming":true}},"models":{"m":{"name":"M","context":1,"compat":{"supports_usage_in_streaming":false}}}}}"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+        assert_eq!(
+            reg.get_compat("p", "m").supports_usage_in_streaming,
+            Some(false)
+        );
+        assert!(
+            !reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions)
+                .supports_usage_in_streaming
+        );
+    }
+
+    #[test]
     fn compat_model_policy_overrides_provider_default() {
         let json = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x","compat":{"thinking_format":"zhipu","reasoning_policy":"require_tool_call"}},"models":{"m":{"name":"M","context":1,"reasoning":true,"compat":{"reasoning_policy":"preserve"}}}}}"#;
         let reg = ModelRegistry::from_json(json).unwrap();
@@ -1686,6 +1737,7 @@ mod tests {
                 thinking_format: Some(ThinkingFormat::Deepseek),
                 auth: None,
                 reasoning_policy: None,
+                supports_usage_in_streaming: None,
             },
         };
         let json = serde_json::to_string(&info).unwrap();

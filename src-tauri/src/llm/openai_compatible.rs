@@ -13,6 +13,7 @@
 //! |---------------------|--------------------------------|
 //! | Thinking 参数       | `request_param` 非空时附加      |
 //! | reasoning_content   | `carrier` 非 "reasoning_content" 时剥离 |
+//! | stream_options      | `supports_usage_in_streaming == false` 时省略 |
 //! | Authorization       | `auth == "none"` 时不发送       |
 //! | 自定义 Headers       | headers 非空                   | 解析 JSON 逐条附加                 |
 //!
@@ -183,8 +184,9 @@ impl OpenAiCompatibleClient {
             Self::ensure_reasoning_replay(&body)?;
         }
 
-        // 流式请求附加 stream_options（用于获取 usage）
-        if stream {
+        // 流式请求附加 stream_options（用于获取 usage）。
+        // 模型声明不支持时直接省略，避免先发一次注定失败、再降级重试。
+        if stream && compat.supports_usage_in_streaming {
             body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
@@ -782,6 +784,7 @@ fn process_sse_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::llm::ApiType;
     use futures_util::stream;
 
     // ── SSE 测试辅助：从字符串数组构造字节流 ──
@@ -1145,5 +1148,35 @@ mod tests {
             ]
         });
         assert!(OpenAiCompatibleClient::ensure_reasoning_replay(&body).is_ok());
+    }
+
+    // ── stream_options 由 compat 决定 ──
+
+    fn stream_body(model_compat: &str) -> Value {
+        let json = format!(
+            r#"{{"p":{{"defaults":{{"api_type":"openai-completions","base_url":"https://x"}},"models":{{"m":{{"name":"M","context":1000,"compat":{model_compat}}}}}}}}}"#
+        );
+        let registry = std::sync::Arc::new(ModelRegistry::from_json(&json).unwrap());
+        let client = OpenAiCompatibleClient::new(registry);
+        let config = LlmConfig {
+            provider: "p".into(),
+            model: "m".into(),
+            api_type: ApiType::OpenAiCompletions,
+            max_tokens: 100,
+            ..Default::default()
+        };
+        client.build_body(&config, &[], &[], true).unwrap()
+    }
+
+    #[test]
+    fn stream_options_present_by_default() {
+        let body = stream_body("{}");
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn stream_options_omitted_when_unsupported() {
+        let body = stream_body(r#"{"supports_usage_in_streaming":false}"#);
+        assert!(body.get("stream_options").is_none());
     }
 }

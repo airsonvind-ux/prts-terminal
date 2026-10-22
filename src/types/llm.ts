@@ -47,6 +47,8 @@ export interface Compat {
   auth?: "bearer" | "none";
   /** 推理链多轮回传策略覆盖；缺省 = 由 thinkingFormat 家族默认决定 */
   reasoningPolicy?: "preserve" | "require_tool_call";
+  /** 流式响应是否接受 stream_options.include_usage；缺省 = 发送并失败降级 */
+  supportsUsageInStreaming?: boolean;
 }
 
 /** 效果层 compat（resolve_compat 运行时计算，不序列化到 JSON） */
