@@ -804,21 +804,55 @@ fn current_logon_sid(token: HANDLE) -> Result<Vec<u8>, String> {
             &mut needed,
         )
         .map_err(|e| format!("GetTokenInformation(TokenGroups): {e}"))?;
-        let groups = buf.as_ptr().cast::<TOKEN_GROUPS>();
-        let count = (*groups).GroupCount as usize;
-        let base = buf.as_ptr().add(std::mem::size_of::<TOKEN_GROUPS>());
-        let stride = std::mem::size_of::<SID_AND_ATTRIBUTES>();
+        find_logon_sid_in_groups(&buf)
+    }
+}
+
+/// 从 TOKEN_GROUPS 原始缓冲中找已启用的 logon SID。
+///
+/// 关键点：`Groups` 的偏移是 `offset_of!(TOKEN_GROUPS, Groups)`（Windows
+/// 布局为 8），不是 `size_of::<TOKEN_GROUPS>()`（24，已包含 Groups[0]）。
+/// 旧写法会跳过第一项并在末尾越界读取。
+fn find_logon_sid_in_groups(buf: &[u8]) -> Result<Vec<u8>, String> {
+    let count = u32::from_ne_bytes(
+        buf.get(0..4)
+            .ok_or_else(|| "TokenGroups 缓冲不足 4 字节".to_string())?
+            .try_into()
+            .map_err(|_| "TokenGroups GroupCount 读取失败".to_string())?,
+    ) as usize;
+    let base = std::mem::offset_of!(TOKEN_GROUPS, Groups);
+    let stride = std::mem::size_of::<SID_AND_ATTRIBUTES>();
+    let end = count
+        .checked_mul(stride)
+        .and_then(|groups_len| base.checked_add(groups_len))
+        .ok_or_else(|| "TokenGroups 尺寸溢出".to_string())?;
+    if buf.len() < end {
+        return Err(format!(
+            "TokenGroups 缓冲不足：需要 {end} 字节，实际 {} 字节",
+            buf.len()
+        ));
+    }
+
+    unsafe {
         for i in 0..count {
-            let entry = base.add(i * stride).cast::<SID_AND_ATTRIBUTES>();
-            let attrs = (*entry).Attributes;
+            let offset = base + i * stride;
+            let entry =
+                std::ptr::read_unaligned(buf.as_ptr().add(offset).cast::<SID_AND_ATTRIBUTES>());
+            let attrs = entry.Attributes;
             if attrs & SE_GROUP_LOGON_ID == SE_GROUP_LOGON_ID && attrs & SE_GROUP_ENABLED != 0 {
-                let sid_ptr = (*entry).Sid;
+                let sid_ptr = entry.Sid;
+                if sid_ptr.0.is_null() {
+                    continue;
+                }
                 let len = GetLengthSid(sid_ptr) as usize;
+                if len == 0 {
+                    continue;
+                }
                 return Ok(std::slice::from_raw_parts(sid_ptr.0 as *const u8, len).to_vec());
             }
         }
-        Err("TokenGroups 中未找到已启用 logon SID".into())
     }
+    Err("TokenGroups 中未找到已启用 logon SID".into())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1341,6 +1375,54 @@ mod tests {
             std::env::temp_dir().join(format!("prts-m4-{tag}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// 与 TOKEN_GROUPS 头部同布局的测试缓冲（u32 + 两个 SID_AND_ATTRIBUTES）。
+    #[repr(C)]
+    struct TestTokenGroups {
+        group_count: u32,
+        groups: [SID_AND_ATTRIBUTES; 2],
+    }
+
+    fn groups_bytes(groups: &TestTokenGroups) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                (groups as *const TestTokenGroups).cast::<u8>(),
+                std::mem::size_of::<TestTokenGroups>(),
+            )
+        }
+    }
+
+    #[test]
+    fn logon_sid_scan_reads_first_group_and_rejects_short_buffer() {
+        // 假 SID 只需满足 GetLengthSid：revision=1、1 个子权威、NT authority。
+        let mut sid = [1u8, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
+        let sid_ptr = PSID(sid.as_mut_ptr().cast());
+        let groups = TestTokenGroups {
+            group_count: 2,
+            groups: [
+                SID_AND_ATTRIBUTES {
+                    Sid: sid_ptr,
+                    Attributes: SE_GROUP_LOGON_ID | SE_GROUP_ENABLED,
+                },
+                SID_AND_ATTRIBUTES {
+                    Sid: sid_ptr,
+                    Attributes: 0,
+                },
+            ],
+        };
+
+        // 旧实现的 base=size_of::<TOKEN_GROUPS>() 会跳过 Groups[0]，此断言会失败。
+        assert_eq!(
+            find_logon_sid_in_groups(groups_bytes(&groups)).unwrap(),
+            sid
+        );
+
+        let short = TestTokenGroups {
+            group_count: 3,
+            groups: groups.groups,
+        };
+        assert!(find_logon_sid_in_groups(groups_bytes(&short)).is_err());
     }
 
     /// 同步执行一次受限命令并收集输出（测试用便捷封装）。
