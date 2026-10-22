@@ -5,8 +5,9 @@
 //   管理 conversations 列表和 activeId 指针。
 //   不涉及 Agent 处理逻辑、不操作 UI 状态。
 //   持久化（Phase 4）：本 store 是**唯一组织态入口**——appendTurn/rename/
-//   delete 在内存更新后 fire-and-forget 通知后端落盘（失败静默降级，内存态先行
-//   不阻断对话）；createConversation/advanceNoticeSeq 不直接触达后端（游标与
+//   delete 在内存更新后 fire-and-forget 通知后端落盘（轮归档失败会标记
+//   persistenceError，不阻断对话；R-05）。createConversation/advanceNoticeSeq
+//   不直接触达后端（游标与
 //   usage 随轮经 append_turn 的 metaSnapshot 提交）。启动恢复由恢复 hook
 //   （useConversationHydration）单点负责，本 store 只提供 setState 装载。
 //   被 useProcessingStore 单向依赖（跨 store 调 getState）。
@@ -53,8 +54,8 @@ export interface ConversationStore {
   ) => string;
   /** 向已有对话归档一轮事件序列（turn/end 或错误发生时）。
    *  内存归档先行（同步）；随后 fire-and-forget 提交后端持久化
-   *  （append_turn，失败静默——重启丢最近轮，与无持久化现状等价）。
-   *  对话不存在（已删除）→ 内存空操作且不发 invoke。
+   *  （append_turn）。写盘失败会写入 persistenceError 并弹 warning toast，
+   *  下一次成功归档清除；对话不存在（已删除）→ 内存空操作且不发 invoke。
    *  @param usage 本轮归档的上下文 Token 用量快照（finishProcessing 从轮内
    *   最后一个 assistant/message 扫出；随轮持久覆盖。缺省时用对话现值——
    *   错误轮无新 usage 不覆盖）。liveContextTokens 随归档清空。 */

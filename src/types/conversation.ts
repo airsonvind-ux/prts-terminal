@@ -263,4 +263,9 @@ export interface Conversation {
   lastNoticeSeq?: number;
   /** 用量统计（Phase 5）：按四类累计，随轮 / 压缩 / 记忆 / 标题更新。 */
   usage?: ConversationUsage;
+  /**
+   * 最近一次轮归档写盘失败的原因（仅内存，不落盘）。
+   * 下一次 append_turn 成功后清除；ChatView 据此显示“未保存”提示。
+   */
+  persistenceError?: string;
 }

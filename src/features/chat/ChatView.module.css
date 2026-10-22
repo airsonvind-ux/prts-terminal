@@ -10,6 +10,17 @@
   overflow: hidden;
 }
 
+/* R-05：本轮归档写盘失败——持续到下一次成功归档，避免 toast 一闪而过 */
+.persistWarning {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--depth-1);
+  background: rgba(216, 160, 74, 0.07);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 /*
  * 内容层编排容器
  *

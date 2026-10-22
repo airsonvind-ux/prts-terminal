@@ -42,6 +42,7 @@ export function ChatView({ onDragHandle }: Props) {
     ? conversations.find((c) => c.id === activeId)
     : undefined;
   const turns = useMemo(() => activeConv?.turns ?? [], [activeConv?.turns]);
+  const persistenceError = activeConv?.persistenceError;
 
   // ── 活跃对话的处理中快照（流式输出期间非空） ──
   // 与 useUIState 中查找 agentPhase 的模式一致：
@@ -330,6 +331,15 @@ export function ChatView({ onDragHandle }: Props) {
       <Toolbar onDragHandle={onDragHandle} showTitle={chromeVisible} />
       <DragOverlay active={dragActive} />
       <div className={styles.messageArea}>
+        {persistenceError && (
+          <div
+            className={styles.persistWarning}
+            role="status"
+            title={persistenceError}
+          >
+            本轮记录未保存；重启后这一轮不会恢复
+          </div>
+        )}
         {/* 恢复中且尚无内容：对话区留白（启动演出覆盖其上）；恢复后内容先挂载、
             在遮盖期间完成首帧与沉底，演出淡出时直接露出 */}
         {restoring && turns.length === 0 ? null : (

@@ -7,7 +7,7 @@
 //   F3 空对话不落盘（createConversation 无 invoke）+ 首轮携带完整 meta
 //   F4 错误轮提交（failProcessing：user 已剥块 + error 事件 + 游标随轮）
 //   F5 游标随轮（advanceNoticeSeq 纯内存无 invoke；appendTurn metaSnapshot 携带）
-//   F8 append_turn 失败静默（内存归档照常）
+//   F8 append_turn 失败可见（内存归档照常 + 未保存标记 + warning toast）
 //   补充：finishProcessing usage 随轮覆盖（append_turn contextTokens = 本轮 usage）
 //
 // 直接调用 store actions 模拟事件到达（架构约定，同 processing.integration）。
@@ -19,6 +19,7 @@ import {
   flushPending,
 } from "../useProcessingStore";
 import { useUIStore } from "../useUIStore";
+import { useToastStore } from "../useToastStore";
 import type { SessionEvent } from "../../types";
 
 // ── 辅助 ──
@@ -36,6 +37,7 @@ function resetAllStores(): void {
     overlay: null,
     restoring: false,
   });
+  useToastStore.setState({ toasts: [] });
   __invokeMock.mockClear();
 }
 
@@ -214,12 +216,12 @@ describe("F5 游标随轮提交", () => {
 });
 
 // ═══════════════════════════════════════════════════════
-// F8：写盘失败静默（内存态照常）
+// F8：写盘失败可见（内存态照常 + 未保存标记）
 // ═══════════════════════════════════════════════════════
 
-describe("F8 写盘失败静默降级", () => {
-  it("append_turn reject → 不抛、内存归档照常", async () => {
-    __invokeMock.mockRejectedValueOnce(new Error("后端不可达"));
+describe("F8 写盘失败可见", () => {
+  it("append_turn reject → 不抛、内存归档照常、标记未保存并弹 warning", async () => {
+    __invokeMock.mockRejectedValueOnce(new Error("磁盘已满"));
     const store = useConversationStore.getState();
     const id = store.createConversation("x");
     const events = [userEvent("s1", "x")];
@@ -230,6 +232,36 @@ describe("F8 写盘失败静默降级", () => {
 
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.turns).toEqual([events]);
+    expect(conv.persistenceError).toContain("磁盘已满");
+
+    const toasts = useToastStore.getState().toasts;
+    expect(
+      toasts.some(
+        (t) =>
+          t.kind === "warning" &&
+          t.message.includes("本轮记录未保存") &&
+          t.message.includes("磁盘已满")
+      )
+    ).toBe(true);
+  });
+
+  it("下一次 append_turn 成功 → 清除未保存标记", async () => {
+    __invokeMock.mockRejectedValueOnce(new Error("磁盘已满"));
+    const store = useConversationStore.getState();
+    const id = store.createConversation("x");
+    store.appendTurn(id, [userEvent("s1", "x")]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      useConversationStore.getState().conversations[0].persistenceError
+    ).toContain("磁盘已满");
+
+    store.appendTurn(id, [userEvent("s2", "y")]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      useConversationStore.getState().conversations[0].persistenceError
+    ).toBeUndefined();
   });
 });
 

@@ -1,8 +1,10 @@
 // 对话的轮次归档与压缩持久化。
 //
-// 内存先行、IPC fire-and-forget；失败静默降级，内存态照常。
+// 内存先行、IPC fire-and-forget；轮归档写盘失败会留下可见的未保存标记
+// （R-05），不再静默吞掉。
 
 import { invoke } from "@tauri-apps/api/core";
+import { showToast } from "./useToastStore";
 import type {
   CompactionMeta,
   Conversation,
@@ -75,7 +77,7 @@ export function appendTurnImpl(
     }),
   }));
 
-  // 持久化提交（fire-and-forget：失败静默降级，内存态照常）
+  // 持久化提交（fire-and-forget；失败不再静默：标记会话 + warning toast）
   // metaSnapshot：首轮即携带完整 meta 建文件（title/createdAt/modelName/
   // contextLength）；contextTokens 取本轮 usage 覆盖参数（无新 usage 时不
   // 覆盖旧值）；lastNoticeSeq 携带当前内存游标（随轮提交）；usageDeltas
@@ -93,9 +95,30 @@ export function appendTurnImpl(
     conversationId,
     eventsJson: JSON.stringify(events),
     ...metaSnapshot,
-  }).catch(() => {
-    // 写盘失败静默：本轮不落盘，内存态继续（重启丢最近轮）
-  });
+  })
+    .then(() => {
+      set((state) => ({
+        conversations: state.conversations.map((c) =>
+          c.id === conversationId && c.persistenceError !== undefined
+            ? { ...c, persistenceError: undefined }
+            : c
+        ),
+      }));
+    })
+    .catch((err) => {
+      const message = String(err);
+      console.error("[persistence] append_turn 失败", err);
+      set((state) => ({
+        conversations: state.conversations.map((c) =>
+          c.id === conversationId ? { ...c, persistenceError: message } : c
+        ),
+      }));
+      showToast(`本轮记录未保存：${message}`, {
+        kind: "warning",
+        ttlMs: 8000,
+        dedupeKey: `append-turn-failed-${conversationId}`,
+      });
+    });
 }
 
 export function applyCompactionImpl(
