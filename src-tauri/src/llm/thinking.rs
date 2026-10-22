@@ -1,26 +1,20 @@
 //! thinking —— 思考强度（thinking level）canonical 解析与请求注入
 //!
-//! 移植自既有实现的思考档位与协议兼容逻辑（
-//! lib/providers/deepseek*.ts）的"canonical 档 → 各族 wire 参数"语义，按
-//! PRTS 的 api_type 三族 + 既有 request_param（resolve_compat）收口：
+//! 把 canonical 档位（off/low/medium/high/max）翻译成各协议族需要的 wire
+//! 参数。canonical 白名单由 models.json 的 `thinking_levels` 声明；未声明的
+//! reasoning 模型使用推断集 [off, medium, high]，默认 medium。
 //!
-//! - canonical 档：off / low / medium / high / max（白名单由 models.json
-//!   `thinking_levels` 声明；**无声明的 reasoning 模型 = 推断集
-//!   [off, medium, high]，默认 medium**——修正 2，对齐既有实现）
-//! - **None = 跟随模型默认档**：resolve 在 reasoning=true 时恒返回一档
-//!   （声明 default 或推断 medium）并注入——默认档即生效档，请求携带显式
-//!   档位（用户可感知、防服务端默认漂移）；非 reasoning / 未知模型 → 不注入
+//! **None = 跟随模型默认档**：resolve 在 reasoning=true 时返回一档（声明默认
+//! 或推断 medium）并注入；非 reasoning / 未知模型不注入。
 //!
-//! 各族 wire（逐函数对照既有实现）：
-//! - completions + request_param="thinking"（DeepSeek）：照
-//!   lib/providers/deepseek.ts reasoningEffortForLevel / thinking 形态——
-//!   off → `thinking:{type:"disabled"}` + 删 reasoning_effort；其余 →
+//! 各族 wire：
+//! - completions + request_param="thinking"（DeepSeek）：off →
+//!   `thinking:{type:"disabled"}` + 删 reasoning_effort；其余 →
 //!   enabled + reasoning_effort（low→low、medium/high→high、max→max）
-//! - completions + request_param="enable_thinking"（Qwen 族）：照
-//!   core/provider-compat/qwen.ts——off → false；其余 → true（布尔形态；
-//!   修正旧 `{"type":"enabled"}` 非布尔附加）
-//! - completions + request_param="zhipu"：照 core/provider-compat/zhipu.ts——
-//!   `thinking.type`；工具轮/历史推理存在时带 `clear_thinking:false`
+//! - completions + request_param="enable_thinking"（Qwen 族）：off → false；
+//!   其余 → true（布尔形态，不使用对象形态）
+//! - completions + request_param="zhipu"：`thinking.type`；工具轮/历史推理存在
+//!   时带 `clear_thinking:false`
 //! - completions + request_param="kimi"：按模型代际分流——K2.6 用 thinking，
 //!   K3 只用 reasoning_effort，K2.7 Code 始终思考且不发 thinking
 //! - completions + request_param="volcengine"：`thinking.type` + effort 映射
@@ -28,12 +22,10 @@
 //! - completions + request_param=None（OpenAI 系无 thinking_format）：发
 //!   `reasoning_effort`（effort 无 off/max 档，由模型声明集约束；off → 删
 //!   字段 = 服务端默认；max → 降 high——OpenAI chat effort 无 max）
-//! - anthropic-messages：照 core/provider-compat/anthropic.ts——off →
-//!   `thinking:{type:"disabled"}`；非 off → enabled + budget_tokens
-//!   （PRTS 无既有实现的预算层，enabled 暂以 8192 起步，
-//!   **待 anthropic 推理族声明接入时复核**——见任务书上报原则）
-//! - openai-responses：沿用既有 responses 族——off → `reasoning.effort=
-//!   "none"`；其余 effort 直传（low/medium/high/max）
+//! - anthropic-messages：off → `thinking:{type:"disabled"}`；非 off → enabled + budget_tokens
+//!   （PRTS 暂无独立预算层，enabled 暂以 8192 起步，待 Anthropic 推理族声明
+//!   接入时复核）
+//! - openai-responses：off → `reasoning.effort="none"`；其余 effort 直传
 
 use serde_json::Value;
 
@@ -45,22 +37,22 @@ pub const LEVELS: [&str; 5] = ["off", "low", "medium", "high", "max"];
 /// 归一 canonical：未知档返回 None（调用方按"未设置"处理，不臆造）。
 pub fn canonical(level: &str) -> Option<&'static str> {
     let t = level.trim().to_ascii_lowercase();
-    // 兼容别名（既有实现 normalize：xhigh 对外即 max 档内部值）
+    // 兼容别名：xhigh 对外即 max 档内部值
     if t == "xhigh" {
         return Some("max");
     }
     LEVELS.iter().copied().find(|&l| l == t)
 }
 
-/// 推断白名单（无显式声明的 reasoning 模型；沿用既有 DEFAULT_VISIBLE
-/// [off, medium, high] 与全局默认 medium）。
+/// 推断白名单（无显式声明的 reasoning 模型：默认可见 [off, medium, high]，
+/// 全局默认 medium）。
 pub const INFERRED_LEVELS: [&str; 3] = ["off", "medium", "high"];
-/// 推断默认档（既有实现 normalizeSessionThinkingLevel 全局默认 medium）。
+/// 推断默认档：全局默认 medium。
 pub const INFERRED_DEFAULT: &str = "medium";
 
 /// 解析本次请求最终思考档。
 ///
-/// 修正 2 语义（对齐既有实现，替换"未声明不显示/不注入"）：
+/// 当前语义（未声明也显示并注入默认档）：
 /// - 模型 reasoning=false 或不在注册表 → None（不注入、UI 不显示）
 /// - **reasoning=true 恒返回一档**：requested None → 模型默认档（有声明 =
 ///   声明 default；无声明 = medium 推断默认）——默认档即生效档，请求携带
@@ -291,14 +283,14 @@ fn apply_openai_effort(body: &mut Value, level: &'static str) {
     body["reasoning_effort"] = Value::String(effort.into());
 }
 
-/// 注入 anthropic-messages 通道 thinking（照 anthropic.ts 语义；预算映射自定）。
+/// 注入 anthropic-messages 通道 thinking（预算映射由 PRTS 自定）。
 ///
 /// budget_tokens 公开约束：最小值 1024 且必须 < max_tokens（Anthropic/Bedrock
-/// 文档一致）；**无官方档位标准表**（既有实现的预算在内部，PRTS 无此层）。
-/// 映射按档递增取合理值（裁决①）：low→2048 / medium→8192 / high→16384 /
+/// 文档一致）；**无官方档位标准表**，PRTS 目前没有独立预算层。
+/// 映射按档递增取合理值：low→2048 / medium→8192 / high→16384 /
 /// max→32768，均满足 ≥1024。开启 thinking 时若 max_tokens 不足（PRTS 默认
 /// 4096 会违反 budget < max_tokens），**联动抬升 max_tokens** = max(现值,
-/// budget + 4096)（参考既有 max 档抬 max_tokens 的做法）。
+/// budget + 4096)。
 pub fn apply_anthropic(body: &mut Value, level: &'static str) {
     if level == "off" {
         body["thinking"] = serde_json::json!({"type": "disabled"});

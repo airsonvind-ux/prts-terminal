@@ -1,6 +1,6 @@
 //! Anthropic Messages API 客户端
 //!
-//! 参考既有实现 `cn()` 中 `anthropic-messages` 分支。
+//! 实现 Anthropic Messages 协议的请求、流式事件与用量解析。
 //!
 //! 与 OpenAI Chat Completions 的核心差异：
 //! - 端点：POST /v1/messages（非 /chat/completions）

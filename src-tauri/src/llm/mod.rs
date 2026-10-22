@@ -23,7 +23,7 @@ pub mod openai_compatible;
 pub mod openai_responses;
 pub mod sse;
 pub mod thinking;
-// 协议异常清洗（匿名工具调用）：对照既有实现的 stream-guard，见模块头。
+// 协议异常清洗（匿名工具调用），见模块头。
 pub mod protocol_guard;
 
 // ═══════════════════════════════════════════════════════
@@ -168,7 +168,7 @@ impl ApiType {
 
 /// 模型所属的 thinking 家族。
 ///
-/// 来自既有实现 `fa()` 的检测结果，在 models.json 中显式声明。
+/// 思考家族在 models.json 中显式声明。
 /// 决定 `resolve_compat()` 如何计算 carrier / request_param / policy。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -329,8 +329,8 @@ pub enum AuthMode {
 
 /// 从声明层 compat 计算效果层 ResolvedCompat。
 ///
-/// 翻译既有实现 `K0()` 逻辑：thinking_format + api_type + has_reasoning
-/// 三个输入唯一确定 carrier / request_param / policy。
+/// 由 thinking_format + api_type + has_reasoning 三个输入确定
+/// carrier / request_param / policy。
 /// auth 不参与计算，由调用方从 Compat.auth 直通。
 pub fn resolve_compat(
     thinking_format: Option<ThinkingFormat>,

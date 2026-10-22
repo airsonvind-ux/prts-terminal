@@ -1,11 +1,11 @@
 //! skills_install —— 技能安装 / 移除（批 3 · 设置页动作）
 //!
-//! 参照既有实现 `skill-package-installer` / `safe-fs` 的成熟方案移植：
+//! 安装流程：
 //! - 校验（路径 / 结构 / frontmatter / 命名 / 查重）→ 拷贝（隐藏临时名）→
 //!   rename 落位（原子）→ 失败清理临时（不留半截产物）；
 //! - **符号链接硬拒**（包内出现即拒绝，防越界读取与循环）；
 //! - 支持两种形态：单 `.md` 文件，或技能包文件夹（根级含 `SKILL.md`；
-//!   容忍一层包装目录——沿用既有实现 `findSkillPackageRoot` 语义）。
+//!   容忍一层包装目录）。
 //!
 //! 落位命名：以 frontmatter `name` 为准（`{name}.md` / `{name}/`）——查重
 //! 收敛为「技能名 + 目标路径」两道；与现有条目同名一律拒绝安装（内置是
@@ -324,7 +324,7 @@ fn find_package_root(source_dir: &Path) -> Option<PathBuf> {
     subs.into_iter().find(|p| p.join("SKILL.md").is_file())
 }
 
-/// 递归检查符号链接：包内出现即拒绝（沿用既有实现 `assertNoSymlinkEntries`）。
+/// 递归检查符号链接：包内出现即拒绝。
 fn assert_no_symlinks(dir: &Path) -> Result<(), String> {
     let rd =
         std::fs::read_dir(dir).map_err(|e| format!("读取目录失败（{}）：{e}", dir.display()))?;
@@ -366,8 +366,7 @@ fn dir_total_bytes(dir: &Path) -> Result<u64, String> {
 }
 
 /// 目录拷贝落位：先复制到同根隐藏临时目录（`.` 前缀，不入索引），
-/// 再 rename 落位（原子）；任一步失败清理临时（沿用既有实现 `safeCopyDir` 语义；
-/// 目标必须不存在，故无备份/回滚分支）。
+/// 再 rename 落位（原子）；任一步失败清理临时（目标必须不存在，故无备份/回滚分支）。
 fn copy_dir_into(src: &Path, dst: &Path) -> Result<(), String> {
     let parent = dst
         .parent()

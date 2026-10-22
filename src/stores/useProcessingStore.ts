@@ -213,9 +213,8 @@ export function isAnyProcessing(): boolean {
 // ── 流式节流缓冲（模块 F · 批 2-A+B 设计一） ──
 //
 // assistant/chunk 是 token 级高频事件：每个 delta 一个事件 → 每个事件一次
-// Zustand set → MessageList 全列表重建 → Markdown 全量转换。这里按既有实现的
-// 参考（30FPS 节流，use-stream-buffer.ts 的 FLUSH_INTERVAL 语义）引入 33ms
-// 批量缓冲：窗口内 chunk 累积在纯 JS Map 中（不触发 React 渲染），flush 时
+// Zustand set → MessageList 全列表重建 → Markdown 全量转换。这里采用 33ms
+// 批量缓冲（30FPS 节流）：窗口内 chunk 累积在纯 JS Map 中（不触发 React 渲染），flush 时
 // 一次性追加进 currentEvents。
 //
 // 语义：
@@ -230,7 +229,7 @@ export function isAnyProcessing(): boolean {
 // - 缓冲属于「事件 → 投影缓存」的写入策略，归 store 职责（测试直接调
 //   store actions 模拟后端事件的架构约定不变）
 // - StrictMode 双挂载下 hook 层缓冲会在 cleanup 时丢未 flush 事件，store
-//   模块级 Map 无此问题（与既有实现的独立 manager 同理）
+//   模块级 Map 无此问题
 // - turn/end 强 flush 原子化在 finishProcessing 内部，useAgentEvents 零改动
 
 /**

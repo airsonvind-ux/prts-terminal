@@ -63,7 +63,7 @@ export function buildReminderBlock(entries: ReminderLine[]): string {
  * 剥离 `[prts_reminder]` 块（与后端约定的块格式兼容；buildReminderBlock 的
  * 互逆）。标记与中间内容整块剥离，不依赖块内格式。
  *
- * 语义（fail closed，仿既有实现 stripSessionReminderBlocks）：
+ * 语义（fail closed）：
  * - 无开始标记 → 原样返回
  * - 未闭合块（有开始无结束）→ 从开始标记剥到文本末尾
  * - 闭合块 → 连同块后紧跟的换行（拼装时块尾接 "\n\n"）一并去除，

@@ -1,7 +1,6 @@
 //! spawn_win32 —— Windows 受限令牌进程启动（M4 降权执行 · 子步 2-4）
 //!
-//! 仅 Windows 编译（exec/mod.rs 以 #[cfg(windows)] 门控）。实现与既有实现
-//! hana-win-sandbox v3 同构的「写隔离」模型：
+//! 仅 Windows 编译（exec/mod.rs 以 #[cfg(windows)] 门控）。实现「写隔离」模型：
 //!
 //! - **Token**：`CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | LUA_TOKEN |
 //!   WRITE_RESTRICTED)`；限制 SID = Everyone + 当前 logon SID + 每写根派生

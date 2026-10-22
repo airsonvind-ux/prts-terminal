@@ -237,7 +237,7 @@ export function getTableLayouts(
   return layouts;
 }
 
-// ── 顶层节点 reconcile（设计三 · DOM 层，移植既有实现语义） ──
+// ── 顶层节点 reconcile（DOM 层） ──
 //
 // 首次挂载整体 innerHTML；后续更新把新 HTML 解析为顶层节点数组，与 root 现有
 // 子节点逐个按下标比较签名：

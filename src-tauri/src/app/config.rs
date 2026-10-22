@@ -115,8 +115,7 @@ pub fn ensure_workspace_dir(path: &Path) -> std::io::Result<()> {
 /// 确保默认工作区存在，返回其路径。
 ///
 /// 仅对默认路径使用：用户自选路径**不**重建——目录消失应当显式暴露，
-/// 而不是被静默重建（既有实现同规则，其 `restoreDefaultWorkspaceIfMissing`
-/// 只对默认路径生效）。
+/// 而不是被静默重建。
 pub fn ensure_default_workspace() -> std::io::Result<PathBuf> {
     let path = default_workspace_path();
     ensure_workspace_dir(&path)?;
