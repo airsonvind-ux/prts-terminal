@@ -99,7 +99,9 @@ export function SettingsUsage() {
   const total = CATEGORIES.reduce((s, c) => s + catTokens(usage[c.key]), 0);
   const hit = CATEGORIES.reduce((s, c) => s + usage[c.key].cacheHitTokens, 0);
   const prompt = CATEGORIES.reduce((s, c) => s + usage[c.key].cachePromptTokens, 0);
-  const hitRate = prompt > 0 ? hit / prompt : null;
+  // 0 命中不作为命中率观测：首轮无缓存、缓存未建立、真实 miss 都可能是 0，
+  // 展示 0% 会把“没观测到”说成“缓存完全失效”。原始值仍在用量事件里可查。
+  const hitRate = hit > 0 && prompt > 0 ? hit / prompt : null;
 
   const scopeLabel =
     effectiveScope === "all" ? "全部对话" : activeConv?.title ?? "全部对话";
@@ -209,7 +211,7 @@ export function SettingsUsage() {
                       {formatCompact(t)}
                     </span>
                     <span className={styles.catHit}>
-                      {v.cachePromptTokens > 0 ? `命中 ${formatCompact(v.cacheHitTokens)}` : "未观测"}
+                      {v.cacheHitTokens > 0 ? `命中 ${formatCompact(v.cacheHitTokens)}` : "未观测"}
                     </span>
                   </span>
                 </div>

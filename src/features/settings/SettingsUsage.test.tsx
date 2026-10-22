@@ -73,4 +73,31 @@ describe("SettingsUsage", () => {
     expect(container.textContent).toContain("记忆");
     expect(container.textContent).toContain("标题");
   });
+
+  it("零命中 → 未观测，不显示 0%", () => {
+    useConversationStore.setState({
+      conversations: [conv("a", "甲", usageOf(1000, 0))],
+    });
+    render();
+    expect(container.textContent).toContain("缓存未观测");
+    expect(container.textContent).toContain("未观测");
+    expect(container.textContent).not.toContain("0%");
+  });
+
+  it("正命中 → 显示命中率与命中量", () => {
+    useConversationStore.setState({
+      conversations: [
+        conv("a", "甲", {
+          session: cat(1000, 500),
+          compaction: cat(0, 0),
+          memory: cat(0, 0),
+          title: cat(0, 0),
+        }),
+      ],
+    });
+    render();
+    expect(container.textContent).toContain("50%");
+    expect(container.textContent).toContain("命中 500");
+    expect(container.textContent).not.toContain("缓存未观测");
+  });
 });

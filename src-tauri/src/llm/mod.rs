@@ -640,9 +640,11 @@ pub struct UsageStat {
 /// - anthropic-messages：`input_tokens` 只含未命中部分，命中单列在 cache_read
 ///
 /// 统一输出 `cache_prompt_tokens` = 该次 prompt 全量（命中率分母）。
-/// provider 不报缓存（`cache_hit_tokens == None`）时两个缓存字段留 None。
+/// provider 不报缓存（`cache_hit_tokens == None`）或报 0 时两个缓存字段留 None。
+/// 0 不进入统计：首轮无前缀可命中、缓存尚未建立、真实 miss 三种情况都会报 0，
+/// 把它当命中率会制造“0%”的假精确；原始 0 仍保留在 TokenUsage 供排查。
 pub fn usage_stat(usage: &TokenUsage, api_type: ApiType) -> UsageStat {
-    let cache_hit = usage.cache_hit_tokens;
+    let cache_hit = usage.cache_hit_tokens.filter(|hit| *hit > 0);
     let cache_prompt = cache_hit.map(|hit| match api_type {
         ApiType::AnthropicMessages => usage.input_tokens.saturating_add(hit),
         _ => usage.input_tokens,
@@ -1366,6 +1368,39 @@ mod tests {
     }
 
     use super::*;
+
+    // ── usage_stat 缓存口径（0 = 未观测）──
+
+    fn usage_with_cache(input: u32, hit: Option<u32>) -> TokenUsage {
+        TokenUsage {
+            input_tokens: input,
+            context_input_tokens: None,
+            output_tokens: 10,
+            cache_hit_tokens: hit,
+            cache_miss_tokens: None,
+        }
+    }
+
+    #[test]
+    fn usage_stat_zero_cache_is_unobserved() {
+        let stat = usage_stat(&usage_with_cache(100, Some(0)), ApiType::OpenAiCompletions);
+        assert_eq!(stat.cache_hit_tokens, None);
+        assert_eq!(stat.cache_prompt_tokens, None);
+    }
+
+    #[test]
+    fn usage_stat_positive_cache_keeps_denominator() {
+        let stat = usage_stat(&usage_with_cache(100, Some(80)), ApiType::OpenAiCompletions);
+        assert_eq!(stat.cache_hit_tokens, Some(80));
+        assert_eq!(stat.cache_prompt_tokens, Some(100));
+    }
+
+    #[test]
+    fn usage_stat_anthropic_cache_adds_hit_to_denominator() {
+        let stat = usage_stat(&usage_with_cache(20, Some(80)), ApiType::AnthropicMessages);
+        assert_eq!(stat.cache_hit_tokens, Some(80));
+        assert_eq!(stat.cache_prompt_tokens, Some(100));
+    }
 
     #[test]
     fn chat_message_constructors() {
