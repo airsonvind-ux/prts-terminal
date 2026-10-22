@@ -344,7 +344,7 @@ describe("sendMessage 与压缩的互斥 + 窗口硬拦", () => {
     seedConversation("c1", [userTurn("你好")], {
       contextTokens: { inputTokens: 54_000, outputTokens: 500 },
     });
-    setModelInfo({ name: "DeepSeek", contextLength: 64_000 });
+    setModelInfo({ name: "DeepSeek", contextLength: 64_000, supportsVision: false });
     await useProcessingStore.getState().sendMessage("继续聊");
     expect(invokeCount("agent_process")).toBe(0);
     expect(toastMessages().join("|")).toContain("请先压缩");
@@ -354,7 +354,7 @@ describe("sendMessage 与压缩的互斥 + 窗口硬拦", () => {
     seedConversation("c1", [userTurn("你好")], {
       contextTokens: { inputTokens: 10_000, outputTokens: 500 },
     });
-    setModelInfo({ name: "DeepSeek", contextLength: 64_000 });
+    setModelInfo({ name: "DeepSeek", contextLength: 64_000, supportsVision: false });
     await useProcessingStore.getState().sendMessage("继续聊");
     expect(invokeCount("agent_process")).toBe(1);
   });
@@ -367,7 +367,7 @@ describe("sendMessage 与压缩的互斥 + 窗口硬拦", () => {
         outputTokens: 500,
       },
     });
-    setModelInfo({ name: "Anthropic", contextLength: 64_000 });
+    setModelInfo({ name: "Anthropic", contextLength: 64_000, supportsVision: false });
     await useProcessingStore.getState().sendMessage("继续聊");
     expect(invokeCount("agent_process")).toBe(0);
   });

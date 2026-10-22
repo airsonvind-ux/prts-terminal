@@ -96,11 +96,21 @@ export function App() {
                 });
               } else {
                 // 自定义模型不在 models.json 中，用原始 ID 作展示名
-                setModelInfo({ name: model, contextLength: 0, thinking: null });
+                setModelInfo({
+                  name: model,
+                  contextLength: 0,
+                  supportsVision: false,
+                  thinking: null,
+                });
               }
             })
             .catch(() => {
-              setModelInfo({ name: model, contextLength: 0, thinking: null });
+              setModelInfo({
+                name: model,
+                contextLength: 0,
+                supportsVision: false,
+                thinking: null,
+              });
             });
         }
       })

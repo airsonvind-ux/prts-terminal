@@ -207,7 +207,7 @@ describe("ContextIndicator · 压缩入口", () => {
 describe("ContextIndicator · 水位口径", () => {
   it("进度使用 inputTokens（output 不计入水位，悬停面板不含成本行）", () => {
     seedConversation({ inputTokens: 100, outputTokens: 900 });
-    setModelInfo({ name: "DeepSeek", contextLength: 200 });
+    setModelInfo({ name: "DeepSeek", contextLength: 200, supportsVision: false });
     renderIndicator();
     // 悬停浮层（React onMouseEnter 由 mouseover 合成）断言口径：
     // used = input（100/200 = 50%）；output 既不进水位也不显示成本行
@@ -226,7 +226,11 @@ describe("ContextIndicator · 水位口径", () => {
       contextInputTokens: 91_000,
       outputTokens: 900,
     });
-    setModelInfo({ name: "Anthropic", contextLength: 200_000 });
+    setModelInfo({
+      name: "Anthropic",
+      contextLength: 200_000,
+      supportsVision: false,
+    });
     renderIndicator();
     const ring = container.querySelector<HTMLElement>('[role="button"]')!;
     act(() => {

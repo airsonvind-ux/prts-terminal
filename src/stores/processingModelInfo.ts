@@ -7,8 +7,8 @@
 export interface ModelInfoCache {
   name: string;
   contextLength: number;
-  /** 当前模型是否支持图像输入（未知/未收录 → undefined，按不支持处理） */
-  supportsVision?: boolean;
+  /** 当前模型是否支持图像输入（未知/未收录 → false；必填防止调用点漏写） */
+  supportsVision: boolean;
   /**
    * 生效思考档的展示文案（如 `中（默认）`；模型不支持推理 → null/undefined）。
    * **算好的值，不是存储偏好**——由写入点（App 启动 / 模型页选中 / 改档位）
