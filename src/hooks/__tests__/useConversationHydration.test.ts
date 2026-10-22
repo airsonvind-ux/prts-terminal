@@ -19,6 +19,7 @@ import {
 } from "../useConversationHydration";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useUIStore } from "../../stores/useUIStore";
+import { useToastStore } from "../../stores/useToastStore";
 import type { ConversationMeta } from "../../types";
 
 // ── 辅助 ──
@@ -29,6 +30,7 @@ function defaultRoute(cmd: string) {
     return Promise.resolve({ seq: 0, dims: [], events: [] });
   }
   if (cmd === "list_conversations") return Promise.resolve([]);
+  if (cmd === "count_unreadable_sessions") return Promise.resolve(0);
   return Promise.resolve(undefined);
 }
 
@@ -43,6 +45,7 @@ function resetAll(): void {
     overlay: null,
     restoring: false,
   });
+  useToastStore.setState({ toasts: [] });
   __invokeMock.mockReset();
   __invokeMock.mockImplementation(defaultRoute);
 }
@@ -254,6 +257,7 @@ describe("F7 恢复失败降级", () => {
     const metaX = meta({ id: "x", updatedAt: 2 });
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_conversations") return Promise.resolve([metaX]);
+      if (cmd === "count_unreadable_sessions") return Promise.resolve(0);
       if (cmd === "get_conversation") {
         return Promise.reject(new Error("会话文件损坏"));
       }
@@ -263,6 +267,25 @@ describe("F7 恢复失败降级", () => {
     await expect(restoreConversations()).resolves.toBeUndefined();
     expect(useConversationStore.getState().conversations).toHaveLength(0);
     expect(useUIStore.getState().restoring).toBe(false);
+  });
+
+  it("存在无法读取的会话文件 → warning toast（不静默）", async () => {
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([]);
+      if (cmd === "count_unreadable_sessions") return Promise.resolve(2);
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const toasts = useToastStore.getState().toasts;
+    expect(
+      toasts.some(
+        (t) =>
+          t.kind === "warning" &&
+          t.message.includes("2 个会话文件无法读取")
+      )
+    ).toBe(true);
   });
 });
 

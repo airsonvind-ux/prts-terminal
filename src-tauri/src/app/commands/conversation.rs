@@ -23,6 +23,18 @@ pub fn list_conversations(
     s.list()
 }
 
+/// 统计当前无法读取的会话文件数（启动恢复后用于一条可见提示）。
+/// 只读扫描；不触发重建，也不修改 index。
+#[tauri::command]
+pub fn count_unreadable_sessions(
+    store: State<'_, Arc<Mutex<SessionStore>>>,
+) -> Result<usize, String> {
+    let s = store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+    Ok(s.count_unreadable())
+}
+
 /// 读取单个会话：meta + 轮行（坏行已跳过；恢复时前端 JSON.parse 逐行重建）。
 ///
 /// **读出侧合并流式 chunk（2026-09 · 单遍）**：归档按事件落盘，每个流式 chunk

@@ -29,6 +29,7 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useUIStore } from "../stores/useUIStore";
+import { showToast } from "../stores/useToastStore";
 import type {
   BootStatus,
   Conversation,
@@ -78,6 +79,17 @@ async function runRestore(): Promise<void> {
 
   try {
     const metas = (await invoke<ConversationMeta[]>("list_conversations")) ?? [];
+    // header 无法修复的会话不会进入 index；启动时给一条可见提示，
+    // 避免文件损坏表现为“对话凭空消失”。
+    const unreadable = await invoke<number>("count_unreadable_sessions").catch(
+      () => 0
+    );
+    if (unreadable > 0) {
+      showToast(
+        `有 ${unreadable} 个会话文件无法读取，未能自动恢复；原文件已保留`,
+        { kind: "warning", ttlMs: 8000 }
+      );
+    }
     if (metas.length === 0) return; // 首次使用/无持久数据 → 欢迎界面照旧
 
     // 并行拉全量（悬浮窗规模：几十条 × 每轮几 KB ≈ 几十 ms，不引入懒加载状态机）

@@ -25,8 +25,9 @@
 //!
 //! 损坏处理：
 //! - 轮行坏行（parse 失败/半行）→ 读取时跳过，其余行照常（get 不整体失败）
-//! - header 损坏 / conversationId 与文件名不符 / schemaVersion 过高 → 会话视为
-//!   无效：list 移除对应 index 条目（**保留 jsonl 文件**），get/append 返回错误
+//! - header 首行损坏且仍有可读轮行 → 备份原文件后重建 header（tmp+rename），
+//!   无法恢复才视为无效；conversationId 不符 / schemaVersion 过高不重建
+//!   （会话视为无效：list 移除对应 index 条目并保留 jsonl 文件，get/append 返回错误）
 //! - index.json 缺失/parse 失败 → 自愈重建（扫 jsonl header；title=创建快照、
 //!   updatedAt=createdAt、其余字段 null）
 //! - index.json schemaVersion > 当前 → **只读降级**：list 返回空、写操作拒绝
@@ -379,8 +380,14 @@ impl SessionStore {
         // 崩溃可能留下半行；先截到最后一行完整换行，避免下一次 append
         // 把新行接在半行后面（宁可丢弃未完成的最后一轮，也不污染后续）。
         self.repair_tail(&path)?;
+        let header_hint = index.iter().find(|m| m.id == req.conversation_id).cloned();
         let header = self
-            .read_header(&path)
+            .read_header_or_recover(
+                &path,
+                &req.conversation_id,
+                header_hint.as_ref().map(|m| m.title.as_str()),
+                header_hint.as_ref().map(|m| m.created_at),
+            )
             .map_err(|e| format!("会话文件损坏（{}）：{e}", path.display()))?;
         if header.conversation_id != req.conversation_id {
             return Err(format!(
@@ -687,8 +694,9 @@ impl SessionStore {
 
     /// 列出全部会话元数据（仅 index.json；列表绝不扫内容文件）。
     ///
-    /// 附带孤儿清理：index 条目对应的 jsonl 缺失或 header 无效 → 移除条目
-    /// （**保留 jsonl 文件**，eprintln 留痕），并整写回 index。
+    /// 附带孤儿清理：index 条目对应的 jsonl 缺失或 header 无法恢复 → 移除条目
+    /// （**保留 jsonl 文件**，eprintln 留痕），并整写回 index；首行损坏但仍有
+    /// 可读轮行的文件会先尝试重建 header，重建失败才按孤儿处理。
     /// index 只读降级（schemaVersion 过高）→ Ok(空列表)，不写任何数据。
     pub fn list(&mut self) -> Result<Vec<ConversationMeta>, String> {
         let mut sessions = match self.load_or_rebuild() {
@@ -703,13 +711,28 @@ impl SessionStore {
             let path = self.dir.join(format!("{}.jsonl", m.id));
             let valid = match self.read_header(&path) {
                 Ok(h) => h.conversation_id == m.id && h.schema_version <= SCHEMA_VERSION,
-                Err(_) => false,
+                Err(e) => {
+                    if !path.exists() {
+                        eprintln!(
+                            "[session_store] index 条目 {} 对应会话文件缺失，移除条目：{e}",
+                            m.id
+                        );
+                        false
+                    } else {
+                        match self.recover_header(&path, &m.id, Some(&m.title), Some(m.created_at)) {
+                            Ok(h) => h.conversation_id == m.id && h.schema_version <= SCHEMA_VERSION,
+                            Err(re) => {
+                                eprintln!(
+                                    "[session_store] 会话 {} header 损坏且无法自动恢复，移除条目（保留文件）：{re}",
+                                    m.id
+                                );
+                                false
+                            }
+                        }
+                    }
+                }
             };
             if !valid {
-                eprintln!(
-                    "[session_store] index 条目 {} 对应会话文件缺失/损坏，移除条目（保留文件）",
-                    m.id
-                );
                 removed = true;
             }
             valid
@@ -720,9 +743,33 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    /// 统计当前无法读取的会话文件（header 无效 / 归属不符 / 版本过高）。
+    ///
+    /// 只读扫描，不触发重建；供启动时提示用户“有文件未能自动恢复”。
+    /// 备份文件（`.corrupt-*`）与临时文件扩展名不是 `.jsonl`，不会计入。
+    pub fn count_unreadable(&self) -> usize {
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(_) => return 0,
+        };
+        entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("jsonl"))
+            .filter(|p| {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                match self.read_header(p) {
+                    Ok(h) => h.conversation_id != stem || h.schema_version > SCHEMA_VERSION,
+                    Err(_) => true,
+                }
+            })
+            .count()
+    }
+
     /// 读取单个会话：meta + 轮行原文。
     ///
-    /// header 无效 → Err（会话不存在或文件损坏）；轮行坏行 → 跳过并 eprintln
+    /// header 首行损坏且仍有可读轮行 → 先备份并重建 header；无法恢复才返回
+    /// Err（会话不存在或文件损坏）。轮行坏行 → 跳过并 eprintln
     /// （其余行照常返回）。meta 优先取 index（含 rename/updatedAt），index 无
     /// 条目时用 header 构造兜底（内容文件为事实源）。
     pub fn get(&mut self, conversation_id: &str) -> Result<ConversationRecord, String> {
@@ -744,8 +791,22 @@ impl SessionStore {
         coalesce: bool,
     ) -> Result<ConversationRecord, String> {
         let path = self.file_path(conversation_id)?;
+        // 先取 index meta 作为重建 header 的标题/创建时间提示；索引只读降级
+        // 不影响内容读取，仍可用 header 兜底。
+        let meta_hint = match self.load_or_rebuild() {
+            Ok(list) => list.into_iter().find(|m| m.id == conversation_id),
+            Err(e) => {
+                eprintln!("[session_store] get 索引降级，用 header meta 兜底：{e}");
+                None
+            }
+        };
         let header = self
-            .read_header(&path)
+            .read_header_or_recover(
+                &path,
+                conversation_id,
+                meta_hint.as_ref().map(|m| m.title.as_str()),
+                meta_hint.as_ref().map(|m| m.created_at),
+            )
             .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
         if header.conversation_id != conversation_id {
             return Err(format!(
@@ -763,30 +824,28 @@ impl SessionStore {
         } else {
             self.read_turns(&path)?
         };
-        // index 只读降级（Err）不影响内容读取——用 header 构造 meta 兜底
-        let meta = match self.load_or_rebuild() {
-            Ok(list) => list.into_iter().find(|m| m.id == conversation_id),
-            Err(e) => {
-                eprintln!("[session_store] get 索引降级，用 header meta 兜底：{e}");
-                None
-            }
-        };
-        let meta = meta.unwrap_or_else(|| meta_from_header(header));
+        let meta = meta_hint.unwrap_or_else(|| meta_from_header(header));
         Ok(ConversationRecord { meta, turns })
     }
 
     /// 读取会话元数据（轻量；不解析轮事件）。
     pub fn meta(&mut self, conversation_id: &str) -> Result<ConversationMeta, String> {
         let path = self.file_path(conversation_id)?;
+        let index = self.load_or_rebuild()?;
+        let hint = index.iter().find(|m| m.id == conversation_id);
         let header = self
-            .read_header(&path)
+            .read_header_or_recover(
+                &path,
+                conversation_id,
+                hint.map(|m| m.title.as_str()),
+                hint.map(|m| m.created_at),
+            )
             .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
         if header.conversation_id != conversation_id {
             return Err(format!(
                 "会话文件归属不符（{conversation_id}）：header conversationId 不一致"
             ));
         }
-        let index = self.load_or_rebuild()?;
         Ok(index
             .into_iter()
             .find(|m| m.id == conversation_id)
@@ -801,7 +860,7 @@ impl SessionStore {
     pub fn load_turns(&mut self, conversation_id: &str) -> Result<Vec<Vec<SessionEvent>>, String> {
         let path = self.file_path(conversation_id)?;
         let header = self
-            .read_header(&path)
+            .read_header_or_recover(&path, conversation_id, None, None)
             .map_err(|e| format!("会话不存在或文件损坏（{conversation_id}）：{e}"))?;
         if header.conversation_id != conversation_id {
             return Err(format!(
@@ -951,6 +1010,8 @@ impl SessionStore {
 
     /// 截掉文件末尾未以换行结束的半行（崩溃恢复）。
     /// 只从尾部向前扫，不整文件读入（长对话每轮 append 的常见路径）。
+    /// 若整个文件没有换行，则补一个换行而不是截成 0 字节（保留 header-only
+    /// 文件或待重建的残留内容，交给后续 header 校验/恢复判断）。
     fn repair_tail(&self, path: &Path) -> Result<(), String> {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
@@ -989,6 +1050,20 @@ impl SessionStore {
                 break 'scan;
             }
             end = start;
+        }
+        if keep == 0 {
+            // 整个文件没有换行：可能是合法的 header-only 文件，也可能是更早的
+            // 残留半行。不能 set_len(0) 把唯一一行也删掉；补一个换行保留原内容，
+            // 后续 read_header / recover_header 再判断它是否可用。
+            file.seek(SeekFrom::End(0))
+                .map_err(|e| format!("定位会话文件末尾失败（{}）：{e}", path.display()))?;
+            file.write_all(b"\n")
+                .map_err(|e| format!("补齐会话文件换行失败（{}）：{e}", path.display()))?;
+            eprintln!(
+                "[session_store] {} 末尾没有换行，已补换行保留原内容",
+                path.display()
+            );
+            return Ok(());
         }
         file.set_len(keep)
             .map_err(|e| format!("截断会话文件失败（{}）：{e}", path.display()))?;
@@ -1047,6 +1122,106 @@ impl SessionStore {
             return Err(format!("不认识的格式标识：{:?}", h.format));
         }
         Ok(h)
+    }
+
+    /// 读取 header；首行损坏但文件仍存在时尝试安全重建（R-49 残余）。
+    ///
+    /// 归属不符 / schema 过高不在这里处理：`read_header` 能解析时直接返回，
+    /// 交由调用方按原规则拒绝；只有“首行本身坏了”才进入重建。
+    fn read_header_or_recover(
+        &self,
+        path: &Path,
+        conversation_id: &str,
+        title: Option<&str>,
+        created_at: Option<u64>,
+    ) -> Result<SessionHeader, String> {
+        match self.read_header(path) {
+            Ok(h) => Ok(h),
+            Err(e) => {
+                if !path.exists() {
+                    return Err(e);
+                }
+                self.recover_header(path, conversation_id, title, created_at)
+                    .map_err(|re| format!("{e}；自动恢复失败：{re}"))
+            }
+        }
+    }
+
+    /// 重建损坏的 header：只保留能解析为 JSON 数组的轮行。
+    ///
+    /// 原文件先备份为 `{name}.corrupt-{timestamp}`，再用 tmp+rename 写回。
+    /// 没有可读轮行时返回 Err，不伪造空会话；归属与版本校验由调用方负责。
+    fn recover_header(
+        &self,
+        path: &Path,
+        conversation_id: &str,
+        title: Option<&str>,
+        created_at: Option<u64>,
+    ) -> Result<SessionHeader, String> {
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| format!("读取损坏会话文件失败（{}）：{e}", path.display()))?;
+        let mut turns = Vec::new();
+        for line in raw.split('\n') {
+            let line = line.trim_end_matches('\r');
+            if line.trim().is_empty() {
+                continue;
+            }
+            if matches!(
+                serde_json::from_str::<serde_json::Value>(line),
+                Ok(serde_json::Value::Array(_))
+            ) {
+                turns.push(line.to_string());
+            }
+        }
+        if turns.is_empty() {
+            return Err("没有可恢复的轮行".into());
+        }
+
+        let backup = Self::backup_corrupted(path)?;
+        let header = SessionHeader {
+            kind: HEADER_KIND.to_string(),
+            format: HEADER_FORMAT.to_string(),
+            schema_version: SCHEMA_VERSION,
+            conversation_id: conversation_id.to_string(),
+            created_at: created_at.unwrap_or_else(now_ms),
+            title: title
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(DEFAULT_TITLE)
+                .to_string(),
+        };
+        let header_json =
+            serde_json::to_string(&header).map_err(|e| format!("重建 header 序列化失败：{e}"))?;
+        let mut content = format!("{header_json}\n");
+        for line in turns {
+            content.push_str(&line);
+            content.push('\n');
+        }
+        Self::write_atomic(path, &content)?;
+        eprintln!(
+            "[session_store] 已重建损坏会话 header（{}），原文件备份：{}",
+            path.display(),
+            backup.display()
+        );
+        Ok(header)
+    }
+
+    /// 读写失败前保留原始损坏文件；同一毫秒内多次恢复时加序号避免覆盖备份。
+    fn backup_corrupted(path: &Path) -> Result<PathBuf, String> {
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("session.jsonl");
+        let stamp = now_ms();
+        let mut candidate = path.with_file_name(format!("{file_name}.corrupt-{stamp}"));
+        let mut n = 1;
+        while candidate.exists() {
+            candidate = path.with_file_name(format!("{file_name}.corrupt-{stamp}-{n}"));
+            n += 1;
+        }
+        std::fs::copy(path, &candidate)
+            .map_err(|e| format!("备份损坏会话文件失败（{}）：{e}", candidate.display()))?;
+        Ok(candidate)
     }
 
     /// 读轮行原文（跳过首行 header 与空行；坏行跳过不整体失败）。
@@ -1222,7 +1397,18 @@ impl SessionStore {
                     sessions.push(meta_from_header(h));
                 }
                 Err(e) => {
-                    eprintln!("[session_store] 跳过无效会话文件 {}：{e}", path.display());
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if !Self::valid_id(stem) {
+                        eprintln!("[session_store] 跳过无效会话文件 {}：{e}", path.display());
+                        continue;
+                    }
+                    match self.recover_header(&path, stem, None, None) {
+                        Ok(h) => sessions.push(meta_from_header(h)),
+                        Err(re) => eprintln!(
+                            "[session_store] 跳过损坏会话文件 {}：{e}；自动恢复失败：{re}",
+                            path.display()
+                        ),
+                    }
                 }
             }
         }
@@ -1862,10 +2048,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ── R6：header 损坏 → get Err；list 移除条目且保留文件 ──
+    // ── R6：header 损坏 → 保留轮行重建；无轮行则拒绝并保留文件 ──
 
     #[test]
-    fn corrupted_header_makes_get_err_and_list_prunes_entry() {
+    fn corrupted_header_is_rebuilt_from_valid_turns() {
         let dir = unique_temp_dir("r6-badheader");
         let mut s = SessionStore::new(&dir);
         let mut r = req("c6", &ev_user("x"));
@@ -1880,20 +2066,108 @@ mod tests {
         let rest: Vec<&str> = raw.splitn(2, '\n').collect();
         std::fs::write(&path, format!("this is not a header\n{}", rest[1])).unwrap();
 
-        // get → Err（文件损坏）
-        assert!(s.get("c6").is_err());
+        // get → 重建 header 后仍能读出原轮
+        let rec = s.get("c6").unwrap();
+        assert_eq!(rec.turns.len(), 1);
+        assert_eq!(rec.meta.title, "T");
+        assert_eq!(rec.meta.created_at, 1);
 
-        // list → 条目被移除（文件保留）
+        // 重建后文件仍可继续追加，且原文件有备份
+        s.append_turn(&req("c6", &ev_user("y"))).unwrap();
+        assert_eq!(s.get("c6").unwrap().turns.len(), 2);
+        assert!(
+            std::fs::read_dir(dir.join("sessions"))
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().contains(".corrupt-")),
+            "重建前应留下损坏文件备份"
+        );
+
         let list = s.list().unwrap();
-        assert_eq!(list.len(), 0);
-        assert!(path.exists(), "损坏的 jsonl 文件应保留（不自动删除）");
-        let v = read_index_value(&dir);
-        assert_eq!(v["sessions"].as_array().unwrap().len(), 0);
+        assert_eq!(list.len(), 1);
+        assert_eq!(s.count_unreadable(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupted_header_without_turns_is_not_rebuilt() {
+        let dir = unique_temp_dir("r6-badheader-empty");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c9", &ev_user("x"))).unwrap();
+
+        let path = dir.join("sessions").join("c9.jsonl");
+        std::fs::write(&path, "this is not a header\n").unwrap();
+
+        assert!(s.get("c9").is_err());
+        assert_eq!(s.list().unwrap().len(), 0);
+        assert!(path.exists(), "无法恢复的文件应保留");
+        assert_eq!(s.count_unreadable(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn header_conversation_mismatch_is_not_rebuilt() {
+        let dir = unique_temp_dir("r6-mismatch");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c10", &ev_user("x"))).unwrap();
+
+        let path = dir.join("sessions").join("c10.jsonl");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut lines = raw.splitn(2, '\n');
+        let first = lines.next().unwrap();
+        let rest = lines.next().unwrap();
+        let mut header: serde_json::Value = serde_json::from_str(first).unwrap();
+        header["conversationId"] = serde_json::Value::String("other".into());
+        let tampered = format!("{}\n{}", serde_json::to_string(&header).unwrap(), rest);
+        std::fs::write(&path, &tampered).unwrap();
+
+        assert!(s.get("c10").is_err());
+        assert_eq!(s.list().unwrap().len(), 0);
+        assert_eq!(s.count_unreadable(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), tampered);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn header_only_file_without_trailing_newline_survives_append() {
+        let dir = unique_temp_dir("r6-header-no-newline");
+        let mut s = SessionStore::new(&dir);
+        s.ensure_conversation("c11", Some("T"), Some(1), None, None)
+            .unwrap();
+        let path = dir.join("sessions").join("c11.jsonl");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, raw.trim_end_matches('\n')).unwrap();
+
+        s.append_turn(&req("c11", &ev_user("x"))).unwrap();
+        assert_eq!(s.get("c11").unwrap().turns.len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── R7：index 缺失 → 自愈重建（扫 jsonl header）──
+
+    #[test]
+    fn missing_index_rebuilds_and_recovers_corrupted_header() {
+        let dir = unique_temp_dir("r7-rebuild-recover");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c7r", &ev_user("x"))).unwrap();
+
+        let path = dir.join("sessions").join("c7r.jsonl");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let rest: Vec<&str> = raw.splitn(2, '\n').collect();
+        std::fs::write(&path, format!("broken header\n{}", rest[1])).unwrap();
+        std::fs::remove_file(dir.join("sessions").join(INDEX_FILE)).unwrap();
+
+        let list = s.list().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "c7r");
+        assert_eq!(s.get("c7r").unwrap().turns.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn missing_index_rebuilds_from_jsonl_headers() {

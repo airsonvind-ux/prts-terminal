@@ -682,6 +682,7 @@ pub fn run() {
             commands::open_workspace_in_explorer,
             commands::get_reminder_data,
             commands::list_conversations,
+            commands::count_unreadable_sessions,
             commands::get_conversation,
             commands::append_turn,
             commands::update_conversation_meta,
