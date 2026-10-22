@@ -87,7 +87,13 @@ pub fn resolve_read(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErro
 /// 对象 = canonicalize 之后的真实路径。顺序即错误优先级：工作区内
 /// （否则 OutsideWorkspace）→ 非 BLOCKED（M2 #B：写同读拒 BLOCKED，防改写
 /// 运行中 db / 台账）→ 非 protected（.git）→ 非 READ_ONLY。
-fn check_write_bounds(policy: &Policy, resolved: &Path, raw: &str) -> Result<(), PathGuardError> {
+/// 返回**最终落盘路径**：既有符号链接解析到真实目标；目标不存在时
+/// 为 canonical 父目录 + 文件名。调用方必须用返回值写入，不能用原始 raw。
+fn check_write_bounds(
+    policy: &Policy,
+    resolved: &Path,
+    raw: &str,
+) -> Result<PathBuf, PathGuardError> {
     // 目标已存在时先解析最终对象：符号链接必须按真实目标判定。
     // （父目录 canonicalize 不能覆盖“最后一段是符号链接”的形态。）
     let resolved = resolved
@@ -119,7 +125,7 @@ fn check_write_bounds(policy: &Policy, resolved: &Path, raw: &str) -> Result<(),
             "目标文件存在多个硬链接，可能指向工作区外：{raw}"
         )));
     }
-    Ok(())
+    Ok(resolved)
 }
 
 /// 目标文件是否有多个硬链接。目录的链接计数天然包含子目录，不参与判定。
@@ -194,8 +200,7 @@ pub fn resolve_write(policy: &Policy, raw: &str) -> Result<PathBuf, PathGuardErr
         .map_err(|_| PathGuardError::Io(format!("目录不存在：{}", parent.display())))?;
     let resolved = canonical_parent.join(file_name);
 
-    check_write_bounds(policy, &resolved, raw)?;
-    Ok(resolved)
+    check_write_bounds(policy, &resolved, raw)
 }
 
 /// 写路径解析（父目录自动创建版，write_file 全量写入用）：
@@ -260,8 +265,7 @@ pub fn resolve_write_create(policy: &Policy, raw: &str) -> Result<PathBuf, PathG
     }
 
     // ── 2. 边界判定（对象 = canonicalize 后的真实目标路径）──
-    check_write_bounds(policy, &resolved, raw)?;
-    Ok(resolved)
+    check_write_bounds(policy, &resolved, raw)
 }
 
 // ═══════════════════════════════════════════════════════
@@ -759,6 +763,36 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// 工作区内软链接到工作区内文件：返回真实目标，而不是链接路径。
+    /// 落盘必须用这个返回值，否则仍会沿链接写入。
+    #[test]
+    fn write_symlink_to_inside_returns_canonical_target() {
+        let ws = ws_fixture("wr-symlink-in");
+        let policy = make_policy(&ws);
+        let target = ws.join("real.txt");
+        std::fs::write(&target, "inside").unwrap();
+        let link = ws.join("link.txt");
+
+        #[cfg(unix)]
+        let created = std::os::unix::fs::symlink(&target, &link).is_ok();
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_file(&target, &link).is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let created = false;
+
+        if !created {
+            let _ = std::fs::remove_dir_all(&ws);
+            return;
+        }
+
+        let out = resolve_write(&policy, "link.txt").unwrap();
+        assert_eq!(out, target.canonicalize().unwrap());
+        let out = resolve_write_create(&policy, "link.txt").unwrap();
+        assert_eq!(out, target.canonicalize().unwrap());
+
         let _ = std::fs::remove_dir_all(&ws);
     }
 }

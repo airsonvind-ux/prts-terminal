@@ -224,6 +224,15 @@ impl Tool for WriteFileTool {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ToolError::Execution(format!("创建目录失败：{e}")))?;
         }
+        // 判定与落盘之间再解析一次：父目录被替换成 junction/符号链接时
+        // 会得到不同目标，直接拒绝，避免“检查里面、写出外面”。
+        let rechecked = path_guard::resolve_write_create(&self.policy, raw)
+            .map_err(|e| map_write_guard_err(raw, e))?;
+        if rechecked != resolved {
+            return Err(ToolError::Execution(
+                "写入前路径发生变化，操作已取消".into(),
+            ));
+        }
         std::fs::write(&resolved, content)
             .map_err(|e| ToolError::Execution(format!("写入文件失败：{e}")))?;
 
@@ -348,7 +357,8 @@ impl Tool for EditTool {
         if !meta.is_file() {
             return Err(ToolError::Execution(format!("不是普通文件：{raw}")));
         }
-        path_guard::resolve_write(&self.policy, raw).map_err(|e| map_write_guard_err(raw, e))?;
+        let write_target = path_guard::resolve_write(&self.policy, raw)
+            .map_err(|e| map_write_guard_err(raw, e))?;
 
         // ── 2. 全量读入（大小守卫 + UTF-8）──
         if meta.len() > MAX_FILE_BYTES {
@@ -432,8 +442,16 @@ impl Tool for EditTool {
             ));
         }
         if !noop {
-            // 父目录必已存在（目标为既有文件），不需要 create_dir_all
-            std::fs::write(&resolved, &new_text)
+            // 父目录必已存在（目标为既有文件），不需要 create_dir_all。
+            // 落盘前再解析一次，并用守卫返回的 canonical 目标写入。
+            let rechecked = path_guard::resolve_write(&self.policy, raw)
+                .map_err(|e| map_write_guard_err(raw, e))?;
+            if rechecked != write_target {
+                return Err(ToolError::Execution(
+                    "写入前路径发生变化，操作已取消".into(),
+                ));
+            }
+            std::fs::write(&write_target, &new_text)
                 .map_err(|e| ToolError::Execution(format!("写入文件失败：{e}")))?;
         }
 
