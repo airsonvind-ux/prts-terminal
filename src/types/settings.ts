@@ -28,6 +28,14 @@ export interface Settings {
   };
 }
 
+// ── 凭据层状态（get_credentials_status）──
+
+/** 凭据层是否可写；writable=false 时 note 是给用户看的原因。 */
+export interface CredentialsStatus {
+  writable: boolean;
+  note: string | null;
+}
+
 // ── MAA 段（settings.json 的 maa 段；snake_case 对齐后端 MaaSettings）──
 
 /** 账号服务器（kebab-case 序列化） */

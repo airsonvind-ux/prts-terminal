@@ -24,8 +24,9 @@ import { useUpdaterEvents } from "./hooks/useUpdaterEvents";
 import { useConversationHydration } from "./hooks/useConversationHydration";
 import { setModelInfo } from "./stores/useProcessingStore";
 import { useGuideStore } from "./stores/useGuideStore";
+import { showToast } from "./stores/useToastStore";
 import { thinkingLabel } from "./thinking";
-import type { Settings } from "./types";
+import type { CredentialsStatus, Settings } from "./types";
 import styles from "./App.module.css";
 
 export function App() {
@@ -41,6 +42,27 @@ export function App() {
   // ── 引导键集（"看过没"）拉一次：说明层由它去重 ──
   useEffect(() => {
     useGuideStore.getState().hydrate();
+  }, []);
+
+  // ── 凭据层启动状态：读取失败时提示一次 ──
+  // 只陈述用户会看到的事实；保存侧仍有后端硬闸，不靠提示兜底。
+  useEffect(() => {
+    invoke<CredentialsStatus>("get_credentials_status")
+      .then((status) => {
+        if (status.writable) return;
+        showToast(
+          status.note ??
+            "已保存的 API Key 这次没有读出来；本次启动期间无法保存新的 Key。",
+          {
+            kind: "warning",
+            ttlMs: 12000,
+            dedupeKey: "credentials-status",
+          }
+        );
+      })
+      .catch(() => {
+        // 状态查询失败不打扰启动
+      });
   }, []);
 
   // ── 启动时初始化模型信息缓存 ──

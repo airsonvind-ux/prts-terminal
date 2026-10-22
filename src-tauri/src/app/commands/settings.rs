@@ -186,6 +186,28 @@ pub fn copy_api_key(
     Ok(crate::platform::clipboard::last_four(&key))
 }
 
+/// 凭据层启动状态（get_credentials_status）：只报是否可写与一句给用户看的原因。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialsStatus {
+    pub writable: bool,
+    pub note: Option<String>,
+}
+
+/// 读取凭据层状态。只读；不触发文件访问，也不改任何状态。
+#[tauri::command]
+pub fn get_credentials_status(
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
+) -> Result<CredentialsStatus, String> {
+    let creds = credentials
+        .lock()
+        .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+    Ok(CredentialsStatus {
+        writable: !creds.is_write_blocked(),
+        note: creds.status_note(),
+    })
+}
+
 /// 局部 patch 写设置（per-field：字段缺席 = 不更新；显式 null = 清除回默认；
 /// api_key 三态：缺席/掩码保留现值、空串清除、其他明文写入——但明文不进
 /// settings，落凭据层（crate::credentials），settings 侧只留"配没配"）。
@@ -232,7 +254,7 @@ pub async fn set_settings(
             .lock()
             .map_err(|e| format!("凭据锁获取失败: {e}"))?;
         if let Some(reason) = creds.write_block_reason() {
-            return Err(format!("密钥保存失败：{reason}"));
+            return Err(reason);
         }
     }
     let changes = st.apply_patch(&patch);

@@ -356,13 +356,31 @@ impl CredentialsStore {
     pub fn write_block_reason(&self) -> Option<String> {
         if self.read_failed {
             return Some(
-                "凭据文件读取失败，原文件未改动；为避免覆盖已有密钥，本次未保存".to_string(),
+                "这次没有读到已保存的 API Key，本次修改没有保存；已有 Key 不会被覆盖。".to_string(),
             );
         }
         if self.readonly {
-            return Some(format!(
-                "凭据文件 version 高于当前（{CREDENTIALS_VERSION}），拒绝写入（需升级应用）"
-            ));
+            return Some(
+                "当前应用版本读不了已保存的 API Key，本次修改没有保存；已有 Key 不会被覆盖。"
+                    .to_string(),
+            );
+        }
+        None
+    }
+
+    /// 启动提示用的稳定文案（不含操作系统错误细节）；可写时为 None。
+    pub fn status_note(&self) -> Option<String> {
+        if self.read_failed {
+            return Some(
+                "已保存的 API Key 这次没有读出来，设置页会显示为未配置；已有 Key 不会被覆盖，本次启动期间无法保存新的 Key。"
+                    .to_string(),
+            );
+        }
+        if self.readonly {
+            return Some(
+                "当前应用版本读不了已保存的 API Key，设置页会显示为未配置；已有 Key 不会被覆盖，本次启动期间无法保存新的 Key。"
+                    .to_string(),
+            );
         }
         None
     }
@@ -488,8 +506,15 @@ mod tests {
             store
                 .write_block_reason()
                 .unwrap_or_default()
-                .contains("读取失败"),
-            "禁写原因必须区分读取失败"
+                .contains("没有读到已保存的 API Key"),
+            "禁写原因必须是用户视角的读取失败"
+        );
+        assert!(
+            store
+                .status_note()
+                .unwrap_or_default()
+                .contains("设置页会显示为未配置"),
+            "启动提示要解释用户看到的空 Key"
         );
         assert!(store.set(&provider_key_ref("deepseek"), "sk-x").is_err());
         assert!(store.save().is_err());
