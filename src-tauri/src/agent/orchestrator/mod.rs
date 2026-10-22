@@ -2100,18 +2100,14 @@ mod tests {
             "停滞应写 turn/end reason=stagnation"
         );
 
-        // IPC 侧：error 事件（recoverable=false 终止）+ turn/end(stagnation)
+        // IPC 侧：只发 turn/end(stagnation)；不再发终止 error。
         let emitted = events.lock().unwrap();
         let ipc_sessions = session_events(&emitted);
         assert!(
-            ipc_sessions.iter().any(|e| matches!(
-                e,
-                SessionEvent::Error {
-                    recoverable: false,
-                    ..
-                }
-            )),
-            "应推送 error 事件"
+            !ipc_sessions
+                .iter()
+                .any(|e| matches!(e, SessionEvent::Error { .. })),
+            "停滞不应再发 error 事件"
         );
         assert!(
             ipc_sessions.iter().any(|e| matches!(

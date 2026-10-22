@@ -109,6 +109,61 @@ describe("useAgentEvents · turn/end reason 传递", () => {
     });
   });
 
+  it("reason=stagnation → 保留半截内容、工具记录和 usage，并补轮尾标记", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("停滞测试");
+    const sid = Object.keys(useProcessingStore.getState().processing)[0];
+
+    pushEvent({
+      type: "assistant/chunk",
+      sessionId: sid,
+      kind: "text",
+      content: "半截回答",
+    });
+    pushEvent({
+      type: "tool/call",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      params: "{}",
+    });
+    pushEvent({
+      type: "tool/result",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      summary: "重复结果",
+      ok: true,
+    });
+    await flush();
+    pushEvent({
+      type: "assistant/message",
+      sessionId: sid,
+      content: "半截回答",
+      reasoningContent: null,
+      usage: { inputTokens: 900, outputTokens: 30 },
+    });
+    pushEvent({
+      type: "turn/end",
+      sessionId: sid,
+      reason: "stagnation",
+      usage: { inputTokens: 900, outputTokens: 30 },
+    });
+    await flush();
+
+    const conv = useConversationStore.getState().conversations[0];
+    const turn = conv.turns[0];
+    const types = turn.map((e) => e.type);
+    expect(types).toContain("assistant/chunk");
+    expect(types).toContain("tool/call");
+    expect(types).toContain("tool/result");
+    expect(turn[turn.length - 1]).toEqual({
+      type: "turn/stagnated",
+      sessionId: sid,
+    });
+    expect(conv.contextTokens).toEqual({ inputTokens: 900, outputTokens: 30 });
+  });
+
   it("reason=completed → 无标记（reason 传递不改变正常轮行为）", async () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("正常完成");

@@ -261,11 +261,9 @@ pub(super) async fn dispatch_turn_with_memory(
             return Ok(TurnOutcome::Aborted(state.stat));
         }
         if state.check_stagnation() {
-            sink.emit(SessionEvent::error(
-                session_id,
-                "调度循环检测到工具调用停滞，已终止本轮处理",
-                false,
-            ));
+            // R-33：只发 turn/end(stagnation)，不再先发终止 error。
+            // 终止 error 会让前端按错误轮收尾，丢掉半截内容、工具记录和 usage；
+            // 轮尾说明由前端按 reason 合成。
             sink.emit(SessionEvent::turn_end_with_usage(
                 session_id,
                 TurnEndReason::Stagnation,

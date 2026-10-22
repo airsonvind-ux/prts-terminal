@@ -90,6 +90,34 @@ function truncatedTurn(sid: string): SessionEvent[] {
   ];
 }
 
+function stagnatedTurn(sid: string): SessionEvent[] {
+  return [
+    { type: "user/message", sessionId: sid, content: "反复查询" },
+    {
+      type: "assistant/chunk",
+      sessionId: sid,
+      kind: "text",
+      content: "半截回答",
+    },
+    {
+      type: "tool/call",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      params: "{}",
+    },
+    {
+      type: "tool/result",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      summary: "重复结果",
+      ok: true,
+    },
+    { type: "turn/stagnated", sessionId: sid },
+  ];
+}
+
 describe("MessageList · aborted 轮展示", () => {
   it("归档中止轮：半截 chunk 成气泡 + 轮尾「该轮已中止」标记条", () => {
     const { text, messageAreas } = render([abortedTurn("s1")]);
@@ -112,6 +140,18 @@ describe("MessageList · aborted 轮展示", () => {
     const areas = messageAreas();
     expect(areas[areas.length - 1].textContent).toBe(
       "回答未完整（达到长度上限）"
+    );
+  });
+
+  it("归档停滞轮：保留半截回答和工具记录 + 轮尾「工具调用停滞，本轮已终止」", () => {
+    const { text, messageAreas } = render([stagnatedTurn("s-stag")]);
+
+    expect(text()).toContain("半截回答");
+    expect(text()).toContain("工具调用停滞，本轮已终止");
+
+    const areas = messageAreas();
+    expect(areas[areas.length - 1].textContent).toBe(
+      "工具调用停滞，本轮已终止"
     );
   });
 

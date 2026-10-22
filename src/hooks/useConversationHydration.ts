@@ -82,23 +82,30 @@ function hydrateTurn(line: string): SessionEvent[] | null {
     return null;
   }
   const turn = parsed as SessionEvent[];
-  const aborted = turn.some(
-    (e) => e.type === "turn/end" && e.reason === "aborted"
-  );
   const end = turn.find((e) => e.type === "turn/end");
-  if (!aborted || turn.some((e) => e.type === "turn/aborted")) {
-    // R-07：primary 日志只有 turn/end(max-tokens)，没有前端私有标记；
-    // 恢复时补回轮尾提示标记（legacy 日志已有时不重复）。
-    if (
-      end?.type === "turn/end" &&
-      end.reason === "max-tokens" &&
-      !turn.some((e) => e.type === "turn/truncated")
-    ) {
-      return [...turn, { type: "turn/truncated", sessionId: end.sessionId }];
-    }
-    return turn;
+  if (end?.type !== "turn/end") return turn;
+
+  // 前端私有轮尾标记在 primary 日志里不存在；按 turn/end reason 重建，
+  // legacy 日志已有标记时不重复。
+  if (
+    end.reason === "aborted" &&
+    !turn.some((e) => e.type === "turn/aborted")
+  ) {
+    return [...turn, { type: "turn/aborted", sessionId: end.sessionId }];
   }
-  return [...turn, { type: "turn/aborted", sessionId: end?.sessionId ?? "" }];
+  if (
+    end.reason === "max-tokens" &&
+    !turn.some((e) => e.type === "turn/truncated")
+  ) {
+    return [...turn, { type: "turn/truncated", sessionId: end.sessionId }];
+  }
+  if (
+    end.reason === "stagnation" &&
+    !turn.some((e) => e.type === "turn/stagnated")
+  ) {
+    return [...turn, { type: "turn/stagnated", sessionId: end.sessionId }];
+  }
+  return turn;
 }
 
 /**

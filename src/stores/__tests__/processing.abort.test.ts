@@ -106,6 +106,62 @@ describe("finishProcessing(sid, 'aborted') 归档语义", () => {
     });
   });
 
+  it("stagnation 轮：保留半截内容、工具记录、usage，并补轮尾标记", async () => {
+    const store = useProcessingStore.getState();
+    await store.sendMessage("停滞测试");
+    const { sid } = getSingle();
+
+    store.appendCurrentEvent(chunk(sid, "半截回答"));
+    store.appendCurrentEvent({
+      type: "tool/call",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      params: "{}",
+    });
+    store.appendCurrentEvent({
+      type: "tool/result",
+      sessionId: sid,
+      callId: "call_stag",
+      toolName: "query_level",
+      summary: "重复结果",
+      ok: true,
+    });
+    store.appendCurrentEvent({
+      type: "assistant/message",
+      sessionId: sid,
+      content: "半截回答",
+      reasoningContent: null,
+      usage: { inputTokens: 900, outputTokens: 30 },
+    });
+
+    useProcessingStore.getState().finishProcessing(sid, "stagnation", {
+      inputTokens: 900,
+      outputTokens: 30,
+    });
+
+    const conv = useConversationStore.getState().conversations[0];
+    const turn = conv.turns[0];
+    const types = turn.map((e) => e.type);
+    expect(types).toContain("assistant/chunk");
+    expect(types).toContain("tool/call");
+    expect(types).toContain("tool/result");
+    expect(turn[turn.length - 1]).toEqual({
+      type: "turn/stagnated",
+      sessionId: sid,
+    });
+    expect(conv.contextTokens).toEqual({ inputTokens: 900, outputTokens: 30 });
+
+    const appendCalls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "append_turn"
+    );
+    expect(appendCalls).toHaveLength(1);
+    expect(appendCalls[0][1].contextTokens).toEqual({
+      inputTokens: 900,
+      outputTokens: 30,
+    });
+  });
+
   it("有历史 contextTokens 的对话被中止轮归档后不覆盖", async () => {
     const store = useProcessingStore.getState();
     await store.sendMessage("首轮");

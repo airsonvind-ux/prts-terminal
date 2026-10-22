@@ -127,12 +127,15 @@ export interface ProcessingStore {
    *    liveContextTokens 随 appendTurn 清空，圆环回退到已提交值。
    * 3. 从 processing 字典删除该条目
    *
-   * 快照不存在（failProcessing 已清理，如停滞路径 error 先到）时幂等返回。
+   * 快照不存在（failProcessing 已清理，如普通错误路径）时幂等返回。
    * 删除后 processing 字典变化 → deriveUIState 自动返回 "ready"。
    *
-   * M3-B：
+   * M3-B / R-33：
    * - `reason === "aborted"` → 归档前在 currentEvents 末尾合成前端私有
    *   turn/aborted 标记（消息列表轮尾展示 + 随轮落库持久化）；
+   * - `reason === "stagnation"` → 同样保留完整 currentEvents，只补
+   *   turn/stagnated 标记；不走 failProcessing 的错误轮路径，避免丢半截内容、
+   *   工具记录和 usage。
    *   其余逻辑（usage 扫描/快照删除/contextTokens 不覆盖）与普通轮一致——
    *   aborted 轮无 assistant/message → usage null → 不覆盖对话 contextTokens。
    */

@@ -54,7 +54,9 @@ export type SessionEvent =
   // derive/展示层不派生内容，仅 MessageList 轮尾展示 + 存储透传）
   | TurnAbortedEvent
   // R-07：轮截断标记（前端私有事件，同 aborted 模式）
-  | TurnTruncatedEvent;
+  | TurnTruncatedEvent
+  // R-33：轮停滞标记（前端私有事件，同 aborted 模式）
+  | TurnStagnatedEvent;
 
 /**
  * 轮中止标记（M3-B §4.1 前端私有事件）。
@@ -81,6 +83,18 @@ export interface TurnAbortedEvent {
  */
 export interface TurnTruncatedEvent {
   type: "turn/truncated";
+  sessionId: string;
+}
+
+/**
+ * 轮停滞标记（R-33 前端私有事件）。
+ *
+ * 由 finishProcessing(sessionId, "stagnation") 归档前合成；primary 模式下
+ * hydration 从 turn/end(stagnation) 重建。消息列表在轮尾展示
+ * “工具调用停滞，本轮已终止”，不进入模型历史。
+ */
+export interface TurnStagnatedEvent {
+  type: "turn/stagnated";
   sessionId: string;
 }
 

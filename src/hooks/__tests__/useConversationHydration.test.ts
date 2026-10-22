@@ -230,6 +230,37 @@ describe("F6 恢复 hydrate", () => {
       expect.arrayContaining([{ type: "turn/truncated", sessionId: "t" }])
     );
   });
+
+  it("primary 日志的 turn/end(stagnation) 恢复为轮尾停滞标记", async () => {
+    const metaX = meta({ id: "s", updatedAt: 2 });
+    const turnLine = JSON.stringify([
+      { type: "user/message", sessionId: "s", content: "反复查询" },
+      {
+        type: "assistant/chunk",
+        sessionId: "s",
+        kind: "text",
+        content: "半截回答",
+      },
+      { type: "turn/end", sessionId: "s", reason: "stagnation" },
+    ]);
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaX]);
+      if (cmd === "get_conversation") {
+        return Promise.resolve({ meta: metaX, turns: [turnLine] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const turn = useConversationStore.getState().conversations[0].turns[0];
+    expect(turn).toEqual(
+      expect.arrayContaining([
+        { type: "turn/stagnated", sessionId: "s" },
+        { type: "assistant/chunk", sessionId: "s", kind: "text", content: "半截回答" },
+      ])
+    );
+  });
 });
 
 // ═══════════════════════════════════════════════════════

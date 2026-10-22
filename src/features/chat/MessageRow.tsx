@@ -130,8 +130,8 @@ export const MessageRow = memo(function MessageRow({
           </div>
         );
       }
-      // R-07：轮截断提示（中性轮尾小字，不用警告色；内容保留）
-      if (item.role === "truncated") {
+      // R-07 / R-33：轮截断、停滞提示（中性轮尾小字，不用警告色；内容保留）
+      if (item.role === "truncated" || item.role === "stagnated") {
         return (
           <div
             data-message-area
