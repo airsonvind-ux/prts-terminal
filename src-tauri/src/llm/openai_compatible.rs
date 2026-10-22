@@ -1047,6 +1047,18 @@ mod tests {
     }
 
     #[test]
+    fn extract_usage_zhipu_cached_tokens() {
+        let json = serde_json::json!({
+            "prompt_tokens": 1075,
+            "completion_tokens": 241,
+            "prompt_tokens_details": { "cached_tokens": 1024 }
+        });
+        let usage = OpenAiCompatibleClient::extract_usage(&json).unwrap();
+        assert_eq!(usage.input_tokens, 1075);
+        assert_eq!(usage.cache_hit_tokens, Some(1024));
+    }
+
+    #[test]
     fn extract_usage_openai_format() {
         let json = serde_json::json!({
             "input_tokens": 200,
