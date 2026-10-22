@@ -2115,9 +2115,7 @@ mod tests {
 
         let path = dir.join("sessions").join("c10.jsonl");
         let raw = std::fs::read_to_string(&path).unwrap();
-        let mut lines = raw.splitn(2, '\n');
-        let first = lines.next().unwrap();
-        let rest = lines.next().unwrap();
+        let (first, rest) = raw.split_once('\n').unwrap();
         let mut header: serde_json::Value = serde_json::from_str(first).unwrap();
         header["conversationId"] = serde_json::Value::String("other".into());
         let tampered = format!("{}\n{}", serde_json::to_string(&header).unwrap(), rest);
