@@ -11,6 +11,7 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DroneShellScene } from "./app/shell/DroneShellScene";
 import { ChatView } from "./features/chat/ChatView";
+import { ChatErrorBoundary } from "./features/chat/ChatErrorBoundary";
 import { GuideHost } from "./features/guide/GuideHost";
 import { ContextMenuHost } from "./features/overlays/ContextMenuHost";
 import { OverlayContainer } from "./features/overlays/OverlayContainer";
@@ -92,7 +93,9 @@ export function App() {
         onDragHandle={onDragHandle}
         onResizeHandle={onResizeHandle}
       >
-        <ChatView onDragHandle={onDragHandle} />
+        <ChatErrorBoundary>
+          <ChatView onDragHandle={onDragHandle} />
+        </ChatErrorBoundary>
         <OverlayContainer />
         {/* 引导说明层（挂在正面内，与设置 / 历史覆盖层同一套；z 序在面板之上） */}
         <GuideHost />

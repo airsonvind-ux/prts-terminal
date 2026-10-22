@@ -87,7 +87,8 @@ interface UIStore {
    */
   bootStatus: BootStatus | null;
   /**
-   * 启动会话恢复是否失败（list/get 失败 → 降级为空历史）。
+   * 启动会话恢复是否失败（list 失败，或全部会话都读取失败 → 空历史）。
+   * 单个会话读取失败只影响它自己，不置位（R-52）。
    * 只喂启动演出（失败时多报一行），不参与任何业务判定。
    */
   restoreFailed: boolean;

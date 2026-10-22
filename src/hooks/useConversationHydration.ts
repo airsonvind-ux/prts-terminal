@@ -16,6 +16,7 @@
 //
 // 恢复期间 UI：restoring=true（欢迎界面判定被抑制 + 输入禁发）——防恢复完成
 // 前闪欢迎界面、防恢复竞态发消息。list 空/失败 → 降级为空历史（欢迎界面照旧）。
+// 单份 get 失败按会话隔离（allSettled）；轮行形状不对只跳过该轮，不拖垮整批（R-52）。
 //
 // 并发口径：restoreConversations 把并发重复调用合并为单次执行（StrictMode
 // 在 dev 下会双触发 effect）——既省一次重复读档，也防两条进度线写乱 readDone。
@@ -60,11 +61,52 @@ export function pickActiveIdAfterRestore(
     既省一次全量读档，也避免两条进度线并发写 readDone 导致计数回退。 */
 let inflight: Promise<void> | null = null;
 
+/** 把一行落盘原文恢复成事件数组；形状不对返回 null（坏行跳过，不拖垮整批）。 */
+function hydrateTurn(line: string): SessionEvent[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  if (
+    !parsed.every(
+      (e) =>
+        e !== null &&
+        typeof e === "object" &&
+        !Array.isArray(e) &&
+        typeof (e as { type?: unknown }).type === "string"
+    )
+  ) {
+    return null;
+  }
+  const turn = parsed as SessionEvent[];
+  const aborted = turn.some(
+    (e) => e.type === "turn/end" && e.reason === "aborted"
+  );
+  const end = turn.find((e) => e.type === "turn/end");
+  if (!aborted || turn.some((e) => e.type === "turn/aborted")) {
+    // R-07：primary 日志只有 turn/end(max-tokens)，没有前端私有标记；
+    // 恢复时补回轮尾提示标记（legacy 日志已有时不重复）。
+    if (
+      end?.type === "turn/end" &&
+      end.reason === "max-tokens" &&
+      !turn.some((e) => e.type === "turn/truncated")
+    ) {
+      return [...turn, { type: "turn/truncated", sessionId: end.sessionId }];
+    }
+    return turn;
+  }
+  return [...turn, { type: "turn/aborted", sessionId: end?.sessionId ?? "" }];
+}
+
 /**
  * 执行一次会话恢复（纯 async 逻辑，与 React 解耦——测试可直接 await）。
  */
 async function runRestore(): Promise<void> {
   useUIStore.getState().setRestoring(true);
+  useUIStore.getState().setRestoreFailed(false);
   useUIStore
     .getState()
     .setRestoreInfo({ phase: "index", readDone: 0, readTotal: 0 });
@@ -98,58 +140,58 @@ async function runRestore(): Promise<void> {
       .getState()
       .setRestoreInfo({ phase: "read", readDone: 0, readTotal: metas.length });
     let readDone = 0;
-    const records = await Promise.all(
+    let failedCount = 0;
+    let skippedTurns = 0;
+    const settled = await Promise.allSettled(
       metas.map(async (m) => {
-        const rec = await invoke<ConversationRecord>("get_conversation", {
-          conversationId: m.id,
-        });
-        readDone += 1;
-        useUIStore.getState().setRestoreInfo({ readDone });
-        return rec;
+        try {
+          return await invoke<ConversationRecord>("get_conversation", {
+            conversationId: m.id,
+          });
+        } finally {
+          readDone += 1;
+          useUIStore.getState().setRestoreInfo({ readDone });
+        }
       })
     );
 
     // 组装 Conversation（与现有形态完全一致）。防御：重复 id（罕见损坏场景）
-    // 后者丢弃 + console.warn。
+    // 后者丢弃 + console.warn；单个会话读取失败只影响它自己。
     const byId = new Map<string, Conversation>();
-    for (const r of records) {
+    for (let i = 0; i < settled.length; i++) {
+      const result = settled[i];
+      if (result.status === "rejected" || !result.value?.meta?.id) {
+        failedCount += 1;
+        console.warn(
+          `[hydration] 会话 ${metas[i].id} 恢复失败：`,
+          result.status === "rejected" ? result.reason : "返回记录缺少 meta.id"
+        );
+        continue;
+      }
+      const r = result.value;
       if (byId.has(r.meta.id)) {
         console.warn(`[hydration] 重复会话 id ${r.meta.id}，丢弃后者`);
         continue;
+      }
+      const turns: SessionEvent[][] = [];
+      if (!Array.isArray(r.turns)) skippedTurns += 1;
+      for (const line of Array.isArray(r.turns) ? r.turns : []) {
+        if (typeof line !== "string") {
+          skippedTurns += 1;
+          continue;
+        }
+        const turn = hydrateTurn(line);
+        if (turn === null) {
+          skippedTurns += 1;
+          continue;
+        }
+        turns.push(turn);
       }
       byId.set(r.meta.id, {
         id: r.meta.id,
         title: r.meta.title,
         createdAt: r.meta.createdAt,
-        // 轮行原文逐行 parse——后端保证每行可 parse（坏行已在读取侧跳过）。
-        // primary 的官方日志没有前端私有 turn/aborted；按 turn/end 原因补回，
-        // 保证重启后中止标记仍可见。
-        turns: r.turns.map((line) => {
-          const turn = JSON.parse(line) as SessionEvent[];
-          const aborted = turn.some(
-            (e) => e.type === "turn/end" && e.reason === "aborted"
-          );
-          const end = turn.find((e) => e.type === "turn/end");
-          if (!aborted || turn.some((e) => e.type === "turn/aborted")) {
-            // R-07：primary 日志只有 turn/end(max-tokens)，没有前端私有标记；
-            // 恢复时补回轮尾提示标记（legacy 日志已有时不重复）。
-            if (
-              end?.type === "turn/end" &&
-              end.reason === "max-tokens" &&
-              !turn.some((e) => e.type === "turn/truncated")
-            ) {
-              return [
-                ...turn,
-                { type: "turn/truncated", sessionId: end.sessionId },
-              ];
-            }
-            return turn;
-          }
-          return [
-            ...turn,
-            { type: "turn/aborted", sessionId: end?.sessionId ?? "" },
-          ];
-        }),
+        turns,
         // null → undefined 适配（后端可缺省字段以 null 表达）
         modelName: r.meta.modelName ?? undefined,
         contextLength: r.meta.contextLength ?? undefined,
@@ -162,11 +204,34 @@ async function runRestore(): Promise<void> {
 
     // ▎导航决策单点：恢复 updatedAt 最新会话为 activeId
     // （开屏流程改造点见文件头注释——只改本处与 pickActiveIdAfterRestore）
+    // 只用成功装载的会话参与导航，避免指向一个打不开的 id。
     useConversationStore.setState({
       conversations: [...byId.values()],
-      activeId: pickActiveIdAfterRestore(metas),
+      activeId: pickActiveIdAfterRestore(
+        metas.filter((m) => byId.has(m.id))
+      ),
       pendingTitle: null,
     });
+
+    if (failedCount > 0) {
+      const message =
+        byId.size > 0
+          ? `有 ${failedCount} 个会话恢复失败，其他会话已载入`
+          : `有 ${failedCount} 个会话恢复失败`;
+      showToast(message, {
+        kind: "warning",
+        ttlMs: 8000,
+        dedupeKey: "hydrate-session-failed",
+      });
+      if (byId.size === 0) useUIStore.getState().setRestoreFailed(true);
+    }
+    if (skippedTurns > 0) {
+      showToast(`有 ${skippedTurns} 轮记录格式异常，已跳过`, {
+        kind: "warning",
+        ttlMs: 8000,
+        dedupeKey: "hydrate-turn-skipped",
+      });
+    }
 
     // 经历管线启动补偿（Phase 4 任务二）：列出水位落后的会话，逐个
     // fire-and-forget 补提炼（前端不 await；失败静默，下轮轮末/切换会再触发）。
@@ -180,7 +245,8 @@ async function runRestore(): Promise<void> {
       /* 补偿失败静默：不阻断恢复 */
     }
   } catch (err) {
-    // list/get 失败（后端不可达/损坏）→ 降级为空历史（欢迎界面），不抛给 UI
+    // list 失败或恢复流程意外异常 → 降级为空历史（欢迎界面），不抛给 UI；
+    // 单份 get 的失败已在 allSettled 分支里按会话隔离。
     console.warn("[hydration] 会话恢复失败（降级为空历史）：", err);
     // 演出据此多报一行（[WARN] 读取: 失败，按新建处理）——降级别没痕迹
     useUIStore.getState().setRestoreFailed(true);

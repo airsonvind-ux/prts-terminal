@@ -253,7 +253,7 @@ describe("F7 恢复失败降级", () => {
     expect(useUIStore.getState().restoring).toBe(false);
   });
 
-  it("get reject（部分拉取失败）→ 整体降级空历史、不抛", async () => {
+  it("唯一会话读取失败 → 空历史、不抛", async () => {
     const metaX = meta({ id: "x", updatedAt: 2 });
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "list_conversations") return Promise.resolve([metaX]);
@@ -267,6 +267,64 @@ describe("F7 恢复失败降级", () => {
     await expect(restoreConversations()).resolves.toBeUndefined();
     expect(useConversationStore.getState().conversations).toHaveLength(0);
     expect(useUIStore.getState().restoring).toBe(false);
+  });
+
+  it("单个会话读取失败 → 其他会话照常载入（按会话隔离）", async () => {
+    const metaA = meta({ id: "a", updatedAt: 2 });
+    const metaB = meta({ id: "b", updatedAt: 3 });
+    __invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaA, metaB]);
+      if (cmd === "count_unreadable_sessions") return Promise.resolve(0);
+      if (cmd === "get_conversation") {
+        const id = (args as { conversationId: string }).conversationId;
+        if (id === "a") {
+          return Promise.resolve({ meta: metaA, turns: [] });
+        }
+        return Promise.reject(new Error("文件被占用"));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const { conversations, activeId } = useConversationStore.getState();
+    expect(conversations.map((c) => c.id)).toEqual(["a"]);
+    expect(activeId).toBe("a");
+    expect(
+      useToastStore.getState().toasts.some((t) =>
+        t.message.includes("1 个会话恢复失败")
+      )
+    ).toBe(true);
+  });
+
+  it("轮行是合法 JSON 但不是事件数组 → 跳过该轮，不拖垮整批", async () => {
+    const metaX = meta({ id: "x", updatedAt: 1 });
+    const good = JSON.stringify([
+      { type: "user/message", sessionId: "s1", content: "你好" },
+    ]);
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaX]);
+      if (cmd === "count_unreadable_sessions") return Promise.resolve(0);
+      if (cmd === "get_conversation") {
+        return Promise.resolve({ meta: metaX, turns: ["{}", good, "[null]"] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const conv = useConversationStore.getState().conversations[0];
+    expect(conv.turns).toHaveLength(1);
+    expect(conv.turns[0][0]).toEqual({
+      type: "user/message",
+      sessionId: "s1",
+      content: "你好",
+    });
+    expect(
+      useToastStore.getState().toasts.some((t) =>
+        t.message.includes("2 轮记录格式异常")
+      )
+    ).toBe(true);
   });
 
   it("存在无法读取的会话文件 → warning toast（不静默）", async () => {
