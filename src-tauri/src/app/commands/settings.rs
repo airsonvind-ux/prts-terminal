@@ -171,6 +171,9 @@ pub fn copy_api_key(
         let creds = credentials
             .lock()
             .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+        if let Some(reason) = creds.write_block_reason() {
+            return Err(reason);
+        }
         creds
             .get(&crate::credentials::provider_key_ref(&name))
             .unwrap_or_default()
@@ -221,6 +224,16 @@ pub async fn set_settings(
     // 之前拒绝，否则会出现「设置半数落进 store、却没落盘」。
     if patch.maa.is_some() && crate::maa::manager::is_running() {
         return Err("MAA 正在执行任务，暂不能修改连接设置；等它跑完，或先中止它".to_string());
+    }
+    // 凭据层禁写（读取失败/未来版本）时，必须在 apply_patch 之前拒绝：
+    // 否则 settings 内存会先被改成新值，凭据失败返回后留下半应用状态。
+    if patch.touches_api_key() {
+        let creds = credentials
+            .lock()
+            .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+        if let Some(reason) = creds.write_block_reason() {
+            return Err(format!("密钥保存失败：{reason}"));
+        }
     }
     let changes = st.apply_patch(&patch);
     // 密钥操作：先落凭据层（可回滚），再存 settings（不可回滚）。锁序固定

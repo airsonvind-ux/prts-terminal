@@ -286,6 +286,23 @@ pub struct SettingsPatch {
     pub window: Option<WindowPatch>,
 }
 
+impl SettingsPatch {
+    /// 本次 patch 是否携带 API Key 写入/清除（掩码占位不算）。
+    /// 命令层用它把凭据禁写挡在 `apply_patch` 之前，避免设置内存半应用。
+    pub fn touches_api_key(&self) -> bool {
+        self.llm
+            .as_ref()
+            .and_then(|l| l.providers.as_ref())
+            .map(|providers| {
+                providers.values().any(|p| match p.api_key.as_deref() {
+                    Some(v) => v != MASKED_SECRET,
+                    None => false,
+                })
+            })
+            .unwrap_or(false)
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct LlmPatch {
     /// 切换 active 供应商（只动指针；目标家配置在 providers 内保留）。
@@ -1021,6 +1038,30 @@ mod tests {
         assert_eq!(s.settings.llm.providers.get("kimi").unwrap().model, "");
         assert_eq!(s.settings.llm.providers.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patch_api_key_detection_ignores_mask_only() {
+        let plain: SettingsPatch = serde_json::from_str(
+            r#"{ "llm": { "providers": { "deepseek": { "api_key": "sk-plain" } } } }"#,
+        )
+        .unwrap();
+        let clear: SettingsPatch = serde_json::from_str(
+            r#"{ "llm": { "providers": { "deepseek": { "api_key": "" } } } }"#,
+        )
+        .unwrap();
+        let masked: SettingsPatch = serde_json::from_str(
+            r#"{ "llm": { "providers": { "deepseek": { "api_key": "********" } } } }"#,
+        )
+        .unwrap();
+        let no_key: SettingsPatch =
+            serde_json::from_str(r#"{ "llm": { "providers": { "deepseek": { "model": "m" } } } }"#)
+                .unwrap();
+
+        assert!(plain.touches_api_key());
+        assert!(clear.touches_api_key());
+        assert!(!masked.touches_api_key(), "掩码占位不产生密钥操作");
+        assert!(!no_key.touches_api_key());
     }
 
     #[test]

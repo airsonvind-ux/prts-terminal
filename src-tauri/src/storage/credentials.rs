@@ -16,7 +16,9 @@
 //!   不引入新的内存暴露面。
 //! - 落盘沿用 settings.rs 同款策略：tmp + rename 原子替换 + **写后重读校验**。
 //! - 文件损坏 → 备份 `credentials.json.bak` 后回空并留下说明，**绝不静默覆盖**
-//!   （同 settings.rs 的 parse-fail 处置）。
+//!   （同 settings.rs 的 parse-fail 处置）；**非 NotFound 的读取失败 → 保留原文件并
+//!   禁止本次运行写入**（读不到不等于没有凭据，不能用空内存覆盖）。
+//! - 带合法前缀但解不开的条目原样保留，整写时写回，避免一次部分损坏变成永久丢失。
 //! - 盘上 version 高于当前 → 只读降级（绝不覆盖写高版本数据）。
 //!
 //! 非 Windows 目标：加密/解密走桩（一律报错），文件读写仍可编译通过——与
@@ -196,8 +198,13 @@ pub struct CredentialsStore {
     path: PathBuf,
     /// 引用键 → 明文值。
     secrets: HashMap<String, String>,
+    /// 带合法前缀但解不开的原始密文。整写时原样带回，避免一次部分损坏
+    /// 在下一次 save 里变成永久丢失。缺前缀的手写明文不进这里。
+    preserved: HashMap<String, String>,
     /// 盘上 version 高于当前 → 只读降级。
     readonly: bool,
+    /// 非 NotFound 的读取失败：原文件内容未知，本次运行禁止写入。
+    read_failed: bool,
     /// 载入时的处置说明（损坏回退、非法条目跳过等），供调用方记录与上报。
     pub load_note: Option<String>,
 }
@@ -208,7 +215,9 @@ impl CredentialsStore {
         let mut store = Self {
             path: data_dir.join(CREDENTIALS_FILE),
             secrets: HashMap::new(),
+            preserved: HashMap::new(),
             readonly: false,
+            read_failed: false,
             load_note: None,
         };
 
@@ -216,7 +225,12 @@ impl CredentialsStore {
             Ok(r) => r,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return store,
             Err(e) => {
-                store.load_note = Some(format!("凭据文件读取失败（{e}），按空存储继续"));
+                // 读取失败不等于“没有凭据”：原文件可能完好，只是磁盘/权限/占用
+                // 暂时读不到。此时必须禁写，否则下一次整写会用空内存覆盖它。
+                store.read_failed = true;
+                store.load_note = Some(format!(
+                    "凭据文件读取失败（{e}），原文件保持不动，本次运行禁止写入"
+                ));
                 return store;
             }
         };
@@ -244,6 +258,7 @@ impl CredentialsStore {
         }
 
         // 逐条解密。跳过非法条目而不是整盘失败：一条坏值不该毁掉其余可用的密钥。
+        // 带合法前缀但解不开的值保留原文，save 时原样写回。
         let mut skipped: Vec<String> = Vec::new();
         for (key, value) in parsed.secrets {
             let Some(b64) = value.strip_prefix(CIPHER_PREFIX) else {
@@ -253,7 +268,8 @@ impl CredentialsStore {
                 continue;
             };
             let Some(blob) = hex_decode(b64) else {
-                skipped.push(format!("{key}（密文不是合法十六进制）"));
+                store.preserved.insert(key.clone(), value);
+                skipped.push(format!("{key}（密文不是合法十六进制，已原样保留）"));
                 continue;
             };
             match unprotect(&blob).and_then(|p| {
@@ -262,8 +278,14 @@ impl CredentialsStore {
                 Ok(plain) if !plain.is_empty() => {
                     store.secrets.insert(key, plain);
                 }
-                Ok(_) => skipped.push(format!("{key}（解出的明文为空）")),
-                Err(e) => skipped.push(format!("{key}（{e}）")),
+                Ok(_) => {
+                    store.preserved.insert(key.clone(), value);
+                    skipped.push(format!("{key}（解出的明文为空，已原样保留）"));
+                }
+                Err(e) => {
+                    store.preserved.insert(key.clone(), value);
+                    skipped.push(format!("{key}（{e}，已原样保留）"));
+                }
             }
         }
         if !skipped.is_empty() {
@@ -294,17 +316,17 @@ impl CredentialsStore {
     /// 这里立刻做一次加密，让"加密失败"在写入口就暴露：失败则内存不变，
     /// 不会出现"看着存上了、其实存不下"的中间态。
     pub fn set(&mut self, key: &str, plaintext: &str) -> Result<(), String> {
-        if self.readonly {
-            return Err(format!(
-                "凭据文件 version 高于当前（{CREDENTIALS_VERSION}），拒绝写入（需升级应用）"
-            ));
+        if let Some(reason) = self.write_block_reason() {
+            return Err(reason);
         }
         if plaintext.is_empty() {
             self.secrets.remove(key);
+            self.preserved.remove(key);
             return Ok(());
         }
         protect(plaintext.as_bytes())?;
         self.secrets.insert(key.to_string(), plaintext.to_string());
+        self.preserved.remove(key);
         Ok(())
     }
 
@@ -325,15 +347,33 @@ impl CredentialsStore {
         self.readonly
     }
 
-    /// 整写：全部条目重新加密 + tmp/rename 原子替换 + 写后重读校验。
-    /// 失败 Err 上抛；内存已同步，盘保持旧值。
-    pub fn save(&self) -> Result<(), String> {
+    /// 当前是否禁止写入（读取失败或未来版本）。
+    pub fn is_write_blocked(&self) -> bool {
+        self.write_block_reason().is_some()
+    }
+
+    /// 禁写原因；可写时返回 None。命令层与 UI 用同一句人话，避免各自编文案。
+    pub fn write_block_reason(&self) -> Option<String> {
+        if self.read_failed {
+            return Some(
+                "凭据文件读取失败，原文件未改动；为避免覆盖已有密钥，本次未保存".to_string(),
+            );
+        }
         if self.readonly {
-            return Err(format!(
+            return Some(format!(
                 "凭据文件 version 高于当前（{CREDENTIALS_VERSION}），拒绝写入（需升级应用）"
             ));
         }
-        let mut secrets = HashMap::with_capacity(self.secrets.len());
+        None
+    }
+
+    /// 整写：全部条目重新加密 + tmp/rename 原子替换 + 写后重读校验。
+    /// 失败 Err 上抛；内存已同步，盘保持旧值。
+    pub fn save(&self) -> Result<(), String> {
+        if let Some(reason) = self.write_block_reason() {
+            return Err(reason);
+        }
+        let mut secrets = self.preserved.clone();
         for (key, plain) in &self.secrets {
             let blob = protect(plain.as_bytes())?;
             secrets.insert(key.clone(), format!("{CIPHER_PREFIX}{}", hex_encode(&blob)));
@@ -429,8 +469,32 @@ mod tests {
         assert!(store.is_empty());
         assert!(!store.has(&provider_key_ref("deepseek")));
         assert!(store.load_note.is_none());
+        assert!(!store.is_write_blocked(), "文件缺失是可写的空存储");
         // 载入不建文件
         assert!(!dir.join(CREDENTIALS_FILE).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_error_blocks_writes_and_preserves_path() {
+        let dir = unique_temp_dir("readerr");
+        let path = dir.join(CREDENTIALS_FILE);
+        // 用目录制造一个非 NotFound 的读取错误（跨平台稳定，不依赖 ACL）。
+        std::fs::create_dir(&path).unwrap();
+
+        let mut store = CredentialsStore::load(&dir);
+        assert!(store.is_write_blocked());
+        assert!(
+            store
+                .write_block_reason()
+                .unwrap_or_default()
+                .contains("读取失败"),
+            "禁写原因必须区分读取失败"
+        );
+        assert!(store.set(&provider_key_ref("deepseek"), "sk-x").is_err());
+        assert!(store.save().is_err());
+        assert!(path.is_dir(), "读失败时不能动原路径");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -441,6 +505,7 @@ mod tests {
         let store = CredentialsStore::load(&dir);
         assert!(store.is_empty());
         assert!(store.load_note.is_some());
+        assert!(!store.is_write_blocked(), "损坏文件备份后仍可重建");
         assert!(
             dir.join(CREDENTIALS_BAK).exists(),
             "损坏内容必须先备份再回空"
@@ -461,6 +526,7 @@ mod tests {
         .unwrap();
         let mut store = CredentialsStore::load(&dir);
         assert!(store.is_readonly());
+        assert!(store.is_write_blocked());
         assert!(store.set(&provider_key_ref("deepseek"), "sk-x").is_err());
         assert!(store.save().is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -532,6 +598,50 @@ mod tests {
             let store = CredentialsStore::load(&dir);
             assert!(store.is_empty());
             assert!(store.load_note.is_some());
+            // 解不开的密文不能在下次整写时被抹掉：save 后原样还在。
+            store.save().unwrap();
+            let text = std::fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap();
+            assert!(
+                text.contains("dpapi:v1:deadbeef"),
+                "无法解密的密文应原样保留：{text}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn partially_unreadable_file_keeps_ciphertext_when_saving() {
+            let dir = unique_temp_dir("partial");
+            let good_key = provider_key_ref("deepseek");
+            let bad_key = provider_key_ref("kimi");
+
+            let mut seed = CredentialsStore::load(&dir);
+            seed.set(&good_key, "sk-good").unwrap();
+            seed.save().unwrap();
+
+            // 在完好文件里塞一条解不开的密文，模拟部分 DPAPI 失败/换机。
+            let text = std::fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap();
+            let mut file: CredentialsFile = serde_json::from_str(&text).unwrap();
+            file.secrets
+                .insert(bad_key.clone(), "dpapi:v1:deadbeef".to_string());
+            std::fs::write(
+                dir.join(CREDENTIALS_FILE),
+                serde_json::to_string_pretty(&file).unwrap(),
+            )
+            .unwrap();
+
+            let store = CredentialsStore::load(&dir);
+            assert_eq!(store.get(&good_key), Some("sk-good"));
+            assert!(!store.has(&bad_key));
+            assert!(store.load_note.is_some());
+
+            store.save().unwrap();
+            let text = std::fs::read_to_string(dir.join(CREDENTIALS_FILE)).unwrap();
+            assert!(
+                text.contains("dpapi:v1:deadbeef"),
+                "部分解不开的条目必须保留原密文：{text}"
+            );
+            assert!(text.contains(good_key.as_str()), "可解条目仍应写出");
+
             let _ = std::fs::remove_dir_all(&dir);
         }
 
