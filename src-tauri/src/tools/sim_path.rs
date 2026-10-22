@@ -7,18 +7,21 @@
 //!
 //! 输出：summary = 格级事件流（相对帧，f0 = 生成帧）；rows = 结构化摘要；
 //! 帧级 JSONL log 默认写入工作区 sim_logs/ 目录（workspace_root/sim_logs/，
-//! M1 批 2 已迁移；log 参数可覆盖，相对路径基于工作区解析）。
+//! M1 批 2 已迁移；log 参数可覆盖，相对路径基于工作区解析，且覆盖路径
+//! 同样受沙箱写守卫约束，仅允许工作区内）。
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::db::{Filter, FilterOp};
+use crate::path_guard;
+use crate::policy::Policy;
 use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
-use crate::workspace::WorkspaceRoot;
 
 mod nav;
 mod parse;
@@ -903,22 +906,77 @@ impl<'a> Simulator<'a> {
 // Tool trait 实现
 // ═══════════════════════════════════════════════════════
 
-/// 寻路模拟工具。工作根为帧级 log 的落点基准（**共享句柄，每次读当前值**）：
+/// 寻路模拟工具。帧级 log 的落点也受沙箱写守卫约束：
 /// 默认写入 workspace_root/sim_logs/，log 参数覆盖时相对路径基于工作区解析。
-/// 本工具只写自己的 log 文件，不走沙箱守卫（读写判定针对 LLM 文件
-/// 能力；log 为工具内部副作用，落点已固定在工作区内）。
+/// log 是工具内部副作用，但它会写盘，不能绕过 `Policy` 的写边界。
 pub struct SimPath {
-    /// 当前工作根（共享句柄，见 crate::workspace）。
-    workspace_root: WorkspaceRoot,
+    /// 沙箱策略：log 落点走 `resolve_write_create`，工作根仍是共享句柄。
+    policy: Arc<Policy>,
 }
 
 impl SimPath {
-    /// `workspace_root` 接受路径（单测）或共享句柄（生产装配）。
-    pub fn new(workspace_root: impl Into<WorkspaceRoot>) -> Self {
-        Self {
-            workspace_root: workspace_root.into(),
-        }
+    /// 生产装配传共享策略；单测可传独立 `Policy`。
+    pub fn new(policy: Arc<Policy>) -> Self {
+        Self { policy }
     }
+}
+
+/// log 的两种路径：实际写入用 canonical，展示用去 verbatim 的原始落点。
+#[derive(Debug)]
+struct LogTarget {
+    write_path: PathBuf,
+    display_path: PathBuf,
+    /// 默认 sim_logs/ 需要自动创建；log 覆盖沿用“父目录必须存在”的旧语义。
+    create_parent: bool,
+}
+
+/// Windows canonicalize 会带 `\\?\` 前缀；展示层去掉它，避免用户看到
+/// `\\?\C:\...`。UNC 形态还原成普通 `\\server\share`。
+fn strip_verbatim(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+        return PathBuf::from(format!("\\\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix("\\\\?\\") {
+        return PathBuf::from(rest);
+    }
+    p.to_path_buf()
+}
+
+/// 解析 log 落点并过写守卫。`raw` 是用户可见的绝对落点（相对 log 已基于
+/// 当前工作根展开）；返回值中的 `write_path` 已 canonicalize。
+fn resolve_log_target(
+    policy: &Policy,
+    log_override: Option<&str>,
+    level_id: &str,
+    route_index: i64,
+) -> Result<LogTarget, path_guard::PathGuardError> {
+    let (raw, create_parent) = match log_override {
+        Some(p) => {
+            let op = PathBuf::from(p);
+            let raw = if op.is_absolute() {
+                op
+            } else {
+                policy.workspace_root().current().join(op)
+            };
+            (raw, false)
+        }
+        None => {
+            let raw = policy
+                .workspace_root()
+                .current()
+                .join("sim_logs")
+                .join(format!("sim_{}_r{}.jsonl", level_id, route_index));
+            (raw, true)
+        }
+    };
+
+    let write_path = path_guard::resolve_write_create(policy, raw.to_string_lossy().as_ref())?;
+    Ok(LogTarget {
+        write_path,
+        display_path: strip_verbatim(&raw),
+        create_parent,
+    })
 }
 
 impl Tool for SimPath {
@@ -942,7 +1000,7 @@ impl Tool for SimPath {
                 "route": { "type": "string", "description": "自定义路线 DSL。不填则用数据库路线" },
                 "obstacle": { "type": "string", "description": "额外障碍物格，分号分隔，如 7,2;7,3。" },
                 "timeAxis": { "type": "object", "description": "计时起点对象（默认全 0=f0），供 WAIT_GLOBAL/FRAGMENT/WAVE 使用；子键 global/fragment/wave，语义见《行动推演》skill 参数语法节"},
-                "log": { "type": "string", "description": "帧级 log 输出路径（相对路径基于工作区解析），覆盖默认位置（工作区 sim_logs/）" },
+                "log": { "type": "string", "description": "帧级 log 输出路径（相对路径基于工作区解析，仅允许工作区内），覆盖默认位置（工作区 sim_logs/）" },
                 "maxFrames": { "type": "integer", "description": "模拟帧上限，默认 12000" }
             },
             "required": ["levelId", "routeIndex"]
@@ -1196,24 +1254,18 @@ impl Tool for SimPath {
         lines.push(String::new());
         let mut summary = lines.join("\n");
 
-        // log 写入（M1 批 2：落点迁移到工作区）
-        // log_override 相对路径 → workspace_root.join；绝对路径直接用。
-        // 缺省 → workspace_root/sim_logs/sim_{level_id}_r{route_index}.jsonl
-        let log_path = match log_override {
-            Some(p) => {
-                let op = PathBuf::from(p);
-                if op.is_absolute() {
-                    op
-                } else {
-                    self.workspace_root.current().join(op)
-                }
+        // log 写入（M1 批 2：落点迁移到工作区；R-00：同样过写守卫）
+        // 相对 log 基于当前工作根展开；默认落 workspace_root/sim_logs/。
+        // 实际写 canonical 路径，summary/rows 用去 verbatim 的展示路径。
+        let log_target =
+            resolve_log_target(&self.policy, log_override.as_deref(), level_id, route_index)
+                .map_err(|e| ToolError::Execution(format!("log 写入路径不可用：{e}")))?;
+        if log_target.create_parent {
+            if let Some(parent) = log_target.write_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| ToolError::Execution(format!("log 目录创建失败: {e}")))?;
             }
-            None => {
-                let dir = self.workspace_root.current().join("sim_logs");
-                fs::create_dir_all(&dir).ok();
-                dir.join(format!("sim_{}_r{}.jsonl", level_id, route_index))
-            }
-        };
+        }
         let meta = json!({
             "type": "meta", "levelId": level_id, "route": route_index,
             "k": k, "theo": theo, "start": [start_pos.0, start_pos.1],
@@ -1246,15 +1298,15 @@ impl Tool for SimPath {
                 serde_json::to_string(&rec).unwrap_or_default()
             ));
         }
-        fs::write(&log_path, log_content)
+        fs::write(&log_target.write_path, log_content)
             .map_err(|e| ToolError::Execution(format!("log 写入失败: {e}")))?;
-        summary.push_str(&format!("\nlog: {}", log_path.display()));
+        summary.push_str(&format!("\nlog: {}", log_target.display_path.display()));
 
         // rows：结构化摘要
         let rows = json!([{
             "levelId": level_id, "routeIndex": route_index, "k": k, "speed": speed,
             "endFrame": out.end_frame, "endReason": out.end_reason,
-            "cpDone": out.cp_done, "logPath": log_path,
+            "cpDone": out.cp_done, "logPath": log_target.display_path,
         }]);
         Ok(ToolOutput::json(rows, summary))
     }
@@ -1298,9 +1350,13 @@ mod tests {
 
     /// 在指定工作区执行一次模拟并返回 summary（**不清理**——show_output
     /// 等持久场景用：log 是研究资产，必须留存供绘图/对拍）。
+    fn sim_tool(ws: &Path) -> SimPath {
+        SimPath::new(Arc::new(Policy::new(ws.to_path_buf())))
+    }
+
     fn run_in(ws: &Path, params: &str) -> String {
         let ctx = make_ctx();
-        let tool = SimPath::new(ws.to_path_buf());
+        let tool = sim_tool(ws);
         match tool.execute(&ctx, params) {
             Ok(s) => s.summary,
             Err(e) => format!("ERROR: {e}"),
@@ -1565,7 +1621,7 @@ mod tests {
         let ws = unique_temp_dir("logrel");
         std::fs::create_dir_all(ws.join("out")).unwrap(); // override 分支不自动建目录
         let ctx = make_ctx();
-        let tool = SimPath::new(ws.clone());
+        let tool = sim_tool(&ws);
 
         let s = tool
             .execute(
@@ -1590,6 +1646,143 @@ mod tests {
             "相对路径应基于工作区解析"
         );
         assert!(log_path.is_file(), "log 文件应真实存在");
+        assert!(
+            !s.contains("\\\\?\\"),
+            "summary 不应出现 verbatim 前缀：\n{s}"
+        );
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
+    #[test]
+    fn sim_log_override_outside_workspace_rejected() {
+        // R-00：绝对路径 log 覆盖必须过写守卫，区外路径不得写出。
+        let ws = unique_temp_dir("log-outside-ws");
+        let outside = unique_temp_dir("log-outside-target");
+        let target = outside.join("leak.jsonl");
+        let ctx = make_ctx();
+        let tool = sim_tool(&ws);
+        let params = json!({
+            "levelId": "level_rogue5_t-10",
+            "routeIndex": 5,
+            "speed": 1.3,
+            "log": target.to_string_lossy(),
+        })
+        .to_string();
+
+        let err = tool.execute(&ctx, &params).unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("不在工作区内")),
+            "区外 log 应被守卫拒绝，got: {err:?}"
+        );
+        assert!(!target.exists(), "区外目标不应被创建：{target:?}");
+
+        let _ = std::fs::remove_dir_all(&ws);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
+    #[test]
+    fn sim_log_override_parent_escape_rejected() {
+        // R-00：相对路径中的 .. 必须在 canonicalize 后按真实位置判定。
+        let ws = unique_temp_dir("log-escape-ws");
+        let outside = ws.parent().expect("临时目录应有父目录").join(format!(
+            "{}-escape.jsonl",
+            ws.file_name().unwrap().to_string_lossy()
+        ));
+        let raw = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        let ctx = make_ctx();
+        let tool = sim_tool(&ws);
+        let params = json!({
+            "levelId": "level_rogue5_t-10",
+            "routeIndex": 5,
+            "speed": 1.3,
+            "log": raw,
+        })
+        .to_string();
+
+        let err = tool.execute(&ctx, &params).unwrap_err();
+        assert!(
+            matches!(&err, ToolError::Execution(m) if m.contains("不在工作区内")),
+            ".. 穿越应被守卫拒绝，got: {err:?}"
+        );
+        assert!(!outside.exists(), "越界目标不应被创建：{outside:?}");
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
+    #[test]
+    fn sim_log_default_lands_in_workspace_sim_logs() {
+        // R-00：默认 log 也走写守卫；展示路径不带 Windows verbatim 前缀。
+        let ws = unique_temp_dir("log-default");
+        let ctx = make_ctx();
+        let tool = sim_tool(&ws);
+        let out = tool
+            .execute(
+                &ctx,
+                r#"{"levelId":"level_rogue5_t-10","routeIndex":5,"speed":1.3}"#,
+            )
+            .unwrap();
+        let expected = ws.join("sim_logs").join("sim_level_rogue5_t-10_r5.jsonl");
+        let log_line = out
+            .summary
+            .lines()
+            .find(|l| l.starts_with("log: "))
+            .expect("summary 应附 log: 行");
+        assert_eq!(
+            PathBuf::from(log_line.trim_start_matches("log: ")),
+            expected,
+            "默认 log 应落在 workspace/sim_logs/"
+        );
+        assert!(expected.is_file(), "默认 log 文件应真实存在");
+        assert!(
+            !log_line.contains("\\\\?\\"),
+            "展示路径不应带 verbatim 前缀：{log_line}"
+        );
+        let canonical_log = out.canonical[0]["logPath"]
+            .as_str()
+            .expect("rows.logPath 应为字符串");
+        assert_eq!(canonical_log, expected.to_string_lossy());
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn strip_verbatim_removes_windows_prefix() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\temp\log.jsonl")),
+            PathBuf::from(r"C:\temp\log.jsonl")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share\log.jsonl")),
+            PathBuf::from(r"\\server\share\log.jsonl")
+        );
+        let plain = Path::new("relative/a.jsonl");
+        assert_eq!(strip_verbatim(plain), plain.to_path_buf());
+    }
+
+    #[test]
+    fn sim_log_target_rejects_protected_git_path() {
+        let ws = unique_temp_dir("log-git");
+        std::fs::create_dir_all(ws.join(".git")).unwrap();
+        let policy = Policy::new(ws.clone());
+
+        let err = resolve_log_target(&policy, Some(".git/leak.jsonl"), "x", 0).unwrap_err();
+        assert!(
+            matches!(&err, path_guard::PathGuardError::Protected(_)),
+            ".git 下 log 应被 protected 拒绝，got: {err:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }

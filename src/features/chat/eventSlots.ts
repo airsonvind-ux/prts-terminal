@@ -5,6 +5,7 @@ import type {
   SessionEvent,
   ToolApprovalResultEvent,
   ToolDisplay,
+  ToolProvenance,
 } from "../../types";
 import { toolAction } from "../../toolDisplay";
 
@@ -19,6 +20,8 @@ export interface ToolSlot {
   summary: string;
   /** 展示切片（来自 tool/call，短语后紧随 text + link）；null = 无信息 */
   display: ToolDisplay | null;
+  /** 结果来源（来自 tool/result；旧归档/未声明工具为 null） */
+  provenance: ToolProvenance | null;
   /** sessionId（审批 invoke 路由用；与事件同源） */
   sessionId: string;
   /** 审批请求的完整命令（无审批 = null） */
@@ -47,6 +50,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
         ok: null,
         summary: "",
         display: e.display ?? null,
+        provenance: null,
         sessionId: e.sessionId,
         command: null,
         approval: null,
@@ -74,6 +78,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
           ok: null,
           summary: "",
           display: null,
+          provenance: null,
           sessionId: e.sessionId,
           command: e.command,
           approval: {
@@ -102,6 +107,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
       if (pending) {
         pending.ok = e.ok;
         pending.summary = e.summary;
+        pending.provenance = e.provenance ?? null;
       } else {
         const toolName = e.toolName ?? "?";
         result.push({
@@ -111,6 +117,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
           ok: e.ok,
           summary: e.summary,
           display: null,
+          provenance: e.provenance ?? null,
           sessionId: e.sessionId,
           command: null,
           approval: null,

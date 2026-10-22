@@ -12,7 +12,7 @@
 //! 失败容忍：`display` 是纯展示路径，解析失败（参数缺失/文件不存在）一律降级
 //! 为空切片或尽力而为的路径拼接，绝不因展示而阻断工具调用本身。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::path_guard;
 use crate::policy::Policy;
@@ -29,8 +29,8 @@ pub(crate) const MAX_DISPLAY_TEXT_CHARS: usize = 200;
 ///
 /// 序列化时字段为空即省略（`skip_serializing_if`），旧归档无此字段 →
 /// 前端按缺省处理（不附加任何信息）。
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ToolDisplay {
     /// 文本信息（对象名、筛选摘要、命令等）；空 = 不展示
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -86,7 +86,7 @@ impl ToolDisplay {
 }
 
 /// 展示链接：文件引用（open_path 打开）或外部 URL（系统浏览器打开）。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayLink {
     /// 链接类型：file / url
@@ -119,7 +119,7 @@ impl DisplayLink {
 }
 
 /// 链接类型判别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkKind {
     File,

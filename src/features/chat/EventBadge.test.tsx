@@ -14,7 +14,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { EventBadge } from "./EventBadge";
-import type { SessionEvent, ToolDisplay } from "../../types";
+import type { SessionEvent, ToolDisplay, ToolProvenance } from "../../types";
 
 // React 19 的 act() 需要显式环境标志（jsdom 默认未开启，仿 Markdown.test.ts）
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -165,7 +165,8 @@ function toolResult(
   callId: string,
   ok: boolean,
   summary: string,
-  toolName = "run_command"
+  toolName = "run_command",
+  provenance?: ToolProvenance
 ): SessionEvent {
   return {
     type: "tool/result",
@@ -174,6 +175,7 @@ function toolResult(
     toolName,
     summary,
     ok,
+    provenance,
   };
 }
 
@@ -205,6 +207,16 @@ describe("EventBadge · 审批 pending（M3-A）", () => {
       html().indexOf("Remove-Item C:\\tmp\\x.txt")
     );
     expect(html()).toContain("PRTS需要你确认执行命令");
+    unmount();
+  });
+
+  it("Skill 包脚本 reason → 类别短语为执行 Skill 包内脚本", () => {
+    const events: SessionEvent[] = [
+      toolCall("run_command", C1),
+      approvalRequest(C1, "powershell -File .\\run.ps1", "high", "skill-package-script"),
+    ];
+    const { text, unmount } = renderBadge(events, true);
+    expect(text()).toContain("将执行：Skill 包内的脚本");
     unmount();
   });
 
@@ -574,6 +586,43 @@ describe("EventBadge · 展示切片（进行中即显示 / 失败保留 / 链�
     const calls = __invokeMock.mock.calls.filter((c) => c[0] === "open_url");
     expect(calls).toHaveLength(1);
     expect((calls[0][1] as { url: string }).url).toBe("https://example.com/x");
+    unmount();
+  });
+});
+
+// ── 外部资料标签（R-02a） ──
+
+describe("EventBadge · 外部资料标签", () => {
+  it("external provenance 显示中性「外部」标签与来源标题", () => {
+    const events = [
+      toolCall("web_fetch", "c_ext"),
+      toolResult("c_ext", true, "外部正文", "web_fetch", {
+        trust: "external",
+        source: "example.com/docs",
+      }),
+    ];
+    const { text, unmount } = renderBadge(events, true);
+    openTools();
+
+    expect(text()).toContain("PRTS浏览网页完成");
+    const tag = Array.from(document.querySelectorAll("span")).find(
+      (el) => el.textContent === "外部"
+    );
+    expect(tag).not.toBeUndefined();
+    expect(tag!.getAttribute("title")).toContain("example.com/docs");
+    unmount();
+  });
+
+  it("旧 tool/result 无 provenance → 不显示外部标签", () => {
+    const events = [
+      toolCall("web_fetch", "c_legacy"),
+      toolResult("c_legacy", true, "旧结果", "web_fetch"),
+    ];
+    const { text, unmount } = renderBadge(events, true);
+    openTools();
+
+    expect(text()).toContain("PRTS浏览网页完成");
+    expect(text()).not.toContain("外部");
     unmount();
   });
 });

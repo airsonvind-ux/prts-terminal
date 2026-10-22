@@ -238,6 +238,9 @@ pub struct Bridge {
     next_id: AtomicU64,
     /// 握手帧（`{"event":"ready","available":...,"version":...,"maa_dir":...,"user_dir":...}`）。
     pub ready: Value,
+    /// 测试注入：让命令立即失败，不依赖真实桥。
+    #[cfg(test)]
+    fail_commands: bool,
 }
 
 impl Bridge {
@@ -332,6 +335,8 @@ impl Bridge {
             alive: Arc::new(AtomicBool::new(true)),
             next_id: AtomicU64::new(1),
             ready,
+            #[cfg(test)]
+            fail_commands: false,
         };
         bridge.start_reader()?;
         Ok(bridge)
@@ -411,6 +416,50 @@ impl Bridge {
         }
     }
 
+    /// 收尾当前运行，避免失败派发留下「永远在跑」的假象。
+    ///
+    /// 只用于 `begin_run` 之后、任务真正起跑之前的失败路径；已经在跑的任务
+    /// 不能用它中止（那会绕开正常的任务停止流程）。
+    pub fn abort_run(&self) {
+        if let Ok(mut record) = self.records.lock() {
+            if record.in_flight() {
+                let _ = record.finish(&results_dir());
+            }
+        }
+    }
+
+    /// 测试用桥：不启动真实进程、不连接 MAA；命令按需立即失败。
+    #[cfg(test)]
+    pub(crate) fn test_stub(fail_commands: bool) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("测试监听端口");
+        let addr = listener.local_addr().expect("测试监听地址");
+        let stream = TcpStream::connect(addr).expect("测试连接");
+        let (server, _) = listener.accept().expect("测试接受连接");
+        drop(server);
+
+        let child = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "0"])
+                .spawn()
+                .expect("测试子进程")
+        } else {
+            Command::new("true").spawn().expect("测试子进程")
+        };
+
+        Self {
+            child,
+            stream,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            events: Arc::new(Mutex::new(EventBuffer::default())),
+            records: Arc::new(Mutex::new(RunRecord::default())),
+            last_run: Arc::new(Mutex::new(LastRun::default())),
+            alive: Arc::new(AtomicBool::new(true)),
+            next_id: AtomicU64::new(1),
+            ready: json!({ "event": "ready", "available": true }),
+            fail_commands,
+        }
+    }
+
     /// 补齐本次运行的任务 id（`task_add` 之后才知道）。
     pub fn set_run_task_ids(&self, task_ids: Vec<i64>) {
         if let Ok(mut record) = self.records.lock() {
@@ -447,6 +496,10 @@ impl Bridge {
 
     /// 发一条命令并等它的应答（事件由读线程照常收进缓冲，不影响这里）。
     pub fn command(&self, mut cmd: Value, timeout: Duration) -> Result<Value, BridgeError> {
+        #[cfg(test)]
+        if self.fail_commands {
+            return Err(BridgeError::Io("测试注入：桥命令失败".to_string()));
+        }
         let name = cmd_name(&cmd);
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         if let Value::Object(ref mut map) = cmd {

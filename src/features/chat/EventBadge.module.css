@@ -167,6 +167,18 @@
   word-break: break-all;
 }
 
+/* 外部资料标签（R-02a）：只提示来源性质，不做危险警示。 */
+.provenanceTag {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 1px solid var(--depth-0);
+  border-radius: 2px;
+  color: var(--text-3);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 /* ── 审批确认态（M3-A：run_command 等待用户确认的第四态） ── */
 
 /* 审批中的工具条目：醒目边框（等待用户输入，非自动流程）

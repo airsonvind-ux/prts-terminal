@@ -10,7 +10,7 @@
 // jsdom 无 ResizeObserver / Canvas 2D：组件级用例 stub 最小实现；
 // 纯函数与 reconcile 用例不依赖这两者。
 
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { marked } from "marked";
@@ -321,6 +321,127 @@ describe("Markdown 组件 · 渲染端到端", () => {
     // → 假表格重建(inline text-align)，两端应分别应用 left / right
     expect(html).toContain("text-align:left");
     expect(html).toContain("text-align:right");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  // ── R-44：Markdown 锚点点击必须离开 webview 导航链路 ──
+
+  const invokeMock = (
+    globalThis as unknown as {
+      __invokeMock: {
+        mockClear: () => void;
+        mock: { calls: unknown[][] };
+      };
+    }
+  ).__invokeMock;
+
+  beforeEach(() => {
+    invokeMock.mockClear();
+  });
+
+  function mountMarkdown(content: string) {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(React.createElement(Markdown, { content }));
+    });
+    return { container, root };
+  }
+
+  function fireLink(
+    link: HTMLAnchorElement,
+    type: "click" | "auxclick" = "click",
+    init: MouseEventInit = {}
+  ) {
+    const event = new MouseEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...init,
+    });
+    link.dispatchEvent(event);
+    return event;
+  }
+
+  function openUrlCalls() {
+    return invokeMock.mock.calls.filter((call) => call[0] === "open_url");
+  }
+
+  it("外链点击走 open_url，并阻止 webview 导航", () => {
+    const { container, root } = mountMarkdown(
+      "[外链](https://example.com/x)"
+    );
+    const link = container.querySelector("a[href]") as HTMLAnchorElement;
+
+    const event = fireLink(link);
+
+    expect(event.defaultPrevented).toBe(true);
+    const calls = openUrlCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual({ url: "https://example.com/x" });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("Ctrl 点击同样走 open_url", () => {
+    const { container, root } = mountMarkdown(
+      "[外链](https://example.com/ctrl)"
+    );
+    const link = container.querySelector("a[href]") as HTMLAnchorElement;
+
+    const event = fireLink(link, "click", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    const calls = openUrlCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual({ url: "https://example.com/ctrl" });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("中键 auxclick 同样走 open_url", () => {
+    const { container, root } = mountMarkdown(
+      "[外链](https://example.com/middle)"
+    );
+    const link = container.querySelector("a[href]") as HTMLAnchorElement;
+
+    const event = fireLink(link, "auxclick", { button: 1 });
+
+    expect(event.defaultPrevented).toBe(true);
+    const calls = openUrlCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual({ url: "https://example.com/middle" });
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("页内 # 锚点保留默认行为，不调用 open_url", () => {
+    const { container, root } = mountMarkdown("[锚点](#section)");
+    const link = container.querySelector("a[href]") as HTMLAnchorElement;
+
+    const event = fireLink(link);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(openUrlCalls()).toHaveLength(0);
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("非 http/https 协议被拦截，不导航也不调用 open_url", () => {
+    const { container, root } = mountMarkdown("[邮件](mailto:a@b.com)");
+    const link = container.querySelector("a[href]") as HTMLAnchorElement;
+
+    const event = fireLink(link);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(openUrlCalls()).toHaveLength(0);
 
     act(() => root.unmount());
     container.remove();

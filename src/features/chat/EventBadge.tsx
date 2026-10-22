@@ -61,6 +61,8 @@ const RULE_ID_PHRASES: Record<string, string> = {
   "config-op": "修改系统网络配置",
   "git-undo": "修改仓库历史（可能丢弃更改）",
   "unanalyzable-syntax": "组合命令：无法判断具体内容",
+  "skill-package-script": "Skill 包内的脚本",
+  "skill-untrusted-active": "不可信 Skill 相关命令",
 };
 
 /** ruleId → 类别短语；null/未收录 → undefined（不渲染类别行） */
@@ -233,6 +235,20 @@ export function EventBadge({ events, interactive = false, className, showApprova
             <div className={styles.detail}>
               {toolSlots.map((slot, i) => {
                 const approval = approvalState(slot);
+                const externalProvenance =
+                  slot.provenance?.trust === "external" ? slot.provenance : null;
+                const provenanceTag = externalProvenance ? (
+                  <span
+                    className={styles.provenanceTag}
+                    title={`外部资料 · 来源：${externalProvenance.source}${
+                      externalProvenance.version
+                        ? ` · ${externalProvenance.version}`
+                        : ""
+                    }`}
+                  >
+                    外部
+                  </span>
+                ) : null;
                 // ── 终态优先：tool/result 到达后走既有三态 ──
                 if (slot.ok !== null) {
                   // 失败行单行省略（悬停 title 看全文）：展示面不铺长错误串；
@@ -250,6 +266,7 @@ export function EventBadge({ events, interactive = false, className, showApprova
                           {`PRTS${slot.phrase}失败：${slot.summary}`}
                         </span>
                         {renderDisplaySuffix(slot.display, true)}
+                        {provenanceTag}
                       </div>
                     );
                   }
@@ -262,6 +279,7 @@ export function EventBadge({ events, interactive = false, className, showApprova
                         {`PRTS${slot.phrase}完成`}
                         {renderDisplaySuffix(slot.display, false)}
                       </span>
+                      {provenanceTag}
                     </div>
                   );
                 }

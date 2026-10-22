@@ -69,6 +69,8 @@ const __defaultInvokeImpl = (cmd: string) => {
     return Promise.resolve({ seq: 0, dims: [], events: [] });
   }
   if (cmd === "list_conversations") return Promise.resolve([]);
+  // C-lite：默认 legacy，避免测试误走 primary（需要真实官方 log 夹具）。
+  if (cmd === "get_backend_history_mode") return Promise.resolve("legacy");
   // 设置页扩展：默认空配置（文件缺失 = 默认值语义）
   if (cmd === "get_settings") {
     return Promise.resolve({

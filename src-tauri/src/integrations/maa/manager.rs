@@ -194,21 +194,34 @@ pub fn submit(tasks: &[Value], wait_secs: u64) -> Result<SubmitOutcome, String> 
             let params = task.get("params").cloned().unwrap_or_else(|| json!({}));
             // 服务器（官/B）由 PRTS 补到用得上它的任务上——用户不必填，也不该填。
             let params = with_client_type(type_, params, m.settings.server.client_type());
-            task_ids.push(add_task(bridge, type_, &params)?);
+            match add_task(bridge, type_, &params) {
+                Ok(id) => task_ids.push(id),
+                Err(error) => {
+                    // begin_run 已经置了 in-flight；入队失败后必须收尾，
+                    // 否则下一次 submit 会被这次失败留下"正在跑"的假记录挡住。
+                    bridge.abort_run();
+                    return Err(error);
+                }
+            }
         }
         bridge.set_run_task_ids(task_ids.clone());
 
         // 队列空闲才起跑；已在跑就只是追加给它。
-        let running = bridge
-            .command(json!({ "cmd": "status" }), QUICK_TIMEOUT)
-            .map_err(|e| e.to_string())?
-            .get("running")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let running = match bridge.command(json!({ "cmd": "status" }), QUICK_TIMEOUT) {
+            Ok(status) => status
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            Err(error) => {
+                bridge.abort_run();
+                return Err(error.to_string());
+            }
+        };
         if !running {
-            bridge
-                .command(json!({ "cmd": "run_start" }), QUICK_TIMEOUT)
-                .map_err(|e| e.to_string())?;
+            if let Err(error) = bridge.command(json!({ "cmd": "run_start" }), QUICK_TIMEOUT) {
+                bridge.abort_run();
+                return Err(error.to_string());
+            }
         }
         (task_ids, connected)
     };
@@ -1439,6 +1452,41 @@ mod tests {
 
         crate::maa::manager::shutdown();
         println!("已关桥");
+    }
+
+    /// 派发失败不能留下 in-flight，否则下一次 submit 会被自己的残影挡住。
+    ///
+    /// 用测试桥注入「命令必失败」，不依赖真实 MAA 或模拟器。
+    #[test]
+    fn failed_dispatch_does_not_leave_run_in_flight() {
+        let bridge = Bridge::test_stub(true);
+        {
+            let mut m = lock().expect("管理器锁");
+            m.bridge = Some(bridge);
+            m.connected = Some(ConnectedInfo {
+                emulator: "test".to_string(),
+                address: "127.0.0.1:0".to_string(),
+                config: "test".to_string(),
+                extras: false,
+                screencap: None,
+                events: Vec::new(),
+            });
+            m.last_error = None;
+        }
+
+        let first = submit(&[json!({ "type": "Depot" })], 0).expect_err("add_task 应失败");
+        assert!(!first.is_empty());
+        assert!(!is_running(), "失败派发不能留下未收尾的运行");
+
+        let second = submit(&[json!({ "type": "Depot" })], 0).expect_err("仍应失败");
+        assert_ne!(second, DISPATCH_BUSY_MSG, "第二次不能撞上一次的残留");
+
+        // 清掉全局单例状态，别把测试桥留给后续测试。
+        let taken = {
+            let mut m = lock().expect("管理器锁");
+            (m.bridge.take(), m.connected.take())
+        };
+        drop(taken);
     }
 
     /// 真机验证（第二步）：哑错误翻译。

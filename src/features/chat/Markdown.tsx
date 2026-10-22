@@ -26,6 +26,8 @@ import {
 } from "react";
 import { marked } from "marked";
 import type { Tokenizer } from "marked";
+import { invoke } from "@tauri-apps/api/core";
+import { showToast } from "../../stores/useToastStore";
 import { sanitizeMarkdownHtml } from "./markdownSanitize";
 import styles from "./Markdown.module.css";
 
@@ -303,6 +305,48 @@ export const Markdown = memo(function Markdown({ content }: Props) {
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
+  }, []);
+
+  // Markdown 锚点是 innerHTML 写进来的普通 DOM，不是 React 子节点，所以在
+  // 根容器上挂原生事件。click 覆盖左键/Ctrl/Shift/键盘，auxclick 覆盖中键。
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    const onLinkEvent = (event: MouseEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.type === "auxclick" && event.button !== 1) return;
+      if (event.type === "click" && event.button !== 0) return;
+
+      const target = event.target;
+      const anchor =
+        target instanceof Element ? target.closest("a[href]") : null;
+      if (!anchor) return;
+
+      const href = (anchor.getAttribute("href") ?? "").trim();
+      // 页内锚点保留默认行为；其余一律不交给 webview 导航。
+      if (href.startsWith("#")) return;
+
+      event.preventDefault();
+      if (!href) return;
+
+      if (!/^https?:\/\//i.test(href)) {
+        showToast("仅支持在浏览器打开 http/https 链接", { kind: "warning" });
+        return;
+      }
+
+      void invoke("open_url", { url: href }).catch((error: unknown) => {
+        console.error("[Markdown] open_url 失败:", error, href);
+        showToast(`无法打开链接：${String(error)}`, { kind: "warning" });
+      });
+    };
+
+    root.addEventListener("click", onLinkEvent);
+    root.addEventListener("auxclick", onLinkEvent);
+    return () => {
+      root.removeEventListener("click", onLinkEvent);
+      root.removeEventListener("auxclick", onLinkEvent);
+    };
   }, []);
 
   // 第一步：marked → DOMPurify 消毒 → 表格提取。只依赖 content，
