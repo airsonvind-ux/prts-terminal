@@ -1157,6 +1157,14 @@ impl ModelRegistry {
             .unwrap_or(false);
 
         let mut resolved = resolve_compat(compat.thinking_format, api_type, has_reasoning);
+        // GLM-5.3 在 low 档下可能不返回 reasoning_content；本地 fail-closed
+        // 会把合法的工具调用轮直接拦掉。5.3 的保留策略交给供应商判断，
+        // 不把“缺失”当成配置错误。
+        if provider.eq_ignore_ascii_case("zhipu")
+            && normalize_model_id(model).starts_with("glm-5.3")
+        {
+            resolved.policy = ReasoningPolicy::Preserve;
+        }
         // auth 不参与 resolve_compat 计算——从声明层直通效果层
         resolved.auth = compat.auth;
         resolved
@@ -1580,6 +1588,12 @@ mod tests {
         assert_eq!(base.thinking_levels, ["low", "high", "max"]);
         assert_eq!(base.default_thinking_level.as_deref(), Some("max"));
         assert!(!base.supports_vision);
+        assert_eq!(
+            reg.get_resolved_compat("zhipu", "glm-5.3", ApiType::OpenAiCompletions)
+                .policy,
+            ReasoningPolicy::Preserve,
+            "5.3 low 档可能不返回 reasoning，不应本地 fail-closed"
+        );
 
         for id in ["glm-5.3-flash", "glm-5.3-flashx"] {
             let model = reg.get_model("zhipu", id).unwrap();
