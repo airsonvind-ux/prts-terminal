@@ -15,12 +15,23 @@ import type {
   ProviderPatch,
 } from "../../types";
 import { setModelInfo, setModelThinking } from "../../stores/useProcessingStore";
+import { useConversationStore } from "../../stores/useConversationStore";
 import { showToast } from "../../stores/useToastStore";
 import { resolveThinking, thinkingLabel } from "../../thinking";
 import { MASKED_SECRET } from "./SettingsPanel";
 import type { ModelListStatus } from "./SettingsModelList";
 
 type VerifyStatus = "idle" | "loading" | "success" | "error";
+
+/** get_local_model_info 的返回（与 App 启动初始化同口径）。 */
+interface LocalModelInfo {
+  displayName: string;
+  contextLength: number;
+  supportsVision: boolean;
+  supportsReasoning?: boolean;
+  thinkingLevels?: string[] | null;
+  defaultThinkingLevel?: string | null;
+}
 
 // 模型列表缓存（跨挂载；仅远端列表，非秘密——切回该家时免重拉）
 export const modelListCache: Record<string, ModelInfo[]> = {};
@@ -188,6 +199,45 @@ export function useModelSettings(
   useEffect(() => {
     setModelThinking(thinkingLabel(llm.thinking_level, selectedModelInfo));
   }, [llm.thinking_level, selectedModelInfo]);
+
+  // 供应商 / 模型变化时刷新全局模型快照。不能只依赖 selectModel()：
+  // 切供应商只 patch active_provider，若该家模型已保存就不会再经过模型列表点击。
+  // 同时同步活跃对话的展示元数据，避免新会话 / append_turn 继续写旧模型名。
+  useEffect(() => {
+    const provider = llm.provider;
+    const modelId = llm.model;
+    if (!provider || !modelId) return;
+    let cancelled = false;
+    const apply = (info: LocalModelInfo | null) => {
+      if (cancelled) return;
+      const next = info
+        ? {
+            name: info.displayName,
+            contextLength: info.contextLength,
+            supportsVision: info.supportsVision,
+            thinking: thinkingLabel(llm.thinking_level, info),
+          }
+        : {
+            name: modelId,
+            contextLength: 0,
+            supportsVision: false,
+            thinking: null,
+          };
+      setModelInfo(next);
+      const activeId = useConversationStore.getState().activeId;
+      if (activeId) {
+        useConversationStore
+          .getState()
+          .updateConversationModel(activeId, next.name, next.contextLength);
+      }
+    };
+    invoke<LocalModelInfo | null>("get_local_model_info", { provider, modelId })
+      .then(apply)
+      .catch(() => apply(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [llm.provider, llm.model, llm.thinking_level]);
 
   // ── 供应商切换（只 patch active_provider；各家配置分区保留） ──
   const handleProviderChange = (newProvider: string) => {

@@ -220,6 +220,32 @@ describe("ContextIndicator · 水位口径", () => {
     expect(body).not.toContain("out");
   });
 
+  it("模型快照变化后，悬停立即显示新模型并换用新窗口", () => {
+    seedConversation({ inputTokens: 100, outputTokens: 1 });
+    setModelInfo({
+      name: "GLM-5.3 Flash",
+      contextLength: 200,
+      supportsVision: true,
+    });
+    const ui = renderIndicator();
+    const ring = ui.ring()!;
+    act(() => {
+      ring.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(ui.bodyText()).toContain("GLM-5.3 Flash");
+
+    act(() => {
+      setModelInfo({
+        name: "DeepSeek V4 Flash",
+        contextLength: 1000,
+        supportsVision: false,
+      });
+    });
+    expect(ui.bodyText()).toContain("DeepSeek V4 Flash");
+    expect(ui.bodyText()).not.toContain("GLM-5.3 Flash");
+    expect(ui.bodyText()).toContain("上下文 100 / 1.0K (10%)");
+  });
+
   it("contextInputTokens 优先于 inputTokens（Anthropic 缓存水位）", () => {
     seedConversation({
       inputTokens: 1000,

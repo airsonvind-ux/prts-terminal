@@ -1,8 +1,10 @@
 // 全局模型信息缓存
 //
 // 模块级 ref：SettingsProvider 在用户选模型时写入，sendMessage 创建对话时读取。
-// 不在任何 store 中——模型信息本质是全局配置的快照，不需要响应式订阅。
-// 组件通过 getModelInfo() / setModelInfo() 读写，避免直接操作 ref 内部结构。
+// 除同步读取外，也向 UI 暴露订阅：ContextIndicator 这类读快照的组件必须在
+// 模型切换后重渲染，否则会一直显示上一个模型。
+
+import { useSyncExternalStore } from "react";
 
 export interface ModelInfoCache {
   name: string;
@@ -18,10 +20,29 @@ export interface ModelInfoCache {
 }
 
 const modelInfoRef: { current: ModelInfoCache | null } = { current: null };
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const listener of listeners) listener();
+}
 
 /** SettingsProvider 在用户选定模型时调用，写入缓存 */
 export function setModelInfo(info: ModelInfoCache | null): void {
   modelInfoRef.current = info;
+  notify();
+}
+
+/** 订阅模型快照；供 useModelInfo 与测试使用。 */
+export function subscribeModelInfo(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** React 组件读取模型快照；setModelInfo 后自动重渲染。 */
+export function useModelInfo(): ModelInfoCache | null {
+  return useSyncExternalStore(subscribeModelInfo, getModelInfo, getModelInfo);
 }
 
 /** 读取缓存的模型信息 */
@@ -34,5 +55,8 @@ export function getModelInfo(): ModelInfoCache | null {
  * 缓存里还没模型信息（未配置）→ 无操作。
  */
 export function setModelThinking(label: string | null): void {
-  if (modelInfoRef.current) modelInfoRef.current.thinking = label;
+  if (!modelInfoRef.current) return;
+  if (modelInfoRef.current.thinking === label) return;
+  modelInfoRef.current = { ...modelInfoRef.current, thinking: label };
+  notify();
 }

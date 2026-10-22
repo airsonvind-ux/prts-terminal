@@ -89,6 +89,13 @@ export interface ConversationStore {
    * 补丁。保证生成标题的"写盘侧复检"不被绕过。
    */
   setConversationTitle: (id: string, title: string) => void;
+  /** 更新对话当前使用的模型展示元数据（切换供应商/模型时同步；
+   *  持久化随下一次 append_turn 的 metaSnapshot 提交）。 */
+  updateConversationModel: (
+    id: string,
+    modelName?: string,
+    contextLength?: number
+  ) => void;
   /** 更新对话的上下文 Token 用量（覆盖式，非累加）。
    *  归档时从 assistant/message 的 usage 快照读取。
    *  纯内存 action：持久化随 append_turn 的 metaSnapshot（usage 参数）提交，
@@ -249,6 +256,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       ),
     }));
   },
+
+  updateConversationModel: (id, modelName, contextLength) =>
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (c.id !== id) return c;
+        const nextName = modelName ?? c.modelName;
+        const nextContext = contextLength ?? c.contextLength;
+        if (nextName === c.modelName && nextContext === c.contextLength) {
+          return c;
+        }
+        return { ...c, modelName: nextName, contextLength: nextContext };
+      }),
+    })),
 
   updateContextTokens: (conversationId, usage) =>
     set((state) => ({

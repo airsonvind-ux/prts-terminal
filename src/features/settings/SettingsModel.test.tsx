@@ -14,6 +14,7 @@ import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { SettingsModel, modelListCache } from "./SettingsModel";
 import { getModelInfo, setModelInfo } from "../../stores/useProcessingStore";
+import { useConversationStore } from "../../stores/useConversationStore";
 import { useToastStore } from "../../stores/useToastStore";
 import type { LlmConfig, LlmPatch } from "../../types";
 
@@ -57,12 +58,32 @@ function maskedLlm(over: Partial<LlmConfig> = {}): LlmConfig {
 }
 
 function installRoutes(list_models: unknown[] = [V4_FLASH]): void {
-  __invokeMock.mockImplementation((cmd: string) => {
-    if (cmd === "list_providers") return Promise.resolve(PROVIDERS);
-    if (cmd === "list_models") return Promise.resolve(list_models);
-    if (cmd === "copy_api_key") return Promise.resolve("cret");
-    return Promise.resolve(undefined);
-  });
+  __invokeMock.mockImplementation(
+    (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "list_providers") return Promise.resolve(PROVIDERS);
+      if (cmd === "list_models") return Promise.resolve(list_models);
+      if (cmd === "copy_api_key") return Promise.resolve("cret");
+      if (cmd === "get_local_model_info") {
+        const modelId = args?.modelId;
+        const found = list_models.find(
+          (m) => (m as { id?: string }).id === modelId
+        ) as Record<string, unknown> | undefined;
+        return Promise.resolve(
+          found
+            ? {
+                displayName: found.displayName,
+                contextLength: found.contextLength,
+                supportsVision: found.supportsVision,
+                supportsReasoning: found.supportsReasoning,
+                thinkingLevels: found.thinkingLevels,
+                defaultThinkingLevel: found.defaultThinkingLevel,
+              }
+            : null
+        );
+      }
+      return Promise.resolve(undefined);
+    }
+  );
 }
 
 async function flush(): Promise<void> {
@@ -183,6 +204,11 @@ beforeEach(() => {
   useToastStore.setState({ toasts: [] });
   __invokeMock.mockClear();
   setModelInfo(null);
+  useConversationStore.setState({
+    conversations: [],
+    activeId: null,
+    pendingTitle: null,
+  });
   // 清模块级模型列表缓存（防跨用例污染：切供应商 effect 会读缓存跳 fetch）
   for (const k of Object.keys(modelListCache)) delete modelListCache[k];
   onPatch = vi.fn((_p: LlmPatch, _l?: string) => {});
@@ -384,6 +410,84 @@ describe("SettingsModel · 思考强度", () => {
 });
 
 describe("SettingsModel · 供应商切换（分区：只 patch active）", () => {
+  it("已有保存模型时挂载即刷新快照，并同步活跃对话元数据", async () => {
+    useConversationStore.setState({
+      conversations: [
+        {
+          id: "c1",
+          title: "会话",
+          titleGenerated: false,
+          turns: [],
+          createdAt: 1,
+          modelName: "GLM-5.3 Flash",
+          contextLength: 1_000_000,
+        },
+      ],
+      activeId: "c1",
+      pendingTitle: null,
+    });
+    setModelInfo({
+      name: "GLM-5.3 Flash",
+      contextLength: 1_000_000,
+      supportsVision: true,
+    });
+
+    renderModel(maskedLlm({ model: "deepseek-v4-flash" }));
+    await flush();
+
+    expect(getModelInfo()?.name).toBe("DeepSeek V4 Flash");
+    expect(getModelInfo()?.contextLength).toBe(1_000_000);
+    const conv = useConversationStore.getState().conversations[0];
+    expect(conv.modelName).toBe("DeepSeek V4 Flash");
+    expect(conv.contextLength).toBe(1_000_000);
+  });
+
+  it("切供应商且该家已有保存模型 → 立即刷新快照（不依赖再次点模型）", async () => {
+    modelListCache["openai"] = [V4_FLASH as never];
+    setModelInfo({
+      name: "GLM-5.3 Flash",
+      contextLength: 1_000_000,
+      supportsVision: true,
+    });
+
+    function ProviderSwitchHarness() {
+      const [llm, setLlm] = useState(maskedLlm({ model: "" }));
+      return React.createElement(SettingsModel, {
+        llm,
+        busy: false,
+        onPatch: (p: LlmPatch) => {
+          if (p.active_provider === "openai") {
+            setLlm(
+              maskedLlm({ provider: "openai", model: "deepseek-v4-flash" })
+            );
+          }
+        },
+      });
+    }
+
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root.render(React.createElement(ProviderSwitchHarness));
+    });
+    await flush();
+
+    const trigger = Array.from(container.querySelectorAll("button")).find(
+      (b) => (b.textContent ?? "").includes("DeepSeek")
+    )!;
+    act(() => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flush();
+    const item = Array.from(container.querySelectorAll("div")).find(
+      (d) => d.textContent === "OpenAI"
+    )!;
+    act(() => item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    await flush();
+
+    expect(getModelInfo()?.name).toBe("DeepSeek V4 Flash");
+    expect(getModelInfo()?.supportsVision).toBe(false);
+  });
+
   it("切供应商 → active_provider patch（不清 key；配置分区保留）", async () => {
     renderModel(maskedLlm());
     await flush();

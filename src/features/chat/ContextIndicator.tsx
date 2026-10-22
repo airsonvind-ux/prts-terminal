@@ -22,7 +22,7 @@ import { createPortal } from "react-dom";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { useUIStore } from "../../stores/useUIStore";
-import { getModelInfo } from "../../stores/useProcessingStore";
+import { useModelInfo } from "../../stores/useProcessingStore";
 import { CONTEXT_WARNING_RATIO } from "../../projection";
 import styles from "./ContextIndicator.module.css";
 
@@ -116,7 +116,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
   // 压缩中 = 活跃对话正在进行压缩（输入区禁用 + 圆环旋转）
   const compacting = activeId !== null && compactingConversationId === activeId;
 
-  const modelInfo = getModelInfo();
+  const modelInfo = useModelInfo();
   const modelName = modelInfo?.name;
   const modelThinking = modelInfo?.thinking;
   const contextWindow = modelInfo?.contextLength ?? 0;

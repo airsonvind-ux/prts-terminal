@@ -32,6 +32,7 @@ export {
   getModelInfo,
   setModelInfo,
   setModelThinking,
+  useModelInfo,
 } from "./processingModelInfo";
 
 // ── 类型 ──
