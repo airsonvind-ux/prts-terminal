@@ -28,7 +28,7 @@ import { marked } from "marked";
 import type { Tokenizer } from "marked";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
-import { sanitizeMarkdownHtml } from "./markdownSanitize";
+import { hardenRemoteImages, sanitizeMarkdownHtml } from "./markdownSanitize";
 import styles from "./Markdown.module.css";
 
 marked.setOptions({ breaks: true, gfm: true });
@@ -349,12 +349,31 @@ export const Markdown = memo(function Markdown({ content }: Props) {
     };
   }, []);
 
-  // 第一步：marked → DOMPurify 消毒 → 表格提取。只依赖 content，
+  // R-38：远程图片失败时退回 alt。error 不冒泡，在根容器捕获阶段委托；
+  // 本 effect 先于下方的 innerHTML 写入注册，避免图片瞬间失败时漏事件。
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onImageError = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLImageElement)) return;
+      if (!target.hasAttribute("data-remote-image")) return;
+      const alt = target.getAttribute("alt")?.trim();
+      const fallback = document.createElement("span");
+      fallback.className = styles.imageAlt;
+      fallback.textContent = alt ? `图片未加载 · ${alt}` : "图片未加载";
+      target.replaceWith(fallback);
+    };
+    root.addEventListener("error", onImageError, true);
+    return () => root.removeEventListener("error", onImageError, true);
+  }, []);
+
+  // 第一步：marked → DOMPurify 消毒 → 远程图片硬化 → 表格提取。只依赖 content，
   // 窗口缩放不重跑（现状是 content/containerW 单 useMemo，缩放也全量重算）。
   const parsed = useMemo(() => {
     const raw = marked.parse(content) as string;
     const sanitized = sanitizeMarkdownHtml(raw);
-    return parseTables(sanitized);
+    return parseTables(hardenRemoteImages(sanitized));
   }, [content]);
 
   // 第二步：列宽（getTableLayouts 缓存）+ 假表格重建。依赖表格内容 + 容器宽。

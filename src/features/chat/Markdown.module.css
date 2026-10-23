@@ -113,6 +113,16 @@
   text-decoration: underline;
 }
 
+/* R-38：远程图片加载失败后的 alt 回落，中性字色，不用警告色。 */
+.imageAlt {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--depth-4);
+  color: var(--text-3);
+  font-size: 0.9em;
+}
+
 /* ── 表格：div+flex 结构（列宽精确控制，避开 table 引擎） ── */
 
 .tableWrap {

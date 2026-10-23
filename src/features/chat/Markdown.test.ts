@@ -447,3 +447,83 @@ describe("Markdown 组件 · 渲染端到端", () => {
     container.remove();
   });
 });
+
+// ── R-38：远程图片最小硬化 ──
+
+describe("远程图片最小硬化", () => {
+  const originalRO = (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+  const originalActEnv = (
+    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+  ).IS_REACT_ACT_ENVIRONMENT;
+
+  beforeAll(() => {
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+      true;
+  });
+
+  afterAll(() => {
+    if (originalRO === undefined) {
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
+    } else {
+      (globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalRO;
+    }
+    if (originalActEnv === undefined) {
+      delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+        .IS_REACT_ACT_ENVIRONMENT;
+    } else {
+      (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
+        originalActEnv;
+    }
+  });
+
+  function mount(content: string) {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => {
+      root.render(React.createElement(Markdown, { content }));
+    });
+    return { container, root };
+  }
+
+  it("远程图片带 lazy/async/no-referrer，本地图片不标记", () => {
+    const { container, root } = mount(
+      "![远程](https://example.com/a.png)\n\n![本地](/local.png)"
+    );
+    const imgs = Array.from(container.querySelectorAll("img"));
+    expect(imgs).toHaveLength(2);
+    const remote = imgs.find((img) =>
+      img.getAttribute("src")?.startsWith("https://")
+    );
+    expect(remote?.getAttribute("loading")).toBe("lazy");
+    expect(remote?.getAttribute("decoding")).toBe("async");
+    expect(remote?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(remote?.hasAttribute("data-remote-image")).toBe(true);
+
+    const local = imgs.find(
+      (img) => img.getAttribute("src") === "/local.png"
+    );
+    expect(local?.hasAttribute("data-remote-image")).toBe(false);
+
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  it("加载失败退回 alt 文本", () => {
+    const { container, root } = mount("![示意图](https://example.com/a.png)");
+    const img = container.querySelector("img") as HTMLImageElement;
+    act(() => {
+      img.dispatchEvent(new Event("error"));
+    });
+    const fallback = container.querySelector("span");
+    expect(fallback?.textContent).toBe("图片未加载 · 示意图");
+
+    act(() => root.unmount());
+    container.remove();
+  });
+});
