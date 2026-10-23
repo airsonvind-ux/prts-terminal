@@ -15,6 +15,7 @@
 //! 输出：canonical {query, results:[{title,url,snippet}]}；summary 编号列表
 //! 中文渲染。错误统一中文文案（限流/HTTP/服务错误/网络失败）。
 
+use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +38,10 @@ const MIN_MAX_RESULTS: u32 = 1;
 const MAX_MAX_RESULTS: u32 = 20;
 /// summary 中单条摘要的最大字符数（渲染层裁剪，canonical 保持完整）。
 const SNIPPET_RENDER_CHARS: usize = 300;
+/// 搜索响应体字节硬上限（流式读取，超限即断）。
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+/// 流式读取缓冲大小。
+const READ_CHUNK_BYTES: usize = 8 * 1024;
 
 /// anysearch_free 免费匿名端点。
 const ANYSEARCH_URL: &str = "https://api.anysearch.com/v1/search";
@@ -85,6 +90,10 @@ pub enum SearchError {
     RateLimited,
     /// 非 2xx
     HttpStatus(u16),
+    /// 重定向（不跟随；搜索端点固定，跳转视为异常）
+    Redirected(u16),
+    /// 响应体超过硬上限
+    ResponseTooLarge,
     /// 服务端业务错误（envelope code != 0）
     Api(String),
     /// 网络/解析失败
@@ -97,6 +106,10 @@ impl SearchError {
         let msg = match self {
             SearchError::RateLimited => "搜索服务限流（HTTP 429），请稍后重试".to_string(),
             SearchError::HttpStatus(code) => format!("搜索服务返回 HTTP {code}"),
+            SearchError::Redirected(code) => {
+                format!("搜索服务返回重定向（HTTP {code}），已拒绝跟随")
+            }
+            SearchError::ResponseTooLarge => "搜索响应过大（超过 1MiB 上限）".to_string(),
             SearchError::Api(m) => format!("搜索服务错误：{m}"),
             SearchError::Network(m) => format!("搜索请求失败：{m}"),
         };
@@ -229,11 +242,23 @@ impl Tool for WebSearchTool {
 // anysearch_free 免费匿名后端（生产薄封装）
 // ═══════════════════════════════════════════════════════
 
-pub struct AnysearchFreeBackend;
+pub struct AnysearchFreeBackend {
+    endpoint: String,
+}
 
 impl AnysearchFreeBackend {
     pub fn new() -> Self {
-        Self
+        Self {
+            endpoint: ANYSEARCH_URL.to_string(),
+        }
+    }
+
+    /// 测试注入端点（生产固定 anysearch）。
+    #[cfg(test)]
+    fn with_endpoint(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+        }
     }
 }
 
@@ -245,9 +270,11 @@ impl Default for AnysearchFreeBackend {
 
 impl WebSearchProvider for AnysearchFreeBackend {
     fn search(&self, query: &str, max_results: u32) -> Result<Vec<SearchResult>, SearchError> {
-        let (url, body) = build_anysearch_request(query, max_results);
+        let (url, body) = build_anysearch_request_at(&self.endpoint, query, max_results);
         let client = reqwest::blocking::Client::builder()
             .timeout(REQUEST_TIMEOUT)
+            // 搜索端点是固定的，重定向只会把请求体/query 交给未知目标。
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent("Mozilla/5.0 (compatible; PRTS-Terminal/0.1)")
             .no_proxy()
             .build()
@@ -259,18 +286,24 @@ impl WebSearchProvider for AnysearchFreeBackend {
                 SearchError::Network(e.to_string())
             }
         })?;
-        let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .map_err(|e| SearchError::Network(format!("读取响应失败：{e}")))?;
 
-        // HTTP 层错误优先（429/402 = 限流；其余非 2xx = 服务状态）
+        // 状态先判，错误响应不读 body；3xx 不跟随。
+        let status = resp.status();
+        if status.is_redirection() {
+            return Err(SearchError::Redirected(status.as_u16()));
+        }
         if status.as_u16() == 429 || status.as_u16() == 402 {
             return Err(SearchError::RateLimited);
         }
         if !status.is_success() {
             return Err(SearchError::HttpStatus(status.as_u16()));
         }
+        if let Some(len) = resp.content_length() {
+            if len > MAX_RESPONSE_BYTES as u64 {
+                return Err(SearchError::ResponseTooLarge);
+            }
+        }
+        let bytes = read_body_capped(resp, MAX_RESPONSE_BYTES)?;
         parse_anysearch_results(&bytes, max_results)
     }
 }
@@ -281,12 +314,37 @@ impl WebSearchProvider for AnysearchFreeBackend {
 
 /// 组装请求：(端点 URL, JSON body {query, max_results, language})。
 fn build_anysearch_request(query: &str, max_results: u32) -> (String, Value) {
+    build_anysearch_request_at(ANYSEARCH_URL, query, max_results)
+}
+
+fn build_anysearch_request_at(endpoint: &str, query: &str, max_results: u32) -> (String, Value) {
     let body = serde_json::json!({
         "query": query,
         "max_results": max_results,
         "language": ANYSEARCH_LANGUAGE,
     });
-    (ANYSEARCH_URL.to_string(), body)
+    (endpoint.to_string(), body)
+}
+
+/// 流式读取响应体，超过 `max` 字节立即失败，不把全量响应读进内存。
+fn read_body_capped<R: Read>(mut reader: R, max: usize) -> Result<Vec<u8>, SearchError> {
+    let mut body = Vec::new();
+    let mut buf = [0u8; READ_CHUNK_BYTES];
+    let mut total = 0usize;
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| SearchError::Network(format!("读取响应失败：{e}")))?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if total > max {
+            return Err(SearchError::ResponseTooLarge);
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    Ok(body)
 }
 
 /// 解析 anysearch 响应体 → 结果列表。
@@ -345,6 +403,9 @@ pub fn clamp_max_results(v: Option<u64>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::thread;
 
     // ── fake 后端（离线确定性：命中/空/限流/服务错误四型）──
 
@@ -587,5 +648,56 @@ mod tests {
             matches!(err, SearchError::Network(_)),
             "缺 results 应为结构错误"
         );
+    }
+
+    // ── 传输边界：重定向拒绝 / 响应体上限 ──
+
+    /// 起一个只回一次原始 HTTP 响应的本地服务器。
+    fn spawn_raw_server(response: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("测试服务器必须能监听");
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (format!("http://{addr}/search"), handle)
+    }
+
+    #[test]
+    fn redirect_is_rejected_before_following() {
+        let (endpoint, server) = spawn_raw_server(
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/collect\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string(),
+        );
+        let backend = AnysearchFreeBackend::with_endpoint(endpoint);
+        let err = backend.search("重定向测试", 1).unwrap_err();
+        assert_eq!(err, SearchError::Redirected(302));
+        server.join().unwrap();
+        assert_eq!(
+            err.to_tool_error().to_string(),
+            "工具执行失败：搜索服务返回重定向（HTTP 302），已拒绝跟随"
+        );
+    }
+
+    #[test]
+    fn content_length_over_cap_is_rejected() {
+        let (endpoint, server) = spawn_raw_server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            MAX_RESPONSE_BYTES + 1
+        ));
+        let backend = AnysearchFreeBackend::with_endpoint(endpoint);
+        let err = backend.search("大响应测试", 1).unwrap_err();
+        assert_eq!(err, SearchError::ResponseTooLarge);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn streaming_body_over_cap_is_rejected() {
+        let data = vec![b'x'; MAX_RESPONSE_BYTES + 1];
+        let err = read_body_capped(std::io::Cursor::new(data), MAX_RESPONSE_BYTES).unwrap_err();
+        assert_eq!(err, SearchError::ResponseTooLarge);
     }
 }
