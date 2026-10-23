@@ -148,7 +148,7 @@ export interface ProcessingStore {
    * - 后端推送 error 事件（recoverable=false） → useAgentEvents Hook 调用
    *
    * 1. 从 processing 字典删除该 session 的快照
-   * 2. 错误轮归档进对话时间线（[user/message, error] 一组）
+   * 2. 错误轮归档进对话时间线：保留已产生的半截输出，错误事件放在轮尾
    * 3. 若错误所属对话为当前活跃对话 → 写入 UIStore.errorMsg
    *    → deriveUIState 读到非 null → 返回 "error"
    */
@@ -223,7 +223,7 @@ export function isAnyProcessing(): boolean {
 //   且先 flush 该 session 的缓冲再追加本事件（两次同步 set，React 自动批处理；
 //   缓冲 chunk 必须排在后续事件之前，事件顺序不变）
 // - turn/end 到达（finishProcessing）必须强 flush：保证 chunk 全落位后归档
-// - failProcessing 丢弃并清理缓冲（错误轮只归档 [user/message, error]）
+// - failProcessing 先 flush 缓冲（保留用户已看到的半截输出），再清理缓冲
 //
 // 位置选在 store 内部而非 hook 层：
 // - 缓冲属于「事件 → 投影缓存」的写入策略，归 store 职责（测试直接调

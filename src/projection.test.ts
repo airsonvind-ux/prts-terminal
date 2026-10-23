@@ -188,6 +188,35 @@ describe("deriveMessages", () => {
     expect(msgs[0]).toEqual({ role: "user", content: "查询 X" });
   });
 
+  it("错误轮保留半截回答归档，但半截回答不进入下一轮历史", () => {
+    const turns: SessionEvent[][] = [
+      [
+        user("s1", "查询 X"),
+        textChunk("s1", "这是已经显示给用户的半截回答"),
+        { type: "error", sessionId: "s1", message: "连接中断", recoverable: false },
+      ],
+    ];
+    const msgs = deriveMessages(turns);
+    // 用户消息保留；已显示给用户的半截 assistant 草稿不进入模型历史
+    expect(msgs).toEqual([{ role: "user", content: "查询 X" }]);
+    // 有输出的错误轮不能当成空错误轮折叠
+    expect(isErrorOnlyTurn(turns[0])).toBe(false);
+  });
+
+  it("错误轮丢弃未完成的工具调用和工具结果，避免下一轮出现悬空工具链", () => {
+    const turns: SessionEvent[][] = [
+      [
+        user("s1", "查询 X"),
+        textChunk("s1", "先查一下"),
+        toolCall("s1", "call_1", "echo", "{}"),
+        toolResult("s1", "call_1", "结果"),
+        { type: "error", sessionId: "s1", message: "连接中断", recoverable: false },
+      ],
+    ];
+    const msgs = deriveMessages(turns);
+    expect(msgs).toEqual([{ role: "user", content: "查询 X" }]);
+  });
+
   it("空 assistant 跳过（无内容无工具）", () => {
     const turns: SessionEvent[][] = [
       [user("s1", "你好"), turnEnd("s1")],

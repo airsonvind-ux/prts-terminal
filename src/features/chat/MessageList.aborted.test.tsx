@@ -166,8 +166,8 @@ describe("MessageList · aborted 轮展示", () => {
     expect(text()).not.toContain("该轮已中止");
   });
 
-  it("中止轮不得走 error 分支：内容照常渲染（error 轮会吞掉其余事件）", () => {
-    // 对照：error 轮只渲染错误气泡
+  it("错误轮保留错误前的半截输出，并标回答未完成", () => {
+    // 对照：错误前已经显示给用户的正文不能消失
     const errText = render([
       [
         { type: "user/message", sessionId: "e", content: "x" },
@@ -175,13 +175,14 @@ describe("MessageList · aborted 轮展示", () => {
           type: "assistant/chunk",
           sessionId: "e",
           kind: "text",
-          content: "不该出现",
+          content: "已经显示的半截",
         },
         { type: "error", sessionId: "e", message: "出错啦", recoverable: false },
       ],
     ]).text();
+    expect(errText).toContain("已经显示的半截");
+    expect(errText).toContain("回答未完成");
     expect(errText).toContain("出错啦");
-    expect(errText).not.toContain("不该出现");
 
     // 中止轮：半截 + 标记都在（未被 error 分支吞掉）
     const abortedText = render([abortedTurn("s3")]).text();

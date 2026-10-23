@@ -6,7 +6,7 @@
 //   2. flushPending 落位且事件顺序保持
 //   3. 非 chunk 事件前置 flush：缓冲 chunk 必须先于后续事件落位（顺序不变）
 //   4. turn/end 强 flush：finishProcessing 前未 flush 的 chunk 完整归档
-//   5. failProcessing 清理缓冲：未 flush chunk 丢弃，错误轮只归档 [user, error]
+//   5. failProcessing 保留缓冲：未 flush chunk 先落位，错误轮归档 [user, chunk, error]
 //   6. 33ms 窗口合并：窗口内多事件一次 flush（fake timers）
 //   7. flushPending 幂等：无缓冲/空缓冲调用无副作用
 
@@ -210,21 +210,22 @@ describe("节流缓冲 · turn/end 强 flush", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 4：failProcessing 清理缓冲
+// 场景 4：failProcessing 保留半截输出
 // ═══════════════════════════════════════════════
 
-describe("节流缓冲 · failProcessing 清理", () => {
-  it("未 flush chunk 在失败路径被丢弃，错误轮只归档 [user, error]", async () => {
+describe("节流缓冲 · failProcessing 保留半截输出", () => {
+  it("未 flush chunk 在失败路径先落位，错误轮归档 [user, chunk, error]", async () => {
     const sid = await startTurn("查询 1-7");
 
     useProcessingStore.getState().appendCurrentEvent(textChunk(sid, "半截输出"));
     useProcessingStore.getState().failProcessing(sid, "查询失败：连接超时");
 
-    // 错误轮归档：无 chunk
+    // 错误轮归档：用户已经看到的半截正文保留在错误之前
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.turns).toHaveLength(1);
     expect(conv.turns[0].map((e) => e.type)).toEqual([
       "user/message",
+      "assistant/chunk",
       "error",
     ]);
 

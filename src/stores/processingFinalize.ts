@@ -141,14 +141,17 @@ export function failProcessingImpl(
   sessionId: string,
   errorMsg: string
 ): void {
-  // 未闭合 pending 放行（扫描器状态释放）；随后随缓冲一并丢弃——
-  // 错误轮只归档 [user/message, error]，chunk（含放行的 pending）不落库。
+  // 未闭合 pending 是扫描器刻意扣留的隐藏片段（可能是半截 mood 标签），
+  // 用户没有看到；错误路径丢弃它。已经进入 33ms 缓冲的 chunk 则先落位，
+  // 这些才是用户已经看到或即将看到的半截回答。
   releasePending(sessionId);
-  // 清理未 flush 的 chunk 缓冲（错误轮只归档 [user/message, error]，chunk 丢弃）
-  clearChunkBuffer(sessionId);
+  flushPending(sessionId);
 
   const snap = get().processing[sessionId];
-  if (!snap) return;
+  if (!snap) {
+    clearChunkBuffer(sessionId);
+    return;
+  }
 
   set((state) => {
     const next = { ...state.processing };
@@ -156,7 +159,7 @@ export function failProcessingImpl(
     return { processing: next };
   });
 
-  // 错误轮归档进对话时间线：[user/message, error] 一组。
+  // 错误轮归档进对话时间线：保留已经产生的半截输出，错误气泡放在轮尾。
   // 轮次序列本身就是时间线——错误自然属于它发生的那一轮，
   // 后续 user 消息追加在其后，无需手动清除。
   // M1 Reminder：归档 user 消息剥离 [prts_reminder] 块——错误轮（invoke
@@ -168,18 +171,21 @@ export function failProcessingImpl(
   const firstEvent = snap.currentEvents[0] as SessionEvent & {
     type: "user/message";
   };
+  const errorEvent: SessionEvent = {
+    type: "error",
+    sessionId,
+    message: errorMsg,
+    recoverable: false,
+  };
   convStore.appendTurn(snap.conversationId, [
     {
       ...firstEvent,
       content: stripReminderBlock(firstEvent.content),
     },
-    {
-      type: "error",
-      sessionId,
-      message: errorMsg,
-      recoverable: false,
-    },
+    ...snap.currentEvents.slice(1),
+    errorEvent,
   ]);
+  clearChunkBuffer(sessionId);
 
   // 会话自动标题：错误轮不兜底（素材不足/用户未得到回答）；若阈值已触发、
   // 生成在途，返回后仍可经 CAS 落地（标题是会话级信息，与轮完成态无关）。

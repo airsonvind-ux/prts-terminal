@@ -131,7 +131,11 @@ export const MessageRow = memo(function MessageRow({
         );
       }
       // R-07 / R-33：轮截断、停滞提示（中性轮尾小字，不用警告色；内容保留）
-      if (item.role === "truncated" || item.role === "stagnated") {
+      if (
+        item.role === "truncated" ||
+        item.role === "stagnated" ||
+        item.role === "incomplete"
+      ) {
         return (
           <div
             data-message-area

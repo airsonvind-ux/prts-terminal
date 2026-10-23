@@ -242,7 +242,8 @@ export function rearmScanner(sessionId: string): string | null {
 
 /**
  * 释放未闭合 pending 并清空扫描器状态（finishProcessing / failProcessing 路径）。
- * 返回扣留文本（无 → null）。fail 路径下返回文本随后被既有 chunk 丢弃语义吞掉。
+ * 返回扣留文本（无 → null）。fail 路径下该文本是刻意隐藏的片段，直接丢弃；
+ * 已进入节流缓冲的可见 chunk 由 failProcessing 先 flush 保留。
  */
 export function releasePending(sessionId: string): string | null {
   const state = scannerStates.get(sessionId);

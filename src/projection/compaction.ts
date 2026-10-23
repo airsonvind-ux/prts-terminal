@@ -106,19 +106,28 @@ export function buildSummaryUserMessage(compaction: CompactionMeta): ChatMessage
 }
 
 /**
- * 是否为“只有 user + error、没有完成 assistant”的错误轮。
+ * 是否为“只有 user + error、用户没有看到任何输出”的错误轮。
  *
- * failProcessing 归档的错误轮固定为 [user/message, error]；不会含
- * assistant/message。用它区分“启动/鉴权失败”与真正完成过的轮次。
+ * failProcessing 归档的纯错误轮没有 assistant 输出；但错误可能发生在
+ * 流式输出之后，此时轮内会有 chunk / tool 记录。后者不能当空错误轮折叠，
+ * 否则用户看到过的半截回答会再次消失。
  */
 export function isErrorOnlyTurn(turn: SessionEvent[]): boolean {
   let hasError = false;
-  let hasAssistantMessage = false;
+  let hasAssistantOutput = false;
   for (const event of turn) {
     if (event.type === "error") hasError = true;
-    if (event.type === "assistant/message") hasAssistantMessage = true;
+    if (event.type === "assistant/message") hasAssistantOutput = true;
+    if (event.type === "assistant/chunk") {
+      const visible =
+        event.kind === "text" ? event.rawContent ?? event.content : event.content;
+      if (visible.length > 0) hasAssistantOutput = true;
+    }
+    if (event.type === "tool/call" || event.type === "tool/result") {
+      hasAssistantOutput = true;
+    }
   }
-  return hasError && !hasAssistantMessage;
+  return hasError && !hasAssistantOutput;
 }
 
 /**

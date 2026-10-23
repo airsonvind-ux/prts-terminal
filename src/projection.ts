@@ -162,7 +162,9 @@ export function splitTurnByUserBoundary(events: SessionEvent[]): TurnSegment[] {
  * - tool/call 收集工具调用（同轮多次调用合并进同一条 assistant 消息）
  * - tool/result → 先冲刷挂起的 assistant 消息，再追加 tool 消息
  * - assistant/message 不参与派生（与 chunk 序列同源，避免双计数）
- * - error 事件跳过（前端 UI 元素，不进 LLM 上下文）
+ * - error 事件跳过（前端 UI 元素，不进 LLM 上下文）；不可恢复错误还会
+ *   撤销本轮已产生的半截 assistant / tool 输出，避免下一轮把未完成回答
+ *   当成已完成事实
  *
  * @param turns 对话的轮次事件序列（投影缓存）
  * @returns LLM 可见历史（error 已过滤；空 assistant 已跳过）
@@ -176,6 +178,7 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
   for (const turn of turns) {
     let textBuf = "";
     let reasoningBuf = "";
+    let assistantStart: number | null = null;
     const toolCalls: NonNullable<ChatMessage["toolCalls"]> = [];
 
     const flushAssistant = () => {
@@ -206,9 +209,11 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
             userMsg.attachments = e.attachments;
           }
           out.push(userMsg);
+          assistantStart = null;
           break;
         }
         case "assistant/chunk":
+          assistantStart ??= out.length;
           if (e.kind === "text") textBuf += e.rawContent ?? e.content;
           else reasoningBuf += e.content;
           break;
@@ -218,8 +223,10 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
           textBuf = "";
           reasoningBuf = "";
           toolCalls.length = 0;
+          assistantStart = out.length;
           break;
         case "tool/call":
+          assistantStart ??= out.length;
           toolCalls.push({
             id: e.callId,
             callType: "function",
@@ -227,8 +234,20 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
           });
           break;
         case "tool/result":
+          assistantStart ??= out.length;
           flushAssistant();
           out.push({ role: "tool", content: e.summary, toolCallId: e.callId });
+          break;
+        case "error":
+          // 不可恢复错误：本轮已经产生的半截 assistant / tool 输出不进入
+          // 下一轮历史；user 消息保留（用户确实发过这句话）。
+          if (!e.recoverable) {
+            if (assistantStart !== null) out.length = assistantStart;
+            textBuf = "";
+            reasoningBuf = "";
+            toolCalls.length = 0;
+            assistantStart = null;
+          }
           break;
         // assistant/message 与 chunk 同源（聚合快照），不参与派生；
         // error / turn/step 边界 / request/header 不派生

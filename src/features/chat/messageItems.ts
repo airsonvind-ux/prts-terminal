@@ -11,7 +11,7 @@ import type { TextSegment } from "../../projection";
 // ── 展示项类型 ──
 
 export type DisplayItem =
-  | { type: "message"; role: "user" | "error" | "aborted" | "aborting" | "truncated" | "stagnated"; content: string; attachments?: Attachment[] }
+  | { type: "message"; role: "user" | "error" | "aborted" | "aborting" | "truncated" | "stagnated" | "incomplete"; content: string; attachments?: Attachment[] }
   | {
       type: "message";
       role: "assistant";
@@ -27,6 +27,18 @@ export type DisplayItem =
   // 模块 D：压缩点本地提示卡（非 LLM 消息——derive/展示派生忽略，仅列表呈现）
   | { type: "compaction"; summary: string; foldedCount: number };
 
+/** 错误轮是否已经有用户看见过的半截输出（正文、推理、工具调用或结果）。 */
+function hasInterruptedOutput(events: SessionEvent[]): boolean {
+  return events.some(
+    (event) =>
+      (event.type === "assistant/chunk" && event.content.length > 0) ||
+      (event.type === "assistant/message" &&
+        (event.content.length > 0 || (event.reasoningContent ?? "").length > 0)) ||
+      event.type === "tool/call" ||
+      event.type === "tool/result"
+  );
+}
+
 /**
  * 将一组轮次事件追加为展示项（按消息边界切分——插话设计定稿）。
  *
@@ -34,7 +46,8 @@ export type DisplayItem =
  * - user/message 各成用户气泡（不再是整轮只取第一条）；
  * - assistant 段独立闭合：段内 meta（推理/工具卡）→ 段文本（段内最后一个
  *   assistant/message 为权威聚合；无则从 chunks 累积 + tool/call 回溯分段）；
- * - error → 错误气泡（其后内容不渲染；错误轮语义不变）；
+ * - error → 先展示错误前已经产生的输出，再显示“回答未完成”标记和错误气泡；
+ *   错误之后的内容不渲染。
  * - turn/aborted 轮中止标记 → 全部段渲染后轮尾追加（不占段）。
  * - turn/truncated 轮截断标记 → 全部段渲染后轮尾追加（不占段）。
  * - turn/stagnated 轮停滞标记 → 全部段渲染后轮尾追加（不占段）。
@@ -73,14 +86,13 @@ function appendTurnItems(
       continue;
     }
 
-    // assistant 段
-    const err = seg.events.find((e) => e.type === "error");
-    if (err) {
-      items.push({ type: "message", role: "error", content: err.message });
-      return; // 错误轮/错误终止段：其后内容不渲染（既有语义）
-    }
+    // assistant 段。错误轮保留错误前已经产生的输出；错误之后不渲染。
+    const errIndex = seg.events.findIndex((e) => e.type === "error");
+    const errEvent = errIndex >= 0 ? seg.events[errIndex] : undefined;
+    const err = errEvent?.type === "error" ? errEvent : undefined;
+    const visibleEvents = err ? seg.events.slice(0, errIndex) : seg.events;
 
-    const meta = seg.events.filter(isMetaEvent);
+    const meta = visibleEvents.filter(isMetaEvent);
     if (meta.length > 0) {
       // interactive = 进行中轮（currentEvents）才允许审批按钮渲染；
       // 归档重放（turns）不渲染交互。仅末段可能在流。
@@ -91,8 +103,8 @@ function appendTurnItems(
       });
     }
 
-    const segIsStreaming = isStreaming && i === lastAssistantIdx;
-    const textSegments = deriveTextSegments(seg.events);
+    const segIsStreaming = isStreaming && i === lastAssistantIdx && !err;
+    const textSegments = deriveTextSegments(visibleEvents);
     if (textSegments) {
       items.push({
         type: "message",
@@ -100,6 +112,19 @@ function appendTurnItems(
         segments: textSegments,
         isStreaming: segIsStreaming,
       });
+    }
+
+    if (err) {
+      // 用户已经看到过内容时，明确标出“这段回答没写完”，再给出失败原因。
+      if (hasInterruptedOutput(visibleEvents)) {
+        items.push({
+          type: "message",
+          role: "incomplete",
+          content: "回答未完成",
+        });
+      }
+      items.push({ type: "message", role: "error", content: err.message });
+      return;
     }
   }
 
