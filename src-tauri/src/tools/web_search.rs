@@ -313,6 +313,7 @@ impl WebSearchProvider for AnysearchFreeBackend {
 // ═══════════════════════════════════════════════════════
 
 /// 组装请求：(端点 URL, JSON body {query, max_results, language})。
+#[cfg(test)]
 fn build_anysearch_request(query: &str, max_results: u32) -> (String, Value) {
     build_anysearch_request_at(ANYSEARCH_URL, query, max_results)
 }
