@@ -435,6 +435,15 @@ describe("EventBadge · 审批终态（事件派生）", () => {
   });
 });
 
+describe("EventBadge · 归档轮未完成工具", () => {
+  it("重启后无 result 的工具显示未完成，不显示正在调用", () => {
+    const { text, unmount } = renderBadge([toolCall("query_enemy", C1)], false);
+    expect(text()).toContain("工具调用未完成");
+    expect(text()).not.toContain("正在调用工具");
+    unmount();
+  });
+});
+
 describe("EventBadge · 无审批路径不受影响", () => {
   it("普通工具（echo）进行中/完成三态不变", () => {
     const running: SessionEvent[] = [toolCall("echo", "c2")];

@@ -199,7 +199,11 @@ pub fn run() {
     // ── 模型注册表（从 models.json 加载）──
     let model_registry = {
         let json = include_str!("../resources/models.json");
-        Arc::new(ModelRegistry::from_json(json).expect("models.json 格式错误"))
+        let limits = include_str!("../resources/model-output-limits.json");
+        Arc::new(
+            ModelRegistry::from_json_with_limits(json, limits)
+                .expect("models.json / model-output-limits.json 格式错误"),
+        )
     };
 
     // ── 设置存储（2026-09 设置页扩展批 A：单一 settings.json 持久化层）──

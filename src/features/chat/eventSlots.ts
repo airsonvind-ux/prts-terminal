@@ -39,6 +39,17 @@ export interface ToolSlot {
   } | null;
 }
 
+function findPendingSlot(
+  slots: ToolSlot[],
+  callId: string
+): ToolSlot | undefined {
+  const exact = slots.find((slot) => slot.callId === callId && slot.ok === null);
+  if (exact) return exact;
+  // 旧归档或供应商流式异常可能留下空 callId。此时按事件顺序配对下一个
+  // 未完成槽位，避免所有结果都覆盖第一个槽、其余槽永远停在“进行中”。
+  return callId === "" ? slots.find((slot) => slot.ok === null) : undefined;
+}
+
 export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
   const result: ToolSlot[] = [];
   for (const e of events) {
@@ -57,7 +68,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
       });
     }
     if (e.type === "tool/approval-request") {
-      const slot = result.find((s) => s.callId === e.callId);
+      const slot = findPendingSlot(result, e.callId) ?? result.find((s) => s.callId === e.callId);
       if (slot) {
         slot.sessionId = e.sessionId;
         slot.command = e.command;
@@ -93,7 +104,8 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
     }
     if (e.type === "tool/approval-result") {
       const ev = e as ToolApprovalResultEvent;
-      const slot = result.find((s) => s.callId === e.callId);
+      const slot =
+        findPendingSlot(result, e.callId) ?? result.find((s) => s.callId === e.callId);
       if (slot && slot.approval) {
         // 仅 approved/rejected 会经 IPC 到达（auto-approved/blocked 为
         // log_only，前端不可见）；防御性忽略其余值（不渲染按钮）
@@ -103,7 +115,8 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
       }
     }
     if (e.type === "tool/result") {
-      const pending = result.find((s) => s.callId === e.callId);
+      const pending =
+        findPendingSlot(result, e.callId) ?? result.find((s) => s.callId === e.callId);
       if (pending) {
         pending.ok = e.ok;
         pending.summary = e.summary;

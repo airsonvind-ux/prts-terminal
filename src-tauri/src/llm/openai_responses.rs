@@ -20,9 +20,31 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry,
-    StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    provider_error_detail, retry_after_ms_from_headers, ChatMessage, FinishReason, LlmClient,
+    LlmConfig, LlmError, LlmResponse, ModelRegistry, StreamEvent, StreamResult, TokenUsage,
+    ToolCall, ToolCallFunction, ToolDef,
 };
+
+/// Responses 的工具调用同时带 `call_id` 和 item `id`。
+///
+/// 前者用于匹配 `function_call_output`，后者是回放该项所需的原生编号。
+/// 两者不同时用 `call_id|item_id` 作为内部不透明 id，协议层发送前再拆开；
+/// 这与 DSH 内部保留的复合编号一致。
+fn responses_tool_id(call_id: &str, item_id: Option<&str>) -> String {
+    match item_id.filter(|item| !item.is_empty() && *item != call_id) {
+        Some(item) => format!("{call_id}|{item}"),
+        None => call_id.to_string(),
+    }
+}
+
+fn split_responses_tool_id(id: &str) -> (String, Option<String>) {
+    match id.split_once('|') {
+        Some((call_id, item_id)) if !call_id.is_empty() && !item_id.is_empty() => {
+            (call_id.to_string(), Some(item_id.to_string()))
+        }
+        _ => (id.to_string(), None),
+    }
+}
 
 // ═══════════════════════════════════════════════════════
 // OpenAIResponsesClient
@@ -80,50 +102,76 @@ impl OpenAIResponsesClient {
     /// tool 消息转为 input 中的 function_call_output item。
     fn build_input(messages: &[ChatMessage]) -> Vec<Value> {
         use crate::llm::MessageRole;
-        messages
-            .iter()
-            .filter(|m| {
-                m.role == MessageRole::User
-                    || m.role == MessageRole::Assistant
-                    || m.role == MessageRole::Tool
-            })
-            .map(|m| match m.role {
+        let mut input = Vec::new();
+
+        for m in messages.iter().filter(|m| {
+            m.role == MessageRole::User
+                || m.role == MessageRole::Assistant
+                || m.role == MessageRole::Tool
+        }) {
+            match m.role {
                 MessageRole::Tool => {
-                    let call_id = m.tool_call_id.as_deref().unwrap_or("");
-                    serde_json::json!({
+                    let raw_id = m.tool_call_id.as_deref().unwrap_or("");
+                    let (call_id, _) = split_responses_tool_id(raw_id);
+                    input.push(serde_json::json!({
                         "type": "function_call_output",
                         "call_id": call_id,
                         "output": m.content,
-                    })
+                    }));
                 }
-                _ => {
-                    // 带图像的 user 消息：content 展开为 input_text + input_image 数组
-                    // （Responses API 多模态格式）；无图时保持字符串 content 不变。
-                    if let Some(images) = m.images.as_ref().filter(|v| !v.is_empty()) {
-                        let mut parts: Vec<Value> = vec![serde_json::json!({
-                            "type": "input_text",
-                            "text": m.content,
-                        })];
-                        for img in images {
-                            parts.push(serde_json::json!({
-                                "type": "input_image",
-                                "image_url": format!("data:{};base64,{}", img.mime_type, img.data),
-                            }));
+                MessageRole::Assistant => {
+                    // 空 assistant 正文在有 function_call 时省略，避免产生无意义
+                    // 的空消息；正文非空时先保留正文，再追加函数调用项。
+                    if !m.content.is_empty() || m.tool_calls.is_none() {
+                        input.push(Self::message_item(m));
+                    }
+                    if let Some(calls) = m.tool_calls.as_ref() {
+                        for call in calls {
+                            let (call_id, item_id) = split_responses_tool_id(&call.id);
+                            let mut item = serde_json::json!({
+                                "type": "function_call",
+                                "call_id": call_id,
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            });
+                            if let Some(item_id) = item_id {
+                                item["id"] = serde_json::Value::String(item_id);
+                            }
+                            input.push(item);
                         }
-                        serde_json::json!({
-                            "role": m.role,
-                            "content": parts,
-                        })
-                    } else {
-                        // MessageRole 序列化为 lowercase 字符串，直通 API role 字面量
-                        serde_json::json!({
-                            "role": m.role,
-                            "content": m.content,
-                        })
                     }
                 }
+                _ => input.push(Self::message_item(m)),
+            }
+        }
+
+        input
+    }
+
+    /// 构造普通 input message，保留 user 图片的 Responses 多模态格式。
+    fn message_item(m: &ChatMessage) -> Value {
+        if let Some(images) = m.images.as_ref().filter(|v| !v.is_empty()) {
+            let mut parts: Vec<Value> = vec![serde_json::json!({
+                "type": "input_text",
+                "text": m.content,
+            })];
+            for img in images {
+                parts.push(serde_json::json!({
+                    "type": "input_image",
+                    "image_url": format!("data:{};base64,{}", img.mime_type, img.data),
+                }));
+            }
+            serde_json::json!({
+                "role": m.role,
+                "content": parts,
             })
-            .collect()
+        } else {
+            // MessageRole 序列化为 lowercase 字符串，直通 API role 字面量
+            serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            })
+        }
     }
 
     // ── 请求体 ──
@@ -141,12 +189,17 @@ impl OpenAIResponsesClient {
             &config.model
         };
 
-        let instructions = Self::extract_instructions(messages);
-        let input = Self::build_input(messages);
+        let normalized = super::normalize_tool_pairs(messages, config.api_type);
+        let instructions = Self::extract_instructions(&normalized);
+        let input = Self::build_input(&normalized);
 
+        let model_limit = self
+            .registry
+            .get_model(&config.provider, &config.model)
+            .and_then(|entry| entry.max_output);
         let mut body = serde_json::json!({
             "model": model,
-            "max_output_tokens": config.max_tokens,
+            "max_output_tokens": crate::llm::chat_output_budget(config.max_tokens, model_limit),
             "input": input,
             "stream": stream,
         });
@@ -179,6 +232,18 @@ impl OpenAIResponsesClient {
         );
 
         Ok(body)
+    }
+
+    /// 测试入口：让能力矩阵/请求体快照复用生产构造路径。
+    #[cfg(test)]
+    pub(crate) fn build_body_for_snapshot(
+        &self,
+        config: &LlmConfig,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+        stream: bool,
+    ) -> Result<Value, LlmError> {
+        self.build_body(config, messages, tools, stream)
     }
 
     // ── HTTP 请求 ──
@@ -234,11 +299,17 @@ impl OpenAIResponsesClient {
                     }
                 }
                 Some("function_call") => {
-                    let id = item
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
+                    // function_call_output 配对用 call_id；item 的 id 是另一个
+                    // 字段，二者可能不同。内部 id 用复合值保留两者；缺失
+                    // call_id 时回退到 item id。
+                    let call_id = item.get("call_id").and_then(|v| v.as_str());
+                    let item_id = item.get("id").and_then(|v| v.as_str());
+                    let id = match (call_id, item_id) {
+                        (Some(call), Some(item)) => responses_tool_id(call, Some(item)),
+                        (Some(call), None) => call.to_string(),
+                        (None, Some(item)) => item.to_string(),
+                        (None, None) => String::new(),
+                    };
                     let name = item
                         .get("name")
                         .and_then(|v| v.as_str())
@@ -321,26 +392,25 @@ impl LlmClient for OpenAIResponsesClient {
                 if e.is_timeout() {
                     LlmError::Timeout(e.to_string())
                 } else {
-                    LlmError::Api(format!("HTTP 请求失败: {e}"))
+                    LlmError::Transport(format!("HTTP 请求失败: {e}"))
                 }
             })?;
 
             let status = response.status();
+            let retry_after_ms = retry_after_ms_from_headers(response.headers());
             let body: Value = response
                 .json()
                 .await
                 .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
-                let err_msg = body
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未知错误");
-                return Err(LlmError::Api(format!(
-                    "HTTP {}: {err_msg}",
-                    status.as_u16()
-                )));
+                let err_msg =
+                    provider_error_detail(&body).unwrap_or_else(|| "未知错误".to_string());
+                return Err(LlmError::http_with_retry_after(
+                    status.as_u16(),
+                    err_msg,
+                    retry_after_ms,
+                ));
             }
 
             Self::parse_chat_response(&body)
@@ -369,26 +439,23 @@ impl LlmClient for OpenAIResponsesClient {
                 if e.is_timeout() {
                     LlmError::Timeout(e.to_string())
                 } else {
-                    LlmError::Api(format!("HTTP 请求失败: {e}"))
+                    LlmError::Transport(format!("HTTP 请求失败: {e}"))
                 }
             })?;
 
             let status = response.status();
+            let retry_after_ms = retry_after_ms_from_headers(response.headers());
             if !status.is_success() {
                 let err_text = response.text().await.unwrap_or_default();
                 let err_msg = serde_json::from_str::<Value>(&err_text)
                     .ok()
-                    .and_then(|v| {
-                        v.get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str())
-                            .map(|s| s.to_string())
-                    })
+                    .and_then(|v| provider_error_detail(&v))
                     .unwrap_or(err_text);
-                return Err(LlmError::Api(format!(
-                    "HTTP {}: {err_msg}",
-                    status.as_u16()
-                )));
+                return Err(LlmError::http_with_retry_after(
+                    status.as_u16(),
+                    err_msg,
+                    retry_after_ms,
+                ));
             }
 
             let byte_stream = response
@@ -419,8 +486,14 @@ enum ResponsesSseEvent {
     ReasoningDelta {
         content: String,
     },
+    FunctionCallItem {
+        call_id: String,
+        item_id: String,
+        name: Option<String>,
+    },
     FunctionCallDelta {
         call_id: String,
+        item_id: Option<String>,
         name: Option<String>,
         arguments_delta: String,
     },
@@ -444,9 +517,17 @@ where
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut usage: Option<TokenUsage> = None;
     let mut finish_reason: Option<FinishReason> = None;
+    let mut saw_completed = false;
 
-    // 按 call_id 累积 tool_call 的 arguments 和 name
-    let mut pending_calls: HashMap<String, (Option<String>, String)> = HashMap::new();
+    #[derive(Default)]
+    struct PendingCall {
+        name: Option<String>,
+        arguments: String,
+        item_id: Option<String>,
+    }
+
+    // 按 call_id 累积 tool_call 的 arguments、name 与 item id
+    let mut pending_calls: HashMap<String, PendingCall> = HashMap::new();
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
@@ -469,23 +550,42 @@ where
                     content: content.clone(),
                 });
             }
+            ResponsesSseEvent::FunctionCallItem {
+                call_id,
+                item_id,
+                name,
+            } => {
+                let entry = pending_calls.entry(call_id).or_default();
+                entry.item_id = Some(item_id);
+                if name.is_some() {
+                    entry.name = name;
+                }
+            }
             ResponsesSseEvent::FunctionCallDelta {
                 call_id,
+                item_id,
                 name,
                 arguments_delta,
             } => {
                 let entry = pending_calls.entry(call_id).or_default();
                 if let Some(n) = name {
-                    entry.0 = Some(n);
+                    entry.name = Some(n);
                 }
-                entry.1.push_str(&arguments_delta);
+                if item_id.is_some() {
+                    entry.item_id = item_id;
+                }
+                entry.arguments.push_str(&arguments_delta);
             }
             ResponsesSseEvent::Completed {
                 usage: u,
                 finish_reason: reason,
             } => {
+                saw_completed = true;
                 if let Some(u) = u {
                     usage = OpenAIResponsesClient::extract_usage(&u);
+                    if let Some(snapshot) = usage {
+                        on_event(StreamEvent::Usage { usage: snapshot });
+                    }
                 }
                 if reason.is_some() {
                     finish_reason = reason;
@@ -495,24 +595,31 @@ where
     })
     .await
     {
-        return Err(LlmError::Api(format!("流读取异常: {e}")));
+        return Err(LlmError::Transport(format!("流读取异常: {e}")));
+    }
+
+    if !saw_completed {
+        return Err(LlmError::Transport(
+            "流提前结束：未收到 response.completed".into(),
+        ));
     }
 
     // 流结束后 emit 所有累积的 tool_call
-    for (call_id, (name, arguments)) in pending_calls {
-        if let Some(ref n) = name {
+    for (call_id, call) in pending_calls {
+        if let Some(ref n) = call.name {
+            let id = responses_tool_id(&call_id, call.item_id.as_deref());
             tool_calls.push(ToolCall {
-                id: call_id.clone(),
+                id: id.clone(),
                 call_type: "function".into(),
                 function: ToolCallFunction {
                     name: n.clone(),
-                    arguments: arguments.clone(),
+                    arguments: call.arguments.clone(),
                 },
             });
             on_event(StreamEvent::ToolCall {
-                id: call_id,
+                id,
                 name: n.clone(),
-                arguments,
+                arguments: call.arguments,
             });
         }
     }
@@ -578,12 +685,33 @@ fn parse_responses_frame(frame: &str) -> Option<ResponsesSseEvent> {
                 Some(ResponsesSseEvent::ReasoningDelta { content })
             }
         }
+        "response.output_item.added" | "response.output_item.done" => {
+            let item = data.get("item")?;
+            if item.get("type").and_then(|v| v.as_str()) != Some("function_call") {
+                return None;
+            }
+            let call_id = item.get("call_id").and_then(|v| v.as_str())?;
+            let item_id = item.get("id").and_then(|v| v.as_str())?;
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(ResponsesSseEvent::FunctionCallItem {
+                call_id: call_id.to_string(),
+                item_id: item_id.to_string(),
+                name,
+            })
+        }
         "response.function_call_arguments.delta" => {
             let call_id = data
                 .get("call_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let item_id = data
+                .get("item_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let name = data
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -595,6 +723,7 @@ fn parse_responses_frame(frame: &str) -> Option<ResponsesSseEvent> {
                 .to_string();
             Some(ResponsesSseEvent::FunctionCallDelta {
                 call_id,
+                item_id,
                 name,
                 arguments_delta,
             })
@@ -651,7 +780,13 @@ mod tests {
         let s = responses_sse_stream(frames);
         let result = parse_responses_sse_stream(s, &on_event).await.unwrap();
 
-        let collected = events.lock().unwrap().clone();
+        let collected = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| !matches!(event, StreamEvent::Usage { .. }))
+            .cloned()
+            .collect();
         (collected, result)
     }
 
@@ -682,6 +817,54 @@ mod tests {
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["role"], "user");
         assert_eq!(input[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn build_input_emits_assistant_function_call() {
+        let msgs = vec![ChatMessage::assistant_with_tools(
+            "",
+            vec![ToolCall {
+                id: "fc_1".into(),
+                call_type: "function".into(),
+                function: ToolCallFunction {
+                    name: "lookup".into(),
+                    arguments: r#"{"q":"x"}"#.into(),
+                },
+            }],
+            Some("reasoning".into()),
+        )];
+        let input = OpenAIResponsesClient::build_input(&msgs);
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["call_id"], "fc_1");
+        assert_eq!(input[0]["name"], "lookup");
+        assert_eq!(input[0]["arguments"], r#"{"q":"x"}"#);
+    }
+
+    #[test]
+    fn build_input_splits_composite_responses_id() {
+        let msgs = vec![ChatMessage::assistant_with_tools(
+            "",
+            vec![ToolCall {
+                id: "call_1|fc_1".into(),
+                call_type: "function".into(),
+                function: ToolCallFunction {
+                    name: "lookup".into(),
+                    arguments: "{}".into(),
+                },
+            }],
+            None,
+        )];
+        let input = OpenAIResponsesClient::build_input(&msgs);
+        assert_eq!(input[0]["call_id"], "call_1");
+        assert_eq!(input[0]["id"], "fc_1");
+    }
+
+    #[test]
+    fn build_input_tool_result_uses_call_id_part() {
+        let msgs = vec![ChatMessage::tool_result("call_1|fc_1", "结果文本")];
+        let input = OpenAIResponsesClient::build_input(&msgs);
+        assert_eq!(input[0]["call_id"], "call_1");
     }
 
     #[test]
@@ -723,6 +906,7 @@ mod tests {
                 {
                     "type": "function_call",
                     "id": "fc_1",
+                    "call_id": "call_1",
                     "name": "query_enemy",
                     "arguments": "{\"name\":\"源石虫\"}"
                 }
@@ -732,9 +916,23 @@ mod tests {
         assert!(resp.text.is_none());
         let tcs = resp.tool_calls.unwrap();
         assert_eq!(tcs.len(), 1);
-        assert_eq!(tcs[0].id, "fc_1");
+        assert_eq!(tcs[0].id, "call_1|fc_1");
         assert_eq!(tcs[0].function.name, "query_enemy");
         assert_eq!(tcs[0].function.arguments, r#"{"name":"源石虫"}"#);
+    }
+
+    #[test]
+    fn parse_function_call_without_call_id_falls_back_to_item_id() {
+        let body = serde_json::json!({
+            "output": [{
+                "type": "function_call",
+                "id": "fc_legacy",
+                "name": "echo",
+                "arguments": "{}"
+            }]
+        });
+        let resp = OpenAIResponsesClient::parse_chat_response(&body).unwrap();
+        assert_eq!(resp.tool_calls.unwrap()[0].id, "fc_legacy");
     }
 
     #[test]
@@ -811,6 +1009,41 @@ mod tests {
             Some(crate::llm::FinishReason::MaxTokens)
         );
         assert_eq!(result.text, "半截回答");
+    }
+
+    #[tokio::test]
+    async fn function_call_stream_preserves_call_and_item_ids() {
+        let frames = &[
+            (
+                "response.output_item.added",
+                r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"echo","arguments":""}}"#,
+            ),
+            (
+                "response.function_call_arguments.delta",
+                r#"{"type":"response.function_call_arguments.delta","call_id":"call_1","item_id":"fc_1","delta":"{}"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":8,"output_tokens":6}}}"#,
+            ),
+        ];
+        let (events, result) = collect_events(frames).await;
+        assert!(matches!(&events[0], StreamEvent::ToolCall { id, .. } if id == "call_1|fc_1"));
+        assert_eq!(result.tool_calls[0].id, "call_1|fc_1");
+    }
+
+    #[tokio::test]
+    async fn stream_without_response_completed_is_transport_error() {
+        let frames = &[(
+            "response.output_text.delta",
+            r#"{"type":"response.output_text.delta","delta":"半截回答"}"#,
+        )];
+        let on_event = |_e: StreamEvent| {};
+        let stream = responses_sse_stream(frames);
+        let err = parse_responses_sse_stream(stream, &on_event)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
     }
 
     #[tokio::test]

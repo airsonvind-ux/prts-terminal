@@ -1653,6 +1653,7 @@ mod tests {
             SessionEvent::StepEnd { .. } => "step/end",
             SessionEvent::UserMessage { .. } => "user/message",
             SessionEvent::AssistantChunk { .. } => "assistant/chunk",
+            SessionEvent::AssistantReset { .. } => "assistant/reset",
             SessionEvent::AssistantMessage { .. } => "assistant/message",
             SessionEvent::AssistantProviderBlocks { .. } => "assistant/provider-blocks",
             SessionEvent::ToolCall { .. } => "tool/call",
@@ -2563,9 +2564,17 @@ mod tests {
     #[test]
     fn is_retryable_judges_error_types() {
         use crate::llm::LlmError;
-        // 超时恒可重试
+        // 超时和连接失败恒可重试
         assert!(is_retryable(&LlmError::Timeout("连接超时".into())));
+        assert!(is_retryable(&LlmError::Transport("连接被重置".into())));
+        assert!(is_retryable(&LlmError::EmptyResponse));
+        assert!(!is_retryable(&LlmError::Quota("insufficient_quota".into())));
         // 429 限流 / 5xx 服务端可重试
+        assert!(is_retryable(&LlmError::Http {
+            status: 429,
+            message: "rate limited".into(),
+            retry_after_ms: None,
+        }));
         assert!(is_retryable(&LlmError::Api(
             "HTTP 429: rate limited".into()
         )));
@@ -2574,6 +2583,11 @@ mod tests {
             "HTTP 500: internal error".into()
         )));
         // 客户端错误 / 配置 / 解析不重试
+        assert!(!is_retryable(&LlmError::Http {
+            status: 401,
+            message: "unauthorized".into(),
+            retry_after_ms: None,
+        }));
         assert!(!is_retryable(&LlmError::Api(
             "HTTP 401: unauthorized".into()
         )));
@@ -2630,11 +2644,21 @@ mod tests {
         }
     }
 
-    /// 测试用"先出流后失败"客户端：emit 一个 TextDelta 后返回 Timeout。
-    /// 用于验证"流已开始 → 不重试"的边界（重试会污染 log/IPC 回放）。
-    struct EmitThenFailClient;
+    /// 测试用"先出半截再失败，第二次成功"客户端。
+    /// 用于验证带正文的流中断：重试前写 assistant/reset，撤回半成品。
+    struct PartialThenSuccessClient {
+        attempts: std::sync::atomic::AtomicUsize,
+    }
 
-    impl LlmClient for EmitThenFailClient {
+    impl PartialThenSuccessClient {
+        fn new() -> Self {
+            Self {
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl LlmClient for PartialThenSuccessClient {
         fn chat<'a>(
             &'a self,
             _config: &'a LlmConfig,
@@ -2659,10 +2683,25 @@ mod tests {
             on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
         ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
             Box::pin(async move {
+                let attempt = self
+                    .attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if attempt == 0 {
+                    on_event(StreamEvent::TextDelta {
+                        content: "半截回答".into(),
+                    });
+                    return Err(LlmError::Timeout("流中断".into()));
+                }
                 on_event(StreamEvent::TextDelta {
-                    content: "半截回答".into(),
+                    content: "重试成功".into(),
                 });
-                Err(LlmError::Timeout("流中断".into()))
+                Ok(StreamResult {
+                    text: "重试成功".into(),
+                    tool_calls: vec![],
+                    reasoning: None,
+                    usage: None,
+                    finish_reason: Some(crate::llm::FinishReason::Normal),
+                })
             })
         }
     }
@@ -2707,6 +2746,7 @@ mod tests {
             RetryPolicy {
                 max_attempts: 2,
                 base_delay_ms: 1,
+                ..RetryPolicy::default()
             },
         )
         .await
@@ -2714,6 +2754,68 @@ mod tests {
         assert_eq!(result.text, "重试成功");
         // 重试不应产生重复事件（失败发生在任何流事件之前）
         let _ = events;
+    }
+
+    #[tokio::test]
+    async fn empty_response_is_retried() {
+        use crate::llm::mock::{MockLlmClient, MockResponse};
+        use crate::llm::{ApiType, FinishReason, StreamEvent, StreamResult};
+
+        let mock = Arc::new(MockLlmClient::new(vec![
+            MockResponse {
+                events: vec![StreamEvent::Usage {
+                    usage: crate::llm::TokenUsage {
+                        input_tokens: 7,
+                        context_input_tokens: None,
+                        output_tokens: 0,
+                        cache_hit_tokens: None,
+                        cache_miss_tokens: None,
+                    },
+                }],
+                result: StreamResult {
+                    text: String::new(),
+                    tool_calls: vec![],
+                    reasoning: None,
+                    usage: None,
+                    finish_reason: Some(FinishReason::Normal),
+                },
+            },
+            MockResponse {
+                events: vec![StreamEvent::TextDelta {
+                    content: "空响应后的回答".into(),
+                }],
+                result: StreamResult {
+                    text: "空响应后的回答".into(),
+                    tool_calls: vec![],
+                    reasoning: None,
+                    usage: None,
+                    finish_reason: Some(FinishReason::Normal),
+                },
+            },
+        ]));
+        let mut client_registry = ClientRegistry::new();
+        client_registry.register(ApiType::OpenAiCompletions, mock);
+        let (sink, _, _) = test_sink();
+        let llm = &**client_registry.select(&ApiType::OpenAiCompletions).unwrap();
+
+        let result = call_llm_with_retry(
+            "s1",
+            &[],
+            &[],
+            llm,
+            &LlmConfig::default(),
+            &sink,
+            &Arc::new(ToolRegistry::new()),
+            &Arc::new(ToolContext::new()),
+            RetryPolicy {
+                max_attempts: 2,
+                base_delay_ms: 1,
+                ..RetryPolicy::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "空响应后的回答");
     }
 
     #[tokio::test]
@@ -2740,6 +2842,7 @@ mod tests {
             RetryPolicy {
                 max_attempts: 2,
                 base_delay_ms: 1,
+                ..RetryPolicy::default()
             },
         )
         .await
@@ -2747,16 +2850,66 @@ mod tests {
         assert!(matches!(err, OrchestratorError::Llm(LlmError::Timeout(_))));
     }
 
+    /// 测试用"先出工具调用再失败"客户端：工具卡一旦出现，就不该被重试撤回。
+    struct ToolThenFailClient {
+        attempts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ToolThenFailClient {
+        fn new() -> Self {
+            Self {
+                attempts: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl LlmClient for ToolThenFailClient {
+        fn chat<'a>(
+            &'a self,
+            _config: &'a LlmConfig,
+            _messages: &'a [ChatMessage],
+            _tools: &'a [crate::llm::ToolDef],
+        ) -> Pin<Box<dyn Future<Output = Result<crate::llm::LlmResponse, LlmError>> + Send + 'a>>
+        {
+            Box::pin(async move {
+                Ok(crate::llm::LlmResponse {
+                    text: None,
+                    tool_calls: None,
+                    usage: None,
+                })
+            })
+        }
+
+        fn chat_stream<'a>(
+            &'a self,
+            _config: &'a LlmConfig,
+            _messages: &'a [ChatMessage],
+            _tools: &'a [crate::llm::ToolDef],
+            on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
+        ) -> Pin<Box<dyn Future<Output = Result<StreamResult, LlmError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                on_event(StreamEvent::ToolCall {
+                    id: "call_1".into(),
+                    name: "echo".into(),
+                    arguments: "{}".into(),
+                });
+                Err(LlmError::Timeout("工具流中断".into()))
+            })
+        }
+    }
+
     #[tokio::test]
-    async fn no_retry_after_stream_started() {
+    async fn tool_call_blocks_partial_retry() {
         use crate::llm::ApiType;
 
+        let client = Arc::new(ToolThenFailClient::new());
         let mut client_registry = ClientRegistry::new();
-        client_registry.register(ApiType::OpenAiCompletions, Arc::new(EmitThenFailClient));
+        client_registry.register(ApiType::OpenAiCompletions, client.clone());
 
-        let (sink, events, log) = test_sink();
+        let (sink, _, log) = test_sink();
         let llm = &**client_registry.select(&ApiType::OpenAiCompletions).unwrap();
-
         let err = call_llm_with_retry(
             "s1",
             &[],
@@ -2769,16 +2922,97 @@ mod tests {
             RetryPolicy {
                 max_attempts: 3,
                 base_delay_ms: 1,
+                ..RetryPolicy::default()
             },
         )
         .await
         .unwrap_err();
         assert!(matches!(err, OrchestratorError::Llm(LlmError::Timeout(_))));
+        assert_eq!(
+            client.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "工具调用出现后不应重试"
+        );
+        assert!(
+            !log.lock()
+                .unwrap()
+                .events()
+                .iter()
+                .any(|e| matches!(e, SessionEvent::AssistantReset { .. })),
+            "没有可撤回的正文时不应写 reset"
+        );
+    }
 
-        // 流已开始：只 emit 了一次（无重试）——初始 phase + 切换 phase + 一条 chunk
-        // （若发生重试，chunk 会重复出现）
-        assert_eq!(events.lock().unwrap().len(), 3);
-        assert_eq!(log.lock().unwrap().len(), 1);
+    #[tokio::test]
+    async fn partial_stream_is_retried_after_reset() {
+        use crate::llm::ApiType;
+
+        let mut client_registry = ClientRegistry::new();
+        client_registry.register(
+            ApiType::OpenAiCompletions,
+            Arc::new(PartialThenSuccessClient::new()),
+        );
+
+        let (sink, events, log) = test_sink();
+        let llm = &**client_registry.select(&ApiType::OpenAiCompletions).unwrap();
+
+        let result = call_llm_with_retry(
+            "s1",
+            &[],
+            &[],
+            llm,
+            &LlmConfig::default(),
+            &sink,
+            &Arc::new(ToolRegistry::new()),
+            &Arc::new(ToolContext::new()),
+            RetryPolicy {
+                max_attempts: 2,
+                base_delay_ms: 1,
+                ..RetryPolicy::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.text, "重试成功");
+
+        let log = log.lock().unwrap();
+        let chunks: Vec<&str> = log
+            .events()
+            .iter()
+            .filter_map(|e| match e {
+                SessionEvent::AssistantChunk {
+                    kind: ChunkKind::Text,
+                    content,
+                    ..
+                } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chunks, vec!["半截回答", "重试成功"]);
+        assert_eq!(
+            log.events()
+                .iter()
+                .filter(|e| matches!(e, SessionEvent::AssistantReset { .. }))
+                .count(),
+            1,
+            "重试前应写一条撤回事件"
+        );
+        // 下一轮 LLM 历史只能看到成功答案，半截回答已被 reset 清掉。
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0].content, "重试成功");
+        drop(log);
+
+        // IPC 也应把撤回事件送给前端，且只送一次。
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(e, IpcEvent::Session(SessionEvent::AssistantReset { .. })))
+                .count(),
+            1
+        );
     }
 
     // ═══════════════════════════════════════════════════════
@@ -2934,6 +3168,80 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn max_tokens_with_tool_call_drops_it_without_executing() {
+        use crate::llm::mock::{MockLlmClient, MockResponse};
+        use crate::llm::{ApiType, ToolCall, ToolCallFunction};
+
+        let tool_call = ToolCall {
+            id: "call_truncated".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "echo".into(),
+                arguments: r#"{"message":"半截参数"#.into(),
+            },
+        };
+        let mock = Arc::new(MockLlmClient::new(vec![MockResponse {
+            events: vec![StreamEvent::ToolCall {
+                id: tool_call.id.clone(),
+                name: tool_call.function.name.clone(),
+                arguments: tool_call.function.arguments.clone(),
+            }],
+            result: StreamResult {
+                text: "半截回答".into(),
+                tool_calls: vec![tool_call],
+                reasoning: None,
+                usage: None,
+                finish_reason: Some(crate::llm::FinishReason::MaxTokens),
+            },
+        }]));
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(crate::tools::EchoTool)).unwrap();
+        let tools = Arc::new(tools);
+        let (sink, _events, log, mut messages, tool_defs, client_registry, _tools) =
+            setup_dispatch_env(tools.clone(), mock, vec![user_msg("问题")]);
+
+        let outcome = dispatch_turn(
+            "s1",
+            &sink,
+            &mut messages,
+            &Arc::new(crate::skills_index::SkillIndex::empty()),
+            &tools,
+            &tool_defs,
+            &**client_registry.select(&ApiType::OpenAiCompletions).unwrap(),
+            &LlmConfig::default(),
+            None,
+            ReasoningPolicy::Preserve,
+            ExecutionMode::Ask,
+            &ApprovalRegistry::new(),
+            &AbortSignal::new(),
+            &SteerQueue::new(),
+            std::path::Path::new(&std::env::temp_dir()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, TurnOutcome::Completed);
+        let log = log.lock().unwrap();
+        assert!(
+            !log.events().iter().any(|e| matches!(
+                e,
+                SessionEvent::ToolCall { .. } | SessionEvent::ToolResult { .. }
+            )),
+            "截断输出里的工具调用不应进入执行记录"
+        );
+        assert!(
+            log.events().iter().any(|e| matches!(
+                e,
+                SessionEvent::TurnEnd {
+                    reason: TurnEndReason::MaxTokens,
+                    ..
+                }
+            )),
+            "截断轮仍应以 max-tokens 收尾"
+        );
+    }
+
     /// 测试辅助工具：等待中止或释放信号后返回（并发安全 → 走并行组）。
     /// 返回固定文本（同参同果 → 同指纹，供停滞场景构造）。
     struct WaitOrReleaseTool {
@@ -3042,6 +3350,15 @@ mod tests {
         let mock = Arc::new(MockLlmClient::new_with_hang(
             vec![{
                 let mut r = mock_echo_response("半截回答");
+                r.events.push(StreamEvent::Usage {
+                    usage: crate::llm::TokenUsage {
+                        input_tokens: 42,
+                        context_input_tokens: None,
+                        output_tokens: 0,
+                        cache_hit_tokens: None,
+                        cache_miss_tokens: None,
+                    },
+                });
                 r.events.push(StreamEvent::TextDelta {
                     content: "（未完）".into(),
                 });
@@ -3087,10 +3404,12 @@ mod tests {
             observer.await.unwrap(),
             "观察超时：未等到 chunk（Mock 挂起点未达）"
         );
-        assert!(
-            matches!(outcome, TurnOutcome::Aborted(_)),
-            "LLM 段中止 → Aborted"
-        );
+        match &outcome {
+            TurnOutcome::Aborted(stat) => {
+                assert_eq!(stat.input_tokens, 42, "中止前已到达的用量应计入本轮");
+            }
+            _ => panic!("LLM 段中止应返回 Aborted"),
+        }
 
         // 已产出 chunk 保留（log 双写）；无 step/end（中止出口不闭合边界）
         let log = log.lock().unwrap();

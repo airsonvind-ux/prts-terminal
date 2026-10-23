@@ -12,13 +12,13 @@
 //! 摘要 run 与主对话共享同一 provider/模型（由命令层传入已路由的 client），
 //! 但：system（含记忆区）、工具面、折叠区消息与主请求**逐字节同源**：请求即
 //! 主请求真前缀，复用提供方 KV cache（上游形态）；流式事件全部丢弃（不推 IPC）、输出不进入
-//! 任何 log。推理链策略与主对话一致（`Preserve`——裁决：思考强度设置挂账，
-//! 本模块不引入第二策略面）。
+//! 任何 log。推理链策略由当前模型的 replay 合同决定，不再固定 `Preserve`；
+//! `require_tool_call` 且 `clearable=false` 时，超窗压缩 fail closed。
 //!
 //! ## 输入超窗降级链（裁决 D，实现顺序微调为可测的线性链）
 //!
 //! 预算 = `0.6 × 当前模型 contextWindow`。estimate 超预算时依次降级：
-//! 1. 丢弃全部推理链（reasoning_content → None，低损降级）；
+//! 1. 丢弃推理链；若模型要求工具轮推理且声明不可清空，则直接 fail closed；
 //! 2. 单条超长消息头尾截断（各留 40%，中间省略标记）；
 //! 3. 仍超 → **规则降级**：不调 LLM，把折叠区渲染为规则抽取的大纲式
 //!    checkpoint（user 提问要点 + assistant 结论 + 工具调用清单），文本内
@@ -33,8 +33,8 @@ use std::sync::Arc;
 use crate::debug;
 use crate::events::FrontendMessage;
 use crate::llm::{
-    ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, StreamEvent, TokenUsage,
-    ToolDef,
+    ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, ResolvedCompat, StreamEvent,
+    TokenUsage, ToolDef,
 };
 use crate::session::SessionLog;
 use crate::turn_registry::AbortSignal;
@@ -83,27 +83,30 @@ pub struct SummaryOutcome {
 /// * `config` — LLM 连接配置（turn 起始快照）
 /// * `folded_history` — 前端折叠区的派生态历史（含链式压缩时的旧摘要消息）
 /// * `context_window` — 当前模型 contextWindow（命令层经 model_registry 查得，同源）
+/// * `replay` — 当前模型的效果层回放合同（policy / clearable / assistant_reasoning）
 /// * `system_prompt` — 对话冻结的完整前缀全文（与主对话同源，批 5 起由命令层
 ///   从 `prefix_snapshot.rs` 取；人格 + 界面 + 目录 + 记忆区）
 /// * `tool_defs` — 主对话工具面快照（同一冻结前缀；仅保请求前缀同源）
 /// * `abort` — 压缩注册项的中止信号（取消通道）
 ///
 /// 返回 Err(String)：错误文案面向用户（toast 直显）。
-pub async fn run_summary(
+#[allow(clippy::too_many_arguments)]
+pub async fn run_summary_with_replay(
     llm: &dyn LlmClient,
     config: &LlmConfig,
     folded_history: Vec<FrontendMessage>,
     context_window: u32,
+    replay: &ResolvedCompat,
     system_prompt: &str,
     tool_defs: &[ToolDef],
     abort: &AbortSignal,
 ) -> Result<SummaryOutcome, String> {
-    // ── 1. 播种 + 派生（Preserve：与主对话推理链策略一致）──
+    // ── 1. 播种 + 派生（与主对话同一个 replay policy）──
     // 复用既有纯函数链：折叠区前端已过滤 error 与结构事件，此处为形态规范化
     // 与防御（未知 role 兜底），与 agent_process 的播种路径同构。
     let mut log = SessionLog::new();
     log.seed_from_history(SUMMARY_SESSION_ID, folded_history);
-    let folded_messages = log.derive_messages(ReasoningPolicy::Preserve);
+    let folded_messages = log.derive_messages(replay.policy);
     if folded_messages.is_empty() {
         return Err("没有可压缩的内容".into());
     }
@@ -123,7 +126,7 @@ pub async fn run_summary(
     // ── 3. 超窗预检与降级链（裁决 D）──
     let budget = ((context_window as f64) * MAX_SUMMARY_INPUT_RATIO).floor() as usize;
     if estimate_messages(&messages) > budget {
-        strip_reasoning(&mut messages);
+        strip_reasoning(&mut messages, replay)?;
         if estimate_messages(&messages) > budget {
             truncate_long_messages(&mut messages);
         }
@@ -143,6 +146,30 @@ pub async fn run_summary(
         tokens_before: Some(tokens_before),
         usage,
     })
+}
+
+/// 测试兼容入口：使用默认 replay 合同。生产命令必须显式传当前模型合同。
+#[cfg(test)]
+pub async fn run_summary(
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    folded_history: Vec<FrontendMessage>,
+    context_window: u32,
+    system_prompt: &str,
+    tool_defs: &[ToolDef],
+    abort: &AbortSignal,
+) -> Result<SummaryOutcome, String> {
+    run_summary_with_replay(
+        llm,
+        config,
+        folded_history,
+        context_window,
+        &ResolvedCompat::default(),
+        system_prompt,
+        tool_defs,
+        abort,
+    )
+    .await
 }
 
 /// 摘要指令（user 形态，置于输入末尾；要求模型只输出 checkpoint 正文）。
@@ -180,11 +207,29 @@ fn build_summary_instruction() -> String {
 }
 
 /// 降级链 1：丢弃全部推理链（reasoning_content → None）。
-/// 输入超窗时的低损降级——推理是思考过程，checkpoint 只关心结论。
-fn strip_reasoning(messages: &mut [ChatMessage]) {
+///
+/// `require_tool_call` 且 `clearable=false` 的模型不能静默清空工具轮推理；
+/// 这类历史直接 fail closed，让用户新建会话，而不是发出一个缺少推理的请求。
+fn strip_reasoning(messages: &mut [ChatMessage], replay: &ResolvedCompat) -> Result<(), String> {
+    if replay.policy == ReasoningPolicy::RequireToolCall && !replay.clearable {
+        let has_tool_reasoning = messages.iter().any(|m| {
+            m.role == MessageRole::Assistant
+                && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty())
+                && m.reasoning_content
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty())
+        });
+        if has_tool_reasoning {
+            return Err(
+                "当前模型要求工具调用轮回传推理，且该模型的推理不可清空；请新建会话后再压缩。"
+                    .into(),
+            );
+        }
+    }
     for m in messages.iter_mut() {
         m.reasoning_content = None;
     }
+    Ok(())
 }
 
 /// 降级链 2：单条超长消息头尾截断（各留 40%，中间省略标记）。
@@ -333,12 +378,16 @@ async fn call_summary_llm(
                 return Ok((text.to_string(), sr.usage));
             }
             Err(e) => {
-                let retryable = is_retryable(&e);
+                let delay_ms = if is_retryable(&e) {
+                    retry.delay_for_error(attempt, &e)
+                } else {
+                    None
+                };
                 let can_retry = attempt < retry.max_attempts
-                    && retryable
+                    && delay_ms.is_some()
                     && !stream_started.load(Ordering::SeqCst);
                 if can_retry {
-                    let delay_ms = retry.base_delay_ms * attempt as u64;
+                    let delay_ms = delay_ms.expect("can_retry 已确认存在延迟");
                     debug!(
                         "action" => "summary_llm_retry",
                         "attempt" => attempt,
@@ -616,6 +665,39 @@ mod tests {
         for msg in &captured {
             assert!(msg.reasoning_content.is_none(), "降级后不应携带推理链");
         }
+    }
+
+    #[tokio::test]
+    async fn oversize_tool_reasoning_fails_closed_when_not_clearable() {
+        let mut assistant = fm("assistant", "结论");
+        assistant.reasoning_content = Some("工具轮推理".repeat(2000));
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "c1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        let mock = MockLlmClient::new(vec![]);
+        let replay = ResolvedCompat {
+            policy: ReasoningPolicy::RequireToolCall,
+            clearable: false,
+            ..Default::default()
+        };
+        let err = run_summary_with_replay(
+            &mock,
+            &cfg(),
+            vec![fm("user", "q"), assistant],
+            1_000,
+            &replay,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("不可清空"), "got: {err}");
     }
 
     #[tokio::test]

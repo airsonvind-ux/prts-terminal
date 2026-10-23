@@ -15,8 +15,8 @@
 //!   其余 → true（布尔形态，不使用对象形态）
 //! - completions + request_param="zhipu"：`thinking.type`；工具轮/历史推理存在
 //!   时带 `clear_thinking:false`
-//! - completions + request_param="kimi"：按模型代际分流——K2.6 用 thinking，
-//!   K3 只用 reasoning_effort，K2.7 Code 始终思考且不发 thinking
+//! - completions + request_param="kimi"：按 thinking_profile 分流——K2.6 用
+//!   thinking，K3 只用 reasoning_effort，K2.7 Code 始终思考且不发 thinking
 //! - completions + request_param="volcengine"：`thinking.type` + effort 映射
 //!   （max → high）
 //! - completions + request_param=None（OpenAI 系无 thinking_format）：发
@@ -29,6 +29,7 @@
 
 use serde_json::Value;
 
+use super::compat::ThinkingProfile;
 use super::{ApiType, ModelRegistry, ResolvedCompat};
 
 /// canonical 白名单（UI/声明/设置共用词汇）。
@@ -108,13 +109,13 @@ pub fn apply_completions(
     body: &mut Value,
     request_param: Option<&str>,
     level: &'static str,
-    model: &str,
+    profile: Option<ThinkingProfile>,
 ) {
     match request_param {
         Some("thinking") => apply_deepseek_completions(body, level),
         Some("enable_thinking") => apply_qwen(body, level),
-        Some("zhipu") => apply_zhipu(body, level, model),
-        Some("kimi") => apply_kimi(body, level, model),
+        Some("zhipu") => apply_zhipu(body, level, profile),
+        Some("kimi") => apply_kimi(body, level, profile),
         Some("volcengine") => apply_volcengine(body, level),
         _ => apply_openai_effort(body, level),
     }
@@ -139,27 +140,44 @@ fn apply_qwen(body: &mut Value, level: &'static str) {
 ///
 /// GLM-5.3 系列始终开启思考，官方不再接受 `disabled`；它支持
 /// `reasoning_effort` 的 low/high/max（默认 max）。旧模型仍保留 off。
-fn apply_zhipu(body: &mut Value, level: &'static str, model: &str) {
+fn apply_zhipu(body: &mut Value, level: &'static str, profile: Option<ThinkingProfile>) {
     clear_thinking_fields(body);
-    let model = model.to_ascii_lowercase();
 
-    if model.starts_with("glm-5.3") {
-        let mut thinking = serde_json::json!({"type": "enabled"});
-        // Flash/FlashX 官方推荐始终保留推理链；标准 5.3 在有工具/历史推理时保留。
-        if model.contains("flash") || has_tool_call_or_reasoning_history(body) {
-            thinking["clear_thinking"] = Value::Bool(false);
-        }
-        body["thinking"] = thinking;
-        body["reasoning_effort"] = Value::String(
-            match level {
-                "low" => "low",
-                "max" => "max",
-                "off" => "low", // 5.3 不能关闭；按官方迁移建议降为 low
-                _ => "high",
+    match profile {
+        Some(ThinkingProfile::ZhipuGlm53) => {
+            let mut thinking = serde_json::json!({"type": "enabled"});
+            if has_tool_call_or_reasoning_history(body) {
+                thinking["clear_thinking"] = Value::Bool(false);
             }
-            .into(),
-        );
-        return;
+            body["thinking"] = thinking;
+            body["reasoning_effort"] = Value::String(
+                match level {
+                    "low" => "low",
+                    "max" => "max",
+                    "off" => "low", // 5.3 不能关闭；按官方迁移建议降为 low
+                    _ => "high",
+                }
+                .into(),
+            );
+            return;
+        }
+        Some(ThinkingProfile::ZhipuGlm53Flash) => {
+            body["thinking"] = serde_json::json!({
+                "type": "enabled",
+                "clear_thinking": false
+            });
+            body["reasoning_effort"] = Value::String(
+                match level {
+                    "low" => "low",
+                    "max" => "max",
+                    "off" => "low",
+                    _ => "high",
+                }
+                .into(),
+            );
+            return;
+        }
+        _ => {}
     }
 
     let enabled = level != "off";
@@ -197,39 +215,36 @@ fn has_tool_call_or_reasoning_history(body: &Value) -> bool {
         })
 }
 
-/// Kimi / Moonshot：按模型代际使用不同 wire。
-fn apply_kimi(body: &mut Value, level: &'static str, model: &str) {
-    let model = model.to_ascii_lowercase();
+/// Kimi / Moonshot：按 thinking_profile 使用不同 wire。
+fn apply_kimi(body: &mut Value, level: &'static str, profile: Option<ThinkingProfile>) {
     let off = level == "off";
-
-    // K3：只接受 reasoning_effort（low/high/max），不要再发 thinking。
-    if model.starts_with("kimi-k3") {
-        clear_thinking_fields(body);
-        if !off {
-            body["reasoning_effort"] = Value::String(
-                match level {
-                    "low" => "low",
-                    "max" => "max",
-                    _ => "high",
-                }
-                .into(),
-            );
-        }
-        return;
-    }
-
-    // K2.7 Code：始终思考、始终保留，不发送 thinking/effort。
-    if model.contains("k2.7-code") {
-        clear_thinking_fields(body);
-        return;
-    }
-
-    // K2.6：thinking.type 开关；开启时保留推理链。
     clear_thinking_fields(body);
-    if off {
-        body["thinking"] = serde_json::json!({"type": "disabled"});
-    } else {
-        body["thinking"] = serde_json::json!({"type": "enabled", "keep": "all"});
+
+    match profile {
+        // K3：只接受 reasoning_effort（low/high/max），不要再发 thinking。
+        Some(ThinkingProfile::KimiK3) => {
+            if !off {
+                body["reasoning_effort"] = Value::String(
+                    match level {
+                        "low" => "low",
+                        "max" => "max",
+                        _ => "high",
+                    }
+                    .into(),
+                );
+            }
+        }
+        // K2.7 Code：始终思考、始终保留，不发送 thinking/effort。
+        Some(ThinkingProfile::KimiK27Code) => {}
+        // K2.6 是通用回退：thinking.type 开关；开启时保留推理链。
+        // 其他 profile 不应走到这里（加载期已校验），按通用回退处理。
+        _ => {
+            if off {
+                body["thinking"] = serde_json::json!({"type": "disabled"});
+            } else {
+                body["thinking"] = serde_json::json!({"type": "enabled", "keep": "all"});
+            }
+        }
     }
 }
 
@@ -288,9 +303,9 @@ fn apply_openai_effort(body: &mut Value, level: &'static str) {
 /// budget_tokens 公开约束：最小值 1024 且必须 < max_tokens（Anthropic/Bedrock
 /// 文档一致）；**无官方档位标准表**，PRTS 目前没有独立预算层。
 /// 映射按档递增取合理值：low→2048 / medium→8192 / high→16384 /
-/// max→32768，均满足 ≥1024。开启 thinking 时若 max_tokens 不足（PRTS 默认
-/// 4096 会违反 budget < max_tokens），**联动抬升 max_tokens** = max(现值,
-/// budget + 4096)。
+/// max→32768，均满足 ≥1024。开启 thinking 时若 max_tokens 不足（chat 的
+/// 8192 兜底仍可能违反 budget < max_tokens），**联动抬升 max_tokens** =
+/// max(现值, budget + 4096)。
 pub fn apply_anthropic(body: &mut Value, level: &'static str) {
     if level == "off" {
         body["thinking"] = serde_json::json!({"type": "disabled"});
@@ -337,9 +352,12 @@ pub fn inject(
     match api_type {
         ApiType::AnthropicMessages => apply_anthropic(body, level),
         ApiType::OpenAIResponses => apply_responses(body, level),
-        ApiType::OpenAiCompletions => {
-            apply_completions(body, compat.request_param.as_deref(), level, model)
-        }
+        ApiType::OpenAiCompletions => apply_completions(
+            body,
+            compat.request_param.as_deref(),
+            level,
+            compat.thinking_profile,
+        ),
     }
     Some(level)
 }
@@ -475,10 +493,10 @@ mod tests {
     #[test]
     fn enable_thinking_boolean_form() {
         let mut b = completions_body(Some("enable_thinking"));
-        apply_completions(&mut b, Some("enable_thinking"), "off", "qwen3-max");
+        apply_completions(&mut b, Some("enable_thinking"), "off", None);
         assert_eq!(b["enable_thinking"], false);
         let mut b = completions_body(Some("enable_thinking"));
-        apply_completions(&mut b, Some("enable_thinking"), "high", "qwen3-max");
+        apply_completions(&mut b, Some("enable_thinking"), "high", None);
         assert_eq!(b["enable_thinking"], true);
     }
 
@@ -492,14 +510,14 @@ mod tests {
             "enable_thinking": true,
             "reasoning_effort": "high"
         });
-        apply_completions(&mut b, Some("zhipu"), "high", "glm-5");
+        apply_completions(&mut b, Some("zhipu"), "high", None);
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["thinking"]["clear_thinking"], false);
         assert!(b.get("enable_thinking").is_none());
         assert!(b.get("reasoning_effort").is_none());
 
         let mut b = serde_json::json!({"model": "glm-5", "messages": []});
-        apply_completions(&mut b, Some("zhipu"), "off", "glm-5");
+        apply_completions(&mut b, Some("zhipu"), "off", None);
         assert_eq!(b["thinking"]["type"], "disabled");
         assert!(b["thinking"].get("clear_thinking").is_none());
     }
@@ -507,13 +525,23 @@ mod tests {
     #[test]
     fn zhipu_53_always_thinks_and_uses_effort() {
         let mut b = serde_json::json!({"model": "glm-5.3", "messages": []});
-        apply_completions(&mut b, Some("zhipu"), "off", "glm-5.3");
+        apply_completions(
+            &mut b,
+            Some("zhipu"),
+            "off",
+            Some(ThinkingProfile::ZhipuGlm53),
+        );
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["reasoning_effort"], "low");
         assert!(b["thinking"].get("clear_thinking").is_none());
 
         let mut b = serde_json::json!({"model": "glm-5.3-flash", "messages": []});
-        apply_completions(&mut b, Some("zhipu"), "low", "glm-5.3-flash");
+        apply_completions(
+            &mut b,
+            Some("zhipu"),
+            "low",
+            Some(ThinkingProfile::ZhipuGlm53Flash),
+        );
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["thinking"]["clear_thinking"], false);
         assert_eq!(b["reasoning_effort"], "low");
@@ -524,7 +552,12 @@ mod tests {
                 {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}
             ]
         });
-        apply_completions(&mut b, Some("zhipu"), "high", "glm-5.3");
+        apply_completions(
+            &mut b,
+            Some("zhipu"),
+            "high",
+            Some(ThinkingProfile::ZhipuGlm53),
+        );
         assert_eq!(b["thinking"]["clear_thinking"], false);
         assert_eq!(b["reasoning_effort"], "high");
     }
@@ -533,25 +566,30 @@ mod tests {
     fn kimi_wire_differs_by_model_generation() {
         // K3：只发 effort，不发 thinking；默认档由模型元数据给 max。
         let mut b = serde_json::json!({"model": "kimi-k3"});
-        apply_completions(&mut b, Some("kimi"), "max", "kimi-k3");
+        apply_completions(&mut b, Some("kimi"), "max", Some(ThinkingProfile::KimiK3));
         assert_eq!(b["reasoning_effort"], "max");
         assert!(b.get("thinking").is_none());
 
         let mut b = serde_json::json!({"model": "kimi-k3"});
-        apply_completions(&mut b, Some("kimi"), "off", "kimi-k3");
+        apply_completions(&mut b, Some("kimi"), "off", Some(ThinkingProfile::KimiK3));
         assert!(b.get("reasoning_effort").is_none());
         assert!(b.get("thinking").is_none());
 
         // K2.6：thinking 开关，不发 effort。
         let mut b = serde_json::json!({"model": "kimi-k2.6"});
-        apply_completions(&mut b, Some("kimi"), "high", "kimi-k2.6");
+        apply_completions(&mut b, Some("kimi"), "high", Some(ThinkingProfile::KimiK26));
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["thinking"]["keep"], "all");
         assert!(b.get("reasoning_effort").is_none());
 
         // K2.7 Code：始终思考，不发任何控制字段。
         let mut b = serde_json::json!({"model": "kimi-k2.7-code"});
-        apply_completions(&mut b, Some("kimi"), "high", "kimi-k2.7-code");
+        apply_completions(
+            &mut b,
+            Some("kimi"),
+            "high",
+            Some(ThinkingProfile::KimiK27Code),
+        );
         assert!(b.get("thinking").is_none());
         assert!(b.get("reasoning_effort").is_none());
     }
@@ -559,31 +597,16 @@ mod tests {
     #[test]
     fn volcengine_uses_thinking_type_and_caps_effort() {
         let mut b = serde_json::json!({"model": "doubao-seed-2-1-pro-260628"});
-        apply_completions(
-            &mut b,
-            Some("volcengine"),
-            "medium",
-            "doubao-seed-2-1-pro-260628",
-        );
+        apply_completions(&mut b, Some("volcengine"), "medium", None);
         assert_eq!(b["thinking"]["type"], "enabled");
         assert_eq!(b["reasoning_effort"], "medium");
 
         let mut b = serde_json::json!({"model": "doubao-seed-2-1-pro-260628"});
-        apply_completions(
-            &mut b,
-            Some("volcengine"),
-            "max",
-            "doubao-seed-2-1-pro-260628",
-        );
+        apply_completions(&mut b, Some("volcengine"), "max", None);
         assert_eq!(b["reasoning_effort"], "high");
 
         let mut b = serde_json::json!({"model": "doubao-seed-2-1-pro-260628"});
-        apply_completions(
-            &mut b,
-            Some("volcengine"),
-            "off",
-            "doubao-seed-2-1-pro-260628",
-        );
+        apply_completions(&mut b, Some("volcengine"), "off", None);
         assert_eq!(b["thinking"]["type"], "disabled");
         assert!(b.get("reasoning_effort").is_none());
     }
@@ -591,16 +614,16 @@ mod tests {
     #[test]
     fn openai_effort_channel_off_removes_and_max_downgrades() {
         let mut b = completions_body(None);
-        apply_completions(&mut b, None, "off", "gpt-5");
+        apply_completions(&mut b, None, "off", None);
         assert!(b.get("reasoning_effort").is_none());
 
         let mut b = completions_body(None);
-        apply_completions(&mut b, None, "medium", "gpt-5");
+        apply_completions(&mut b, None, "medium", None);
         assert_eq!(b["reasoning_effort"], "medium");
 
         // max → high（OpenAI chat effort 无 max）
         let mut b = completions_body(None);
-        apply_completions(&mut b, None, "max", "gpt-5");
+        apply_completions(&mut b, None, "max", None);
         assert_eq!(b["reasoning_effort"], "high");
     }
 

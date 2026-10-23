@@ -103,6 +103,28 @@ describe("节流缓冲 · chunk 未 flush 不入列", () => {
     useProcessingStore.getState().finishProcessing(sid);
   });
 
+  it("assistant/reset 丢弃尚未 flush 的半成品，只保留重试后的 chunk", async () => {
+    const sid = await startTurn("查询 1-7");
+
+    useProcessingStore.getState().appendCurrentEvent(textChunk(sid, "半截回答"));
+    useProcessingStore
+      .getState()
+      .appendCurrentEvent({ type: "assistant/reset", sessionId: sid });
+    useProcessingStore.getState().appendCurrentEvent(textChunk(sid, "重试成功"));
+    flushPending(sid);
+
+    const events = currentEventsOf(sid);
+    expect(events.map((e) => e.type)).toEqual([
+      "user/message",
+      "assistant/reset",
+      "assistant/chunk",
+    ]);
+    expect(events.some((e) => e.type === "assistant/chunk" && e.content === "半截回答")).toBe(false);
+    expect(events.some((e) => e.type === "assistant/chunk" && e.content === "重试成功")).toBe(true);
+
+    useProcessingStore.getState().finishProcessing(sid);
+  });
+
   it("flushPending 幂等：无缓冲/空缓冲调用无副作用", async () => {
     const sid = await startTurn("查询 1-7");
 

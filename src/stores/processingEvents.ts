@@ -6,9 +6,11 @@ import {
   stripTagFromText,
   rearmScanner,
   segmentConsumed,
+  releasePending,
 } from "../moodTag";
 import {
   appendImmediate,
+  clearChunkBuffer,
   pushChunk,
   pushTextChunk,
 } from "./processingChunks";
@@ -47,6 +49,25 @@ export function appendCurrentEventImpl(
 ): void {
   const snap = get().processing[event.sessionId];
   if (!snap) return; // 快照已被清理（finishProcessing 或 failProcessing 已执行），忽略
+
+  if (event.type === "assistant/reset") {
+    // 重试前撤回半成品：丢弃尚未 flush 的 chunk 和扫描器扣留文本；
+    // 已经落进 currentEvents 的旧 chunk 由投影层按本事件截断。
+    clearChunkBuffer(event.sessionId);
+    releasePending(event.sessionId);
+    set((state) => {
+      const current = state.processing[event.sessionId];
+      if (!current) return state;
+      return {
+        processing: {
+          ...state.processing,
+          [event.sessionId]: { ...current, mood: "平静", moodIntensity: 0 },
+        },
+      };
+    });
+    appendImmediate(event);
+    return;
+  }
 
   if (event.type === "assistant/chunk") {
     // 高频增量：进入 33ms 批量缓冲（窗口内累积，flush 时一次性追加）。

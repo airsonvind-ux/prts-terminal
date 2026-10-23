@@ -9,6 +9,7 @@
 //!   不关心消息怎么从用户输入构造而来（那是 context 的活）。
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -16,11 +17,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub mod anthropic;
+pub mod compat;
 #[cfg(test)]
 #[cfg(test)]
 pub mod mock;
 pub mod openai_compatible;
 pub mod openai_responses;
+#[cfg(test)]
+mod smoke_tests;
+#[cfg(test)]
+mod snapshot_tests;
 pub mod sse;
 pub mod thinking;
 // 协议异常清洗（匿名工具调用），见模块头。
@@ -60,7 +66,8 @@ pub(crate) fn http_client() -> reqwest::Client {
 /// model 和 max_tokens 不在设置页 UI 中展示：
 ///   model — 正确归属是"读取模型"功能（下拉选择，非文本输入），
 ///           当前阶段后端不依赖此字段（Mock 忽略），前端 set_config 不传时 serde 填默认
-///   max_tokens — 用户无需调整，前端不传时 serde 填 4096
+///   max_tokens — 用户无需调整，前端不传时 serde 填 4096；chat 适配器把
+///                这个 legacy default 视为未设置，Anthropic/Responses 用 8192 兜底
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LlmConfig {
     /// Provider 标识，如 "openai"、"anthropic" 等。空字符串表示未选择
@@ -85,7 +92,8 @@ pub struct LlmConfig {
     /// 额外 HTTP 请求头（JSON 字符串），用于代理/中转场景。None = 不发送
     #[serde(default)]
     pub headers: Option<String>,
-    /// 单次请求 token 上限。前端不传时默认 4096
+    /// 单次请求 token 上限。前端不传时默认 4096；chat 路径会把 4096 视为
+    /// legacy默认值并走协议兜底，utility 路径仍按显式小上限压缩。
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     /// 思考强度（canonical 档：off/low/medium/high/max 等，见 models.json
@@ -98,6 +106,27 @@ pub struct LlmConfig {
 
 fn default_max_tokens() -> u32 {
     4096
+}
+
+/// 旧版前端默认值。它表示“没有显式设置”，而不是用户要求的 4096 输出。
+pub const LEGACY_DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// 协议必填输出字段的保守兜底；模型级 `max_output` 落地前使用。
+pub const DEFAULT_REQUIRED_OUTPUT_TOKENS: u32 = 8192;
+
+/// chat 输出上限：旧版 4096 默认值视为未设置，默认目标为 8192。
+/// 模型级 max_output 只负责向下封顶，不把能力上限直接变成请求预算；
+/// utility 路径会先把 max_tokens 压到更小的显式值。
+pub fn chat_output_budget(configured: u32, model_limit: Option<u32>) -> u32 {
+    let requested = if configured == 0 || configured == LEGACY_DEFAULT_MAX_TOKENS {
+        DEFAULT_REQUIRED_OUTPUT_TOKENS
+    } else {
+        configured
+    };
+    match model_limit {
+        Some(limit) => requested.min(limit),
+        None => requested,
+    }
 }
 
 /// provider → 默认 base_url 映射（**与 models.json 各 provider defaults.base_url
@@ -233,6 +262,18 @@ pub struct Compat {
         skip_serializing_if = "Option::is_none"
     )]
     pub thinking_format: Option<ThinkingFormat>,
+    /// 同一 thinking 家族内的代际差异。生产期只读，不序列化到前端。
+    #[serde(default, alias = "thinking_profile", skip_serializing)]
+    pub thinking_profile: Option<compat::ThinkingProfile>,
+    /// 压缩时是否允许显式清空推理载体。None = 安全默认 false。
+    #[serde(default, alias = "reasoning_clearable", skip_serializing)]
+    pub reasoning_clearable: Option<bool>,
+    /// 推理开启时 assistant 消息是否必须带 carrier 字段。
+    #[serde(default, alias = "assistant_reasoning", skip_serializing)]
+    pub assistant_reasoning: Option<compat::AssistantReasoning>,
+    /// 流式 usage 能力。None = 未声明，目标行为是不发送 stream_options。
+    #[serde(default, alias = "stream_usage", skip_serializing)]
+    pub stream_usage: Option<compat::StreamUsage>,
     /// 认证方式。None = 默认 "bearer"。"none" = 不发送 Authorization header
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<AuthMode>,
@@ -270,10 +311,30 @@ impl Compat {
                 ));
             }
         }
+        if let (Some(profile), Some(format)) = (self.thinking_profile, self.thinking_format) {
+            let matches = matches!(
+                (profile, format),
+                (
+                    compat::ThinkingProfile::ZhipuGlm53 | compat::ThinkingProfile::ZhipuGlm53Flash,
+                    ThinkingFormat::Zhipu,
+                ) | (
+                    compat::ThinkingProfile::KimiK26
+                        | compat::ThinkingProfile::KimiK3
+                        | compat::ThinkingProfile::KimiK27Code,
+                    ThinkingFormat::Kimi,
+                )
+            );
+            if !matches {
+                problems.push(format!("{at}: thinking_profile 与 thinking_format 不匹配"));
+            }
+        }
         if self.supports_usage_in_streaming.is_some() && api_type != ApiType::OpenAiCompletions {
             problems.push(format!(
                 "{at}: supports_usage_in_streaming 仅适用于协议 openai-completions"
             ));
+        }
+        if self.auth.is_some() && api_type != ApiType::OpenAiCompletions {
+            problems.push(format!("{at}: auth 仅适用于协议 openai-completions"));
         }
         // reasoning_policy 是跨协议的重放策略，不需要协议 gate。
     }
@@ -288,6 +349,14 @@ pub struct ResolvedCompat {
     pub carrier: Option<String>,
     /// 请求体中开启推理模式的参数名。None = 不附加 thinking 参数
     pub request_param: Option<String>,
+    /// 同一 thinking 家族内的代际差异。None = 走该家族的通用 wire。
+    pub thinking_profile: Option<compat::ThinkingProfile>,
+    /// 压缩/清空路径是否允许显式删除推理载体。
+    pub clearable: bool,
+    /// assistant 消息是否必须带推理载体字段。
+    pub assistant_reasoning: compat::AssistantReasoning,
+    /// 流式 usage 三态；只有 Supported 才发送 stream_options。
+    pub stream_usage: compat::StreamUsage,
     /// 多轮回传策略
     pub policy: ReasoningPolicy,
     /// 认证方式（直通自 Compat.auth）
@@ -301,6 +370,10 @@ impl Default for ResolvedCompat {
         Self {
             carrier: None,
             request_param: None,
+            thinking_profile: None,
+            clearable: false,
+            assistant_reasoning: compat::AssistantReasoning::Optional,
+            stream_usage: compat::StreamUsage::Unknown,
             policy: ReasoningPolicy::Preserve,
             auth: None,
             supports_usage_in_streaming: true,
@@ -329,11 +402,12 @@ pub enum AuthMode {
 
 /// 从声明层 compat 计算效果层 ResolvedCompat。
 ///
-/// 由 thinking_format + api_type + has_reasoning 三个输入确定
-/// carrier / request_param / policy。
+/// 由 thinking_format + thinking_profile + api_type + has_reasoning 确定
+/// carrier / request_param / profile / policy。
 /// auth 不参与计算，由调用方从 Compat.auth 直通。
 pub fn resolve_compat(
     thinking_format: Option<ThinkingFormat>,
+    thinking_profile: Option<compat::ThinkingProfile>,
     api_type: ApiType,
     has_reasoning: bool,
 ) -> ResolvedCompat {
@@ -341,7 +415,7 @@ pub fn resolve_compat(
         return ResolvedCompat::default();
     }
 
-    match (thinking_format, api_type) {
+    let mut resolved = match (thinking_format, api_type) {
         // DeepSeek 走 OpenAI 兼容协议 → reasoning_content + thinking 参数
         (Some(ThinkingFormat::Deepseek), ApiType::OpenAiCompletions) => ResolvedCompat {
             carrier: Some("reasoning_content".into()),
@@ -399,7 +473,9 @@ pub fn resolve_compat(
         },
         // 无匹配 → 默认（无推理处理）
         _ => ResolvedCompat::default(),
-    }
+    };
+    resolved.thinking_profile = thinking_profile;
+    resolved
 }
 
 // ═══════════════════════════════════════════════════════
@@ -473,6 +549,83 @@ pub struct ImagePart {
     pub data: String,
     /// MIME 类型，如 "image/png"
     pub mime_type: String,
+}
+
+/// 协议无关的工具配对归一化。
+///
+/// 在三个适配器构造 body 前统一执行：丢弃孤儿 tool result、丢弃没有后续
+/// tool result 的 call、重复 call id 保留首个、清空后仍为空的 assistant 直接移除。
+/// Phase 3 选择“丢弃 + 日志”而不是伪造工具结果，避免把不存在的工具输出
+/// 发给模型。
+pub fn normalize_tool_pairs(messages: &[ChatMessage], _api_type: ApiType) -> Vec<ChatMessage> {
+    use std::collections::HashSet;
+
+    let result_ids: HashSet<&str> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .filter_map(|m| m.tool_call_id.as_deref())
+        // 空 id 不是身份键；否则多个畸形调用会被折叠成同一条。
+        .filter(|id| !id.trim().is_empty())
+        .collect();
+
+    let mut seen_calls: HashSet<String> = HashSet::new();
+    let mut kept_calls: HashSet<String> = HashSet::new();
+    let mut seen_results: HashSet<String> = HashSet::new();
+    let mut out = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        match message.role {
+            MessageRole::Assistant => {
+                let Some(calls) = message.tool_calls.as_ref() else {
+                    out.push(message.clone());
+                    continue;
+                };
+
+                let mut kept = Vec::new();
+                for call in calls {
+                    if call.id.trim().is_empty() {
+                        continue;
+                    }
+                    if !seen_calls.insert(call.id.clone()) {
+                        continue;
+                    }
+                    if !result_ids.contains(call.id.as_str()) {
+                        continue;
+                    }
+                    kept_calls.insert(call.id.clone());
+                    kept.push(call.clone());
+                }
+
+                if kept.is_empty() {
+                    if !message.content.is_empty() {
+                        let mut copy = message.clone();
+                        copy.tool_calls = None;
+                        out.push(copy);
+                    }
+                    continue;
+                }
+
+                let mut copy = message.clone();
+                copy.tool_calls = Some(kept);
+                out.push(copy);
+            }
+            MessageRole::Tool => {
+                let Some(id) = message.tool_call_id.as_deref() else {
+                    continue;
+                };
+                if id.trim().is_empty()
+                    || !kept_calls.contains(id)
+                    || !seen_results.insert(id.to_string())
+                {
+                    continue;
+                }
+                out.push(message.clone());
+            }
+            _ => out.push(message.clone()),
+        }
+    }
+
+    out
 }
 
 impl ChatMessage {
@@ -680,8 +833,8 @@ pub struct TokenUsage {
     ///
     /// Anthropic 的 `input_tokens` 只含未命中缓存部分，水位需加上
     /// `cache_read_input_tokens` 与 `cache_creation_input_tokens`；其他协议
-    /// 与 `input_tokens` 同义，置 None 由前端回退。只用于上下文占用判断，
-    /// 不参与用量统计。
+    /// 与 `input_tokens` 同义，置 None 由前端回退。用于上下文占用判断；
+    /// Anthropic 的缓存命中率分母也使用它，以覆盖缓存写入部分。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_input_tokens: Option<u32>,
     /// 输出 token 数（LLM 生成的文本 + reasoning）
@@ -734,7 +887,9 @@ pub struct UsageStat {
 pub fn usage_stat(usage: &TokenUsage, api_type: ApiType) -> UsageStat {
     let cache_hit = usage.cache_hit_tokens.filter(|hit| *hit > 0);
     let cache_prompt = cache_hit.map(|hit| match api_type {
-        ApiType::AnthropicMessages => usage.input_tokens.saturating_add(hit),
+        ApiType::AnthropicMessages => usage
+            .context_input_tokens
+            .unwrap_or_else(|| usage.input_tokens.saturating_add(hit)),
         _ => usage.input_tokens,
     });
     UsageStat {
@@ -775,6 +930,13 @@ pub enum StreamEvent {
         id: String,
         name: String,
         arguments: String,
+    },
+    /// 供应商已报告的用量快照。
+    ///
+    /// 正常完成时以 `StreamResult.usage` 为准；这个事件让中止的流也能
+    /// 保留已经到达的用量（例如 Anthropic message_start 的输入 token）。
+    Usage {
+        usage: TokenUsage,
     },
     TextDelta {
         content: String,
@@ -844,6 +1006,25 @@ pub struct StreamResult {
     pub finish_reason: Option<FinishReason>,
 }
 
+impl StreamResult {
+    /// 正常结束却没有任何可见内容或工具调用。
+    ///
+    /// 对齐 DSH 的 `EMPTY_RESPONSE`：空响应属于可重试的临时失败，
+    /// 不能当成一轮“什么都没说”的成功回答。max-tokens 截断单独处理，
+    /// 这里不把“输出上限为 0”误判成供应商空响应。
+    pub fn is_empty_response(&self) -> bool {
+        self.tool_calls.is_empty()
+            && self.text.trim().is_empty()
+            && self
+                .reasoning
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            && matches!(self.finish_reason, None | Some(FinishReason::Normal))
+    }
+}
+
 // ═══════════════════════════════════════════════════════
 // 错误类型
 // ═══════════════════════════════════════════════════════
@@ -852,10 +1033,25 @@ pub struct StreamResult {
 pub enum LlmError {
     /// 配置缺失或无效（api_key 为空、model 名不合法等）
     Config(String),
-    /// LLM API 返回 HTTP 错误
+    /// LLM API 返回 HTTP 错误（通用/旧路径）
     Api(String),
+    /// LLM API 返回结构化 HTTP 错误
+    Http {
+        status: u16,
+        message: String,
+        /// 供应商通过 `Retry-After` 给出的等待时间（毫秒）。
+        /// 缺失时由本地指数退避决定。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<u64>,
+    },
     /// 响应解析失败（JSON 格式不符预期）
     Parse(String),
+    /// 网络连接失败（DNS、TLS、连接中断等，非超时）
+    Transport(String),
+    /// 供应商正常结束，但没有任何正文、推理或工具调用
+    EmptyResponse,
+    /// 账户额度、余额或预算已耗尽；重试不会恢复
+    Quota(String),
     /// 网络超时
     Timeout(String),
 }
@@ -865,10 +1061,142 @@ impl std::fmt::Display for LlmError {
         match self {
             Self::Config(msg) => write!(f, "LLM 配置错误：{msg}"),
             Self::Api(msg) => write!(f, "LLM API 错误：{msg}"),
+            Self::Http {
+                status, message, ..
+            } => {
+                let reason = match *status {
+                    400 => "请求格式不被供应商接受",
+                    401 | 403 => "认证失败，请检查 API Key",
+                    404 => "接口或模型不存在",
+                    429 => "请求被供应商限流",
+                    500..=599 => "供应商服务暂时不可用",
+                    _ => "供应商返回 HTTP 错误",
+                };
+                if message.trim().is_empty() || *status == 401 || *status == 403 {
+                    write!(f, "{reason}（HTTP {status}）")
+                } else {
+                    write!(f, "{reason}（HTTP {status}）：{message}")
+                }
+            }
             Self::Parse(msg) => write!(f, "LLM 响应解析错误：{msg}"),
+            Self::Transport(msg) => write!(f, "LLM 网络连接失败：{msg}"),
+            Self::EmptyResponse => write!(f, "LLM 没有返回任何内容"),
+            Self::Quota(msg) => {
+                if msg.trim().is_empty() {
+                    write!(f, "LLM 账户额度或余额不足")
+                } else {
+                    write!(f, "LLM 账户额度或余额不足：{msg}")
+                }
+            }
             Self::Timeout(msg) => write!(f, "LLM 请求超时：{msg}"),
         }
     }
+}
+
+impl LlmError {
+    /// 构造结构化 HTTP 错误，并截断过长的 provider body。
+    pub fn http(status: u16, message: impl Into<String>) -> Self {
+        Self::http_with_retry_after(status, message, None)
+    }
+
+    /// 构造带供应商等待时间的 HTTP 错误。
+    pub fn http_with_retry_after(
+        status: u16,
+        message: impl Into<String>,
+        retry_after_ms: Option<u64>,
+    ) -> Self {
+        let message = message.into();
+        let message = message.trim();
+        let message: String = message.chars().take(500).collect();
+        if status == 402 || is_quota_error_message(&message) {
+            return Self::Quota(message);
+        }
+        Self::Http {
+            status,
+            message,
+            retry_after_ms,
+        }
+    }
+
+    /// 供应商要求的最短等待时间；只有 429/5xx 的响应头会被采用。
+    pub fn retry_after_ms(&self) -> Option<u64> {
+        match self {
+            Self::Http { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        }
+    }
+}
+
+/// 从供应商错误响应中提取可诊断的 type/code/message。
+///
+/// 对照 DSH 的错误归一化：额度判断不能只看 message，因为有些供应商
+/// 只在 `error.code` 里写 `insufficient_quota`。
+pub(crate) fn provider_error_detail(body: &Value) -> Option<String> {
+    let error = body.get("error")?;
+    if let Some(text) = error.as_str() {
+        return (!text.trim().is_empty()).then(|| text.to_string());
+    }
+    let mut parts = Vec::new();
+    for key in ["type", "code", "message"] {
+        if let Some(text) = error.get(key).and_then(|v| v.as_str()) {
+            if !text.trim().is_empty() {
+                parts.push(text.to_string());
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// 识别“额度/余额已耗尽”而不是临时限流的措辞。
+///
+/// 规则对照 DSH 的 `isQuotaExceededError`：只匹配明确的额度、余额、
+/// credits、预算或 usage limit 耗尽，避免把 `quota resets in one minute`
+/// 这类临时信息误判成终止性失败。
+pub(crate) fn is_quota_error_message(message: &str) -> bool {
+    use std::sync::OnceLock;
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\binsufficient[\s_-]+(?:quota|balance|credits?)\b|\b(?:quota|usage[\s_-]+limit)[\s_-]+(?:exceeded|exhausted|reached)\b|\bexceed(?:ed|s)?[\s_-]+(?:(?:your|the)[\s_-]+)?(?:current[\s_-]+)?quota\b|\b(?:balance|credits?)[\s_-]+(?:exhausted|depleted)\b|\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b",
+        )
+        .expect("quota regex 必须有效")
+    });
+    pattern.is_match(message)
+}
+
+/// 从响应头解析 `Retry-After`，支持秒数和 HTTP 日期。
+///
+/// 只接受正的有限等待时间；非法值返回 `None`，交回本地退避。
+pub(crate) fn retry_after_ms_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let raw = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Some(seconds.saturating_mul(1_000));
+    }
+
+    let target = chrono::DateTime::parse_from_rfc2822(raw)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::DateTime::parse_from_str(raw, "%A, %d-%b-%y %H:%M:%S GMT")
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        })
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%a %b %e %H:%M:%S %Y")
+                .map(|dt| dt.and_utc())
+        })
+        .ok()?;
+    let delta = target.signed_duration_since(chrono::Utc::now());
+    if delta <= chrono::TimeDelta::zero() {
+        return Some(0);
+    }
+    u64::try_from(delta.num_milliseconds()).ok()
 }
 
 impl std::error::Error for LlmError {}
@@ -886,8 +1214,8 @@ impl std::error::Error for LlmError {}
 ///   （id/name/arguments 逐字段一致）
 /// - **I3**：`StreamResult.reasoning` 恒等于 `ReasoningDelta` 的拼接；
 ///   无推理事件时为 `None`
-/// - **I4**：usage 先于 finish——流式事件不含 usage，聚合结果
-///   `StreamResult.usage` 在返回时已给出（调用方无需在流中收集）
+/// - **I4**：usage 先于 finish——流式过程可以发出 `Usage` 快照，
+///   但聚合结果 `StreamResult.usage` 在返回时已给出并以它为准
 /// - **I5**：tool call arguments 端到端 raw——适配器不得解析/改写
 ///   provider 原始 JSON（由 I2 的逐字段一致保证）
 ///
@@ -1011,6 +1339,10 @@ pub struct ModelEntry {
     pub reasoning: bool,
     pub supports_vision: bool,
     pub compat: Option<Compat>,
+    /// 模型级输出能力上限；None = 未收录，不猜。
+    pub max_output: Option<u32>,
+    /// Phase 1 并行解析的新声明层；生产请求仍读 `compat`。
+    pub declared_compat: Option<compat::Compat>,
     /// 思考强度白名单（models.json `thinking_levels`；空 = 未声明 → UI 不显示
     /// 思考强度行、请求不干预）。canonical 档：off/low/medium/high/max。
     pub thinking_levels: Vec<String>,
@@ -1036,6 +1368,8 @@ pub struct ProviderEntry {
     pub api_type: ApiType,
     pub base_url: String,
     pub default_compat: Compat,
+    /// Phase 1 并行解析的供应商级新声明层。
+    pub default_declared_compat: compat::Compat,
     pub models: HashMap<String, ModelEntry>,
 }
 
@@ -1054,8 +1388,45 @@ pub struct ModelRegistry {
 }
 
 impl ModelRegistry {
-    /// 从 models.json 的 JSON 字符串加载。
+    /// 并行解析新旧声明。旧声明供生产路径使用；新声明只做合并与校验。
+    fn parse_compat_decl_strict(
+        value: Option<&Value>,
+        _api_type: ApiType,
+        at: &str,
+    ) -> Result<(Option<Compat>, compat::Compat, bool), String> {
+        let Some(value) = value else {
+            return Ok((None, compat::Compat::default(), false));
+        };
+        let wire: compat::CompatWire = serde_json::from_value(value.clone())
+            .map_err(|e| format!("{at}: 新声明解析失败: {e}"))?;
+        let old = if wire.uses_new_schema {
+            wire.legacy_compat()
+        } else {
+            Some(
+                serde_json::from_value::<Compat>(value.clone())
+                    .map_err(|e| format!("{at}: 旧声明解析失败: {e}"))?,
+            )
+        };
+        Ok((old, wire.compat, wire.uses_new_schema))
+    }
+
+    /// 从 models.json 加载，不附带模型输出上限。
     pub fn from_json(json: &str) -> Result<Self, String> {
+        Self::from_json_with_limits(json, "{}")
+    }
+
+    /// 从 models.json 和独立的输出上限词典加载。
+    pub fn from_json_with_limits(json: &str, limits_json: &str) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct OutputLimitsFile {
+            #[serde(default)]
+            limits: HashMap<String, u32>,
+        }
+
+        let limits: HashMap<String, u32> = serde_json::from_str::<OutputLimitsFile>(limits_json)
+            .map_err(|e| format!("model-output-limits.json 解析失败: {e}"))?
+            .limits;
+
         #[derive(Deserialize)]
         struct ModelsFile {
             #[serde(flatten)]
@@ -1075,7 +1446,7 @@ impl ModelRegistry {
             api_type: ApiType,
             base_url: String,
             #[serde(default)]
-            compat: Option<Compat>,
+            compat: Option<Value>,
         }
 
         #[derive(Deserialize)]
@@ -1088,7 +1459,7 @@ impl ModelRegistry {
             #[serde(default, rename = "supports_vision")]
             supports_vision: bool,
             #[serde(default)]
-            compat: Option<Compat>,
+            compat: Option<Value>,
             /// 思考强度白名单（canonical：off/low/medium/high/max）
             #[serde(default, rename = "thinking_levels")]
             thinking_levels: Vec<String>,
@@ -1107,24 +1478,60 @@ impl ModelRegistry {
             if pj.defaults.base_url.trim().is_empty() {
                 problems.push(format!("{pid}: defaults.base_url 为空"));
             }
-            if let Some(ref compat) = pj.defaults.compat {
-                compat.validate(
+            let provider_at = format!("{pid}: defaults.compat");
+            let (provider_old, provider_new, provider_uses_new) =
+                match Self::parse_compat_decl_strict(
+                    pj.defaults.compat.as_ref(),
                     pj.defaults.api_type,
-                    &format!("{pid}: defaults.compat"),
-                    &mut problems,
-                );
+                    &provider_at,
+                ) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        problems.push(err);
+                        (None, compat::Compat::default(), false)
+                    }
+                };
+            if let Some(ref compat) = provider_old {
+                compat.validate(pj.defaults.api_type, &provider_at, &mut problems);
+            }
+            if provider_uses_new {
+                if let Err(err) = provider_new.validate(pj.defaults.api_type, &provider_at) {
+                    problems.push(err);
+                }
             }
             for (mid, m) in pj.models.iter() {
                 let at = format!("{pid}/{mid}");
                 if m.name.trim().is_empty() {
                     problems.push(format!("{at}: name 为空"));
                 }
-                if let Some(ref compat) = m.compat {
+                let (model_old, model_new, model_uses_new) = match Self::parse_compat_decl_strict(
+                    m.compat.as_ref(),
+                    pj.defaults.api_type,
+                    &format!("{at}: compat"),
+                ) {
+                    Ok(parsed) => parsed,
+                    Err(err) => {
+                        problems.push(err);
+                        (None, compat::Compat::default(), false)
+                    }
+                };
+                if let Some(ref compat) = model_old {
                     compat.validate(
                         pj.defaults.api_type,
                         &format!("{at}: compat"),
                         &mut problems,
                     );
+                }
+                if model_uses_new {
+                    // Model declarations inherit the provider format, so
+                    // validate the merged contract rather than the model patch
+                    // in isolation.
+                    let merged = compat::Compat::merge(&provider_new, &model_new);
+                    if let Err(err) =
+                        merged.validate(pj.defaults.api_type, &format!("{at}: merged compat"))
+                    {
+                        problems.push(err);
+                    }
                 }
                 if m.context == 0 {
                     problems.push(format!("{at}: context 为 0"));
@@ -1151,31 +1558,43 @@ impl ModelRegistry {
 
         let mut providers = HashMap::new();
         for (id, pj) in file.providers {
-            let models: HashMap<String, ModelEntry> = pj
-                .models
-                .into_iter()
-                .map(|(mid, mj)| {
-                    (
-                        mid,
-                        ModelEntry {
-                            name: mj.name,
-                            context: mj.context,
-                            reasoning: mj.reasoning,
-                            supports_vision: mj.supports_vision,
-                            compat: mj.compat,
-                            thinking_levels: mj.thinking_levels,
-                            default_thinking_level: mj.default_thinking_level,
-                        },
-                    )
-                })
-                .collect();
+            let (provider_old, provider_new, _) = Self::parse_compat_decl_strict(
+                pj.defaults.compat.as_ref(),
+                pj.defaults.api_type,
+                &format!("{id}: defaults.compat"),
+            )?;
+
+            let mut models = HashMap::new();
+            for (mid, mj) in pj.models {
+                let (model_old, model_new, _) = Self::parse_compat_decl_strict(
+                    mj.compat.as_ref(),
+                    pj.defaults.api_type,
+                    &format!("{id}/{mid}: compat"),
+                )?;
+                let max_output = limits.get(&format!("{id}/{mid}")).copied();
+                models.insert(
+                    mid,
+                    ModelEntry {
+                        name: mj.name,
+                        context: mj.context,
+                        reasoning: mj.reasoning,
+                        supports_vision: mj.supports_vision,
+                        compat: model_old,
+                        max_output,
+                        declared_compat: Some(model_new),
+                        thinking_levels: mj.thinking_levels,
+                        default_thinking_level: mj.default_thinking_level,
+                    },
+                );
+            }
 
             providers.insert(
                 id,
                 ProviderEntry {
                     api_type: pj.defaults.api_type,
                     base_url: pj.defaults.base_url,
-                    default_compat: pj.defaults.compat.unwrap_or_default(),
+                    default_compat: provider_old.unwrap_or_default(),
+                    default_declared_compat: provider_new,
                     models,
                 },
             );
@@ -1234,6 +1653,18 @@ impl ModelRegistry {
                 if mc.thinking_format.is_some() {
                     merged.thinking_format = mc.thinking_format;
                 }
+                if mc.thinking_profile.is_some() {
+                    merged.thinking_profile = mc.thinking_profile;
+                }
+                if mc.reasoning_clearable.is_some() {
+                    merged.reasoning_clearable = mc.reasoning_clearable;
+                }
+                if mc.assistant_reasoning.is_some() {
+                    merged.assistant_reasoning = mc.assistant_reasoning;
+                }
+                if mc.stream_usage.is_some() {
+                    merged.stream_usage = mc.stream_usage;
+                }
                 if mc.auth.is_some() {
                     merged.auth = mc.auth;
                 }
@@ -1246,6 +1677,20 @@ impl ModelRegistry {
             }
         }
 
+        merged
+    }
+
+    /// 查询指定模型的 Phase 1 新声明层（供货商默认 + 模型覆盖）。
+    pub fn get_declared_compat(&self, provider: &str, model: &str) -> compat::Compat {
+        let Some(pe) = self.providers.get(provider) else {
+            return compat::Compat::default();
+        };
+        let mut merged = pe.default_declared_compat.clone();
+        if let Some(me) = pe.models.get(model) {
+            if let Some(ref declared) = me.declared_compat {
+                merged = compat::Compat::merge(&merged, declared);
+            }
+        }
         merged
     }
 
@@ -1266,7 +1711,24 @@ impl ModelRegistry {
             .map(|me| me.reasoning)
             .unwrap_or(false);
 
-        let mut resolved = resolve_compat(compat.thinking_format, api_type, has_reasoning);
+        let mut resolved = resolve_compat(
+            compat.thinking_format,
+            compat.thinking_profile,
+            api_type,
+            has_reasoning,
+        );
+        resolved.clearable = compat.reasoning_clearable.unwrap_or(false);
+        resolved.assistant_reasoning = compat
+            .assistant_reasoning
+            .unwrap_or(compat::AssistantReasoning::Optional);
+        let derived_stream_usage = match compat.supports_usage_in_streaming {
+            Some(true) => compat::StreamUsage::Supported,
+            Some(false) => compat::StreamUsage::Unsupported,
+            None => compat::StreamUsage::Unknown,
+        };
+        resolved.stream_usage = compat.stream_usage.unwrap_or(derived_stream_usage);
+        resolved.supports_usage_in_streaming =
+            resolved.stream_usage == compat::StreamUsage::Supported;
         // 模型级 policy 覆盖 thinking_format 家族默认值。GLM-5.3 的
         // preserve 由 models.json 声明，不再按 provider/model 名硬编码。
         if let Some(policy) = compat.reasoning_policy {
@@ -1280,18 +1742,18 @@ impl ModelRegistry {
         resolved
     }
 
-    /// 供应商展示排序（国际 → 国内 → 本地）。
+    /// 供应商展示排序（国内 → 本地 → 国际）。
     /// 不在列表中的供应商排在末尾，按 id 字母序。
     const PROVIDER_ORDER: &'static [&'static str] = &[
-        "openai",
-        "anthropic",
-        "gemini",
         "deepseek",
         "zhipu",
         "kimi",
         "qwen",
         "volcengine",
         "ollama",
+        "openai",
+        "anthropic",
+        "gemini",
     ];
 
     /// 枚举所有供应商的基本信息（供 list_providers 命令使用）。
@@ -1327,6 +1789,25 @@ impl ModelRegistry {
     /// 获取指定供应商的 base_url。
     pub fn get_base_url(&self, provider: &str) -> Option<&str> {
         self.providers.get(provider).map(|pe| pe.base_url.as_str())
+    }
+
+    /// 枚举全部已收录模型（provider + api_type + model id），按稳定顺序返回。
+    ///
+    /// 仅供测试与能力矩阵生成使用；生产路径仍按 provider/model 点查。
+    #[cfg(test)]
+    pub(crate) fn all_models(&self) -> Vec<(String, ApiType, String)> {
+        let mut all: Vec<(String, ApiType, String)> = self
+            .providers
+            .iter()
+            .flat_map(|(provider, entry)| {
+                entry
+                    .models
+                    .keys()
+                    .map(move |model| (provider.clone(), entry.api_type, model.clone()))
+            })
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
+        all
     }
 
     /// 获取指定模型的能力信息（供 list_models 匹配远端 ID）。
@@ -1511,6 +1992,15 @@ mod tests {
     }
 
     #[test]
+    fn usage_stat_anthropic_denominator_includes_cache_creation() {
+        let mut usage = usage_with_cache(20, Some(80));
+        usage.context_input_tokens = Some(120);
+        let stat = usage_stat(&usage, ApiType::AnthropicMessages);
+        assert_eq!(stat.cache_hit_tokens, Some(80));
+        assert_eq!(stat.cache_prompt_tokens, Some(120));
+    }
+
+    #[test]
     fn chat_message_constructors() {
         let s = ChatMessage::system("你是 PRTS");
         assert_eq!(s.role, MessageRole::System);
@@ -1604,6 +2094,90 @@ mod tests {
         assert!(e.to_string().contains("401"));
         let e = LlmError::Config("api_key 为空".into());
         assert!(e.to_string().contains("api_key"));
+        let e = LlmError::http(401, "Incorrect API key");
+        let text = e.to_string();
+        assert!(text.contains("认证失败"), "{text}");
+        assert!(
+            !text.contains("Incorrect API key"),
+            "401 不回显 provider body"
+        );
+        let e = LlmError::http(400, "bad request body");
+        assert!(e.to_string().contains("bad request body"));
+        let e = LlmError::http_with_retry_after(429, "rate limited", Some(3_000));
+        assert_eq!(e.retry_after_ms(), Some(3_000));
+        let e = LlmError::http(429, "rate limited");
+        assert!(e.to_string().contains("限流"));
+        assert!(!e.to_string().contains("额度"));
+        let e = LlmError::http_with_retry_after(429, "insufficient_quota", None);
+        assert!(matches!(e, LlmError::Quota(_)));
+    }
+
+    #[test]
+    fn provider_error_detail_includes_code_and_type() {
+        let body = serde_json::json!({
+            "error": {
+                "type": "insufficient_quota",
+                "code": "insufficient_quota",
+                "message": "You exceeded your current quota"
+            }
+        });
+        let detail = provider_error_detail(&body).unwrap();
+        assert!(detail.contains("insufficient_quota"));
+        assert!(detail.contains("You exceeded your current quota"));
+        assert!(is_quota_error_message(&detail));
+    }
+
+    #[test]
+    fn quota_wording_is_distinguished_from_rate_limit() {
+        for text in [
+            "insufficient_quota",
+            "You exceeded your current quota",
+            "usage limit reached",
+            "balance depleted",
+            "out of credits",
+        ] {
+            assert!(is_quota_error_message(text), "应识别为额度耗尽: {text}");
+        }
+        for text in ["rate limit reached", "quota resets in one minute"] {
+            assert!(!is_quota_error_message(text), "不应识别为额度耗尽: {text}");
+        }
+    }
+
+    #[test]
+    fn empty_response_detection_excludes_max_tokens() {
+        let mut result = StreamResult {
+            text: String::new(),
+            tool_calls: vec![],
+            reasoning: None,
+            usage: None,
+            finish_reason: Some(FinishReason::Normal),
+        };
+        assert!(result.is_empty_response());
+        result.finish_reason = Some(FinishReason::MaxTokens);
+        assert!(!result.is_empty_response());
+        result.finish_reason = Some(FinishReason::ContentFilter);
+        assert!(!result.is_empty_response());
+    }
+
+    #[test]
+    fn retry_after_header_parses_seconds_and_http_date() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("3"));
+        assert_eq!(retry_after_ms_from_headers(&headers), Some(3_000));
+
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("not-a-date"));
+        assert_eq!(retry_after_ms_from_headers(&headers), None);
+
+        let future = chrono::Utc::now() + chrono::TimeDelta::seconds(30);
+        let raw = future.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+        headers.insert(RETRY_AFTER, HeaderValue::from_str(&raw).unwrap());
+        let parsed = retry_after_ms_from_headers(&headers).unwrap();
+        assert!(
+            (20_000..=31_000).contains(&parsed),
+            "HTTP 日期应换算为约 30 秒，实际 {parsed}ms"
+        );
     }
 
     // ── default_base_url ──
@@ -1629,6 +2203,33 @@ mod tests {
     }
 
     #[test]
+    fn registry_applies_output_limits_only_when_provided() {
+        let json = r#"{"p":{"defaults":{"api_type":"openai-completions","base_url":"https://x"},"models":{"m":{"name":"M","context":1}}}}"#;
+        let limits = r#"{"limits":{"p/m":32000,"p/nope":999}}"#;
+        let reg = ModelRegistry::from_json_with_limits(json, limits).unwrap();
+        assert_eq!(reg.get_model("p", "m").unwrap().max_output, Some(32000));
+        assert_eq!(
+            ModelRegistry::from_json(json)
+                .unwrap()
+                .get_model("p", "m")
+                .unwrap()
+                .max_output,
+            None
+        );
+    }
+
+    #[test]
+    fn chat_output_budget_treats_legacy_default_as_unset() {
+        assert_eq!(chat_output_budget(4096, None), 8192);
+        assert_eq!(chat_output_budget(0, None), 8192);
+        assert_eq!(chat_output_budget(16000, None), 16000);
+        assert_eq!(chat_output_budget(64, None), 64);
+        assert_eq!(chat_output_budget(4096, Some(32000)), 8192);
+        assert_eq!(chat_output_budget(4096, Some(4096)), 4096);
+        assert_eq!(chat_output_budget(16000, Some(8192)), 8192);
+    }
+
+    #[test]
     fn default_base_url_unknown_returns_none() {
         assert_eq!(default_base_url("unknown_vendor"), None);
         assert_eq!(default_base_url(""), None);
@@ -1640,6 +2241,10 @@ mod tests {
     fn compat_serializes_camelcase() {
         let c = Compat {
             thinking_format: Some(ThinkingFormat::Deepseek),
+            thinking_profile: None,
+            reasoning_clearable: None,
+            assistant_reasoning: None,
+            stream_usage: None,
             auth: Some(AuthMode::None),
             reasoning_policy: Some(ReasoningPolicy::Preserve),
             supports_usage_in_streaming: Some(false),
@@ -1689,6 +2294,25 @@ mod tests {
     }
 
     #[test]
+    fn compat_rejects_auth_for_non_completions_protocols() {
+        let json = r#"{
+            "anthropic": {
+                "defaults": {
+                    "api_type": "anthropic-messages",
+                    "base_url": "https://x",
+                    "compat": { "auth": "none" }
+                },
+                "models": { "m": { "name": "M", "context": 1 } }
+            }
+        }"#;
+        let err = ModelRegistry::from_json(json).unwrap_err();
+        assert!(
+            err.contains("auth 仅适用于协议 openai-completions"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn compat_rejects_usage_streaming_for_wrong_protocol() {
         let json = r#"{"anthropic":{"defaults":{"api_type":"anthropic-messages","base_url":"https://x","compat":{"supports_usage_in_streaming":false}},"models":{"m":{"name":"M","context":1}}}}"#;
         let err = ModelRegistry::from_json(json).unwrap_err();
@@ -1727,6 +2351,79 @@ mod tests {
     }
 
     #[test]
+    fn new_compat_fields_are_parsed_in_parallel_and_project_to_old_path() {
+        let json = r#"{
+            "p": {
+                "defaults": {
+                    "api_type": "openai-completions",
+                    "base_url": "https://x",
+                    "compat": {
+                        "thinking_format": "zhipu",
+                        "reasoning_replay": {
+                            "policy": "preserve",
+                            "carrier": "reasoning_content"
+                        }
+                    }
+                },
+                "models": {
+                    "m": {
+                        "name": "M",
+                        "context": 1000,
+                        "reasoning": true,
+                        "compat": { "stream_usage": "unsupported" }
+                    }
+                }
+            }
+        }"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+
+        // New declaration layer: provider defaults + model override.
+        let declared = reg.get_declared_compat("p", "m");
+        assert_eq!(
+            declared.thinking_format,
+            Some(compat::ThinkingFormat::Zhipu)
+        );
+        assert_eq!(
+            declared
+                .reasoning_replay
+                .as_ref()
+                .and_then(|replay| replay.policy),
+            Some(compat::ReplayPolicy::Preserve)
+        );
+        assert_eq!(
+            declared.stream_usage,
+            Some(compat::StreamUsage::Unsupported)
+        );
+
+        // Old production path still gets the projected flat fields.
+        let old = reg.get_compat("p", "m");
+        assert_eq!(old.thinking_format, Some(ThinkingFormat::Zhipu));
+        assert_eq!(old.reasoning_policy, Some(ReasoningPolicy::Preserve));
+        assert_eq!(old.supports_usage_in_streaming, Some(false));
+        let effective = reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions);
+        assert_eq!(effective.carrier.as_deref(), Some("reasoning_content"));
+        assert!(!effective.supports_usage_in_streaming);
+    }
+
+    #[test]
+    fn invalid_new_compat_is_rejected_without_panic() {
+        let json = r#"{
+            "p": {
+                "defaults": {
+                    "api_type": "openai-completions",
+                    "base_url": "https://x",
+                    "compat": {
+                        "reasoning_replay": { "policy": "require_tool_call" }
+                    }
+                },
+                "models": { "m": { "name": "M", "context": 1 } }
+            }
+        }"#;
+        let err = ModelRegistry::from_json(json).unwrap_err();
+        assert!(err.contains("carrier"), "got: {err}");
+    }
+
+    #[test]
     fn provider_info_compat_is_camelcase() {
         let info = ProviderInfo {
             id: "deepseek".into(),
@@ -1735,6 +2432,10 @@ mod tests {
             base_url: "https://api.deepseek.com/v1".into(),
             default_compat: Compat {
                 thinking_format: Some(ThinkingFormat::Deepseek),
+                thinking_profile: None,
+                reasoning_clearable: None,
+                assistant_reasoning: None,
+                stream_usage: None,
                 auth: None,
                 reasoning_policy: None,
                 supports_usage_in_streaming: None,
@@ -1801,25 +2502,139 @@ mod tests {
         assert_eq!(base.thinking_levels, ["low", "high", "max"]);
         assert_eq!(base.default_thinking_level.as_deref(), Some("max"));
         assert!(!base.supports_vision);
+        let resolved = reg.get_resolved_compat("zhipu", "glm-5.3", ApiType::OpenAiCompletions);
+        assert_eq!(resolved.policy, ReasoningPolicy::Preserve);
         assert_eq!(
-            reg.get_resolved_compat("zhipu", "glm-5.3", ApiType::OpenAiCompletions)
-                .policy,
-            ReasoningPolicy::Preserve,
-            "5.3 low 档可能不返回 reasoning，不应本地 fail-closed"
+            resolved.thinking_profile,
+            Some(compat::ThinkingProfile::ZhipuGlm53),
+            "5.3 profile 必须来自 models.json"
         );
+        assert!(resolved.clearable, "Zhipu 的 replay 声明 clearable=true");
 
         for id in ["glm-5.3-flash", "glm-5.3-flashx"] {
             let model = reg.get_model("zhipu", id).unwrap();
             assert_eq!(model.context, 1_000_000, "{id}");
             assert!(model.supports_vision, "{id} 应支持视觉");
             assert_eq!(model.default_thinking_level.as_deref(), Some("max"));
+            let resolved = reg.get_resolved_compat("zhipu", id, ApiType::OpenAiCompletions);
+            assert_eq!(resolved.policy, ReasoningPolicy::Preserve);
             assert_eq!(
-                reg.get_resolved_compat("zhipu", id, ApiType::OpenAiCompletions)
-                    .policy,
-                ReasoningPolicy::Preserve,
-                "{id} 的 preserve 应由 models.json 声明，不再按模型名硬编码"
+                resolved.thinking_profile,
+                Some(compat::ThinkingProfile::ZhipuGlm53Flash),
+                "{id} 的 profile 必须来自 models.json，不再按模型名硬编码"
             );
         }
+    }
+
+    #[test]
+    fn real_models_json_kimi_profiles_resolve() {
+        let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        for (id, profile) in [
+            ("kimi-k2.6", compat::ThinkingProfile::KimiK26),
+            ("kimi-k3", compat::ThinkingProfile::KimiK3),
+            ("kimi-k2.7-code", compat::ThinkingProfile::KimiK27Code),
+        ] {
+            let resolved = reg.get_resolved_compat("kimi", id, ApiType::OpenAiCompletions);
+            assert_eq!(
+                resolved.thinking_profile,
+                Some(profile),
+                "{id} profile 必须来自 models.json"
+            );
+            assert_eq!(
+                resolved.assistant_reasoning,
+                compat::AssistantReasoning::Required,
+                "{id} 的 assistant 推理字段必须存在"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_order_domestic_first() {
+        let reg = ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap();
+        let ids: Vec<String> = reg
+            .list_providers()
+            .into_iter()
+            .map(|provider| provider.id)
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                "deepseek",
+                "zhipu",
+                "kimi",
+                "qwen",
+                "volcengine",
+                "ollama",
+                "openai",
+                "anthropic",
+                "gemini",
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_tool_pairs_drops_orphans_and_duplicates() {
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage::assistant_with_tools("", vec![call("c1")], Some("r1".into())),
+            ChatMessage::tool_result("c1", "ok"),
+            ChatMessage::tool_result("orphan", "drop"),
+            ChatMessage::assistant_with_tools("", vec![call("c2")], Some("r2".into())),
+            ChatMessage::assistant_with_tools("", vec![call("c1")], Some("r3".into())),
+        ];
+        let out = normalize_tool_pairs(&messages, ApiType::OpenAiCompletions);
+        assert_eq!(
+            out.len(),
+            3,
+            "orphan result / orphan call / duplicate call 应被移除"
+        );
+        assert_eq!(out[0].role, MessageRole::User);
+        assert_eq!(out[1].tool_calls.as_ref().unwrap()[0].id, "c1");
+        assert_eq!(out[2].tool_call_id.as_deref(), Some("c1"));
+    }
+
+    #[test]
+    fn normalize_tool_pairs_does_not_collapse_empty_ids() {
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let messages = vec![
+            ChatMessage::user("q"),
+            ChatMessage::assistant_with_tools("step1", vec![call("")], None),
+            ChatMessage::tool_result("", "one"),
+            ChatMessage::assistant_with_tools("step2", vec![call("")], None),
+            ChatMessage::tool_result("", "two"),
+        ];
+
+        let out = normalize_tool_pairs(&messages, ApiType::OpenAiCompletions);
+        assert!(
+            out.iter()
+                .all(|m| m.tool_calls.is_none() && m.role != MessageRole::Tool),
+            "空 id 必须被丢弃，不能被当成同一个调用折叠"
+        );
+        assert!(out.iter().any(|m| m.content == "step1"));
+        assert!(out.iter().any(|m| m.content == "step2"));
+    }
+
+    #[test]
+    fn normalize_tool_pairs_keeps_empty_assistant_text_without_calls() {
+        let messages = vec![ChatMessage::assistant("")];
+        let out = normalize_tool_pairs(&messages, ApiType::OpenAiCompletions);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content, "");
     }
 
     #[test]

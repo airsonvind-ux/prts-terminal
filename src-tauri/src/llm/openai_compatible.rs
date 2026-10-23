@@ -26,7 +26,9 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::StreamExt;
 use reqwest::header;
@@ -35,9 +37,9 @@ use serde_json::Value;
 use crate::debug;
 
 use super::{
-    default_base_url, AuthMode, ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError,
-    LlmResponse, ModelRegistry, ReasoningPolicy, ResolvedCompat, StreamEvent, StreamResult,
-    TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    default_base_url, provider_error_detail, retry_after_ms_from_headers, AuthMode, ChatMessage,
+    FinishReason, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry, ReasoningPolicy,
+    ResolvedCompat, StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -143,7 +145,8 @@ impl OpenAiCompatibleClient {
         // 序列化 messages（此时 reasoning_content 字段由 ChatMessage 的
         // #[serde(skip_serializing_if)] 控制——None 时自动省略）。
         // 带图像的 user 消息把 content 展开为 [text, image_url...] 数组。
-        let messages_json = Self::messages_to_json(messages)?;
+        let normalized = super::normalize_tool_pairs(messages, config.api_type);
+        let messages_json = Self::messages_to_json(&normalized)?;
 
         // compat 驱动剥离：carrier 为 "reasoning_content" 的协议原生支持，不剥离
         let messages_json = if Self::should_strip_reasoning(&compat) {
@@ -176,21 +179,60 @@ impl OpenAiCompatibleClient {
             config.thinking_level.as_deref(),
         );
 
+        // Kimi 等声明的模型要求推理开启时 assistant 消息带 carrier 键；
+        // 空串合法，但不能缺键。必须在 require_tool_call 校验前补齐。
+        if compat.assistant_reasoning == crate::llm::compat::AssistantReasoning::Required
+            && effective_level.is_some_and(|level| level != "off")
+        {
+            body["messages"] = Self::ensure_assistant_reasoning_field(body["messages"].take());
+        }
+
         // 思考开启时，需要回传真实 reasoning_content 的协议不能带缺失历史出网。
         // 旧会话/异常轮缺字段时在本地拦截，避免供应商返回难以理解的 400。
-        let requires_tool_call_replay = compat.policy == ReasoningPolicy::RequireToolCall
-            || compat.request_param.as_deref() == Some("kimi");
-        if requires_tool_call_replay && effective_level.is_some_and(|level| level != "off") {
+        if compat.policy == ReasoningPolicy::RequireToolCall
+            && effective_level.is_some_and(|level| level != "off")
+        {
             Self::ensure_reasoning_replay(&body)?;
         }
 
         // 流式请求附加 stream_options（用于获取 usage）。
         // 模型声明不支持时直接省略，避免先发一次注定失败、再降级重试。
-        if stream && compat.supports_usage_in_streaming {
+        if stream && compat.stream_usage == crate::llm::compat::StreamUsage::Supported {
             body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
         Ok(body)
+    }
+
+    /// 测试入口：让能力矩阵/请求体快照复用生产构造路径。
+    #[cfg(test)]
+    pub(crate) fn build_body_for_snapshot(
+        &self,
+        config: &LlmConfig,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+        stream: bool,
+    ) -> Result<Value, LlmError> {
+        self.build_body(config, messages, tools, stream)
+    }
+
+    /// 给所有 assistant 消息补齐 `reasoning_content` 键（空串合法）。
+    ///
+    /// 只在模型声明 `assistant_reasoning=required` 且思考开启时调用。
+    fn ensure_assistant_reasoning_field(mut messages: Value) -> Value {
+        if let Some(arr) = messages.as_array_mut() {
+            for msg in arr {
+                let Some(obj) = msg.as_object_mut() else {
+                    continue;
+                };
+                if obj.get("role").and_then(Value::as_str) != Some("assistant") {
+                    continue;
+                }
+                obj.entry("reasoning_content".to_string())
+                    .or_insert_with(|| Value::String(String::new()));
+            }
+        }
+        messages
     }
 
     /// 拒绝把缺少 reasoning_content 的工具轮历史发给要求回传的供应商。
@@ -343,6 +385,14 @@ impl OpenAiCompatibleClient {
         let tool_calls = msg
             .get("tool_calls")
             .and_then(|v| serde_json::from_value::<Vec<ToolCall>>(v.clone()).ok())
+            .map(|mut calls| {
+                for call in &mut calls {
+                    if call.id.trim().is_empty() {
+                        call.id = fallback_tool_call_id();
+                    }
+                }
+                calls
+            })
             .filter(|tc| !tc.is_empty());
 
         let usage = body.get("usage").and_then(Self::extract_usage);
@@ -373,26 +423,25 @@ impl LlmClient for OpenAiCompatibleClient {
                 if e.is_timeout() {
                     LlmError::Timeout(e.to_string())
                 } else {
-                    LlmError::Api(format!("HTTP 请求失败: {e}"))
+                    LlmError::Transport(format!("HTTP 请求失败: {e}"))
                 }
             })?;
 
             let status = response.status();
+            let retry_after_ms = retry_after_ms_from_headers(response.headers());
             let body: Value = response
                 .json()
                 .await
                 .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
-                let err_msg = body
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未知错误");
-                return Err(LlmError::Api(format!(
-                    "HTTP {}: {err_msg}",
-                    status.as_u16()
-                )));
+                let err_msg =
+                    provider_error_detail(&body).unwrap_or_else(|| "未知错误".to_string());
+                return Err(LlmError::http_with_retry_after(
+                    status.as_u16(),
+                    err_msg,
+                    retry_after_ms,
+                ));
             }
 
             OpenAiCompatibleClient::parse_chat_response(&body)
@@ -467,35 +516,32 @@ impl OpenAiCompatibleClient {
             if e.is_timeout() {
                 LlmError::Timeout(e.to_string())
             } else {
-                LlmError::Api(format!("HTTP 请求失败: {e}"))
+                LlmError::Transport(format!("HTTP 请求失败: {e}"))
             }
         })?;
 
         let status = response.status();
+        let retry_after_ms = retry_after_ms_from_headers(response.headers());
         log::debug!("[LLM] 响应 HTTP {}", status.as_u16());
         if !status.is_success() {
             let (err_text, read_failed) = match response.text().await {
                 Ok(t) => (t, false),
                 Err(e) => (format!("(响应体读取失败: {e})"), true),
             };
-            // 尝试提取 JSON error message，失败则用原始文本
+            // 尝试提取 JSON error 的 type/code/message，失败则用原始文本
             let err_msg = if read_failed {
                 err_text
             } else {
                 serde_json::from_str::<Value>(&err_text)
                     .ok()
-                    .and_then(|v| {
-                        v.get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str())
-                            .map(|s| s.to_string())
-                    })
+                    .and_then(|v| provider_error_detail(&v))
                     .unwrap_or(err_text)
             };
-            return Err(LlmError::Api(format!(
-                "HTTP {}: {err_msg}",
-                status.as_u16()
-            )));
+            return Err(LlmError::http_with_retry_after(
+                status.as_u16(),
+                err_msg,
+                retry_after_ms,
+            ));
         }
 
         // 将 reqwest 的 Bytes 流转换为 Vec<u8> 流，交给通用 SSE 解析器
@@ -523,10 +569,32 @@ struct ToolCallAccumulator {
     arguments_str: String,
 }
 
+/// 供应商未提供可用 tool_call id 时的兜底。
+/// 不能只用分片 index：同一会话的多个 step 都会从 index 0 开始。
+/// 还要跨进程重启保持不重复，否则旧历史里的 `call_prts_1` 会把新调用当成
+/// 重复 id 丢弃。进程号 + 毫秒时间 + 进程内计数器足以避免这种碰撞。
+static NEXT_FALLBACK_TOOL_CALL_ID: AtomicU64 = AtomicU64::new(1);
+
+fn fallback_tool_call_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!(
+        "call_prts_{}_{}_{}",
+        std::process::id(),
+        millis,
+        NEXT_FALLBACK_TOOL_CALL_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 impl ToolCallAccumulator {
     fn into_tool_call(self) -> Option<ToolCall> {
-        let id = self.id?;
-        let name = self.name?;
+        let id = self
+            .id
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or_else(fallback_tool_call_id);
+        let name = self.name.filter(|name| !name.trim().is_empty())?;
         Some(ToolCall {
             id,
             call_type: "function".into(),
@@ -560,9 +628,13 @@ where
     let mut tool_call_acc: HashMap<usize, ToolCallAccumulator> = HashMap::new();
     let mut usage: Option<TokenUsage> = None;
     let mut finish_reason: Option<FinishReason> = None;
+    let mut saw_done = false;
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     let read = crate::llm::sse::read_frames(stream, |frame| {
+        if crate::llm::sse::frame_data(frame).as_deref() == Some("[DONE]") {
+            saw_done = true;
+        }
         process_sse_frame(
             frame,
             on_event,
@@ -583,7 +655,15 @@ where
                 content: format!("\n\n[错误] {error_msg}"),
             });
         }
-        return Err(LlmError::Api(error_msg));
+        return Err(LlmError::Transport(error_msg));
+    }
+
+    // 既没有 [DONE] 也没有 finish_reason：连接在响应中途结束。
+    // 不能把已收到的半截内容当成正常回答。
+    if !saw_done && finish_reason.is_none() {
+        return Err(LlmError::Transport(
+            "流提前结束：未收到 [DONE] 或 finish_reason".into(),
+        ));
     }
 
     // ── 流结束：emit 所有累积的 tool_call，同时收集到 Vec 供 orchestrator 判断 ──
@@ -700,6 +780,7 @@ fn process_sse_chunk(
                 "cache_hit_tokens" => tu.cache_hit_tokens,
                 "cache_miss_tokens" => tu.cache_miss_tokens
             );
+            on_event(StreamEvent::Usage { usage: *tu });
         }
         *usage = extracted;
     }
@@ -761,11 +842,20 @@ fn process_sse_chunk(
 
                 let acc = tool_call_acc.entry(idx).or_default();
 
-                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                // 后续分片可能带空 id/name；空值不能覆盖首片已拿到的真实值。
+                if let Some(id) = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|id| !id.trim().is_empty())
+                {
                     acc.id = Some(id.to_string());
                 }
                 if let Some(func) = tc.get("function") {
-                    if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                    if let Some(name) = func
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .filter(|name| !name.trim().is_empty())
+                    {
                         acc.name = Some(name.to_string());
                     }
                     if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
@@ -810,7 +900,13 @@ mod tests {
         let stream = sse_stream(lines);
         let result = parse_sse_stream(stream, &on_event).await.unwrap();
 
-        let collected = events.lock().unwrap().clone();
+        let collected = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| !matches!(event, StreamEvent::Usage { .. }))
+            .cloned()
+            .collect();
         (collected, result)
     }
 
@@ -892,6 +988,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_without_done_or_finish_reason_is_transport_error() {
+        let lines = vec![text_delta_line("半截回答")];
+        let stream = sse_stream(&lines);
+        let on_event = |_e: StreamEvent| {};
+        let err = parse_sse_stream(stream, &on_event).await.unwrap_err();
+        assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn reasoning_delta_deepseek() {
         let lines = vec![reasoning_delta_line("需要查询数据库"), done_line()];
         let (events, result) = collect_events(&lines).await;
@@ -948,6 +1053,40 @@ mod tests {
         assert_eq!(result.tool_calls[0].function.name, "echo");
         // 契约不变量 I2/I5：arguments 端到端 raw（分片累积后原样直通）
         super::super::assert_stream_contract(&events, &result);
+    }
+
+    #[tokio::test]
+    async fn empty_id_in_later_chunk_does_not_overwrite_real_id() {
+        let lines = vec![
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_real","function":{"name":"echo","arguments":"{}"}}]}}]}"#.to_string(),
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","function":{"arguments":""}}]}}]}"#.to_string(),
+            done_line(),
+        ];
+        let (_, result) = collect_events(&lines).await;
+
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].id, "call_real");
+    }
+
+    #[tokio::test]
+    async fn empty_or_missing_id_gets_fallback() {
+        let lines = vec![
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","function":{"name":"echo","arguments":"{}"}}]}}]}"#.to_string(),
+            done_line(),
+        ];
+        let (_, result) = collect_events(&lines).await;
+
+        assert_eq!(result.tool_calls.len(), 1);
+        assert!(!result.tool_calls[0].id.trim().is_empty());
+        assert!(result.tool_calls[0].id.starts_with("call_prts_"));
+    }
+
+    #[test]
+    fn fallback_ids_do_not_collide_with_previous_processes() {
+        let a = fallback_tool_call_id();
+        let b = fallback_tool_call_id();
+        assert_ne!(a, b);
+        assert!(a.starts_with(&format!("call_prts_{}_", std::process::id())));
     }
 
     #[tokio::test]
@@ -1150,6 +1289,17 @@ mod tests {
         assert!(OpenAiCompatibleClient::ensure_reasoning_replay(&body).is_ok());
     }
 
+    #[test]
+    fn assistant_reasoning_required_fills_empty_string() {
+        let messages = serde_json::json!([
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "answer"}
+        ]);
+        let out = OpenAiCompatibleClient::ensure_assistant_reasoning_field(messages);
+        assert_eq!(out[1]["reasoning_content"], "");
+        assert!(out[0].get("reasoning_content").is_none());
+    }
+
     // ── stream_options 由 compat 决定 ──
 
     fn stream_body(model_compat: &str) -> Value {
@@ -1169,14 +1319,20 @@ mod tests {
     }
 
     #[test]
-    fn stream_options_present_by_default() {
-        let body = stream_body("{}");
+    fn stream_options_present_when_supported() {
+        let body = stream_body(r#"{"stream_usage":"supported"}"#);
         assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
     #[test]
     fn stream_options_omitted_when_unsupported() {
-        let body = stream_body(r#"{"supports_usage_in_streaming":false}"#);
+        let body = stream_body(r#"{"stream_usage":"unsupported"}"#);
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn stream_options_omitted_when_unknown() {
+        let body = stream_body("{}");
         assert!(body.get("stream_options").is_none());
     }
 }

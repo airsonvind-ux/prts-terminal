@@ -2,7 +2,10 @@
   "openai": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://api.openai.com/v1"
+      "base_url": "https://api.openai.com/v1",
+      "compat": {
+        "stream_usage": "supported"
+      }
     },
     "models": {
       "chatgpt-4o-latest": {
@@ -459,7 +462,11 @@
       "api_type": "anthropic-messages",
       "base_url": "https://api.anthropic.com",
       "compat": {
-        "thinking_format": "anthropic"
+        "thinking_format": "anthropic",
+        "reasoning_replay": {
+          "policy": "preserve",
+          "carrier": "thinking_blocks"
+        }
       }
     },
     "models": {
@@ -594,7 +601,10 @@
   "gemini": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai"
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "compat": {
+        "stream_usage": "unknown"
+      }
     },
     "models": {
       "gemini-2.0-flash": {
@@ -764,7 +774,15 @@
   "deepseek": {
     "defaults": {
       "api_type": "openai-completions",
-      "base_url": "https://api.deepseek.com/v1"
+      "base_url": "https://api.deepseek.com/v1",
+      "compat": {
+        "thinking_format": "deepseek",
+        "reasoning_replay": {
+          "policy": "require_tool_call",
+          "carrier": "reasoning_content"
+        },
+        "stream_usage": "supported"
+      }
     },
     "models": {
       "deepseek-flash": {
@@ -820,7 +838,13 @@
       "api_type": "openai-completions",
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "compat": {
-        "thinking_format": "zhipu"
+        "thinking_format": "zhipu",
+        "reasoning_replay": {
+          "policy": "require_tool_call",
+          "carrier": "reasoning_content",
+          "clearable": true
+        },
+        "stream_usage": "unsupported"
       }
     },
     "models": {
@@ -872,7 +896,11 @@
         "context": 1000000,
         "reasoning": true,
         "compat": {
-          "reasoning_policy": "preserve"
+          "thinking_profile": "zhipu-glm-5.3",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
         },
         "thinking_levels": [
           "low",
@@ -887,7 +915,11 @@
         "reasoning": true,
         "supports_vision": true,
         "compat": {
-          "reasoning_policy": "preserve"
+          "thinking_profile": "zhipu-glm-5.3-flash",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
         },
         "thinking_levels": [
           "low",
@@ -902,7 +934,11 @@
         "reasoning": true,
         "supports_vision": true,
         "compat": {
-          "reasoning_policy": "preserve"
+          "thinking_profile": "zhipu-glm-5.3-flash",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
         },
         "thinking_levels": [
           "low",
@@ -942,7 +978,13 @@
       "api_type": "openai-completions",
       "base_url": "https://api.moonshot.cn/v1",
       "compat": {
-        "thinking_format": "kimi"
+        "thinking_format": "kimi",
+        "reasoning_replay": {
+          "policy": "preserve",
+          "carrier": "reasoning_content",
+          "assistant_reasoning": "required"
+        },
+        "stream_usage": "supported"
       }
     },
     "models": {
@@ -951,6 +993,13 @@
         "context": 262144,
         "reasoning": true,
         "supports_vision": true,
+        "compat": {
+          "thinking_profile": "kimi-k2.6",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
+        },
         "thinking_levels": [
           "off",
           "high"
@@ -961,6 +1010,13 @@
         "name": "Kimi K2.7 Code",
         "context": 262144,
         "reasoning": true,
+        "compat": {
+          "thinking_profile": "kimi-k2.7-code",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
+        },
         "thinking_levels": [
           "high"
         ],
@@ -971,6 +1027,13 @@
         "context": 1048576,
         "reasoning": true,
         "supports_vision": true,
+        "compat": {
+          "thinking_profile": "kimi-k3",
+          "reasoning_replay": {
+            "policy": "preserve",
+            "carrier": "reasoning_content"
+          }
+        },
         "thinking_levels": [
           "low",
           "high",
@@ -985,7 +1048,8 @@
       "api_type": "openai-completions",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "compat": {
-        "thinking_format": "qwen"
+        "thinking_format": "qwen",
+        "stream_usage": "supported"
       }
     },
     "models": {
@@ -1094,7 +1158,8 @@
       "api_type": "openai-completions",
       "base_url": "https://ark.cn-beijing.volces.com/api/v3",
       "compat": {
-        "thinking_format": "volcengine"
+        "thinking_format": "volcengine",
+        "stream_usage": "unknown"
       }
     },
     "models": {
@@ -1177,7 +1242,8 @@
       "api_type": "openai-completions",
       "base_url": "http://localhost:11434/v1",
       "compat": {
-        "auth": "none"
+        "auth": "none",
+        "stream_usage": "unknown"
       }
     },
     "models": {

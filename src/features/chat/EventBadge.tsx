@@ -94,7 +94,9 @@ export function EventBadge({ events, interactive = false, className, showApprova
   const reasoningText = useMemo(() => {
     let text = "";
     for (const e of events) {
-      if (e.type === "assistant/chunk" && e.kind === "reasoning") {
+      if (e.type === "assistant/reset") {
+        text = "";
+      } else if (e.type === "assistant/chunk" && e.kind === "reasoning") {
         text += e.content;
       }
     }
@@ -161,13 +163,21 @@ export function EventBadge({ events, interactive = false, className, showApprova
   };
 
   // ── 情绪事件（批 2-D）：本轮 mood/event 聚合（时序由事件序列承载） ──
-  const moodEvents = useMemo(
-    () => events.filter((e) => e.type === "mood/event"),
-    [events]
-  );
+  const moodEvents = useMemo(() => {
+    const result: MoodEvent[] = [];
+    for (const e of events) {
+      if (e.type === "assistant/reset") result.length = 0;
+      else if (e.type === "mood/event") result.push(e);
+    }
+    return result;
+  }, [events]);
 
   const hasTools = toolSlots.length > 0;
-  const toolsActive = toolSlots.some((s) => s.ok === null);
+  // 归档轮没有“正在执行”语义：无 result 只可能是中止/异常留下的未完成项，
+  // 不能在重启后继续显示为活跃状态。
+  const hasPendingTools = toolSlots.some((s) => s.ok === null);
+  const toolsActive = interactive && hasPendingTools;
+  const toolsIncomplete = !interactive && hasPendingTools;
   const hasToolFailure = toolSlots.some((s) => s.ok === false);
   /**
    * 存在审批态且未到 tool/result 终态的槽位（pending / 乐观或事件已决）→
@@ -226,9 +236,11 @@ export function EventBadge({ events, interactive = false, className, showApprova
             <span className={toolsActive ? styles.statusActive : styles.statusDone}>
               {toolsActive
                 ? "· 正在调用工具..."
-                : hasToolFailure
-                  ? "· ⚠ 工具调用完成（含失败）"
-                  : `· ✓ 工具调用完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`}
+                : toolsIncomplete
+                  ? `· 工具调用未完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`
+                  : hasToolFailure
+                    ? "· ⚠ 工具调用完成（含失败）"
+                    : `· ✓ 工具调用完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`}
             </span>
           </button>
           {toolsOpenEffective && (

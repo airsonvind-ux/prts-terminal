@@ -22,8 +22,9 @@ use reqwest::header;
 use serde_json::Value;
 
 use super::{
-    ChatMessage, FinishReason, LlmClient, LlmConfig, LlmError, LlmResponse, ModelRegistry,
-    ProviderBlock, StreamEvent, StreamResult, TokenUsage, ToolCall, ToolCallFunction, ToolDef,
+    provider_error_detail, retry_after_ms_from_headers, ChatMessage, FinishReason, LlmClient,
+    LlmConfig, LlmError, LlmResponse, ModelRegistry, ProviderBlock, StreamEvent, StreamResult,
+    TokenUsage, ToolCall, ToolCallFunction, ToolDef,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -79,6 +80,10 @@ impl AnthropicMessagesClient {
     fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
         let mut system_parts: Vec<String> = Vec::new();
         let mut anthropic_msgs: Vec<Value> = Vec::new();
+        // 同一轮多个工具结果必须放进同一条 user 消息。Anthropic 的
+        // tool_result 要求紧跟 assistant 的 tool_use；拆成多条 user 消息
+        // 会让并行工具结果丢失配对，甚至直接 400。
+        let mut pending_tool_results: Vec<Value> = Vec::new();
 
         for msg in messages {
             use crate::llm::MessageRole;
@@ -88,42 +93,60 @@ impl AnthropicMessagesClient {
                         system_parts.push(msg.content.clone());
                     }
                 }
+                MessageRole::Tool => {
+                    let tc_id = msg.tool_call_id.as_deref().unwrap_or("");
+                    pending_tool_results.push(serde_json::json!({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": msg.content,
+                    }));
+                }
                 MessageRole::User => {
-                    // Anthropic 约定：图像 block 在前、文本在后。
-                    // 无图时保持字符串 content（与既有输出逐字节一致）。
-                    match msg.images.as_ref().filter(|v| !v.is_empty()) {
-                        Some(images) => {
-                            let mut blocks: Vec<Value> = Vec::new();
-                            for img in images {
-                                blocks.push(serde_json::json!({
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": img.mime_type,
-                                        "data": img.data,
-                                    },
-                                }));
-                            }
-                            if !msg.content.is_empty() {
-                                blocks.push(serde_json::json!({
-                                    "type": "text",
-                                    "text": msg.content,
-                                }));
-                            }
-                            anthropic_msgs.push(serde_json::json!({
-                                "role": "user",
-                                "content": blocks,
+                    let image_blocks: Vec<Value> = msg
+                        .images
+                        .as_ref()
+                        .filter(|v| !v.is_empty())
+                        .map(|images| {
+                            images
+                                .iter()
+                                .map(|img| {
+                                    serde_json::json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": img.mime_type,
+                                            "data": img.data,
+                                        },
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    if pending_tool_results.is_empty() && image_blocks.is_empty() {
+                        // 无图时保持字符串 content（与既有输出逐字节一致）。
+                        anthropic_msgs.push(serde_json::json!({
+                            "role": "user",
+                            "content": msg.content,
+                        }));
+                    } else {
+                        let mut blocks: Vec<Value> = std::mem::take(&mut pending_tool_results);
+                        // Anthropic 约定：tool_result 必须在最前，图像随后，文本最后。
+                        blocks.extend(image_blocks);
+                        if !msg.content.is_empty() {
+                            blocks.push(serde_json::json!({
+                                "type": "text",
+                                "text": msg.content,
                             }));
                         }
-                        None => {
-                            anthropic_msgs.push(serde_json::json!({
-                                "role": "user",
-                                "content": msg.content,
-                            }));
-                        }
+                        anthropic_msgs.push(serde_json::json!({
+                            "role": "user",
+                            "content": blocks,
+                        }));
                     }
                 }
                 MessageRole::Assistant => {
+                    Self::flush_tool_results(&mut anthropic_msgs, &mut pending_tool_results);
                     // Anthropic 要求 thinking / redacted_thinking 按原序回到
                     // assistant content 开头；缺签名会导致工具续跑 400（R-27）。
                     let has_provider_blocks = msg
@@ -181,20 +204,10 @@ impl AnthropicMessagesClient {
                         }));
                     }
                 }
-                MessageRole::Tool => {
-                    // 工具结果 → user role 的 tool_result block
-                    let tc_id = msg.tool_call_id.as_deref().unwrap_or("");
-                    anthropic_msgs.push(serde_json::json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tc_id,
-                            "content": msg.content,
-                        }],
-                    }));
-                }
             }
         }
+
+        Self::flush_tool_results(&mut anthropic_msgs, &mut pending_tool_results);
 
         let system = if system_parts.is_empty() {
             None
@@ -203,6 +216,18 @@ impl AnthropicMessagesClient {
         };
 
         (system, anthropic_msgs)
+    }
+
+    /// 把已经收齐的工具结果作为一条 user 消息发出。
+    fn flush_tool_results(anthropic_msgs: &mut Vec<Value>, pending: &mut Vec<Value>) {
+        if pending.is_empty() {
+            return;
+        }
+        let blocks = std::mem::take(pending);
+        anthropic_msgs.push(serde_json::json!({
+            "role": "user",
+            "content": blocks,
+        }));
     }
 
     // ── 工具定义转换 ──
@@ -238,7 +263,8 @@ impl AnthropicMessagesClient {
             &config.model
         };
 
-        let (system, anthropic_msgs) = Self::convert_messages(messages);
+        let normalized = super::normalize_tool_pairs(messages, config.api_type);
+        let (system, anthropic_msgs) = Self::convert_messages(&normalized);
 
         // Anthropic 要求 messages 非空
         let anthropic_msgs = if anthropic_msgs.is_empty() {
@@ -247,9 +273,13 @@ impl AnthropicMessagesClient {
             anthropic_msgs
         };
 
+        let model_limit = self
+            .registry
+            .get_model(&config.provider, &config.model)
+            .and_then(|entry| entry.max_output);
         let mut body = serde_json::json!({
             "model": model,
-            "max_tokens": config.max_tokens,
+            "max_tokens": crate::llm::chat_output_budget(config.max_tokens, model_limit),
             "messages": anthropic_msgs,
             "stream": stream,
         });
@@ -280,6 +310,18 @@ impl AnthropicMessagesClient {
         );
 
         Ok(body)
+    }
+
+    /// 测试入口：让能力矩阵/请求体快照复用生产构造路径。
+    #[cfg(test)]
+    pub(crate) fn build_body_for_snapshot(
+        &self,
+        config: &LlmConfig,
+        messages: &[ChatMessage],
+        tools: &[ToolDef],
+        stream: bool,
+    ) -> Result<Value, LlmError> {
+        self.build_body(config, messages, tools, stream)
     }
 
     // ── HTTP 请求发送 ──
@@ -424,26 +466,25 @@ impl LlmClient for AnthropicMessagesClient {
                 if e.is_timeout() {
                     LlmError::Timeout(e.to_string())
                 } else {
-                    LlmError::Api(format!("HTTP 请求失败: {e}"))
+                    LlmError::Transport(format!("HTTP 请求失败: {e}"))
                 }
             })?;
 
             let status = response.status();
+            let retry_after_ms = retry_after_ms_from_headers(response.headers());
             let body: Value = response
                 .json()
                 .await
                 .map_err(|e| LlmError::Parse(format!("响应 JSON 解析失败: {e}")))?;
 
             if !status.is_success() {
-                let err_msg = body
-                    .get("error")
-                    .and_then(|e| e.get("message"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("未知错误");
-                return Err(LlmError::Api(format!(
-                    "HTTP {}: {err_msg}",
-                    status.as_u16()
-                )));
+                let err_msg =
+                    provider_error_detail(&body).unwrap_or_else(|| "未知错误".to_string());
+                return Err(LlmError::http_with_retry_after(
+                    status.as_u16(),
+                    err_msg,
+                    retry_after_ms,
+                ));
             }
 
             Self::parse_chat_response(&body)
@@ -472,26 +513,23 @@ impl LlmClient for AnthropicMessagesClient {
                 if e.is_timeout() {
                     LlmError::Timeout(e.to_string())
                 } else {
-                    LlmError::Api(format!("HTTP 请求失败: {e}"))
+                    LlmError::Transport(format!("HTTP 请求失败: {e}"))
                 }
             })?;
 
             let status = response.status();
+            let retry_after_ms = retry_after_ms_from_headers(response.headers());
             if !status.is_success() {
                 let err_text = response.text().await.unwrap_or_default();
                 let err_msg = serde_json::from_str::<Value>(&err_text)
                     .ok()
-                    .and_then(|v| {
-                        v.get("error")
-                            .and_then(|e| e.get("message"))
-                            .and_then(|m| m.as_str())
-                            .map(|s| s.to_string())
-                    })
+                    .and_then(|v| provider_error_detail(&v))
                     .unwrap_or(err_text);
-                return Err(LlmError::Api(format!(
-                    "HTTP {}: {err_msg}",
-                    status.as_u16()
-                )));
+                return Err(LlmError::http_with_retry_after(
+                    status.as_u16(),
+                    err_msg,
+                    retry_after_ms,
+                ));
             }
 
             let byte_stream = response
@@ -579,6 +617,7 @@ where
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut usage: Option<TokenUsage> = None;
     let mut finish_reason: Option<FinishReason> = None;
+    let mut saw_message_stop = false;
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
@@ -586,6 +625,9 @@ where
             return;
         }
         if let Some(ev) = parse_anthropic_frame(frame) {
+            if matches!(ev, AnthropicSseEvent::MessageStop) {
+                saw_message_stop = true;
+            }
             process_anthropic_event(
                 &ev,
                 on_event,
@@ -600,7 +642,13 @@ where
     })
     .await
     {
-        return Err(LlmError::Api(format!("流读取异常: {e}")));
+        return Err(LlmError::Transport(format!("流读取异常: {e}")));
+    }
+
+    if !saw_message_stop {
+        return Err(LlmError::Transport(
+            "流提前结束：未收到 message_stop".into(),
+        ));
     }
 
     Ok(StreamResult {
@@ -731,13 +779,15 @@ fn process_anthropic_event(
                     .saturating_add((*cache_read_input_tokens).unwrap_or(0))
                     .saturating_add((*cache_creation_input_tokens).unwrap_or(0)),
             );
-            *usage = Some(TokenUsage {
+            let snapshot = TokenUsage {
                 input_tokens: *input_tokens,
                 context_input_tokens,
                 output_tokens: 0,
                 cache_hit_tokens: *cache_read_input_tokens,
                 cache_miss_tokens: None,
-            });
+            };
+            *usage = Some(snapshot);
+            on_event(StreamEvent::Usage { usage: snapshot });
         }
         AnthropicSseEvent::ContentBlockStart {
             index,
@@ -866,6 +916,7 @@ fn process_anthropic_event(
             }
             if let Some(ref mut existing) = usage {
                 existing.output_tokens = *output_tokens;
+                on_event(StreamEvent::Usage { usage: *existing });
             }
         }
         AnthropicSseEvent::MessageStop => {
@@ -911,7 +962,13 @@ mod tests {
         let s = anthropic_sse_stream(frames);
         let result = parse_anthropic_sse_stream(s, &on_event).await.unwrap();
 
-        let collected = events.lock().unwrap().clone();
+        let collected = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| !matches!(event, StreamEvent::Usage { .. }))
+            .cloned()
+            .collect();
         (collected, result)
     }
 
@@ -945,6 +1002,30 @@ mod tests {
         assert_eq!(arr[0]["type"], "tool_result");
         assert_eq!(arr[0]["tool_use_id"], "toolu_1");
         assert_eq!(arr[0]["content"], "HP: 100");
+    }
+
+    #[test]
+    fn convert_parallel_tool_results_into_one_user_message() {
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        };
+        let msgs = vec![
+            ChatMessage::assistant_with_tools("", vec![call("toolu_1"), call("toolu_2")], None),
+            ChatMessage::tool_result("toolu_1", "first"),
+            ChatMessage::tool_result("toolu_2", "second"),
+        ];
+        let (_sys, an_msgs) = AnthropicMessagesClient::convert_messages(&msgs);
+        assert_eq!(an_msgs.len(), 2);
+        assert_eq!(an_msgs[1]["role"], "user");
+        let results = an_msgs[1]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["tool_use_id"], "toolu_1");
+        assert_eq!(results[1]["tool_use_id"], "toolu_2");
     }
 
     #[test]
@@ -1077,6 +1158,38 @@ mod tests {
             Some(crate::llm::FinishReason::MaxTokens)
         );
         assert_eq!(result.text, "半截回答");
+    }
+
+    #[tokio::test]
+    async fn stream_without_message_stop_is_transport_error() {
+        let frames = &[
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":3}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"半截回答"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
+            ),
+        ];
+        let on_event = |_e: StreamEvent| {};
+        let stream = anthropic_sse_stream(frames);
+        let err = parse_anthropic_sse_stream(stream, &on_event)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
     }
 
     #[tokio::test]

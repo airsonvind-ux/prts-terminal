@@ -41,6 +41,7 @@ export function useAgentEvents(): void {
       switch (e.type) {
         // ── 持久事实：追加到本轮投影缓存 ──
         case "assistant/chunk":
+        case "assistant/reset":
         case "assistant/message":
         case "tool/call":
         case "tool/result":

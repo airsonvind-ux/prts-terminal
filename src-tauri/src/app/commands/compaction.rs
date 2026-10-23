@@ -122,12 +122,14 @@ pub async fn compact_conversation(
         .get_model(&cfg.provider, &cfg.model)
         .map(|m| m.context)
         .unwrap_or(orchestrator::compaction::DEFAULT_CONTEXT_WINDOW);
+    let replay = model_registry.get_resolved_compat(&cfg.provider, &cfg.model, cfg.api_type);
     let abort = turn_registry.register(&request.session_id, &request.conversation_id);
-    let result = orchestrator::compaction::run_summary(
+    let result = orchestrator::compaction::run_summary_with_replay(
         &**client,
         &cfg,
         request.folded_history,
         window,
+        &replay,
         &system_prompt,
         &tool_defs,
         &abort,

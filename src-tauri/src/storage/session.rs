@@ -184,6 +184,12 @@ pub enum SessionEvent {
         raw_content: Option<String>,
     },
 
+    /// 流式半成品撤回：重试前丢弃上一段未完成的 assistant 输出。
+    /// 派生与展示只保留本事件之后的 chunk；工具调用出现后不重试，故不会
+    /// 撤掉已经落账的工具轮。
+    #[serde(rename = "assistant/reset", rename_all = "camelCase")]
+    AssistantReset { session_id: String },
+
     /// 最终 assistant 消息聚合（turn 结束时追加，供回放/遥测与前端归档；
     /// 派生时忽略，派生只认 chunk 序列，避免双计数）。
     /// `usage` 为最后一次 LLM 调用的 token 快照（最终上下文状态，缺陷 4 口径）。
@@ -444,6 +450,11 @@ impl SessionEvent {
             kind,
             content: content.to_string(),
             raw_content: None,
+        }
+    }
+    pub fn assistant_reset(session_id: &str) -> Self {
+        Self::AssistantReset {
+            session_id: session_id.to_string(),
         }
     }
     pub fn assistant_message(
@@ -946,6 +957,14 @@ impl SessionLog {
                 },
                 SessionEvent::AssistantProviderBlocks { blocks, .. } => {
                     pending_provider_blocks.extend(blocks.iter().cloned());
+                }
+                SessionEvent::AssistantReset { .. } => {
+                    // 被撤回的半成品不能进入下一轮 LLM 历史。只清当前未提交的
+                    // assistant 草稿；已由 tool/result 闭合的轮次不受影响。
+                    text_buf.clear();
+                    reasoning_buf.clear();
+                    pending_tool_calls.clear();
+                    pending_provider_blocks.clear();
                 }
                 SessionEvent::ToolCall {
                     call_id,
@@ -1540,6 +1559,27 @@ mod tests {
         assert_eq!(derived.len(), 2);
         assert_eq!(derived[1].content, "第一段第二段第三段");
         assert_eq!(derived[1].reasoning_content.as_deref(), Some("让我想想"));
+    }
+
+    #[test]
+    fn derive_drops_partial_output_before_reset() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::user_message("s1", "你好"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "半截回答",
+        ));
+        log.append(SessionEvent::assistant_reset("s1"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "重试成功",
+        ));
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 2);
+        assert_eq!(derived[1].content, "重试成功");
     }
 
     #[test]

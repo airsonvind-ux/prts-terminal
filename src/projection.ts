@@ -212,6 +212,13 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
           if (e.kind === "text") textBuf += e.rawContent ?? e.content;
           else reasoningBuf += e.content;
           break;
+        case "assistant/reset":
+          // 重试撤回：被放弃的半成品不进入下一轮历史。工具调用出现后
+          // 不会重试，所以这里只清当前未闭合的 assistant 草稿。
+          textBuf = "";
+          reasoningBuf = "";
+          toolCalls.length = 0;
+          break;
         case "tool/call":
           toolCalls.push({
             id: e.callId,
@@ -242,6 +249,14 @@ export interface AssistantProjection {
   reasoningContent: string;
 }
 
+/** 最后一次 assistant/reset 的下标；没有则从 0 开始。 */
+function lastResetIndex(events: SessionEvent[]): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === "assistant/reset") return i + 1;
+  }
+  return 0;
+}
+
 /**
  * 从单轮事件序列派生 assistant 展示消息。
  *
@@ -252,8 +267,11 @@ export interface AssistantProjection {
 export function deriveAssistantFromEvents(
   events: SessionEvent[]
 ): AssistantProjection | null {
+  // 最后一次撤回之后才是有效输出；之前的半成品不再展示。
+  const start = lastResetIndex(events);
+
   // 归档轮：assistant/message 是权威聚合
-  for (let i = events.length - 1; i >= 0; i--) {
+  for (let i = events.length - 1; i >= start; i--) {
     const e = events[i];
     if (e.type === "assistant/message") {
       if (e.content.length === 0) return null;
@@ -266,7 +284,8 @@ export function deriveAssistantFromEvents(
   // 流式中：chunks 累积
   let content = "";
   let reasoning = "";
-  for (const e of events) {
+  for (let i = start; i < events.length; i++) {
+    const e = events[i];
     if (e.type === "assistant/chunk") {
       if (e.kind === "text") content += e.content;
       else reasoning += e.content;
@@ -298,8 +317,11 @@ export interface TextSegment {
 export function deriveTextSegments(
   events: SessionEvent[]
 ): TextSegment[] | null {
+  // 最后一次撤回之后才是有效输出。
+  const start = lastResetIndex(events);
+
   // 归档轮：assistant/message 是权威聚合 → 单段正常显示
-  for (let i = events.length - 1; i >= 0; i--) {
+  for (let i = events.length - 1; i >= start; i--) {
     const e = events[i];
     if (e.type === "assistant/message") {
       if (e.content.length === 0) return null;
@@ -309,7 +331,8 @@ export function deriveTextSegments(
   // 流式中：chunks 累积；tool/call 回溯闭合当前段（空段不产生）
   const segments: TextSegment[] = [];
   let buf = "";
-  for (const e of events) {
+  for (let i = start; i < events.length; i++) {
+    const e = events[i];
     if (e.type === "assistant/chunk" && e.kind === "text") {
       buf += e.content;
     } else if (e.type === "tool/call" && buf.length > 0) {
@@ -328,6 +351,7 @@ export function deriveTextSegments(
 export function isMetaEvent(e: SessionEvent): boolean {
   return (
     e.type === "assistant/chunk" ||
+    e.type === "assistant/reset" ||
     e.type === "tool/call" ||
     e.type === "tool/result" ||
     e.type === "tool/approval-request" ||

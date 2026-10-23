@@ -34,6 +34,10 @@ function textChunk(sessionId: string, content: string): SessionEvent {
   return { type: "assistant/chunk", sessionId, kind: "text", content };
 }
 
+function assistantReset(sessionId: string): SessionEvent {
+  return { type: "assistant/reset", sessionId };
+}
+
 function reasoningChunk(sessionId: string, content: string): SessionEvent {
   return { type: "assistant/chunk", sessionId, kind: "reasoning", content };
 }
@@ -102,6 +106,16 @@ describe("deriveMessages", () => {
       ],
     ];
     expect(deriveMessages(turns)[1].content).toBe("【mood:高兴】\n\n晚上好");
+  });
+
+  it("流式重试：reset 之前的半截内容不进入下一轮历史", () => {
+    const turns: SessionEvent[][] = [
+      [user("s1", "你好"), textChunk("s1", "半截回答"), assistantReset("s1"), textChunk("s1", "重试成功")],
+    ];
+    expect(deriveMessages(turns)).toEqual([
+      { role: "user", content: "你好" },
+      { role: "assistant", content: "重试成功" },
+    ]);
   });
 
   it("多轮：user + assistant + user + assistant", () => {
@@ -217,6 +231,20 @@ describe("deriveAssistantFromEvents", () => {
     expect(deriveAssistantFromEvents(events)).toBeNull();
   });
 
+  it("流式重试：只取最后一次 reset 之后的内容", () => {
+    const events: SessionEvent[] = [
+      user("s1", "你好"),
+      textChunk("s1", "第一段半截"),
+      assistantReset("s1"),
+      textChunk("s1", "第二段半截"),
+      assistantReset("s1"),
+      textChunk("s1", "最终回答"),
+    ];
+    const proj = deriveAssistantFromEvents(events)!;
+    expect(proj.content).toBe("最终回答");
+    expect(proj.reasoningContent).toBe("");
+  });
+
   it("推理-only 轮：content 空但存在（reasoning 由 EventBadge 展示）", () => {
     const events: SessionEvent[] = [
       user("s1", "分析"),
@@ -271,6 +299,18 @@ describe("deriveTextSegments", () => {
     expect(deriveTextSegments(events)).toEqual([
       { content: "我来查一下", transition: true },
       { content: "敌人是整合运动", transition: false },
+    ]);
+  });
+
+  it("流式重试：reset 之前的半截文本被丢弃", () => {
+    const events: SessionEvent[] = [
+      user("s1", "你好"),
+      textChunk("s1", "半截回答"),
+      assistantReset("s1"),
+      textChunk("s1", "重试成功"),
+    ];
+    expect(deriveTextSegments(events)).toEqual([
+      { content: "重试成功", transition: false },
     ]);
   });
 

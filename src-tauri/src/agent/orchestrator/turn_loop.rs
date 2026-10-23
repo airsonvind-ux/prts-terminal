@@ -107,9 +107,19 @@ pub(super) async fn dispatch_turn_with_memory(
         // Anthropic thinking 原始块：本轮收集后挂到内存 assistant 消息，
         // 同 turn 的下一步工具续跑必须原序回传（R-27）。
         let provider_blocks = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let usage_snapshot = Arc::new(std::sync::Mutex::new(None));
         let result = tokio::select! {
             biased;
             _ = abort.wait_abort() => {
+                // 中止前已经到达的用量仍算真实消耗（例如 Anthropic 的
+                // message_start 已给出输入 token）。正常完成时不会走这里。
+                if let Some(usage) = usage_snapshot
+                    .lock()
+                    .ok()
+                    .and_then(|slot| *slot)
+                {
+                    state.add_stat(usage_stat(&usage, config.api_type));
+                }
                 debug!("step" => step, "action" => "llm_aborted");
                 return Ok(TurnOutcome::Aborted(state.stat));
             }
@@ -124,6 +134,7 @@ pub(super) async fn dispatch_turn_with_memory(
                 &tool_ctx,
                 RetryPolicy::default(),
                 Arc::clone(&provider_blocks),
+                Arc::clone(&usage_snapshot),
             ) => res?,
         };
         let step_provider_blocks = provider_blocks
@@ -144,8 +155,20 @@ pub(super) async fn dispatch_turn_with_memory(
             state.add_stat(usage_stat(&u, config.api_type));
         }
 
-        // ── 终止判断：tool_calls 为空 → completed ──
-        if result.tool_calls.is_empty() {
+        // 输出被截断时不能执行工具调用：此时的参数和工具名可能是半截的。
+        // 参考 DSH assembler：max-tokens 直接丢弃 tool-call，保留已生成的正文。
+        let truncated_tool_calls = result.finish_reason
+            == Some(crate::llm::FinishReason::MaxTokens)
+            && !result.tool_calls.is_empty();
+        if truncated_tool_calls {
+            debug!(
+                "action" => "max_tokens_tool_calls_dropped",
+                "count" => result.tool_calls.len()
+            );
+        }
+
+        // ── 终止判断：没有工具调用，或工具调用属于截断输出 → completed ──
+        if result.tool_calls.is_empty() || truncated_tool_calls {
             // 最终回答归档进上下文（与 log 的 chunk 序列一致；推理链按策略附载，
             // 保持 messages 与 derive(log) 的一致性不变量）
             if !result.text.is_empty() {

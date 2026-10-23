@@ -39,6 +39,7 @@ export type SessionEvent =
   | StepEndEvent
   | UserMessageEvent
   | AssistantChunkEvent
+  | AssistantResetEvent
   | AssistantMessageEvent
   | ToolCallEvent
   | ToolResultEvent
@@ -159,6 +160,12 @@ export interface AssistantChunkEvent {
   content: string;
   /** 模型原始文本（含情绪标签）；历史派生用，旧事件缺省。 */
   rawContent?: string;
+}
+
+/** 流式半成品撤回：重试前丢弃上一段未完成的 assistant 输出。 */
+export interface AssistantResetEvent {
+  type: "assistant/reset";
+  sessionId: string;
 }
 
 /** 最终 assistant 消息聚合（归档依据：content + reasoning + usage 快照） */

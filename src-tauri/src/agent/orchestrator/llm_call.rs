@@ -60,9 +60,9 @@ fn push_notice(content: &mut String, notice: &str) {
 
 /// 带通用重试的 LLM 调用（缺陷 3）。
 ///
-/// 仅当**请求尚未产出任何流式事件**（连接/建流阶段失败）时重试——
-/// 一旦流已开始（chunk/tool 已双写入 log 与 IPC），重试会造成
-/// 重复事件污染回放，此时直接返回错误（turn/end reason=error）。
+/// 请求阶段失败直接重试；流已经开始但只产出正文/推理时，先写
+/// `assistant/reset` 撤回这段半成品，再重试。工具调用一旦出现就不再重试——
+/// 工具卡已经可见，撤回会把用户刚看到的执行事实抹掉。
 #[allow(clippy::too_many_arguments)] // 调用面由调度循环固定，拆参数结构会扩散到所有调用点
 #[allow(dead_code)] // 测试兼容包装；生产走 call_llm_with_retry_collect
 pub(super) async fn call_llm_with_retry(
@@ -87,6 +87,7 @@ pub(super) async fn call_llm_with_retry(
         tool_ctx,
         policy,
         Arc::new(std::sync::Mutex::new(Vec::new())),
+        Arc::new(std::sync::Mutex::new(None)),
     )
     .await
 }
@@ -106,13 +107,24 @@ pub(super) async fn call_llm_with_retry_collect(
     tool_ctx: &Arc<ToolContext>,
     policy: RetryPolicy,
     provider_blocks: Arc<std::sync::Mutex<Vec<crate::llm::ProviderBlock>>>,
+    usage_snapshot: Arc<std::sync::Mutex<Option<crate::llm::TokenUsage>>>,
 ) -> Result<crate::llm::StreamResult, OrchestratorError> {
     let mut attempt: u32 = 0;
+    // 本轮是否已经产出过需要撤回的流内容（正文/推理/供应商块）；
+    // 用于决定重试前是否写撤回事件。
+    let partial_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // 工具调用一旦出现就不能撤回：UI 卡片与后续执行阶段都以它为准。
+    let tool_seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     loop {
         attempt += 1;
-        // 流是否已开始的观测标志：回调首个事件置位
-        let stream_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // 每次尝试独立收集；失败尝试的 provider 块和用量不能污染重试结果。
+        if let Ok(mut blocks) = provider_blocks.lock() {
+            blocks.clear();
+        }
+        if let Ok(mut slot) = usage_snapshot.lock() {
+            *slot = None;
+        }
 
         match call_llm_and_stream(
             session_id,
@@ -121,22 +133,31 @@ pub(super) async fn call_llm_with_retry_collect(
             llm,
             config,
             sink,
-            stream_started.clone(),
+            Arc::clone(&partial_seen),
+            Arc::clone(&tool_seen),
             tools,
             tool_ctx,
             Arc::clone(&provider_blocks),
+            Arc::clone(&usage_snapshot),
         )
         .await
         {
             Ok(result) => return Ok(result),
             Err(e) => {
-                let retryable =
-                    matches!(&e, OrchestratorError::Llm(llm_err) if is_retryable(llm_err));
+                let delay_ms = match &e {
+                    OrchestratorError::Llm(llm_err) if is_retryable(llm_err) => {
+                        policy.delay_for_error(attempt, llm_err)
+                    }
+                    _ => None,
+                };
                 let can_retry = attempt < policy.max_attempts
-                    && retryable
-                    && !stream_started.load(std::sync::atomic::Ordering::SeqCst);
+                    && delay_ms.is_some()
+                    && !tool_seen.load(std::sync::atomic::Ordering::SeqCst);
                 if can_retry {
-                    let delay_ms = policy.base_delay_ms * attempt as u64;
+                    if partial_seen.load(std::sync::atomic::Ordering::SeqCst) {
+                        sink.emit(SessionEvent::assistant_reset(session_id));
+                    }
+                    let delay_ms = delay_ms.expect("can_retry 已确认存在延迟");
                     debug!(
                         "action" => "llm_retry",
                         "attempt" => attempt,
@@ -160,8 +181,8 @@ pub(super) async fn call_llm_with_retry_collect(
 /// 2. StreamEvent → 双写映射：TextDelta/ReasoningDelta → assistant/chunk，
 ///    ToolCall → 仅 IPC（实时卡片，log 由执行阶段批量写）
 ///
-/// `stream_started` 由调用方传入：首个事件到达时置位，
-/// 供重试决策判断"流是否已开始"（开始后不可重试）。
+/// `partial_seen` / `tool_seen` 由调用方传入：分别记录正文/推理是否出现、
+/// 工具调用是否出现；重试前据此决定是否撤回半成品。
 #[allow(clippy::too_many_arguments)] // 调用面由调度循环固定，拆参数结构会扩散到所有调用点
 async fn call_llm_and_stream(
     session_id: &str,
@@ -170,10 +191,12 @@ async fn call_llm_and_stream(
     llm: &dyn LlmClient,
     config: &LlmConfig,
     sink: &EventSink,
-    stream_started: Arc<std::sync::atomic::AtomicBool>,
+    partial_seen: Arc<std::sync::atomic::AtomicBool>,
+    tool_seen: Arc<std::sync::atomic::AtomicBool>,
     tools: &Arc<ToolRegistry>,
     tool_ctx: &Arc<ToolContext>,
     provider_blocks: Arc<std::sync::Mutex<Vec<crate::llm::ProviderBlock>>>,
+    usage_snapshot: Arc<std::sync::Mutex<Option<crate::llm::TokenUsage>>>,
 ) -> Result<crate::llm::StreamResult, OrchestratorError> {
     // ── 用 Arc 共享可变状态到回调闭包中 ──
     // Mutex 保护的原因：chat_stream 的 on_event 回调是 Box<dyn Fn + Send + Sync>，
@@ -189,7 +212,10 @@ async fn call_llm_and_stream(
     let session_id_owned = session_id.to_string();
     let phase_state_clone = phase_state.clone();
     let sink_for_closure = sink.clone();
-    let stream_started_for_closure = stream_started;
+    let partial_seen_for_closure = Arc::clone(&partial_seen);
+    let partial_seen_tail = Arc::clone(&partial_seen);
+    let tool_seen_for_closure = Arc::clone(&tool_seen);
+    let tool_seen_tail = Arc::clone(&tool_seen);
     // Registry / ToolContext 以 Arc 克隆入 'static 回调：tool/call 事件在流式
     // 阶段（工具执行之前）发出，需在此解析展示切片（Tool::display）。
     let tools_for_closure = Arc::clone(tools);
@@ -206,9 +232,26 @@ async fn call_llm_and_stream(
     let tools_tail = Arc::clone(tools);
     let tool_ctx_tail = Arc::clone(tool_ctx);
     let provider_blocks_tail = Arc::clone(&provider_blocks);
+    let usage_snapshot_for_closure = Arc::clone(&usage_snapshot);
 
     let on_event = Box::new(move |event: StreamEvent| {
-        stream_started_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Usage 只是计费快照，不代表用户已经看到内容；它不能阻止空响应重试。
+        match &event {
+            StreamEvent::TextDelta { .. }
+            | StreamEvent::ReasoningDelta { .. }
+            | StreamEvent::ProviderBlock { .. } => {
+                partial_seen_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            StreamEvent::ToolCall { .. } => {
+                tool_seen_for_closure.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        if let StreamEvent::Usage { usage } = &event {
+            if let Ok(mut slot) = usage_snapshot_for_closure.lock() {
+                *slot = Some(*usage);
+            }
+        }
         let passed = match guard_for_closure.lock() {
             Ok(mut guard) => guard.push(event),
             // 锁中毒（持锁 panic）按"原样放行"处理：清洗是加分项，不能因为锁坏了吞事件。
@@ -237,6 +280,18 @@ async fn call_llm_and_stream(
         Err(_) => Vec::new(),
     };
     for event in tail {
+        // finish 回写的正文/推理/块同样属于这次尝试的事实；失败重试时必须撤回。
+        match &event {
+            StreamEvent::TextDelta { .. }
+            | StreamEvent::ReasoningDelta { .. }
+            | StreamEvent::ProviderBlock { .. } => {
+                partial_seen_tail.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            StreamEvent::ToolCall { .. } => {
+                tool_seen_tail.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            _ => {}
+        }
         handle_stream_event_collect(
             &session_id_tail,
             event,
@@ -251,6 +306,9 @@ async fn call_llm_and_stream(
     let mut result = outcome?;
     if let Ok(mut guard) = guard.lock() {
         guard.sanitize_result(&mut result);
+    }
+    if result.is_empty_response() {
+        return Err(OrchestratorError::Llm(crate::llm::LlmError::EmptyResponse));
     }
     Ok(result)
 }
@@ -310,6 +368,10 @@ pub(super) fn handle_stream_event_collect(
                 ChunkKind::Reasoning,
                 &content,
             ));
+        }
+
+        StreamEvent::Usage { .. } => {
+            // 用量快照只供中止路径兜底；正常完成以 StreamResult.usage 为准。
         }
 
         StreamEvent::ProviderBlock { block } => {
