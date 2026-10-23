@@ -14,7 +14,7 @@
 //! 离线确定性测试，不触碰真实网络。
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -46,34 +46,75 @@ pub fn parse_http_url(raw: &str) -> Result<reqwest::Url, UrlReject> {
 // SSRF 防护：IP 字面量分类
 // ═══════════════════════════════════════════════════════
 
-/// 判断 IP 是否属于"不可访问"的私有/本机/链路本地/保留范围。
+/// 判断 IP 是否不可作为抓取目标（非全局单播）。
 ///
-/// 覆盖（对齐 M5 定稿清单 + 防御补强）：
+/// 口径对齐 DSH `web-fetch-http`：IPv4 按私有/保留段判定；IPv6 只放行
+/// 全局单播，过渡/翻译前缀整段拒绝。即使 6to4、Teredo、NAT64 地址
+/// 内嵌的是公网 IPv4，也不在这里放行：连接固定的是 IPv6 目标，无法
+/// 同时固定其最终 IPv4 目的地。
+///
+/// 覆盖：
 /// - IPv4 回环 127.0.0.0/8、未指定 0.0.0.0/8、RFC1918（10/8、172.16/12、
 ///   192.168/16）、链路本地 169.254/16、CGNAT 100.64/10、基准测试
 ///   198.18/15、文档/保留段（192.0.0/24、192.0.2/24、198.51.100/24、
 ///   203.0.113/24、192.88.99/24）、组播/保留 224.0.0.0/3
 /// - IPv6 回环 ::1、未指定 ::、链路本地 fe80::/10、ULA fc00::/7、
-///   组播 ff00::/8、文档段 2001:db8::/32
+///   组播 ff00::/8，以及 [`NON_PUBLIC_IPV6_PREFIXES`] 中的过渡/特殊段
 /// - IPv4 映射 IPv6（::ffff:a.b.c.d）按其内嵌 v4 地址复查（否则
 ///   127.0.0.1 经 ::ffff:127.0.0.1 形态可绕过回环判定）
 /// - 其余地址一律放行（公网）
 pub fn is_private_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_private_ipv4(*v4),
-        IpAddr::V6(v6) => {
-            // 先处理 v4 映射形态（含 IPv4 兼容的压缩书写）
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_private_ipv4(v4);
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_unicast_link_local()
-                || v6.is_unique_local()
-                || v6.is_multicast()
-                || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
-        }
+        IpAddr::V6(v6) => is_non_public_ipv6(*v6),
     }
+}
+
+/// IPv6 特殊用途/过渡前缀（非全局单播，整段拒绝）。
+///
+/// 表内是（前缀值，前缀长度）；前缀值只用于掩码比较，低位的非前缀位
+/// 可以为 0。来源：IANA IPv6 Special-Purpose Address Registry，口径与
+/// DSH 的 `ipaddr.js range() == "unicast"` 对齐。
+const NON_PUBLIC_IPV6_PREFIXES: &[(u128, u8)] = &[
+    (0x0000_0000_0000_0000_0000_0000_0000_0000, 96), // ::/96 IPv4-compatible（已废弃）
+    (0x0000_0000_0000_0000_ffff_0000_0000_0000, 96), // ::ffff:0:0:0/96 RFC 6145
+    (0x0064_ff9b_0000_0000_0000_0000_0000_0000, 96), // 64:ff9b::/96 NAT64
+    (0x0064_ff9b_0001_0000_0000_0000_0000_0000, 48), // 64:ff9b:1::/48 本地 NAT64
+    (0x0100_0000_0000_0000_0000_0000_0000_0000, 64), // 100::/64 discard-only
+    (0x2001_0000_0000_0000_0000_0000_0000_0000, 32), // 2001::/32 Teredo
+    (0x2001_0002_0000_0000_0000_0000_0000_0000, 48), // 2001:2::/48 benchmarking
+    (0x2001_0003_0000_0000_0000_0000_0000_0000, 32), // 2001:3::/32 AMT
+    (0x2001_0004_0112_0000_0000_0000_0000_0000, 48), // 2001:4:112::/48 AS112
+    (0x2001_0010_0000_0000_0000_0000_0000_0000, 28), // 2001:10::/28 ORCHID
+    (0x2001_0020_0000_0000_0000_0000_0000_0000, 28), // 2001:20::/28 ORCHIDv2
+    (0x2001_0030_0000_0000_0000_0000_0000_0000, 28), // 2001:30::/28 Drone RID
+    (0x2001_0db8_0000_0000_0000_0000_0000_0000, 32), // 2001:db8::/32 文档段
+    (0x2002_0000_0000_0000_0000_0000_0000_0000, 16), // 2002::/16 6to4
+    (0x3fff_0000_0000_0000_0000_0000_0000_0000, 20), // 3fff::/20 文档段
+    (0xfec0_0000_0000_0000_0000_0000_0000_0000, 10), // fec0::/10 站点本地（已废弃）
+];
+
+fn is_non_public_ipv6(v6: Ipv6Addr) -> bool {
+    // 先处理 v4 映射形态；::ffff:a.b.c.d 内嵌的 v4 仍需按 v4 规则复查。
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return is_private_ipv4(v4);
+    }
+    v6.is_loopback()
+        || v6.is_unspecified()
+        || v6.is_unicast_link_local()
+        || v6.is_unique_local()
+        || v6.is_multicast()
+        || NON_PUBLIC_IPV6_PREFIXES
+            .iter()
+            .any(|(prefix, bits)| ipv6_in_prefix(v6, *prefix, *bits))
+}
+
+fn ipv6_in_prefix(ip: Ipv6Addr, prefix: u128, bits: u8) -> bool {
+    if bits == 0 {
+        return true;
+    }
+    let mask = u128::MAX << (128 - u32::from(bits));
+    (ip.to_bits() & mask) == (prefix & mask)
 }
 
 fn is_private_ipv4(v4: Ipv4Addr) -> bool {
@@ -330,6 +371,31 @@ mod tests {
             "::ffff:169.254.1.1",
             "::ffff:172.20.0.1",
             "::ffff:0.0.0.0",
+            // IPv4-compatible / RFC 6145 / NAT64
+            "::a00:1",
+            "::ffff:0:0:0",
+            "64:ff9b::a00:1",
+            "64:ff9b:1::1",
+            // 6to4 / Teredo 内嵌私有 v4
+            "2002:0a00:0001::1",
+            "2001:0:4136:e378:8000:63bf:f5ff:fffe",
+            // 过渡前缀即使内嵌公网 v4 也整段拒绝
+            "64:ff9b::808:808",
+            "2002:0808:0808::1",
+            // IANA 特殊用途段
+            "100::1",
+            "2001:2::1",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:10::1",
+            "2001:1f::1",
+            "2001:20::1",
+            "2001:2f::1",
+            "2001:30::1",
+            "2001:3f::1",
+            "3fff::1",
+            "fec0::1",
+            "feff::1",
         ];
         for s in private {
             assert!(is_private_ip(&ip(s)), "应判定私有: {s}");
@@ -352,6 +418,14 @@ mod tests {
             "2001:4860:4860::8888",
             "2606:4700:4700::1111",
             "2400:3200::1",
+            // 特殊段边界外仍是普通公网 v6
+            "2001:db7::1",
+            "2001:db9::1",
+            "2001:4:113::1",
+            "2001:9::1",
+            "2001:40::1",
+            "3ffe::1",
+            "100:0:0:1::1",
             // v4 映射 v6 内嵌公网
             "::ffff:8.8.8.8",
             "::ffff:1.1.1.1",
@@ -413,6 +487,8 @@ mod tests {
         assert!(host_is_blocked("10.0.0.1", &empty, mock_resolve));
         assert!(host_is_blocked("::1", &empty, mock_resolve));
         assert!(host_is_blocked("::ffff:127.0.0.1", &empty, mock_resolve));
+        assert!(host_is_blocked("64:ff9b::a00:1", &empty, mock_resolve));
+        assert!(host_is_blocked("2002:0a00:0001::1", &empty, mock_resolve));
         // 字面量公网 → 放
         assert!(!host_is_blocked("8.8.8.8", &empty, mock_resolve));
         // 字面量直接分类，不该调用 resolver（域名 mock 不认识的 IP 串也会过）
