@@ -5,19 +5,22 @@
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Clean      # 先清空构建目录，全量重编
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Jobs 4     # 限制并行编译数（内存紧张时）
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -DryRun     # 只做检查与预告，不构建
+#   powershell -ExecutionPolicy Bypass -File .\build.ps1 -AllowDirty # 工作树不干净也继续；仍跑质量门禁，产物不作为发布候选
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Config src-tauri\tauri.updater-test.conf.json
 #                                                                    # 合并测试配置（本地更新源）
 #
 # 屏幕上看得到：
-#   1) 前置检查（工具是否就绪、构建盘剩余空间）
-#   2) 构建过程：cargo 会实时刷新进度条，形如 Building [====> ] 326/574
-#   3) 结果汇总：耗时、安装包路径与大小、target 目录体积
+#   1) 前置检查（工具是否就绪、版本一致性、构建盘剩余空间）
+#   2) 质量门禁（工作树、测试、格式、clippy）
+#   3) 构建过程：cargo 会实时刷新进度条，形如 Building [====> ] 326/574
+#   4) 结果汇总：耗时、安装包路径与大小、target 目录体积
 # 完整日志同时落盘到 build-log-<时间>.txt；失败时会自动把日志末尾 40 行打出来。
 
 param(
     [switch]$Clean,
     [int]$Jobs = 0,
     [switch]$DryRun,
+    [switch]$AllowDirty,
     [string]$Config = ""
 )
 
@@ -43,6 +46,35 @@ function Say([string]$msg) {
 function WriteLog([string]$text) {
     $script:logStream.WriteLine($text)
     $script:logStream.Flush()
+}
+
+# 质量门禁：任一检查失败立即中止，避免从红测试/格式漂移的工作树出包。
+function Invoke-Check([string]$label, [scriptblock]$command) {
+    Say ('      ' + $label)
+    & $command 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Say ('      ' + $label + ' 失败，已中止。')
+        exit 1
+    }
+}
+
+function Test-WorktreeClean {
+    $dirty = @(git status --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        Say '      git status 失败，已中止。'
+        exit 1
+    }
+    if ($dirty.Count -eq 0) {
+        Say '      工作树干净'
+        return
+    }
+    if (-not $AllowDirty) {
+        Say '      工作树不干净，已中止。请先提交或清理改动，或显式使用 -AllowDirty。'
+        $dirty | ForEach-Object { Say ('        ' + $_) }
+        exit 1
+    }
+    Say '      工作树不干净（-AllowDirty）：继续，但本次产物不作为发布候选。'
+    $dirty | ForEach-Object { Say ('        ' + $_) }
 }
 
 function SizeOf([string]$p) {
@@ -88,9 +120,9 @@ Say '========================================'
 
 # ── 1/3 前置检查 ──
 Say ''
-Say '[1/3] 前置检查'
+Say '[1/4] 前置检查'
 $missing = @()
-foreach ($tool in 'node', 'npm', 'python', 'cargo', 'rustc') {
+foreach ($tool in 'node', 'npm', 'python', 'cargo', 'rustc', 'git') {
     if (Get-Command $tool -ErrorAction SilentlyContinue) {
         Say ('      {0,-6} 就绪' -f $tool)
     } else {
@@ -121,9 +153,22 @@ $freeGB = [math]::Round((Get-PSDrive -Name $drive).Free / 1GB, 1)
 Say ('      构建盘 {0}: 剩余 {1} GB' -f $drive, $freeGB)
 if ($freeGB -lt 20) { Say '      注意：剩余空间偏低，构建可能失败。' }
 
-# ── 2/3 构建 ──
+# ── 2/4 质量门禁 ──
 Say ''
-Say '[2/3] 开始构建（前端 → MAA 桥 → Rust 发布编译 → NSIS 打包）'
+Say '[2/4] 质量门禁'
+if ($DryRun) {
+    Say '      -DryRun：跳过测试、格式与静态检查。'
+} else {
+    Test-WorktreeClean
+    Invoke-Check 'npm test' { npm test }
+    Invoke-Check 'cargo fmt --check' { cargo fmt --manifest-path src-tauri/Cargo.toml -- --check }
+    Invoke-Check 'cargo clippy' { cargo clippy --tests --lib --manifest-path src-tauri/Cargo.toml -- -D warnings }
+    Invoke-Check 'cargo test --lib' { cargo test --lib --manifest-path src-tauri/Cargo.toml }
+}
+
+# ── 3/4 构建 ──
+Say ''
+Say '[3/4] 开始构建（前端 → MAA 桥 → Rust 发布编译 → NSIS 打包）'
 Say '      冷启动通常十几分钟起；热启动约 2-3 分钟。'
 Say '      cargo 的进度条会显示 已完成/总数，例如 Building [====> ] 326/574。'
 Say ''
@@ -131,7 +176,7 @@ Say ''
 if ($DryRun) {
     Say '      -DryRun：只做检查与预告，不执行构建。'
     Say ''
-    Say '[3/3] 跳过构建（-DryRun）'
+    Say '[4/4] 跳过构建（-DryRun）'
     Say ('      target 目录当前：' + (SizeOf (Join-Path $root 'src-tauri\target')))
     Say ''
     Say '检查完成。去掉 -DryRun 即可真正构建。'
@@ -194,7 +239,7 @@ $sw.Stop()
 # ── 3/3 结果 ──
 Say ''
 if ($code -eq 0) {
-    Say ('[3/3] 构建成功，耗时 {0}' -f $sw.Elapsed.ToString('hh\:mm\:ss'))
+    Say ('[4/4] 构建成功，耗时 {0}' -f $sw.Elapsed.ToString('hh\:mm\:ss'))
     Say '      安装包：'
     $nsis = Join-Path $root 'src-tauri\target\release\bundle\nsis'
     $versionToken = '_' + [regex]::Escape($tauriVersion) + '_'
@@ -255,7 +300,7 @@ if ($code -eq 0) {
     }
     Say '完成。'
 } else {
-    Say ('[3/3] 构建失败（退出码 {0}），耗时 {1}' -f $code, $sw.Elapsed.ToString('hh\:mm\:ss'))
+    Say ('[4/4] 构建失败（退出码 {0}），耗时 {1}' -f $code, $sw.Elapsed.ToString('hh\:mm\:ss'))
     Say '      日志末尾 40 行：'
     Say '      ----------------------------------------'
     if (Test-Path $script:logFile) {
