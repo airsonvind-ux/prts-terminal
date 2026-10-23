@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::skills::trust::{self, SkillTrust};
-use crate::skills::SkillMeta;
+use crate::skills::{SkillMeta, MAX_SKILL_DESCRIPTION_CHARS};
 
 /// Skill 索引：name → 元数据 + 正文（剥 frontmatter）+ 源文件路径。
 #[derive(Debug)]
@@ -194,24 +194,28 @@ impl SkillIndex {
         names
     }
 
-    /// 目录清单文本：每条一行 `- {name}：{description}`，按 name 排序，
+    /// 目录清单文本：每条一行 `- {name}［{source}］：{description}`，按 name 排序，
     /// 行间 `\n` 连接；空索引返回空字符串。
+    ///
+    /// 描述在目录层统一压成单行并限长；来源只映射受控枚举，不展示
+    /// frontmatter 里的任意字符串。
     pub fn catalog_text(&self) -> String {
         self.names()
             .into_iter()
             .map(|name| {
-                let desc = self
-                    .skills
-                    .get(name)
-                    .map(|m| m.description.as_str())
+                let meta = self.skills.get(name);
+                let desc = meta
+                    .map(|m| catalog_description(&m.description))
                     .unwrap_or_default();
-                format!("- {name}：{desc}")
+                let source = source_label(meta.and_then(|m| m.source.as_deref()));
+                format!("- {name}［{source}］：{desc}")
             })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     /// 全部条目 `(name, description)` 对，按 name 排序（提醒 diff / 基线用，批 3）。
+    /// 描述与目录层同口径压缩，避免 UI/提醒仍看到未限长原文。
     pub fn catalog_pairs(&self) -> Vec<(String, String)> {
         self.names()
             .into_iter()
@@ -219,11 +223,31 @@ impl SkillIndex {
                 let desc = self
                     .skills
                     .get(name)
-                    .map(|m| m.description.clone())
+                    .map(|m| catalog_description(&m.description))
                     .unwrap_or_default();
                 (name.to_string(), desc)
             })
             .collect()
+    }
+}
+
+/// 目录描述：压成单行，超过上限时截断并加省略号。
+fn catalog_description(raw: &str) -> String {
+    let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= MAX_SKILL_DESCRIPTION_CHARS {
+        return compact;
+    }
+    let mut truncated: String = compact.chars().take(MAX_SKILL_DESCRIPTION_CHARS).collect();
+    truncated.push('…');
+    truncated
+}
+
+/// 来源只暴露受控标签；未知值按用户处理，不把 frontmatter 原文带进 system。
+fn source_label(raw: Option<&str>) -> &'static str {
+    match raw.unwrap_or_default().trim().to_ascii_lowercase().as_str() {
+        "builtin" => "内置",
+        "community" => "社区",
+        _ => "用户",
     }
 }
 
@@ -507,8 +531,49 @@ mod tests {
         );
         assert_eq!(idx.body("不存在"), None);
 
-        // catalog_text 按 name 排序（贝塔 < 阿尔法，与文件名顺序相反）且行格式正确
-        assert_eq!(idx.catalog_text(), "- 贝塔：条目 B\n- 阿尔法：条目 A");
+        // catalog_text 按 name 排序（贝塔 < 阿尔法，与文件名顺序相反），
+        // 行尾带受控来源标签（fixture 未声明 source → 用户）。
+        assert_eq!(
+            idx.catalog_text(),
+            "- 贝塔［用户］：条目 B\n- 阿尔法［用户］：条目 A"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn catalog_text_marks_source_and_caps_description() {
+        let root = unique_temp_dir("catalog-meta");
+        std::fs::write(
+            root.join("builtin.md"),
+            "---\nname: builtin-skill\ndescription: 内置描述\nsource: builtin\n---",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("community.md"),
+            "---\nname: community-skill\ndescription: 社区描述\nsource: community\n---",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("unknown.md"),
+            "---\nname: unknown-skill\ndescription: 未知来源\nsource: admin\n---",
+        )
+        .unwrap();
+        let long = "长".repeat(crate::skills::MAX_SKILL_DESCRIPTION_CHARS + 5);
+        std::fs::write(
+            root.join("long.md"),
+            format!("---\nname: long-skill\ndescription: {long}\n---"),
+        )
+        .unwrap();
+
+        let idx = SkillIndex::load(&root).unwrap();
+        let catalog = idx.catalog_text();
+        assert!(catalog.contains("- builtin-skill［内置］：内置描述"));
+        assert!(catalog.contains("- community-skill［社区］：社区描述"));
+        assert!(catalog.contains("- unknown-skill［用户］：未知来源"));
+        assert!(catalog.contains("- long-skill［用户］："));
+        assert!(catalog.contains('…'));
+        assert!(!catalog.contains(&long));
 
         let _ = std::fs::remove_dir_all(&root);
     }

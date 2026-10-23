@@ -24,6 +24,9 @@ pub mod trust;
 
 use crate::knowledge::parse_frontmatter_fields;
 
+/// Skill 描述上限（字符数）：目录会逐轮进入 system prompt，描述必须可预算。
+pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 300;
+
 /// Skill 目录条目元数据。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkillMeta {

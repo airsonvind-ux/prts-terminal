@@ -486,7 +486,9 @@ mod tests {
         let prompt = assemble_system_prompt(&idx.catalog_text());
 
         // 层序：Base 人格 → Skill 目录（Catalog）→（无 Active/Reference）
-        assert!(prompt.contains("## Skill 目录\n\n- 贝塔：条目 B\n- 阿尔法：条目 A"));
+        assert!(
+            prompt.contains("## Skill 目录\n\n- 贝塔［用户］：条目 B\n- 阿尔法［用户］：条目 A")
+        );
         let persona_pos = prompt.find(SYSTEM_PROMPT).unwrap();
         let catalog_pos = prompt.find("## Skill 目录").unwrap();
         assert!(catalog_pos > persona_pos, "Catalog 应在 Base 人格之后");

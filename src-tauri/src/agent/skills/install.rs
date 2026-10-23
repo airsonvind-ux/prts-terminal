@@ -18,8 +18,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::memory::store::atomic_write;
-use crate::skills::parse_skill_frontmatter;
 use crate::skills::trust::{self, PackageInspection, SkillScriptFile, SkillTrust};
+use crate::skills::{parse_skill_frontmatter, MAX_SKILL_DESCRIPTION_CHARS};
 use crate::skills_index::SkillIndex;
 use serde::Serialize;
 
@@ -245,14 +245,26 @@ pub fn remove_skill(file_path: &Path, skills_root: &Path) -> Result<String, Stri
 // 内部辅助
 // ═══════════════════════════════════════════════════════
 
-/// frontmatter 校验：name 合法 + description 非空；返回 (name, desc, source)。
+/// frontmatter 校验：name 合法 + description 非空/单行/限长；返回 (name, desc, source)。
 fn validate_meta(text: &str) -> Result<(String, String, Option<String>), String> {
     let meta = parse_skill_frontmatter(text)
         .ok_or_else(|| "缺少或无法解析 frontmatter（至少需要 name）".to_string())?;
     let name = validate_skill_name(&meta.name)?;
-    let description = meta.description.trim().to_string();
+    // 描述会逐轮进入 system prompt 的 Skill 目录：压成单行并限长，
+    // 超限直接拒绝，不做静默截断（截断会让用户以为描述完整生效）。
+    let description = meta
+        .description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     if description.is_empty() {
         return Err("frontmatter 缺少 description（描述即激活判据，不可为空）".into());
+    }
+    let description_chars = description.chars().count();
+    if description_chars > MAX_SKILL_DESCRIPTION_CHARS {
+        return Err(format!(
+            "Skill 描述过长（当前 {description_chars} 字，上限 {MAX_SKILL_DESCRIPTION_CHARS} 字）"
+        ));
     }
     Ok((name, description, meta.source))
 }
@@ -464,6 +476,23 @@ mod tests {
         assert!(out.resource_dir.is_none());
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&src);
+    }
+
+    #[test]
+    fn validate_meta_rejects_overlong_description() {
+        let text = format!(
+            "---\nname: 长描述\ndescription: {}\n---",
+            "长".repeat(crate::skills::MAX_SKILL_DESCRIPTION_CHARS + 1)
+        );
+        let err = validate_meta(&text).unwrap_err();
+        assert!(err.contains("描述过长"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_meta_compacts_description_whitespace() {
+        let (_, description, _) =
+            validate_meta("---\nname: 空白\ndescription: 第一行   第二行\t第三行\n---").unwrap();
+        assert_eq!(description, "第一行 第二行 第三行");
     }
 
     #[test]
