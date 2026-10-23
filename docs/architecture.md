@@ -18,7 +18,7 @@ src-tauri/
 └─ content/         知识库、技能、提示词、随包文档
 ```
 
-`content/` 是内容资产，不参与 Rust 模块编译；`bridge/` 是独立 AGPL crate。
+`content/` 是内容资产：`content/prompts/` 通过 `include_str!` 编译进二进制，`knowledge/`、`skills/`、`docs/` 作为 Tauri resources 随包分发；`bridge/` 是独立 AGPL crate。
 
 前端按 feature 组织：
 
@@ -55,7 +55,7 @@ agent → llm / tools / storage
 tools → storage / integrations
 ```
 
-`agent` 不依赖 Tauri，`tools` 不依赖 UI，`content` 不被代码反向依赖。
+`agent` 不依赖 Tauri，`tools` 不依赖 UI；`content/prompts` 被 Rust 编译期嵌入，`knowledge/skills/docs` 不被代码反向依赖。
 
 ## 一次 turn 的生命周期
 
@@ -96,7 +96,7 @@ tools → storage / integrations
 
 ## 内容资产
 
-知识库、技能、提示词和随包使用说明属于内容，不属于 Rust 模块。它们由 `content/` 维护，通过 Tauri `resources` 映射进入安装包。内容更新不应该改变代码模块的路径语义。
+知识库、技能和随包使用说明属于运行时内容，由 `content/` 维护，通过 Tauri `resources` 映射进入安装包。系统提示词（`content/prompts/`）是另一类资产：它们通过 `include_str!` 在编译期嵌入二进制，修改后必须重新编译 Rust。内容更新不应该改变代码模块的路径语义。
 
 ## 外部集成
 

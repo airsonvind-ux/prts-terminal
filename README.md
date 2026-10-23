@@ -36,7 +36,7 @@ PRTS Terminal 不是聊天壳，而是一个带工具循环的领域 Agent：
 ### 环境
 
 - Windows 10/11 x64
-- Node.js 20+
+- Node.js 22.22.2+（22.x）、24.15+ 或 26+（需满足 jsdom 30；见 `.nvmrc`）
 - Rust stable（MSVC toolchain）
 - Python 3.11+（构建 MAA 桥需要；维护数据管线也需要）
 
