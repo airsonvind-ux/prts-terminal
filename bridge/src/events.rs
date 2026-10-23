@@ -213,3 +213,24 @@ pub fn msg_name(code: AsstMsgId) -> &'static str {
         _ => "Unknown",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn msg_name_maps_known_codes_and_unknown() {
+        assert_eq!(msg_name(0), "InternalError");
+        assert_eq!(msg_name(20001), "SubTaskStart");
+        assert_eq!(msg_name(SUBTASK_EXTRA_INFO), "SubTaskExtraInfo");
+        assert_eq!(msg_name(30000), "ReportRequest");
+        assert_eq!(msg_name(99999), "Unknown");
+    }
+
+    #[test]
+    fn recognition_kinds_keep_key_entries() {
+        assert!(RECOGNITION_KINDS.contains(&"RecruitResult"));
+        assert!(RECOGNITION_KINDS.contains(&"StageDrops"));
+        assert!(RECOGNITION_KINDS.contains(&"RoguelikeEvent"));
+    }
+}

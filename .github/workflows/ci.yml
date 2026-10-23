@@ -54,4 +54,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge
-      - run: cargo check --manifest-path bridge/Cargo.toml
+      - name: Test bridge
+        run: cargo test --manifest-path bridge/Cargo.toml

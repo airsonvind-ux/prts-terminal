@@ -53,3 +53,81 @@ pub fn read_frame(input: &mut (impl Read + ?Sized)) -> io::Result<Option<Vec<u8>
     input.read_exact(&mut buf)?;
     Ok(Some(buf))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn sink_and_buffer() -> (Sink, Arc<Mutex<Vec<u8>>>) {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let sink = Sink::from_writer(Box::new(SharedWriter(buffer.clone())));
+        (sink, buffer)
+    }
+
+    #[test]
+    fn emit_writes_length_prefixed_json_frame() {
+        let (sink, buffer) = sink_and_buffer();
+        sink.emit(&serde_json::json!({"event": "maa", "code": 20003}))
+            .unwrap();
+
+        let bytes = buffer.lock().unwrap().clone();
+        assert!(bytes.len() > 4, "应写出长度前缀和正文");
+        let expected_len = (bytes.len() - 4) as u32;
+        assert_eq!(&bytes[..4], &expected_len.to_be_bytes());
+
+        let mut cursor = io::Cursor::new(bytes);
+        let frame = read_frame(&mut cursor).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        assert_eq!(value["event"], "maa");
+        assert_eq!(value["code"], 20003);
+    }
+
+    #[test]
+    fn read_frame_returns_none_on_empty_input() {
+        let mut cursor = io::Cursor::new(Vec::new());
+        assert!(read_frame(&mut cursor).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_frame_treats_short_header_as_eof_and_rejects_short_body() {
+        // 头部不足 4 字节按 EOF 处理（对端关闭）；正文不足声明长度才是错误。
+        let mut short_header = io::Cursor::new(vec![0u8, 0, 0]);
+        assert!(read_frame(&mut short_header).unwrap().is_none());
+
+        let mut short_body = io::Cursor::new(vec![0u8, 0, 0, 8, b'{']);
+        assert!(read_frame(&mut short_body).is_err());
+    }
+
+    #[test]
+    fn read_frame_reads_multiple_frames_in_order() {
+        let (sink, buffer) = sink_and_buffer();
+        sink.emit(&serde_json::json!({"seq": 1})).unwrap();
+        sink.emit(&serde_json::json!({"seq": 2})).unwrap();
+
+        let bytes = buffer.lock().unwrap().clone();
+        let mut cursor = io::Cursor::new(bytes);
+        let first: serde_json::Value =
+            serde_json::from_slice(&read_frame(&mut cursor).unwrap().unwrap()).unwrap();
+        let second: serde_json::Value =
+            serde_json::from_slice(&read_frame(&mut cursor).unwrap().unwrap()).unwrap();
+        assert_eq!(first["seq"], 1);
+        assert_eq!(second["seq"], 2);
+        assert!(read_frame(&mut cursor).unwrap().is_none());
+    }
+}
