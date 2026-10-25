@@ -407,12 +407,16 @@ def run(spec, argv=None):
             print("    %s  %s" % (Pending.kstr(k), rows[k].get("名称") or ""))
         if not args.dry_run:
             added = 0
+            exempt_new = 0
             for k in new_keys:
-                if not exempt(k):
-                    added += 1 if pending.add(k, rows[k].get("名称") or "") else 0
+                if exempt(k):
+                    exempt_new += 1
+                elif pending.add(k, rows[k].get("名称") or ""):
+                    added += 1
             record["pending"]["入口"] = added
-            if added:
-                print("  登记待办: %d（豁免 %d）" % (added, len(new_keys) - added))
+            record["新增"]["豁免"] = exempt_new
+            if added or exempt_new:
+                print("  登记待办: %d（豁免 %d）" % (added, exempt_new))
 
     # ── 2. 爬取（--crawl）──
     outcomes = {}

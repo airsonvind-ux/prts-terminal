@@ -1,6 +1,6 @@
 [package]
 name = "prts-terminal"
-version = "0.1.0"
+version = "0.1.1"
 description = "PRTS Terminal：面向明日方舟的专用 Agent 终端助手（桌面应用）"
 authors = ["AirsonVind"]
 license = "Apache-2.0"

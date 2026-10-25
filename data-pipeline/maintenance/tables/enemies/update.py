@@ -450,6 +450,8 @@ def crawl(keys, rows):
 # ─── 行级豁免 ──────────────────────────────────────────────────
 
 def row_exempt(key):
+    # 55 段是特殊活动敌人，整段由人工处理，不能按 ID 边界收窄；
+    # 这类新行仍会写库，但不会进入 pending，也不会被 --crawl 触碰。
     return str(key[0]).startswith(ROW_EXEMPT_PREFIXES)
 
 
