@@ -329,18 +329,19 @@ describe("场景 4：turn/end 归档", () => {
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.turns).toHaveLength(1);
     const turn = conv.turns[0];
-    // 时序：user → mood/event → chunk → assistant/message
+    // 时序：user → mood/event → chunk → assistant/message → turn/end
     expect(turn.map((e) => e.type)).toEqual([
       "user/message",
       "mood/event",
       "assistant/chunk",
       "assistant/message",
+      "turn/end",
     ]);
     // chunk 剥离
     expect(turn[2].type).toBe("assistant/chunk");
     expect((turn[2] as { content: string }).content).toBe("答案在此。");
     // assistant/message 剥离（防止归档瞬间标签复活）
-    const msg = turn[turn.length - 1];
+    const msg = turn[turn.length - 2];
     expect(msg.type).toBe("assistant/message");
     expect((msg as { content: string }).content).toBe("答案在此。");
 
@@ -591,6 +592,7 @@ describe("场景 9：mood/event 情绪事件", () => {
       "mood/event",
       "assistant/chunk",
       "assistant/message",
+      "turn/end",
     ]);
     expect(turn.filter((e) => e.type === "mood/event")).toHaveLength(1); // 防重
     expect(turn[1]).toEqual({

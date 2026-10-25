@@ -56,6 +56,14 @@ function renderHost() {
 }
 
 describe("ToastHost · 可点动作", () => {
+  it("空队列也保留 status live region，提示出现时可被读屏播报", () => {
+    renderHost();
+    const host = document.body.querySelector<HTMLElement>('[role="status"]');
+    expect(host).not.toBeNull();
+    expect(host?.getAttribute("aria-live")).toBe("polite");
+    expect(host?.textContent).toBe("");
+  });
+
   it("带 onClick：可点语义（title=点击查看）→ 点击执行动作并关闭", () => {
     const clicked = { count: 0 };
     act(() => {

@@ -54,17 +54,27 @@
   margin-bottom: 2px;
 }
 
+.tabList {
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── 导航项（label 全 2 字；栏宽按实际收紧） ── */
 
 .navItem {
+  width: 100%;
   font-size: 11px;
+  font-family: var(--font-ui);
   color: var(--text-2);
   padding: 5px 6px;
   cursor: pointer;
+  border: 0;
   border-left: 2px solid transparent;
+  background: transparent;
   transition: color 0.12s ease, background 0.12s ease, border-left-color 0.15s ease;
   white-space: nowrap;
   text-align: center;
+  box-sizing: border-box;
 }
 
 .navItem:hover {

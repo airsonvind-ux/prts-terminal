@@ -18,9 +18,10 @@ mod win32;
 
 use std::ffi::c_void;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
@@ -166,6 +167,17 @@ fn main() -> ExitCode {
     code
 }
 
+/// 截图落点：固定的 `out_dir/screenshots/`，文件名由桥生成。
+fn screenshot_path(out_dir: &Path) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    out_dir
+        .join("screenshots")
+        .join(format!("screenshot_{nanos}.png"))
+}
+
 /// 桥被连上之前愿意等多久。
 ///
 /// 父进程正常退出时，桥会从连接上读到 EOF 自行退出；但父进程若在 connect
@@ -245,7 +257,9 @@ impl Session<'_> {
     }
 
     fn emit_error(&self, id: Value, msg: String) {
-        let _ = self.sink.emit(&json!({ "event": "error", "id": id, "error": msg }));
+        let _ = self
+            .sink
+            .emit(&json!({ "event": "error", "id": id, "error": msg }));
     }
 
     /// 返回 `false` 表示请求退出。
@@ -365,9 +379,7 @@ impl Session<'_> {
                     let x = cmd.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
                     let y = cmd.get("y").and_then(Value::as_i64).unwrap_or(0) as i32;
                     match inst.click(x, y) {
-                        Ok(call_id) => {
-                            self.reply(&id, true, json!({ "async_call_id": call_id }))
-                        }
+                        Ok(call_id) => self.reply(&id, true, json!({ "async_call_id": call_id })),
                         Err(e) => self.reply(&id, false, json!({ "error": e })),
                     }
                 }
@@ -394,19 +406,25 @@ impl Session<'_> {
                 None => self.reply(&id, false, json!({ "error": "MaaCore 不可用" })),
                 Some(inst) => match inst.screenshot() {
                     Ok(bytes) => {
-                        let path = cmd
-                            .get("path")
-                            .and_then(Value::as_str)
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| self.out_dir.join("screenshot.png"));
-                        match std::fs::write(&path, &bytes) {
+                        // 截图落点由桥自己决定。客户端给的 path 不参与定位，
+                        // 否则任何连上桥的进程都能借它覆盖任意文件。
+                        let path = screenshot_path(&self.out_dir);
+                        let result = path
+                            .parent()
+                            .map(std::fs::create_dir_all)
+                            .unwrap_or(Ok(()))
+                            .and_then(|()| std::fs::write(&path, &bytes));
+                        match result {
                             Ok(()) => self.reply(
                                 &id,
                                 true,
                                 json!({ "path": path.to_string_lossy(), "bytes": bytes.len() }),
                             ),
-                            Err(e) => self
-                                .reply(&id, false, json!({ "error": format!("写文件失败：{e}") })),
+                            Err(e) => self.reply(
+                                &id,
+                                false,
+                                json!({ "error": format!("写文件失败：{e}") }),
+                            ),
                         }
                     }
                     Err(e) => self.reply(&id, false, json!({ "error": e })),
@@ -533,6 +551,14 @@ impl Args {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    #[test]
+    fn screenshot_path_is_generated_under_out_dir() {
+        let out = std::env::temp_dir().join("prts-bridge-shot-test");
+        let path = screenshot_path(&out);
+        assert!(path.starts_with(out.join("screenshots")));
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("png"));
+    }
     use std::net::{TcpListener, TcpStream};
     use std::time::{Duration, Instant};
 

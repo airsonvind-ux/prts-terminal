@@ -106,10 +106,14 @@ export function EventBadge({ events, interactive = false, className, showApprova
   // "正在思考"：推理链未闭合——最后一个事件仍是推理 chunk。
   // 推理结束由后续事件（text chunk / tool/call / turn/end）隐式表达。
   const lastEvent = events[events.length - 1];
-  const reasoningActive =
+  const reasoningChainOpen =
     reasoningText.length > 0 &&
     lastEvent?.type === "assistant/chunk" &&
     lastEvent.kind === "reasoning";
+  // 归档轮没有“正在执行”语义：中止时停在推理 chunk 的轮，重启后
+  // 只能显示未完成，不能永远显示“正在思考...”。
+  const reasoningActive = interactive && reasoningChainOpen;
+  const reasoningIncomplete = !interactive && reasoningChainOpen;
 
   // ── 工具配对：callId 精确配对（tool/call 开槽，approval/result 事件挂接） ──
   const toolSlots: ToolSlot[] = useMemo(() => buildToolSlots(events), [events]);
@@ -202,6 +206,7 @@ export function EventBadge({ events, interactive = false, className, showApprova
         <div className={styles.section}>
           <button
             className={styles.toggle}
+            data-focus-inset
             onClick={() => setReasoningOpen(!reasoningOpen)}
           >
             <span
@@ -211,7 +216,11 @@ export function EventBadge({ events, interactive = false, className, showApprova
             </span>
             思考过程
             <span className={reasoningActive ? styles.statusActive : styles.statusDone}>
-              {reasoningActive ? "· 正在思考..." : "· ✓ 思考完成"}
+              {reasoningActive
+                ? "· 正在思考..."
+                : reasoningIncomplete
+                  ? "· 思考未完成"
+                  : "· ✓ 思考完成"}
             </span>
           </button>
           {reasoningOpen && (
@@ -225,6 +234,7 @@ export function EventBadge({ events, interactive = false, className, showApprova
         <div className={styles.section}>
           <button
             className={styles.toggle}
+            data-focus-inset
             onClick={() => setToolsOpen(!toolsOpen)}
           >
             <span

@@ -65,8 +65,14 @@
 | `marked` | 18.0.7 | MIT | https://registry.npmjs.org/marked/-/marked-18.0.7.tgz |
 | `react` | 19.2.6 | MIT | https://registry.npmjs.org/react/-/react-19.2.6.tgz |
 | `react-dom` | 19.2.6 | MIT | https://registry.npmjs.org/react-dom/-/react-dom-19.2.6.tgz |
-| `svg-smoother` | 2.1.0 | GPL-3.0-or-later | https://registry.npmjs.org/svg-smoother/-/svg-smoother-2.1.0.tgz |
 | `zustand` | 5.0.14 | MIT | https://registry.npmjs.org/zustand/-/zustand-5.0.14.tgz |
+
+## 供应商标记图标
+
+- 来源：`@lobehub/icons`（部分图标）与本项目本地 SVG
+- 许可证：MIT
+- 说明：`src/features/chat/providerIcons.ts` 中的单色供应商图标由 Hanako 项目的 `scripts/gen-provider-icons.mjs` 生成；PRTS 复用其生成结果，并按 MIT 要求保留来源声明。
+- 上游：https://github.com/lobehub/lobe-icons
 
 ## 随包数据与内容
 

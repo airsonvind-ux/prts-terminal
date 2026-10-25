@@ -14,6 +14,11 @@
 //! 跨轮对话持久化已由 session_store.rs 承担（前端归档轮视图存档，见
 //! 后端-软件工程 §十二）——本 log 的“持久化 seam 留 Phase 4”表述作废。
 
+use std::collections::HashMap;
+use std::io::Write as IoWrite;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
 
 use crate::events::FrontendMessage;
@@ -47,13 +52,16 @@ pub enum TurnEndReason {
     Completed,
     /// 处理出错终止
     Error,
-    /// 用户中止（stop 生成，Phase 后置预留）
-    #[allow(dead_code)] // 预留词汇：随取消（stop 生成，P2）落地
+    /// 用户中止（由 orchestrator 中止出口写入）
     Aborted,
     /// 停滞检测触发（PRTS 独有资产，升格为一等终止原因）
     Stagnation,
     /// 上下文超限（max_tokens 截断）
     MaxTokens,
+    /// 进程在 turn 结束前退出（崩溃/断电/强制关闭），由启动恢复写入
+    Interrupted,
+    /// 应用正常关闭（quit_app / 窗口关闭）触发的中止
+    AppShutdown,
 }
 
 /// 工具审批请求的危险度（M3-A §5.1）。
@@ -94,6 +102,30 @@ pub enum ApprovalDecision {
     Blocked,
 }
 
+/// 图片未进入请求体的原因（只供审计，不直接进模型文案）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOmitReason {
+    /// 已收录模型明确声明不支持视觉
+    UnsupportedVision,
+    /// 模型未收录，视觉能力未知
+    UnknownVision,
+    /// 声明支持视觉，但附件物化失败/为空
+    MaterializeFailed,
+}
+
+/// 一次请求里某条消息的实际图片投递事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageDeliveryFact {
+    /// user/message 在当前 turn 内的相对序号；工具图片走 `tool_call_id`。
+    /// 用相对序号而不是全局 seq：归档后 turn 重新拼接，绝对 seq 会漂移。
+    pub user_event_offset: Option<usize>,
+    pub tool_call_id: Option<String>,
+    /// image block 是否真的进入了本次请求体。
+    pub included: bool,
+    pub reason: Option<ImageOmitReason>,
+}
+
 /// 拒绝原因（decision = Rejected 时携带）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -104,19 +136,6 @@ pub enum ApprovalRejectReason {
     Timeout,
     /// 等待通道 drop（会话结束/清理）
     Drop,
-}
-
-/// 缓存桶判别（模块 7：静态桶常驻提醒 / 动态桶会话级）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[allow(dead_code)] // 第三轮 cache_* 工具接线启用
-pub enum CacheBucket {
-    /// 静态桶：LLM 读知识条目后的自写总结（常驻，压缩才卸）
-    #[serde(rename = "static")]
-    Static,
-    /// 动态桶：LLM 工作中产生的重要数据（会话级，每轮可重载）
-    #[serde(rename = "dynamic")]
-    Dynamic,
 }
 
 /// 持久事实事件（Discriminated Union）。
@@ -228,6 +247,20 @@ pub enum SessionEvent {
         display: crate::tools::ToolDisplay,
     },
 
+    /// 图片投递事实：记录某条 user/tool 消息的 image block 是否真的进入请求体。
+    /// 这是观察值，不是模型能力判断；派生历史时据此追加固定提示。
+    #[serde(rename = "image/delivery", rename_all = "camelCase")]
+    ImageDelivery {
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_event_offset: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        included: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<ImageOmitReason>,
+    },
+
     /// 工具执行结果。`tool_name` 为 None 表示历史播种的旧数据（前端不携带）。
     /// `ok` 区分成功与失败（失败内容同样回传 LLM，由模型决定下一步）。
     #[serde(rename = "tool/result", rename_all = "camelCase")]
@@ -256,42 +289,8 @@ pub enum SessionEvent {
         tool_defs: Vec<ToolDef>,
     },
 
-    /// 缓存区写操作（模块 7 P0：缓存区与 log 分层——CacheStore 独立于 log，
-    /// log 只记录 `cache_*` 操作，可回放）。`bucket` 区分静态/动态桶，
-    /// `source_entry` 为静态桶的来源知识条目名（None = 动态桶）。
-    #[allow(dead_code)] // 第三轮 cache_store 工具接线启用
-    #[serde(rename = "cache/store", rename_all = "camelCase")]
-    CacheStore {
-        session_id: String,
-        key: String,
-        bucket: CacheBucket,
-        #[serde(default)]
-        source_entry: Option<String>,
-    },
-
-    /// 缓存区读取操作（注入动作入 log）。
-    #[allow(dead_code)] // 第三轮 cache_retrieve 工具接线启用
-    #[serde(rename = "cache/load", rename_all = "camelCase")]
-    CacheLoad {
-        session_id: String,
-        key: String,
-        bucket: CacheBucket,
-        hit: bool,
-    },
-
-    /// 缓存区移除操作。
-    #[allow(dead_code)] // 第三轮 cache_remove / reset_workspace 工具接线启用
-    #[serde(rename = "cache/remove", rename_all = "camelCase")]
-    CacheRemove {
-        session_id: String,
-        key: String,
-        bucket: CacheBucket,
-        existed: bool,
-    },
-
-    /// Skill 激活事件（模块 B）：激活动作入 log 可回放，仿 cache/* 事件模式。
-    /// 激活状态本身随 ActiveContext 每 turn 重建（天然卸载），log 只记录
-    /// 事实（何时激活了哪个 Skill），不承载状态。
+    /// Skill 激活事件（模块 B）：激活动作入 log 可回放。
+    /// log 只记录事实（何时激活了哪个 Skill），不承载状态。
     #[serde(rename = "skill/activate", rename_all = "camelCase")]
     SkillActivate { session_id: String, name: String },
 
@@ -307,7 +306,7 @@ pub enum SessionEvent {
     ToolApprovalRequest {
         session_id: String,
         call_id: String,
-        /// 完整命令（≤512 字符；preflight 构造时截断）
+        /// 审批命令摘要（≤512 字符；完整命令在 tool/call params）
         command: String,
         risk: ApprovalRisk,
         mode: crate::exec_settings::ExecutionMode,
@@ -339,30 +338,8 @@ pub enum SessionEvent {
         privilege: ApprovalPrivilege,
     },
 
-    // —— SkillUnload / CacheUnload 已注释（2026-08：卸载机制移除，
-    //     无生产者；未来记忆系统复用时可恢复）──
-    // /// Skill 卸载事件（模块 B）：轮末自动卸载入 log，与 activate 对称。
-    // /// 卸载是系统自动行为（ActiveContext 每 turn 重建），此处记录事实，
-    // /// derive_messages 渲染为 LLM 可见的卸载说明——让 LLM 从历史时序
-    // /// 理解"上一轮激活已随本轮结束失效"，而非误以为状态持续。
-    // #[serde(rename = "skill/unload", rename_all = "camelCase")]
-    // SkillUnload {
-    //     session_id: String,
-    //     name: String,
-    // },
-    //
-    // /// 动态缓存卸载事件（模块 C 补强）：动态桶条目的载入状态轮末自动
-    // /// 卸载入 log（桶内容跨轮保留，需要时重新载入）。静态桶条目常驻、
-    // /// 每轮自动恢复在场，不写卸载。
-    // #[serde(rename = "cache/unload", rename_all = "camelCase")]
-    // CacheUnload {
-    //     session_id: String,
-    //     key: String,
-    // },
-    /// 错误事件（可恢复错误也入 log，与前端 error 事件对应）。
-    /// 当前调度循环以 turn/end reason=error 表达错误，本变体为
-    /// 可恢复错误（recoverable=true，继续处理）预留。
-    #[allow(dead_code)] // 预留：可恢复错误路径落地时启用
+    /// 错误事件（与前端 error 事件对应）。
+    /// `recoverable=true` 表示该错误可恢复并继续处理。
     #[serde(rename = "error", rename_all = "camelCase")]
     Error {
         session_id: String,
@@ -521,6 +498,16 @@ impl SessionEvent {
     }
 
     /// 带图片附件的工具结果（工具产物走附件通路）。
+    pub fn image_delivery(session_id: &str, fact: ImageDeliveryFact) -> Self {
+        Self::ImageDelivery {
+            session_id: session_id.to_string(),
+            user_event_offset: fact.user_event_offset,
+            tool_call_id: fact.tool_call_id,
+            included: fact.included,
+            reason: fact.reason,
+        }
+    }
+
     pub fn tool_result_with_attachments(
         session_id: &str,
         call_id: &str,
@@ -562,41 +549,6 @@ impl SessionEvent {
             session_id: session_id.to_string(),
             message: message.to_string(),
             recoverable,
-        }
-    }
-
-    #[allow(dead_code)] // 第三轮 cache_store 工具接线启用
-    pub fn cache_store(
-        session_id: &str,
-        key: &str,
-        bucket: CacheBucket,
-        source_entry: Option<&str>,
-    ) -> Self {
-        Self::CacheStore {
-            session_id: session_id.to_string(),
-            key: key.to_string(),
-            bucket,
-            source_entry: source_entry.map(|s| s.to_string()),
-        }
-    }
-
-    #[allow(dead_code)] // 第三轮 cache_retrieve 工具接线启用
-    pub fn cache_load(session_id: &str, key: &str, bucket: CacheBucket, hit: bool) -> Self {
-        Self::CacheLoad {
-            session_id: session_id.to_string(),
-            key: key.to_string(),
-            bucket,
-            hit,
-        }
-    }
-
-    #[allow(dead_code)] // 第三轮 cache_remove / reset_workspace 工具接线启用
-    pub fn cache_remove(session_id: &str, key: &str, bucket: CacheBucket, existed: bool) -> Self {
-        Self::CacheRemove {
-            session_id: session_id.to_string(),
-            key: key.to_string(),
-            bucket,
-            existed,
         }
     }
 
@@ -657,21 +609,6 @@ impl SessionEvent {
             privilege,
         }
     }
-
-    // —— skill_unload / cache_unload 构造已注释（2026-08：卸载机制移除）──
-    // pub fn skill_unload(session_id: &str, name: &str) -> Self {
-    //     Self::SkillUnload {
-    //         session_id: session_id.to_string(),
-    //         name: name.to_string(),
-    //     }
-    // }
-    //
-    // pub fn cache_unload(session_id: &str, key: &str) -> Self {
-    //     Self::CacheUnload {
-    //         session_id: session_id.to_string(),
-    //         key: key.to_string(),
-    //     }
-    // }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -691,6 +628,11 @@ pub struct SessionLog {
     last_header: Option<(String, Vec<ToolDef>)>,
     /// 本轮事件起点（legacy 播种完历史后设置；primary 从 0 开始）。
     turn_boundary: usize,
+    /// 轮内崩溃恢复日志（sessions/.inflight/{sessionId}.jsonl）。
+    /// 只写当前 turn 的事件；文件关闭/删除由命令层在提交后执行。
+    journal: Option<Arc<Mutex<std::fs::File>>>,
+    /// 播种历史完成、进入当前 turn 后才开始写 journal。
+    journal_active: bool,
 }
 
 impl SessionLog {
@@ -700,7 +642,44 @@ impl SessionLog {
 
     /// 追加一个事件。seq 由追加位置隐式给出。
     pub fn append(&mut self, event: SessionEvent) {
+        self.journal_event(&event);
         self.events.push(event);
+    }
+
+    /// 接上轮内 journal；文件已由命令层写好 meta + turn/start + user。
+    pub fn attach_journal(&mut self, path: &Path) -> Result<(), String> {
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("打开轮内日志失败（{}）：{e}", path.display()))?;
+        self.journal = Some(Arc::new(Mutex::new(file)));
+        self.journal_active = false;
+        Ok(())
+    }
+
+    /// 关闭 journal 句柄（Windows 下先关文件，命令层才能删除）。
+    pub fn close_journal(&mut self) {
+        self.journal = None;
+        self.journal_active = false;
+    }
+
+    fn journal_event(&self, event: &SessionEvent) {
+        if !self.journal_active {
+            return;
+        }
+        let Some(file) = &self.journal else {
+            return;
+        };
+        let Ok(line) = serde_json::to_string(event) else {
+            eprintln!("[session] journal 事件序列化失败，跳过");
+            return;
+        };
+        let Ok(mut guard) = file.lock() else {
+            return;
+        };
+        if let Err(e) = writeln!(guard, "{line}").and_then(|_| guard.flush()) {
+            eprintln!("[session] journal 写入失败：{e}");
+        }
     }
 
     /// 已追加事件数 = 下一个事件将获得的 seq。
@@ -723,11 +702,24 @@ impl SessionLog {
     /// 标记本轮事件起点（播种历史之后调用；primary 不调用，保持 0）。
     pub fn mark_turn_boundary(&mut self) {
         self.turn_boundary = self.events.len();
+        // 播种历史不写 journal；边界之后才是当前 turn 的持久事实。
+        self.journal_active = self.journal.is_some();
     }
 
     /// 本轮事件（不含 legacy 播种的历史）。
     pub fn turn_events(&self) -> &[SessionEvent] {
         &self.events[self.turn_boundary.min(self.events.len())..]
+    }
+
+    /// primary 归档事件：`turn_events()` 的边界在 user 之后，归档时必须
+    /// 显式补回本轮 user；journal 已由 `begin_inflight` 单独写过，不能靠
+    /// 前移 boundary 来补，否则 journal 会重复 user。
+    pub fn archive_events(&self, session_id: &str, user: &SessionEvent) -> Vec<SessionEvent> {
+        let mut events = Vec::with_capacity(self.turn_events().len() + 2);
+        events.push(SessionEvent::turn_start(session_id));
+        events.push(user.clone());
+        events.extend_from_slice(self.turn_events());
+        events
     }
 
     /// 追加 request/header 快照——仅当 system prompt 或工具 schema 变化时
@@ -845,6 +837,23 @@ impl SessionLog {
         )
     }
 
+    /// 图片没有随请求发送时的固定提示。
+    ///
+    /// 只陈述投递事实，不判断模型能力：能力可能误判/未知，而「未发送」
+    /// 是这次请求真正发生的事。
+    pub const IMAGE_OMITTED_NOTICE: &'static str = "[此消息附带的图片未随请求发送]";
+
+    /// 往正文末尾补固定提示；已出现过就不重复。
+    pub fn append_image_omitted_notice(content: &mut String) {
+        if content.contains(Self::IMAGE_OMITTED_NOTICE) {
+            return;
+        }
+        if !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str(Self::IMAGE_OMITTED_NOTICE);
+    }
+
     /// 工具返回图片时那条 user 消息的文本。轮内（orchestrator 追加）与
     /// 跟轮（derive 重建）必须同源，否则那条消息会多发一次字节变化。
     pub fn tool_image_text(tool_name: Option<&str>) -> String {
@@ -928,10 +937,53 @@ impl SessionLog {
         let mut reasoning_buf = String::new();
         let mut pending_tool_calls: Vec<ToolCall> = Vec::new();
         let mut pending_provider_blocks: Vec<ProviderBlock> = Vec::new();
+        // 当前 step 开始时的已提交消息数。普通 error 只回滚失败 step，
+        // 不能回滚整轮（此前成功的工具步骤必须保留）。
+        let mut step_start_out_len: Option<usize> = None;
+        let mut turn_start_idx = 0usize;
 
+        // 图片投递事实：先扫一遍，因为事件可能排在目标消息之后（请求前才写）。
+        // key 带 session_id：不同轮的 offset 会重复，只有 session_id 能区分。
+        let mut deliveries: HashMap<(String, Option<usize>, Option<String>), bool> = HashMap::new();
         for event in &self.events {
+            if let SessionEvent::ImageDelivery {
+                session_id,
+                user_event_offset,
+                tool_call_id,
+                included,
+                ..
+            } = event
+            {
+                deliveries.insert(
+                    (session_id.clone(), *user_event_offset, tool_call_id.clone()),
+                    *included,
+                );
+            }
+        }
+
+        for (idx, event) in self.events.iter().enumerate() {
             match event {
+                SessionEvent::TurnStart { .. } => {
+                    step_start_out_len = None;
+                    turn_start_idx = idx;
+                }
+                SessionEvent::StepStart { .. } => {
+                    step_start_out_len = Some(out.len());
+                }
+                // 失败 attempt 不进入模型历史：只丢弃当前未闭合 step 的
+                // 草稿/已派生消息，保留此前成功 step 的 tool 配对。
+                SessionEvent::TurnEnd { reason, .. } if *reason == TurnEndReason::Error => {
+                    if let Some(len) = step_start_out_len.take() {
+                        out.truncate(len);
+                    }
+                    text_buf.clear();
+                    reasoning_buf.clear();
+                    pending_tool_calls.clear();
+                    pending_provider_blocks.clear();
+                }
+                SessionEvent::TurnEnd { .. } => {}
                 SessionEvent::UserMessage {
+                    session_id,
                     content,
                     attachments,
                     ..
@@ -944,7 +996,13 @@ impl SessionLog {
                         &mut pending_provider_blocks,
                         policy,
                     );
-                    out.push(Self::derive_user_message(content, attachments));
+                    let mut msg = Self::derive_user_message(content, attachments);
+                    let offset = idx.saturating_sub(turn_start_idx);
+                    msg.image_event_seq = Some(offset);
+                    if deliveries.get(&(session_id.clone(), Some(offset), None)) == Some(&false) {
+                        Self::append_image_omitted_notice(&mut msg.content);
+                    }
+                    out.push(msg);
                 }
                 SessionEvent::AssistantChunk {
                     kind,
@@ -982,9 +1040,11 @@ impl SessionLog {
                     });
                 }
                 SessionEvent::ToolResult {
+                    session_id,
                     call_id,
                     summary,
                     tool_name,
+                    ok,
                     attachments,
                     ..
                 } => {
@@ -996,15 +1056,26 @@ impl SessionLog {
                         &mut pending_provider_blocks,
                         policy,
                     );
-                    out.push(ChatMessage::tool_result(call_id.clone(), summary.clone()));
+                    out.push(ChatMessage::tool_result_with_status(
+                        call_id.clone(),
+                        summary.clone(),
+                        *ok,
+                    ));
                     // 工具图的像素只在当前轮送达，消息本身必须重建。
-                    if let Some(msg) = Self::tool_image_message(tool_name.as_deref(), attachments) {
+                    if let Some(mut msg) =
+                        Self::tool_image_message(tool_name.as_deref(), attachments)
+                    {
+                        msg.image_tool_call_id = Some(call_id.clone());
+                        if deliveries.get(&(session_id.clone(), None, Some(call_id.clone())))
+                            == Some(&false)
+                        {
+                            Self::append_image_omitted_notice(&mut msg.content);
+                        }
                         out.push(msg);
                     }
                 }
-                // —— SkillUnload / CacheUnload 派生已注释（2026-08：卸载机制移除）──
                 // 不参与派生的结构事件（turn/step 边界、request/header、
-                // assistant/message 聚合、error、skill/activate、cache/*）
+                // assistant/message 聚合、error、skill/activate）
                 _ => {}
             }
         }
@@ -1092,17 +1163,6 @@ fn repair_tool_pairs(messages: &mut Vec<ChatMessage>) {
     }
 }
 
-// —— flush_unloads 已注释（2026-08：卸载机制移除）──
-// fn flush_unloads(out: &mut Vec<ChatMessage>, buf: &mut Vec<String>) {
-//     if buf.is_empty() {
-//         return;
-//     }
-//     let items = std::mem::take(buf).join("、");
-//     out.push(ChatMessage::system(format!(
-//         "（系统）上一轮结束，已自动卸载：{items}"
-//     )));
-// }
-
 /// 工具定义列表是否等价（比较序列化形式，serde_json::Value 支持 PartialEq）。
 fn tool_defs_eq(a: &[ToolDef], b: &[ToolDef]) -> bool {
     if a.len() != b.len() {
@@ -1117,8 +1177,13 @@ fn tool_defs_eq(a: &[ToolDef], b: &[ToolDef]) -> bool {
 ///
 /// 三条规则：
 /// 1. 空内容 + 无工具调用 + 无推理 → 不产出（防御性，避免空消息进上下文）
-/// 2. RequireToolCall 策略下，无工具调用的 assistant 消息丢弃推理链
+/// 2. 推理链只要真实产生过就保留；RequireToolCall 只约束协议校验，
+///    不能把最终回答的 reasoning 主动删掉
 /// 3. 工具调用归属：chunk 先于 tool/call 到达 → 文本/推理挂到带工具调用的消息上
+///
+/// 工具轮在 RequireToolCall 策略下即使没有推理片段，也写 `Some("")`。
+/// 空串是“已记录为空”的 carrier，不是伪造推理内容；供应商要求工具轮
+/// 必须带 reasoning_content 时，缺键与空串是两种不同语义。
 fn flush_assistant(
     out: &mut Vec<ChatMessage>,
     text_buf: &mut String,
@@ -1132,13 +1197,12 @@ fn flush_assistant(
         return;
     }
 
-    // 缺陷 1（RequireToolCall 死代码）：此处获得应用点——
-    // 无工具调用的 assistant 消息在 RequireToolCall 策略下不携带推理链。
-    // 推理缓冲为空时同样不附载（避免 Some("") 污染上下文）。
-    let reasoning = if reasoning_buf.is_empty()
-        || (pending_tool_calls.is_empty() && policy == ReasoningPolicy::RequireToolCall)
-    {
-        None
+    let reasoning = if reasoning_buf.is_empty() {
+        if !pending_tool_calls.is_empty() && policy == ReasoningPolicy::RequireToolCall {
+            Some(String::new())
+        } else {
+            None
+        }
     } else {
         Some(reasoning_buf.clone())
     };
@@ -1156,6 +1220,9 @@ fn flush_assistant(
         },
         image_paths: None,
         images: None,
+        tool_ok: None,
+        image_event_seq: None,
+        image_tool_call_id: None,
     };
     if !pending_tool_calls.is_empty() {
         msg.tool_calls = Some(std::mem::take(pending_tool_calls));
@@ -1262,6 +1329,8 @@ mod tests {
             (TurnEndReason::Aborted, "aborted"),
             (TurnEndReason::Stagnation, "stagnation"),
             (TurnEndReason::MaxTokens, "max-tokens"),
+            (TurnEndReason::Interrupted, "interrupted"),
+            (TurnEndReason::AppShutdown, "app-shutdown"),
         ] {
             let json = serde_json::to_string(&reason).unwrap();
             assert_eq!(
@@ -1275,45 +1344,6 @@ mod tests {
     // ── 播种 + 派生：等价性（替代旧 convert_history 测试）──
 
     #[test]
-    fn cache_events_serialize_with_type_tags() {
-        // 缓存区与 log 分层（模块 7 P0）：cache_* 操作入 log 可回放
-        let json = serde_json::to_string(&SessionEvent::cache_store(
-            "s1",
-            "buff.总结",
-            CacheBucket::Static,
-            Some("Buff机制基础"),
-        ))
-        .unwrap();
-        assert!(json.contains("\"type\":\"cache/store\""), "got {json}");
-        assert!(json.contains("\"bucket\":\"static\""), "got {json}");
-        assert!(
-            json.contains("\"sourceEntry\":\"Buff机制基础\""),
-            "got {json}"
-        );
-
-        let json = serde_json::to_string(&SessionEvent::cache_load(
-            "s1",
-            "k",
-            CacheBucket::Dynamic,
-            true,
-        ))
-        .unwrap();
-        assert!(json.contains("\"type\":\"cache/load\""), "got {json}");
-        assert!(json.contains("\"hit\":true"), "got {json}");
-        assert!(json.contains("\"bucket\":\"dynamic\""), "got {json}");
-
-        let json = serde_json::to_string(&SessionEvent::cache_remove(
-            "s1",
-            "k",
-            CacheBucket::Dynamic,
-            false,
-        ))
-        .unwrap();
-        assert!(json.contains("\"type\":\"cache/remove\""), "got {json}");
-        assert!(json.contains("\"existed\":false"), "got {json}");
-    }
-
-    #[test]
     fn skill_activate_serializes_with_type_tag_and_name() {
         // Skill 激活动作入 log 可回放：type 为 skill/activate、携带 name 字段
         let json = serde_json::to_string(&SessionEvent::skill_activate("s1", "推演分析")).unwrap();
@@ -1321,61 +1351,6 @@ mod tests {
         assert!(json.contains("\"name\":\"推演分析\""), "got {json}");
         assert!(json.contains("\"sessionId\":\"s1\""), "got {json}");
     }
-
-    // —— 卸载相关测试已注释（2026-08：卸载机制移除）──
-    // #[test]
-    // fn unload_events_serialize_with_type_tags() {
-    //     // 轮末卸载事实入 log 可回放：与 activate/cache/* 同风格
-    //     let json = serde_json::to_string(&SessionEvent::skill_unload("s1", "伤害计算")).unwrap();
-    //     assert!(json.contains("\"type\":\"skill/unload\""), "got {json}");
-    //     assert!(json.contains("\"name\":\"伤害计算\""), "got {json}");
-    //
-    //     let json = serde_json::to_string(&SessionEvent::cache_unload("s1", "地图")).unwrap();
-    //     assert!(json.contains("\"type\":\"cache/unload\""), "got {json}");
-    //     assert!(json.contains("\"key\":\"地图\""), "got {json}");
-    // }
-    //
-    // #[test]
-    // fn derive_renders_unloads_as_system_message_before_next_user() {
-    //     // 轮末卸载事件渲染为 LLM 可见的 system 消息：合并一条、位于
-    //     // 上一轮 assistant 回复之后、下一轮 user 消息之前——LLM 从时序
-    //     // 理解"激活/载入已随上一轮结束失效"
-    //     let mut log = SessionLog::new();
-    //     log.append(SessionEvent::user_message("s1", "算总伤"));
-    //     log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "计算结果如下"));
-    //     log.append(SessionEvent::skill_unload("s1", "数值计算"));
-    //     log.append(SessionEvent::cache_unload("s1", "地图"));
-    //     log.append(SessionEvent::user_message("s1", "换个问题"));
-    //
-    //     let derived = log.derive_messages(ReasoningPolicy::Preserve);
-    //     assert_eq!(derived.len(), 4, "user/assistant/系统说明/user，got: {derived:?}");
-    //     assert_eq!(derived[0].role, crate::llm::MessageRole::User);
-    //     assert_eq!(derived[1].role, crate::llm::MessageRole::Assistant);
-    //     assert_eq!(derived[1].content, "计算结果如下");
-    //     assert_eq!(derived[2].role, crate::llm::MessageRole::System);
-    //     assert_eq!(
-    //         derived[2].content,
-    //         "（系统）上一轮结束，已自动卸载：Skill「数值计算」、动态缓存条目「地图」"
-    //     );
-    //     assert_eq!(derived[3].role, crate::llm::MessageRole::User);
-    //     assert_eq!(derived[3].content, "换个问题");
-    // }
-    //
-    // #[test]
-    // fn derive_renders_only_skill_unload_when_no_cache() {
-    //     // 只激活了 Skill、未载入动态缓存：卸载说明只含 Skill 项
-    //     let mut log = SessionLog::new();
-    //     log.append(SessionEvent::user_message("s1", "算总伤"));
-    //     log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "结果"));
-    //     log.append(SessionEvent::skill_unload("s1", "数值计算"));
-    //     log.append(SessionEvent::user_message("s1", "继续"));
-    //
-    //     let derived = log.derive_messages(ReasoningPolicy::Preserve);
-    //     assert_eq!(
-    //         derived[2].content,
-    //         "（系统）上一轮结束，已自动卸载：Skill「数值计算」"
-    //     );
-    // }
 
     #[test]
     fn seed_and_derive_roundtrip_simple() {
@@ -1453,6 +1428,210 @@ mod tests {
             "附图引用走跟轮重建"
         );
         assert_eq!(derived[3].content, "（工具 run_maa_task 返回的图片）");
+    }
+
+    /// 图片投递事实落账后，派生出的历史文案跨多次重建保持一致。
+    #[test]
+    fn image_delivery_omitted_is_stable_across_derivations() {
+        use crate::attachments::Attachment;
+        let attachment = Attachment {
+            path: "C:/x/shot.png".into(),
+            name: "shot.png".into(),
+            mime_type: "image/png".into(),
+            size: 10,
+        };
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message_with_attachments(
+            "s1",
+            "看看这张图",
+            vec![attachment.clone()],
+        ));
+        // turn/start 在 0，user 在 1：offset 是 turn 内相对序号。
+        let user_offset = 1;
+        log.append(SessionEvent::image_delivery(
+            "s1",
+            ImageDeliveryFact {
+                user_event_offset: Some(user_offset),
+                tool_call_id: None,
+                included: false,
+                reason: Some(ImageOmitReason::UnknownVision),
+            },
+        ));
+
+        let first = log.derive_messages(ReasoningPolicy::Preserve);
+        let second = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(first[0].content, second[0].content, "前缀文本必须逐字稳定");
+        assert!(first[0].content.contains(SessionLog::IMAGE_OMITTED_NOTICE));
+        assert_eq!(first[0].image_event_seq, Some(user_offset));
+
+        // 模拟归档后重新拼接：turn_start + user + delivery 的相对位置不变。
+        let mut reloaded = SessionLog::new();
+        reloaded.append(SessionEvent::turn_start("s1"));
+        reloaded.append(SessionEvent::user_message_with_attachments(
+            "s1",
+            "看看这张图",
+            vec![attachment],
+        ));
+        reloaded.append(SessionEvent::image_delivery(
+            "s1",
+            ImageDeliveryFact {
+                user_event_offset: Some(user_offset),
+                tool_call_id: None,
+                included: false,
+                reason: Some(ImageOmitReason::UnknownVision),
+            },
+        ));
+        let third = reloaded.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(first[0].content, third[0].content, "归档重放必须同字节");
+    }
+
+    /// 投递成功不追加提示；旧日志缺事件也不追加（不回溯改写旧前缀）。
+    #[test]
+    fn image_delivery_included_or_legacy_has_no_notice() {
+        use crate::attachments::Attachment;
+        let attachment = Attachment {
+            path: "C:/x/shot.png".into(),
+            name: "shot.png".into(),
+            mime_type: "image/png".into(),
+            size: 10,
+        };
+
+        let mut included = SessionLog::new();
+        included.append(SessionEvent::user_message_with_attachments(
+            "s1",
+            "看图",
+            vec![attachment.clone()],
+        ));
+        let seq = included.events().len() - 1;
+        included.append(SessionEvent::image_delivery(
+            "s1",
+            ImageDeliveryFact {
+                user_event_offset: Some(seq),
+                tool_call_id: None,
+                included: true,
+                reason: None,
+            },
+        ));
+        let derived = included.derive_messages(ReasoningPolicy::Preserve);
+        assert!(!derived[0]
+            .content
+            .contains(SessionLog::IMAGE_OMITTED_NOTICE));
+
+        let mut legacy = SessionLog::new();
+        legacy.append(SessionEvent::user_message_with_attachments(
+            "s1",
+            "看图",
+            vec![attachment],
+        ));
+        let derived = legacy.derive_messages(ReasoningPolicy::Preserve);
+        assert!(!derived[0]
+            .content
+            .contains(SessionLog::IMAGE_OMITTED_NOTICE));
+    }
+
+    /// 不同轮的 offset 会重复，投递事实必须按 session_id 隔离。
+    #[test]
+    fn image_delivery_is_scoped_by_turn_session() {
+        use crate::attachments::Attachment;
+        let attachment = || Attachment {
+            path: "C:/x/shot.png".into(),
+            name: "shot.png".into(),
+            mime_type: "image/png".into(),
+            size: 10,
+        };
+        let mut log = SessionLog::new();
+        for (session_id, included) in [("t1", false), ("t2", true)] {
+            log.append(SessionEvent::turn_start(session_id));
+            log.append(SessionEvent::user_message_with_attachments(
+                session_id,
+                "看图",
+                vec![attachment()],
+            ));
+            log.append(SessionEvent::image_delivery(
+                session_id,
+                ImageDeliveryFact {
+                    user_event_offset: Some(1),
+                    tool_call_id: None,
+                    included,
+                    reason: None,
+                },
+            ));
+        }
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert!(derived[0]
+            .content
+            .contains(SessionLog::IMAGE_OMITTED_NOTICE));
+        assert!(!derived[1]
+            .content
+            .contains(SessionLog::IMAGE_OMITTED_NOTICE));
+    }
+
+    /// 工具图片也走投递事实：未进入请求体时，派生的那条带图 user 消息带提示。
+    #[test]
+    fn tool_image_delivery_omitted_derives_notice() {
+        use crate::attachments::Attachment;
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message("s1", "截个图"));
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "好"));
+        log.append(SessionEvent::tool_call(
+            "s1",
+            "call_img",
+            "run_maa_task",
+            "{}",
+        ));
+        log.append(SessionEvent::tool_result_with_attachments(
+            "s1",
+            "call_img",
+            Some("run_maa_task"),
+            "已截取当前画面",
+            true,
+            vec![Attachment {
+                path: "C:/x/screenshot.png".into(),
+                name: "screenshot.png".into(),
+                mime_type: "image/png".into(),
+                size: 10,
+            }],
+        ));
+        log.append(SessionEvent::image_delivery(
+            "s1",
+            ImageDeliveryFact {
+                user_event_offset: None,
+                tool_call_id: Some("call_img".into()),
+                included: false,
+                reason: Some(ImageOmitReason::UnsupportedVision),
+            },
+        ));
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        let image_msg = derived
+            .iter()
+            .find(|m| m.image_tool_call_id.as_deref() == Some("call_img"))
+            .expect("应有工具图片消息");
+        assert!(image_msg.content.contains(SessionLog::IMAGE_OMITTED_NOTICE));
+    }
+
+    /// 失败结果派生成带 ok=false 的 tool 消息，Anthropic 才能标 is_error。
+    #[test]
+    fn failed_tool_result_derives_with_status() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::user_message("s1", "查一下"));
+        log.append(SessionEvent::tool_call("s1", "c1", "lookup", "{}"));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("lookup"),
+            "查询失败",
+            false,
+        ));
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        let tool = derived
+            .iter()
+            .find(|m| m.role == crate::llm::MessageRole::Tool)
+            .expect("应有 tool 消息");
+        assert_eq!(tool.tool_ok, Some(false));
     }
 
     #[test]
@@ -1626,6 +1805,8 @@ mod tests {
         let derived = log.derive_messages(ReasoningPolicy::Preserve);
         // user + assistant(带2个工具调用) + tool × 2 + assistant(最终)
         assert_eq!(derived.len(), 5);
+        assert_eq!(derived[2].tool_ok, Some(true), "成功结果带 ok=true");
+        assert_eq!(derived[3].tool_ok, Some(true), "成功结果带 ok=true");
         assert_eq!(derived[1].role, crate::llm::MessageRole::Assistant);
         let calls = derived[1].tool_calls.as_ref().unwrap();
         assert_eq!(calls.len(), 2);
@@ -1651,7 +1832,7 @@ mod tests {
     // ── 缺陷 1：RequireToolCall 应用点 ──
 
     #[test]
-    fn require_tool_call_policy_drops_reasoning_without_tools() {
+    fn require_tool_call_policy_keeps_reasoning_without_tools() {
         let mut log = SessionLog::new();
         log.append(SessionEvent::user_message("s1", "你好"));
         log.append(SessionEvent::assistant_chunk(
@@ -1663,9 +1844,116 @@ mod tests {
 
         let derived = log.derive_messages(ReasoningPolicy::RequireToolCall);
         assert_eq!(derived[1].content, "回答");
-        assert!(
-            derived[1].reasoning_content.is_none(),
-            "无工具轮次应丢弃推理链"
+        assert_eq!(
+            derived[1].reasoning_content.as_deref(),
+            Some("思考过程"),
+            "RequireToolCall 只约束校验范围，不能丢弃最终回答的 reasoning"
+        );
+    }
+
+    #[test]
+    fn journal_writes_only_after_turn_boundary() {
+        let path = std::env::temp_dir().join(format!(
+            "prts-journal-{}-{}.jsonl",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "").unwrap();
+        let mut log = SessionLog::new();
+        log.attach_journal(&path).unwrap();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message("s1", "你好"));
+        log.mark_turn_boundary();
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "回答"));
+        log.close_journal();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("assistant/chunk"));
+        assert!(!raw.contains("turn/start"), "播种前缀由命令层单独写");
+        assert!(!raw.contains("user/message"), "边界前事件不重复写");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn derive_rolls_back_only_failed_step_on_error() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message("s1", "查完再回答"));
+
+        // step 1：成功的工具步骤。
+        log.append(SessionEvent::step_start("s1", 1, 0));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Reasoning,
+            "先查数据",
+        ));
+        log.append(SessionEvent::tool_call("s1", "c1", "echo", "{}"));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("echo"),
+            "工具结果",
+            true,
+        ));
+        log.append(SessionEvent::step_end("s1", 1, None, 0));
+
+        // step 2：LLM 产出半截正文后失败。
+        log.append(SessionEvent::step_start("s1", 2, 0));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "失败步骤的半截",
+        ));
+        log.append(SessionEvent::turn_end("s1", TurnEndReason::Error));
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        // user + assistant(tool call) + tool result；失败 step 的半截被丢弃。
+        assert_eq!(derived.len(), 3, "got: {derived:?}");
+        assert_eq!(derived[0].role, crate::llm::MessageRole::User);
+        assert_eq!(derived[1].tool_calls.as_ref().unwrap().len(), 1);
+        assert_eq!(derived[2].role, crate::llm::MessageRole::Tool);
+        assert!(!derived.iter().any(|m| m.content.contains("失败步骤的半截")));
+    }
+
+    #[test]
+    fn derive_rolls_back_error_before_first_step_without_dropping_user() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message("s1", "你好"));
+        log.append(SessionEvent::assistant_chunk(
+            "s1",
+            ChunkKind::Text,
+            "配置失败前的半截",
+        ));
+        log.append(SessionEvent::turn_end("s1", TurnEndReason::Error));
+
+        let derived = log.derive_messages(ReasoningPolicy::Preserve);
+        assert_eq!(derived.len(), 1, "只保留 user，got: {derived:?}");
+        assert_eq!(derived[0].role, crate::llm::MessageRole::User);
+    }
+
+    #[test]
+    fn require_tool_call_policy_emits_empty_carrier_for_tool_round_without_reasoning() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::user_message("s1", "查数据"));
+        log.append(SessionEvent::tool_call("s1", "c1", "echo", "{}"));
+        log.append(SessionEvent::tool_result(
+            "s1",
+            "c1",
+            Some("echo"),
+            "结果",
+            true,
+        ));
+
+        let derived = log.derive_messages(ReasoningPolicy::RequireToolCall);
+        assert_eq!(derived[1].role, crate::llm::MessageRole::Assistant);
+        assert_eq!(
+            derived[1].reasoning_content.as_deref(),
+            Some(""),
+            "工具轮没有 reasoning 时应写空 carrier，而不是缺键"
         );
     }
 
@@ -1749,6 +2037,39 @@ mod tests {
     }
 
     #[test]
+    fn primary_archive_includes_current_user_once() {
+        let mut log = SessionLog::new();
+        log.append(SessionEvent::turn_start("s1"));
+        log.append(SessionEvent::user_message("s1", "你好"));
+        log.mark_turn_boundary();
+        log.append(SessionEvent::assistant_chunk("s1", ChunkKind::Text, "答"));
+
+        let user = SessionEvent::user_message("s1", "你好");
+        let events = log.archive_events("s1", &user);
+
+        assert!(matches!(events[0], SessionEvent::TurnStart { .. }));
+        assert!(matches!(
+            events[1],
+            SessionEvent::UserMessage { ref content, .. } if content == "你好"
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    SessionEvent::UserMessage { content, .. } if content == "你好"
+                ))
+                .count(),
+            1,
+            "归档必须恰好包含一条本轮 user"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(SessionEvent::AssistantChunk { .. })
+        ));
+    }
+
+    #[test]
     fn log_is_append_only() {
         // events 字段私有且无修改接口——编译期保证；
         // 这里验证顺序保持与 seq 连续性
@@ -1800,6 +2121,14 @@ mod tests {
         let derived = log.derive_messages(ReasoningPolicy::Preserve);
         assert_eq!(derived.len(), 1);
         assert_eq!(derived[0].content, "你好");
+    }
+
+    #[test]
+    fn removed_cache_events_deserialize_as_unknown() {
+        // 旧日志可能含已删除的 cache/* 事件：按 Unknown 忽略，不阻塞历史读取。
+        let line = r#"{"type":"cache/store","sessionId":"s1","key":"k","bucket":"static","sourceEntry":null}"#;
+        let event: SessionEvent = serde_json::from_str(line).expect("旧 cache 事件应可读");
+        assert!(matches!(event, SessionEvent::Unknown));
     }
 
     #[test]

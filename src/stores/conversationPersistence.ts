@@ -87,13 +87,16 @@ export function appendTurnImpl(
     createdAt: conv.createdAt,
     modelName: conv.modelName ?? null,
     contextLength: conv.contextLength ?? null,
+    provider: conv.provider ?? null,
+    model: conv.model ?? null,
+    // 空串 = 显式清除回模型默认（null 在 append_turn 里表示“不更新”）。
+    thinkingLevel: conv.thinkingLevel ?? "",
     contextTokens: usage ?? conv.contextTokens ?? null,
     lastNoticeSeq: conv.lastNoticeSeq ?? null,
     usageDeltas: usageDeltas ?? null,
   };
   invoke("append_turn", {
     conversationId,
-    eventsJson: JSON.stringify(events),
     ...metaSnapshot,
   })
     .then(() => {

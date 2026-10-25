@@ -22,7 +22,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useProcessingStore, flushPending } from "../useProcessingStore";
 import { useConversationStore } from "../useConversationStore";
 import { useUIStore } from "../useUIStore";
-import { resetBackendHistoryModeCache } from "../processingHistoryMode";
 import type { ReminderData, SessionEvent } from "../../types";
 
 // ── 类型 ──
@@ -43,7 +42,6 @@ function resetAllStores(): void {
   });
   // 清理跨测试累积的 invoke 调用记录，确保每个测试独立验证
   __invokeMock.mockClear();
-  resetBackendHistoryModeCache();
 }
 
 /** 获取当前唯一的 processing 快照，断言正好一个 */
@@ -93,47 +91,19 @@ describe("场景 1：新建对话发送消息", () => {
     expect(snap.agentPhase).toBe("processing");
 
     // invoke 调用参数正确
-    // 命令序列：[get_reminder_data, get_backend_history_mode, agent_process]
+    // 命令序列：[get_reminder_data, agent_process]
     // setup.ts 将 invoke mock 暴露在 globalThis.__invokeMock
     const invokeCalls = __invokeMock.mock.calls;
-    expect(invokeCalls).toHaveLength(3);
+    expect(invokeCalls).toHaveLength(2);
     expect(invokeCalls[0][0]).toBe("get_reminder_data"); // 提醒拉取先于发送
-    expect(invokeCalls[1][0]).toBe("get_backend_history_mode");
     const agentInvoke = invokeCalls.find((c) => c[0] === "agent_process")!;
     const requestArg = agentInvoke[1].request;
     expect(requestArg.input).toBe("查询 1-7");
     expect(requestArg.sessionId).toBe(sid);
     // 模块 C：request 携带 conversationId（缓存区按对话分区，非 sessionId）
     expect(requestArg.conversationId).toBe(convs.conversations[0].id);
-    expect(requestArg.history).toHaveLength(1);
-    expect(requestArg.history[0]).toEqual({ role: "user", content: "查询 1-7" });
-  });
-});
-
-// ═══════════════════════════════════════════════
-// 场景 1b：primary 模式
-// ═══════════════════════════════════════════════
-
-describe("场景 1b：primary 历史模式", () => {
-  it("不再发送完整 history，只带本轮 userContent", async () => {
-    const original = __invokeMock.getMockImplementation();
-    __invokeMock.mockImplementation((cmd: string, args?: unknown) =>
-      cmd === "get_backend_history_mode"
-        ? Promise.resolve("primary")
-        : original!(cmd, args)
-    );
-
-    await useProcessingStore.getState().sendMessage("查询 1-7");
-    const agentInvoke = __invokeMock.mock.calls.find(
-      (c) => c[0] === "agent_process"
-    )!;
-    const request = agentInvoke[1].request;
-    expect(request.history).toEqual([]);
-    expect(request.userContent).toBe("查询 1-7");
-    expect(request.conversationId).toBeTruthy();
-
-    __invokeMock.mockImplementation(original!);
-    resetBackendHistoryModeCache();
+    expect(requestArg.userContent).toBe("查询 1-7");
+    expect("history" in requestArg).toBe(false);
   });
 });
 
@@ -142,6 +112,45 @@ describe("场景 1b：primary 历史模式", () => {
 // ═══════════════════════════════════════════════
 
 describe("场景 2：同一对话并发保护", () => {
+  it.each([
+    ["aborted", "手动中止"],
+    ["app-shutdown", "应用关闭"],
+    ["interrupted", "异常退出"],
+  ] as const)(
+    "最近一轮 turn/end(%s) → reminder 携带上一轮状态",
+    async (reason, phrase) => {
+      useConversationStore.setState({
+        conversations: [
+          {
+            id: "c-status",
+            title: "状态",
+            createdAt: 0,
+            turns: [
+              [
+                { type: "user/message", sessionId: "s-old", content: "旧问题" },
+                { type: "turn/end", sessionId: "s-old", reason },
+                { type: "turn/aborted", sessionId: "s-old" },
+              ],
+            ],
+          },
+        ],
+        activeId: "c-status",
+      });
+
+      await useProcessingStore.getState().sendMessage("继续");
+      const { snap } = getSingleSnapshot();
+      const content = asEvent(snap.currentEvents[0], "user/message").content;
+      expect(content).toContain("[prts_reminder]");
+      expect(content).toContain("上一轮状态");
+      expect(content).toContain(phrase);
+
+      const agentInvoke = __invokeMock.mock.calls.find(
+        (c) => c[0] === "agent_process"
+      )!;
+      expect(agentInvoke[1].request.previousTurnStatus).toBeUndefined();
+    }
+  );
+
   it("处理中再次 sendMessage 被忽略", async () => {
     const store = useProcessingStore.getState();
 
@@ -156,9 +165,9 @@ describe("场景 2：同一对话并发保护", () => {
     const { sid } = getSingleSnapshot();
     expect(sid).toBe(firstSid);
 
-    // invoke：首次 sendMessage = [get_reminder_data, get_backend_history_mode, agent_process]；
+    // invoke：首次 sendMessage = [get_reminder_data, agent_process]；
     // 第二次被并发保护挡下（不新增调用）
-    expect(__invokeMock.mock.calls).toHaveLength(3);
+    expect(__invokeMock.mock.calls).toHaveLength(2);
 
     // conversation 未归档任何轮次（user 消息仍在快照中）
     const conv = useConversationStore.getState().conversations[0];
@@ -222,14 +231,15 @@ describe("场景 3：正常流式完成", () => {
     // processing 快照已清除
     expect(useProcessingStore.getState().processing).toEqual({});
 
-    // 对话归档整轮：user/message + chunks + assistant/message
-    // （turn/end 是归档触发信号，不进入事件缓冲——与旧 generation_done 一致）
+    // 对话归档整轮：user/message + chunks + assistant/message + turn/end
+    // turn/end 是生命周期终点，必须随轮持久化；不能只靠 assistant/message 推断完成。
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.turns).toHaveLength(1);
     const turn = conv.turns[0];
     expect(asEvent(turn[0], "user/message").content).toBe("查询 1-7");
     expect(turn.filter((e) => e.type === "assistant/chunk")).toHaveLength(3);
-    expect(asEvent(turn[turn.length - 1], "assistant/message").type).toBe("assistant/message");
+    expect(asEvent(turn[turn.length - 2], "assistant/message").type).toBe("assistant/message");
+    expect(asEvent(turn[turn.length - 1], "turn/end").reason).toBe("completed");
 
     // contextTokens：assistant/message 的 usage 快照（覆盖式）
     expect(conv.contextTokens).toEqual({ inputTokens: 1200, outputTokens: 80 });
@@ -276,7 +286,7 @@ describe("场景 4：推理模型思维链", () => {
     // turns 包含推理链（含合成 user/message）
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.turns).toHaveLength(1);
-    expect(conv.turns[0]).toHaveLength(3);
+    expect(conv.turns[0]).toHaveLength(4); // user + 2 reasoning chunks + turn/end
   });
 });
 
@@ -339,6 +349,7 @@ describe("场景 5：工具调用完整流程", () => {
       "tool/call",
       "tool/result",
       "assistant/chunk",
+      "turn/end",
     ]);
     expect(asEvent(turn[1], "tool/call").callId).toBe("call_1");
     expect(asEvent(turn[2], "tool/result").callId).toBe("call_1");
@@ -456,84 +467,6 @@ describe("场景 8：processing 字典键类型验证", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 9：多轮历史投影派生（sendMessage 的 history 构造）
-// ═══════════════════════════════════════════════
-
-describe("场景 9：多轮历史投影派生", () => {
-  it("第二轮 history 从已归档 turns 派生（含工具轮推理链）", async () => {
-    const store = useProcessingStore.getState();
-    await store.sendMessage("查询 1-7");
-    const { sid } = getSingleSnapshot();
-
-    // 模拟完整的第一轮：推理 → 工具 → 回答
-    store.onPhase({ sessionId: sid, phase: "reasoning" });
-    store.appendCurrentEvent({
-      type: "assistant/chunk",
-      sessionId: sid,
-      kind: "reasoning",
-      content: "需要查询关卡数据",
-    });
-    store.appendCurrentEvent({
-      type: "tool/call",
-      sessionId: sid,
-      callId: "c1",
-      toolName: "query_level",
-      params: "{}",
-    });
-    store.appendCurrentEvent({
-      type: "tool/result",
-      sessionId: sid,
-      callId: "c1",
-      toolName: "query_level",
-      summary: "主线 1-7",
-      ok: true,
-    });
-    store.appendCurrentEvent({
-      type: "assistant/chunk",
-      sessionId: sid,
-      kind: "text",
-      content: "查到了。",
-    });
-    store.appendCurrentEvent({
-      type: "assistant/message",
-      sessionId: sid,
-      content: "查到了。",
-      reasoningContent: "需要查询关卡数据",
-      usage: null,
-    });
-    store.finishProcessing(sid);
-
-    // 第一轮归档完成
-    expect(useProcessingStore.getState().processing).toEqual({});
-    const convAId = useConversationStore.getState().activeId!;
-
-    // 第二轮发送：切回同一对话，history 从已归档 turns 投影派生
-    useConversationStore.getState().switchConversation(convAId);
-    await store.sendMessage("谢谢");
-    const invokeCalls = __invokeMock.mock.calls;
-    const secondCall = invokeCalls[invokeCalls.length - 1];
-    const history = secondCall[1].request.history;
-
-    // user + assistant(推理+工具) + tool + assistant + user
-    expect(history).toHaveLength(5);
-    expect(history[0]).toEqual({ role: "user", content: "查询 1-7" });
-    expect(history[1]).toMatchObject({
-      role: "assistant",
-      content: "",
-      reasoningContent: "需要查询关卡数据",
-    });
-    expect(history[1].toolCalls).toHaveLength(1);
-    expect(history[2]).toMatchObject({
-      role: "tool",
-      content: "主线 1-7",
-      toolCallId: "c1",
-    });
-    expect(history[3]).toMatchObject({ role: "assistant", content: "查到了。" });
-    expect(history[4]).toEqual({ role: "user", content: "谢谢" });
-  });
-});
-
-// ═══════════════════════════════════════════════
 // 场景 10：停滞路径幂等（error 先到，turn/end 后到）
 // ═══════════════════════════════════════════════
 
@@ -592,12 +525,12 @@ describe("场景 11：Reminder 数据装配", () => {
     });
   }
 
-  it("新对话：仅值维度快照（无事件行）、游标＝payload.seq、history 含块", async () => {
+  it("新对话：仅值维度快照（无事件行）、完成后游标＝payload.seq、userContent 含块", async () => {
     routeReminder(snapshotPayload(4));
     const store = useProcessingStore.getState();
     await store.sendMessage("帮我算伤害");
 
-    const { snap } = getSingleSnapshot();
+    const { snap, sid } = getSingleSnapshot();
     const userMsg = asEvent(snap.currentEvents[0], "user/message");
     const content = userMsg.content;
     expect(content.startsWith("[prts_reminder]\n")).toBe(true);
@@ -611,15 +544,16 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(content).not.toContain("记忆"); // 无事件行
     expect(content.endsWith("帮我算伤害")).toBe(true);
 
-    // 游标＝payload.seq
+    // 发送时不提前推进；正常完成后才提交
+    store.finishProcessing(sid);
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.lastNoticeSeq).toBe(4);
 
-    // history 末条 user 与归档同字节（含块冻结）
+    // userContent 与归档同字节（含块冻结）
     const agentInvoke = __invokeMock.mock.calls.find(
       (c) => c[0] === "agent_process"
     )!;
-    expect(agentInvoke[1].request.history.at(-1).content).toBe(content);
+    expect(agentInvoke[1].request.userContent).toBe(content);
   });
 
   it("进行中增量：仅超游标项（维度行在上、事件行在下），旧游标不下发旧条目", async () => {
@@ -651,6 +585,8 @@ describe("场景 11：Reminder 数据装配", () => {
     // 维度行在事件行之前
     expect(content.indexOf("工作空间")).toBeLessThan(content.indexOf("记忆："));
 
+    const secondSid = Object.keys(useProcessingStore.getState().processing)[0];
+    store.finishProcessing(secondSid);
     const conv = useConversationStore.getState().conversations[0];
     expect(conv.lastNoticeSeq).toBe(6);
   });
@@ -668,8 +604,8 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(asEvent(snaps[0].currentEvents[0], "user/message").content).toBe("第二问");
   });
 
-  it("invoke 失败：进行中回滚游标；新对话不回滚为 0", async () => {
-    // ① 进行中对话：失败回滚到拼装前游标
+  it("invoke 失败：不提交游标；新对话重试重发完整快照", async () => {
+    // ① 进行中对话：失败不推进游标
     routeReminder(snapshotPayload(4));
     const store = useProcessingStore.getState();
     await store.sendMessage("第一问");
@@ -689,9 +625,9 @@ describe("场景 11：Reminder 数据装配", () => {
     });
     await store.sendMessage("第二问");
     const conv1 = useConversationStore.getState().conversations[0];
-    expect(conv1.lastNoticeSeq).toBe(4); // 回滚到拼装前游标
+    expect(conv1.lastNoticeSeq).toBe(4); // 未提前推进，仍是上一次成功游标
 
-    // ② 新对话：基线推进不回滚为 0（避免重放）
+    // ② 新对话首轮失败：游标保持空；重试仍走完整快照
     __invokeMock.mockImplementation((cmd: string) => {
       if (cmd === "get_reminder_data") return Promise.resolve(snapshotPayload(4));
       if (cmd === "agent_process") return Promise.reject(new Error("后端不可达"));
@@ -708,7 +644,20 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(
       asEvent(fresh.turns[0][0], "user/message").content
     ).not.toContain("prts_reminder");
-    expect(fresh.lastNoticeSeq).toBe(4); // 新对话基线不回滚为 0
+    expect(fresh.lastNoticeSeq).toBeUndefined(); // 首轮失败不提交基线
+
+    // 重试：完整环境快照必须重新出现
+    routeReminder(snapshotPayload(4));
+    await store.sendMessage("重试");
+    const retry = Object.values(useProcessingStore.getState().processing)[0];
+    const retryContent = asEvent(retry.currentEvents[0], "user/message").content;
+    expect(retryContent.startsWith("[prts_reminder]\n")).toBe(true);
+    expect(retryContent).toContain("- 工作空间：/ws");
+    expect(retryContent.endsWith("重试")).toBe(true);
+    const retrySid = Object.keys(useProcessingStore.getState().processing)[0];
+    store.finishProcessing(retrySid);
+    const retryConvs = useConversationStore.getState().conversations;
+    expect(retryConvs[retryConvs.length - 1].lastNoticeSeq).toBe(4);
   });
 
   it("压缩后首条消息重发三值快照（游标复位走「新对话」分支，不回放事件）", async () => {
@@ -742,7 +691,9 @@ describe("场景 11：Reminder 数据装配", () => {
     expect(content).toContain("- 模型：m");
     expect(content).not.toContain("技能目录");
     expect(content).not.toContain("记忆");
-    // 游标推进到新载荷 seq
+    // 正常完成后游标推进到新载荷 seq
+    const secondSid = Object.keys(useProcessingStore.getState().processing)[0];
+    store.finishProcessing(secondSid);
     expect(useConversationStore.getState().conversations[0].lastNoticeSeq).toBe(10);
   });
 });

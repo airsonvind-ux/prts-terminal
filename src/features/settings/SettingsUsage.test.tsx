@@ -84,6 +84,36 @@ describe("SettingsUsage", () => {
     expect(container.textContent).not.toContain("0%");
   });
 
+  it("范围下拉：aria-expanded；Escape 关闭并回到触发按钮", () => {
+    useConversationStore.setState({
+      conversations: [conv("a", "甲", usageOf(1000, 0))],
+    });
+    render();
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="选择统计范围"]'
+    )!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector("#usage-scope-list")).toBeTruthy();
+
+    act(() => {
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector("#usage-scope-list")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("正命中 → 显示命中率与命中量", () => {
     useConversationStore.setState({
       conversations: [

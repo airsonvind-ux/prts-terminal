@@ -2,8 +2,7 @@
 // 对话持久化（Phase 4）提交路径测试：ConversationStore 持久通知 + 轮归档链路
 //
 // 覆盖：
-//   F2 appendTurn 提交参数（eventsJson 与 JSON.stringify(events) 字节保真 +
-//      完整 metaSnapshot）
+//   F2 appendTurn 提交参数（只提交元数据，不写轮事件）
 //   F3 空对话不落盘（createConversation 无 invoke）+ 首轮携带完整 meta
 //   F4 错误轮提交（failProcessing：user 已剥块 + error 事件 + 游标随轮）
 //   F5 游标随轮（advanceNoticeSeq 纯内存无 invoke；appendTurn metaSnapshot 携带）
@@ -65,7 +64,7 @@ function lastInvokeArg(cmd: string): Record<string, unknown> | undefined {
 // ═══════════════════════════════════════════════════════
 
 describe("F2 appendTurn 持久提交参数", () => {
-  it("eventsJson 与 JSON.stringify(events) 相等（字节保真契约）+ 完整 metaSnapshot", () => {
+  it("只提交元数据，不携带 eventsJson", () => {
     const store = useConversationStore.getState();
     // createConversation 不支持注入 createdAt——断言与 store 现值一致即可；
     // 通过 advanceNoticeSeq/updateContextTokens 预置游标与 usage
@@ -82,7 +81,7 @@ describe("F2 appendTurn 持久提交参数", () => {
     const arg = lastInvokeArg("append_turn");
     expect(arg).toBeDefined();
     expect(arg!.conversationId).toBe(id);
-    expect(arg!.eventsJson).toBe(JSON.stringify(events));
+    expect("eventsJson" in arg!).toBe(false);
     expect(arg!.title).toBe("查询 1-7");
     const conv = useConversationStore.getState().conversations[0];
     expect(arg!.createdAt).toBe(conv.createdAt);
@@ -126,7 +125,7 @@ describe("F3 空对话不落盘 / 首轮 meta 完整", () => {
     store.appendTurn(id, events);
 
     const arg = lastInvokeArg("append_turn")!;
-    expect(arg.eventsJson).toBe(JSON.stringify(events));
+    expect("eventsJson" in arg).toBe(false);
     expect(arg.title).toBe("首问");
     expect(arg.createdAt).toBe(createdAt);
     expect(arg.modelName).toBe("m1");
@@ -164,22 +163,24 @@ describe("F4 错误轮提交", () => {
 
     const arg = lastInvokeArg("append_turn");
     expect(arg).toBeDefined();
-    const events = JSON.parse(arg!.eventsJson as string) as SessionEvent[];
+    expect("eventsJson" in arg!).toBe(false);
+    const archived = useConversationStore.getState().conversations[0].turns;
+    const turn = archived[archived.length - 1];
     // 错误轮 user 消息剥块（纯输入）——含块版本只进正常轮归档
-    expect(events[0]).toEqual({
+    expect(turn[0]).toEqual({
       type: "user/message",
       sessionId: sid,
       content: "触发失败",
     });
-    expect(JSON.stringify(events)).not.toContain("prts_reminder");
-    expect(events[1]).toEqual({
+    expect(JSON.stringify(turn)).not.toContain("prts_reminder");
+    expect(turn[1]).toEqual({
       type: "error",
       sessionId: sid,
       message: "后端错误",
       recoverable: false,
     });
-    // 游标已随 sendMessage 推进 → 随错误轮提交
-    expect(arg!.lastNoticeSeq).toBe(1);
+    // 发送时不提前推进游标；错误轮不提交未送达的提醒
+    expect(arg!.lastNoticeSeq).toBeNull();
     // 错误轮无 usage 覆盖 → contextTokens 保持缺省 null
     expect(arg!.contextTokens).toBeNull();
   });
@@ -290,7 +291,7 @@ describe("finishProcessing usage 随轮提交", () => {
     const arg = lastInvokeArg("append_turn")!;
     // usage 随轮覆盖提交（持久侧）
     expect(arg.contextTokens).toEqual({ inputTokens: 1200, outputTokens: 80 });
-    expect(arg.eventsJson).toContain('"assistant/message"');
+    expect("eventsJson" in arg).toBe(false);
     // 内存同步（store 状态）
     expect(
       useConversationStore.getState().conversations[0].contextTokens

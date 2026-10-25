@@ -15,6 +15,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { SettingsPanel, mergeSettings, MASKED_SECRET } from "./SettingsPanel";
+import { useSettingsPanel } from "./useSettingsPanel";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useProcessingStore } from "../../stores/useProcessingStore";
 import { useToastStore } from "../../stores/useToastStore";
@@ -26,6 +27,7 @@ import type { Settings } from "../../types";
 
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+let hookApi: ReturnType<typeof useSettingsPanel> | null = null;
 
 const NAV_KEYS = ["app", "model", "safety", "space", "skills", "memory", "about"] as const;
 
@@ -56,6 +58,7 @@ function defaultSettings(): Settings {
 afterEach(() => {
   act(() => root?.unmount());
   container?.remove();
+  hookApi = null;
 });
 
 function resetStores(): void {
@@ -113,6 +116,59 @@ function setSettingsCalls(): Array<{ patch: unknown }> {
   return __invokeMock.mock.calls
     .filter((c) => c[0] === "set_settings")
     .map((c) => c[1] as { patch: unknown });
+}
+
+function deferred<T = unknown>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function HookProbe() {
+  hookApi = useSettingsPanel();
+  return React.createElement("div", {
+    "data-mode": hookApi.settings?.exec.mode ?? "",
+    "data-ws": hookApi.settings?.workspace.workspace_root ?? "",
+  });
+}
+
+function renderProbe(): void {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => {
+    root.render(React.createElement(HookProbe));
+  });
+}
+
+function settingsView(): { mode: string; ws: string } {
+  return {
+    mode: container!.querySelector("[data-mode]")!.getAttribute("data-mode") ?? "",
+    ws: container!.querySelector("[data-ws]")!.getAttribute("data-ws") ?? "",
+  };
+}
+
+function mockSettingsSaves(): Array<ReturnType<typeof deferred>> {
+  const saves: Array<ReturnType<typeof deferred>> = [];
+  const fallback = (
+    globalThis as {
+      __defaultInvokeImpl?: (cmd: string) => Promise<unknown>;
+    }
+  ).__defaultInvokeImpl!;
+  __invokeMock.mockImplementation((cmd: string) => {
+    if (cmd === "get_settings") return Promise.resolve(defaultSettings());
+    if (cmd === "set_settings") {
+      const pending = deferred();
+      saves.push(pending);
+      return pending.promise;
+    }
+    return fallback(cmd);
+  });
+  return saves;
 }
 
 function seedBusy(): void {
@@ -250,6 +306,89 @@ describe("SettingsPanel · 即时保存单漏斗（Safety 接线）", () => {
   });
 });
 
+describe("useSettingsPanel · 保存串行与失败摘除", () => {
+  it("A 失败、B 成功：只回退 A，不覆盖 B", async () => {
+    const saves = mockSettingsSaves();
+    renderProbe();
+    await flush();
+    expect(hookApi).not.toBeNull();
+
+    act(() => {
+      hookApi!.updateSettings({ exec: { mode: "auto" } }, "命令确认");
+    });
+    act(() => {
+      hookApi!.updateSettings(
+        { workspace: { workspace_root: "F:/B" } },
+        "路径"
+      );
+    });
+    await flush();
+
+    // 串行：A 未完成前 B 不发出；UI 先显示两次乐观更新
+    expect(saves).toHaveLength(1);
+    expect(settingsView()).toEqual({ mode: "auto", ws: "F:/B" });
+
+    await act(async () => {
+      saves[0].reject("写盘失败");
+      await Promise.resolve();
+    });
+    await flush();
+
+    // A 被摘除后 B 才发出；A 的字段回退，B 的字段保留
+    expect(saves).toHaveLength(2);
+    expect(settingsView()).toEqual({ mode: "ask", ws: "F:/B" });
+
+    await act(async () => {
+      saves[1].resolve(undefined);
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(settingsView()).toEqual({ mode: "ask", ws: "F:/B" });
+    expect(
+      useToastStore.getState().toasts.some((t) =>
+        t.message.includes("保存失败（命令确认）")
+      )
+    ).toBe(true);
+  });
+
+  it("A 成功、B 失败：A 保留，B 回退", async () => {
+    const saves = mockSettingsSaves();
+    renderProbe();
+    await flush();
+
+    act(() => {
+      hookApi!.updateSettings(
+        { workspace: { workspace_root: "F:/A" } },
+        "路径"
+      );
+    });
+    act(() => {
+      hookApi!.updateSettings(
+        { workspace: { workspace_root: "F:/B" } },
+        "路径"
+      );
+    });
+    await flush();
+    expect(saves).toHaveLength(1);
+
+    await act(async () => {
+      saves[0].resolve(undefined);
+      await Promise.resolve();
+    });
+    await flush();
+    expect(saves).toHaveLength(2);
+
+    await act(async () => {
+      saves[1].reject("写盘失败");
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(settingsView()).toEqual({ mode: "ask", ws: "F:/A" });
+  });
+});
+
 describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
   function topCheckbox(): HTMLInputElement {
     return container!.querySelector<HTMLInputElement>(
@@ -292,6 +431,30 @@ describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
     expect(topCheckbox().checked).toBe(false); // 乐观已更新
     // 不走 set_settings（专用命令原子完成窗口 + 落盘）
     expect(setSettingsCalls().length).toBe(0);
+  });
+
+  it("置顶复选框：Enter 也可切换", async () => {
+    renderPanel();
+    await flush();
+    clickTab("app");
+    const checkbox = topCheckbox();
+    checkbox.focus();
+    act(() => {
+      checkbox.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+    await flush();
+
+    const calls = __invokeMock.mock.calls.filter(
+      (c) => c[0] === "set_always_on_top"
+    );
+    expect(calls).toHaveLength(1);
+    expect((calls[0][1] as { enabled: boolean }).enabled).toBe(false);
   });
 
   it("置顶失败：回滚 + toast", async () => {

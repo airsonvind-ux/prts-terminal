@@ -349,8 +349,9 @@ export const Markdown = memo(function Markdown({ content }: Props) {
     };
   }, []);
 
-  // R-38：远程图片失败时退回 alt。error 不冒泡，在根容器捕获阶段委托；
-  // 本 effect 先于下方的 innerHTML 写入注册，避免图片瞬间失败时漏事件。
+  // R-38 旧路径兜底：若仍有带 data-remote-image 的 img（旧 HTML/未来策略），
+  // 失败时退回 alt。当前 hardenRemoteImages 已把远程图替换为占位。
+  // error 不冒泡，在根容器捕获阶段委托；本 effect 先于 innerHTML 写入注册。
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;

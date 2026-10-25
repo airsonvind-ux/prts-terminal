@@ -491,37 +491,26 @@ describe("远程图片最小硬化", () => {
     return { container, root };
   }
 
-  it("远程图片带 lazy/async/no-referrer，本地图片不标记", () => {
+  it("远程图片替换为中性占位，本地图片仍内联", () => {
     const { container, root } = mount(
       "![远程](https://example.com/a.png)\n\n![本地](/local.png)"
     );
-    const imgs = Array.from(container.querySelectorAll("img"));
-    expect(imgs).toHaveLength(2);
-    const remote = imgs.find((img) =>
-      img.getAttribute("src")?.startsWith("https://")
-    );
-    expect(remote?.getAttribute("loading")).toBe("lazy");
-    expect(remote?.getAttribute("decoding")).toBe("async");
-    expect(remote?.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(remote?.hasAttribute("data-remote-image")).toBe(true);
-
-    const local = imgs.find(
-      (img) => img.getAttribute("src") === "/local.png"
-    );
-    expect(local?.hasAttribute("data-remote-image")).toBe(false);
+    expect(container.querySelectorAll("img")).toHaveLength(1);
+    const placeholder = container.querySelector("[data-remote-image]");
+    expect(placeholder?.textContent).toBe("图片未加载 · 远程");
+    const local = container.querySelector("img");
+    expect(local?.getAttribute("src")).toBe("/local.png");
 
     act(() => root.unmount());
     container.remove();
   });
 
-  it("加载失败退回 alt 文本", () => {
+  it("远程图片不创建 img，直接显示占位", () => {
     const { container, root } = mount("![示意图](https://example.com/a.png)");
-    const img = container.querySelector("img") as HTMLImageElement;
-    act(() => {
-      img.dispatchEvent(new Event("error"));
-    });
-    const fallback = container.querySelector("span");
-    expect(fallback?.textContent).toBe("图片未加载 · 示意图");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-remote-image]")?.textContent).toBe(
+      "图片未加载 · 示意图"
+    );
 
     act(() => root.unmount());
     container.remove();

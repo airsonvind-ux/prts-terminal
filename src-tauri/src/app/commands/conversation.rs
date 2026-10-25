@@ -55,48 +55,43 @@ pub fn get_conversation(
     s.get_coalesced(&conversation_id)
 }
 
-/// 追加一轮（前端轮末归档触发）。首轮建会话文件（header + 轮行 + index 插入），
-/// 后续轮追加轮行 + index 更新 updatedAt 与随轮提交的 contextTokens/lastNoticeSeq。
+/// 更新一轮的元数据（前端轮末触发）。primary 下事件由后端写官方 log；
+/// 前端只提交标题、用量、游标等投影元数据，不写轮事件。
 /// 可缺省字段：JS 侧 null/不传 = 缺省（Option）。
 #[tauri::command]
 pub fn append_turn(
     store: State<'_, Arc<Mutex<SessionStore>>>,
-    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
     conversation_id: String,
-    events_json: String,
     title: Option<String>,
     created_at: Option<u64>,
     model_name: Option<String>,
     context_length: Option<u64>,
+    provider: Option<String>,
+    model: Option<String>,
+    thinking_level: Option<String>,
     context_tokens: Option<TokenUsage>,
     last_notice_seq: Option<u64>,
     usage_deltas: Option<Vec<UsageDelta>>,
 ) -> Result<AppendTurnOutcome, String> {
     let req = AppendTurnReq {
         conversation_id,
-        events_json,
+        events_json: "[]".into(),
         title,
         created_at,
         model_name,
         context_length,
+        provider,
+        model,
+        thinking_level,
         context_tokens,
         last_notice_seq,
         usage_deltas,
     };
-    let primary = {
-        let st = settings_store
-            .lock()
-            .map_err(|e| format!("设置锁获取失败: {e}"))?;
-        st.settings.backend_history_mode() == crate::settings::BackendHistoryMode::Primary
-    };
     let mut s = store
         .lock()
         .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
-    if primary {
-        s.append_meta_only(&req)
-    } else {
-        s.append_turn(&req)
-    }
+    // journal 由后端在真正写入本轮后删除；前端只更新元数据，不能提前删。
+    s.append_meta_only(&req)
 }
 
 /// 更新会话元数据（rename / contextTokens / lastNoticeSeq / compaction；
@@ -113,6 +108,9 @@ pub fn update_conversation_meta(
     expected_title: Option<String>,
     context_tokens: Option<TokenUsage>,
     last_notice_seq: Option<u64>,
+    provider: Option<String>,
+    model: Option<String>,
+    thinking_level: Option<String>,
     // 压缩记录（模块 D）：传对象 = 覆盖写入；null/缺省 = 不更新。
     // （tauri command 参数上的 doc 注释不合法，用普通注释）
     compaction: Option<CompactionMeta>,
@@ -129,6 +127,9 @@ pub fn update_conversation_meta(
         expected_title,
         context_tokens,
         last_notice_seq,
+        provider,
+        model,
+        thinking_level,
         compaction,
         context_tokens_clear: clear_context_tokens.unwrap_or(false),
         last_notice_seq_clear: clear_notice_seq.unwrap_or(false),
@@ -161,17 +162,59 @@ pub async fn generate_conversation_title(
     app_handle: AppHandle,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
+    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
+    model_registry: State<'_, Arc<ModelRegistry>>,
     store: State<'_, Arc<Mutex<SessionStore>>>,
     conversation_id: String,
     user_text: String,
     assistant_text: String,
     expected_title: String,
+    provider: Option<String>,
+    model: Option<String>,
 ) -> Result<(), String> {
-    // turn 起始配置快照（短暂持锁）
-    let llm_config = {
-        let guard = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
-        guard.clone()
+    // turn 起始配置快照（短暂持锁）；会话级身份优先，缺省回退全局。
+    let mut llm_config = match (
+        provider.as_deref().filter(|p| !p.is_empty()),
+        model.as_deref().filter(|m| !m.is_empty()),
+    ) {
+        (Some(p), Some(m)) => {
+            let st = settings_store
+                .lock()
+                .map_err(|e| format!("设置锁获取失败: {e}"))?;
+            let creds = credentials
+                .lock()
+                .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+            st.settings
+                .llm
+                .resolve_for(p, m, None, |name| {
+                    creds
+                        .get(&crate::credentials::provider_key_ref(name))
+                        .map(|s| s.to_string())
+                })
+                .ok_or_else(|| format!("会话使用的供应商「{p}」未配置"))?
+        }
+        _ => config
+            .lock()
+            .map_err(|e| format!("配置锁获取失败: {e}"))?
+            .clone(),
     };
+    // 标题任务固定关闭思考；模型不支持 off 时取最低可用档。
+    llm_config.thinking_level = crate::llm::thinking::utility_level(
+        &model_registry,
+        &llm_config.provider,
+        &llm_config.model,
+        crate::llm::thinking::UtilityTask::Title,
+    )
+    .map(str::to_string);
+    eprintln!(
+        "[utility] task=title conversation={} provider={} model={} api={:?} thinking={}",
+        conversation_id,
+        llm_config.provider,
+        llm_config.model,
+        llm_config.api_type,
+        llm_config.thinking_level.as_deref().unwrap_or("none")
+    );
     let client = llm
         .select(&llm_config.api_type)
         .ok_or_else(|| format!("协议 {:?} 暂未支持", llm_config.api_type))?;

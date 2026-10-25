@@ -164,6 +164,10 @@ pub(crate) fn spawn_command(
 /// std 路径（非 Windows 编译路径也在此，保证跨平台可编译）。
 fn spawn_std(program: &str, args: &[String], cwd: &Path) -> io::Result<Spawned> {
     let mut cmd = Command::new(program);
+    cmd.env_clear();
+    for (k, v) in super::env::scrubbed_env() {
+        cmd.env(k, v);
+    }
     cmd.args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())

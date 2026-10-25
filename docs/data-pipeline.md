@@ -31,15 +31,16 @@ data-pipeline/
 数据库不提交进 Git。发布构建前必须先生成，并在发布记录中写明数据版本或校验和。
 
 发布副本需要带 `meta` 表（`dataVersion/generatedAt/sourceCommit/schemaVersion`）和
-`src-tauri/resources/DATA_MANIFEST.json`；这两项由 `maintenance/tools/push.py` 生成，
-不要把应用版本当作数据版本。版本规则见 `docs/release-versioning.md`。
+`src-tauri/resources/DATA_MANIFEST.json`；日常用 `scripts/push-data.ps1` 生成，
+底层脚本是 `maintenance/tools/push.py`。不要把应用版本当作数据版本。
+版本规则见 `docs/release-versioning.md`。
 
 ## 路径约定
 
 脚本不应写死开发机的绝对路径。数据源根、数据库输出和资源目录应通过以下方式之一解析：
 
 - 仓库相对路径
-- 环境变量（如 `PRTS_DATA_ROOT`）
+- 环境变量（如 `PRTS_DATA_SOURCE`）
 - 命令行参数
 
 `db_builder/` 中的历史脚本已经移出当前仓库，不再作为新脚本的参考。

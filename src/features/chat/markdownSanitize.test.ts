@@ -147,14 +147,8 @@ describe("sanitizeMarkdownHtml · 恶意注入拦截", () => {
 // 表格单元格覆盖（消毒在表格提取之前）
 // ═══════════════════════════════════════════════
 
-describe("hardenRemoteImages · 远程图片最小硬化", () => {
-  function image(html: string): HTMLImageElement {
-    const div = document.createElement("div");
-    div.innerHTML = html;
-    return div.querySelector("img") as HTMLImageElement;
-  }
-
-  it("远程 http/https 与协议相对图片加 lazy/async/no-referrer", () => {
+describe("hardenRemoteImages · 外部图片不直连", () => {
+  it("远程 http/https 与协议相对图片替换为中性占位", () => {
     const html = sanitizeMarkdownHtml(
       marked.parse(
         "![a](https://example.com/a.png)\n\n![b](http://example.com/b.png)\n\n![c](//cdn.example.com/c.png)"
@@ -163,21 +157,26 @@ describe("hardenRemoteImages · 远程图片最小硬化", () => {
     const hardened = hardenRemoteImages(html);
     const div = document.createElement("div");
     div.innerHTML = hardened;
-    const imgs = Array.from(div.querySelectorAll("img"));
-    expect(imgs).toHaveLength(3);
-    for (const img of imgs) {
-      expect(img.getAttribute("loading")).toBe("lazy");
-      expect(img.getAttribute("decoding")).toBe("async");
-      expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
-      expect(img.hasAttribute("data-remote-image")).toBe(true);
-    }
+    expect(div.querySelectorAll("img")).toHaveLength(0);
+    const placeholders = Array.from(div.querySelectorAll("[data-remote-image]"));
+    expect(placeholders).toHaveLength(3);
+    expect(placeholders[0].textContent).toBe("图片未加载 · a");
+    expect(placeholders[1].getAttribute("title")).toBe("http://example.com/b.png");
   });
 
-  it("本地相对图片不改写、不标记为远程", () => {
-    const img = image(hardenRemoteImages('<img src="/local/a.png" alt="本地">'));
-    expect(img.getAttribute("src")).toBe("/local/a.png");
-    expect(img.hasAttribute("data-remote-image")).toBe(false);
-    expect(img.hasAttribute("loading")).toBe(false);
+  it("本地相对路径与 asset.localhost 图片保留为 img", () => {
+    const div = document.createElement("div");
+    div.innerHTML = hardenRemoteImages(
+      '<img src="/local/a.png" alt="本地">' +
+        '<img src="http://asset.localhost/C:/pics/a.png" alt="附件">'
+    );
+    const imgs = Array.from(div.querySelectorAll("img"));
+    expect(imgs).toHaveLength(2);
+    expect(imgs[0].getAttribute("src")).toBe("/local/a.png");
+    expect(imgs[1].getAttribute("src")).toBe(
+      "http://asset.localhost/C:/pics/a.png"
+    );
+    expect(div.querySelector("[data-remote-image]")).toBeNull();
   });
 });
 

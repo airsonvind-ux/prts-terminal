@@ -1,0 +1,41 @@
+name: 功能请求
+description: 提出需求或行为变更
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先阅读 CONTRIBUTING.md 的 Issue 规则。
+        这里只收需求，不收实现方案、技术设计或代码。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 在什么情况下会用到？现在缺少它会遇到什么问题？
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 希望达到的效果
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 做到什么程度算完成
+      description: 从使用者角度写可以检查的结果。
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我确认这是需求描述，不包含实现方案、代码或补丁
+          required: true

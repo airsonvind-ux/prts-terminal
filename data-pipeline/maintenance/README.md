@@ -96,28 +96,38 @@ git log -1 --format="%h %cs"
 
 ### 5. 推送
 
-```powershell
-cd data-pipeline\maintenance\tools
-python push.py --dry-run --data-version 2026.10.18 --source-commit <数据源提交>
-python push.py --data-version 2026.10.18 --source-commit <数据源提交>
-```
-
-`push.py` 只推数据库种子，并在发布副本里写入 `meta` 表、生成
-`src-tauri/resources/DATA_MANIFEST.json`。`--data-version` 必填，格式
-`YYYY.MM.DD[.N]`；`--source-commit` 填数据源提交或维护快照标识。
-
-数据源不在本机时，用明确的快照标识并补 `--source-note`，不要让
-`sourceCommit` 成为无法解释的孤立值。
-
-推送后跑发布库的 data-contract，再把结果写回清单：
+日常使用项目根目录的包装脚本，不需要手动拼底层参数：
 
 ```powershell
-cd ..\..\..
-.\scripts\data-contract.ps1
-python data-pipeline\maintenance\tools\push.py --manifest-only `
-  --data-contract-status passed --data-contract-passed 1252 `
-  --data-contract-ignored 21 --source-note "<与推送时一致>"
+cd <prts-terminal 仓库根目录>
+.\scripts\push-data.ps1 -DryRun
+.\scripts\push-data.ps1
 ```
+
+它会自动读取 `data-source/ArknightsGameData` 的 HEAD，默认用当天日期作为
+`dataVersion`；如果目标库已经有当天版本，会递增 `.1`、`.2`。随后依次完成：
+
+1. 把权威库推送到 `src-tauri/resources/arknights.db`；
+2. 运行 `scripts/data-contract.ps1`；
+3. 把实际 `passed` / `ignored` 回写到 `DATA_MANIFEST.json`。
+
+`-DryRun` 只显示计划和表行数，不写数据库、不跑契约、不写清单。行数相同
+不代表内容没变；脚本还会打印源库 SHA-256，内容补全会反映在哈希上。
+
+需要指定版本或数据源不在本机时：
+
+```powershell
+.\scripts\push-data.ps1 -DataVersion 2026.10.23.1
+.\scripts\push-data.ps1 -SourceCommit "<维护快照标识>" -SourceNote "<说明>"
+```
+
+同一天重跑同一份数据（例如上次契约失败）时，显式传回原来的 `-DataVersion`，
+否则脚本会按“又有一份当天快照”递增到 `.1`。
+
+调试时可以加 `-SkipContract`，但清单会保持 `pending`，不能用于发布。
+
+底层 `maintenance/tools/push.py` 仍然保留，供排查和发布记录使用；日常入口是
+`push-data.ps1`，不要把它拆成多条命令交给维护者执行。
 
 五张 JSON 表由各自脚本直接写进 `src-tauri/resources/`，不需要推送。
 
@@ -128,6 +138,8 @@ python data-pipeline\maintenance\tools\push.py --manifest-only `
   `python update.py --crawl` 即可。
 - **记录**：`updates/<表>/<时间戳>.json`，**有变化或失败才写**。内含源版本（提交 / 游戏版本 /
   数据时间）、校对差异明细、新增明细、爬取统计、待办变化，以及「待人工核对」条目。
+  推送记录也在 `updates/arknights.db/<时间戳>.json`，该目录会入库；数据库和 `DATA_MANIFEST.json`
+  本身不入库。
 - **备份**：写库前自动备份到 `backups/`，同一文件名只保留 3 份。
 
 ## 六、注意事项

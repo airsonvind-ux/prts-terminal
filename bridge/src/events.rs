@@ -187,7 +187,7 @@ const RECOGNITION_KINDS: &[&str] = &[
     "UserAdditionalOperInvalid",
 ];
 
-/// 消息码 → 名称。取自 `docs/zh-cn/protocol/callback-schema.md` 的 `AsstMsg` 枚举。
+/// 消息码 → 名称。取自 MAA 上游仓库的 `docs/zh-cn/protocol/callback-schema.md` 的 `AsstMsg` 枚举。
 ///
 /// 官方明言「回调随版本飞速迭代」，故此表仅作**提示**用途；`code` 与 `raw`
 /// 才是事实来源，PRTS 侧不应依赖此名称做逻辑分支。

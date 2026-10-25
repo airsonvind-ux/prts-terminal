@@ -15,7 +15,12 @@
 // 见 mergeSettings），故「已配 key」= api_key === MASKED_SECRET。
 // headers / max_tokens 内部参数不暴露 UI（settings.json 手动写入保留）。
 
-import type { ApiType, LlmConfig, LlmPatch } from "../../types";
+import type {
+  ApiType,
+  ConversationConfigPatch,
+  LlmConfig,
+  LlmPatch,
+} from "../../types";
 import { THINKING_LABELS } from "../../thinking";
 import { SectionWarning } from "./ui/SettingsSection";
 import { ModelListSection } from "./SettingsModelList";
@@ -44,11 +49,18 @@ export interface SettingsModelProps {
   llm: LlmConfig;
   /** busy（对话处理中）：控件禁用 + 漏斗拒 patch */
   busy: boolean;
-  /** v2 llm 段 patch（Panel 漏斗：即时保存 + 失败回滚） */
+  /** v2 llm 段 patch（供应商连接配置；Panel 漏斗：即时保存 + 失败回滚） */
   onPatch: (patch: LlmPatch, label?: string) => void;
+  /** 当前对话 / 新对话草稿的模型身份 patch（provider/model/thinking） */
+  onConfigPatch: (patch: ConversationConfigPatch) => void;
 }
 
-export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
+export function SettingsModel({
+  llm,
+  busy,
+  onPatch,
+  onConfigPatch,
+}: SettingsModelProps) {
   const {
     providers,
     providersLoading,
@@ -89,7 +101,7 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
     canCopy,
     keyToggleTitle,
     home,
-  } = useModelSettings(llm, busy, onPatch);
+  } = useModelSettings(llm, busy, onPatch, onConfigPatch);
 
   return (
     <div className={styles.container}>
@@ -230,10 +242,13 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
           <span className={styles.label}>模型</span>
           {modelListStatus === "loaded" && (
             <button
+              type="button"
               className={styles.refreshBtn}
+              data-focus-inset
               disabled={busy}
               onClick={() => void fetchModels()}
               title="刷新模型列表"
+              aria-label="刷新模型列表"
             >
               ↻
             </button>
@@ -257,7 +272,7 @@ export function SettingsModel({ llm, busy, onPatch }: SettingsModelProps) {
             ariaLabel="思考强度"
             value={thinking.effective}
             disabled={busy}
-            onChange={(v) => onPatch({ thinking_level: v }, "思考强度")}
+            onChange={(v) => onConfigPatch({ thinkingLevel: v })}
             options={thinking.levels.map((lvl) => ({
               value: lvl,
               label: `${THINKING_LABELS[lvl] ?? lvl}${

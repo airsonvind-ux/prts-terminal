@@ -203,18 +203,24 @@ describe("deriveMessages", () => {
     expect(isErrorOnlyTurn(turns[0])).toBe(false);
   });
 
-  it("错误轮丢弃未完成的工具调用和工具结果，避免下一轮出现悬空工具链", () => {
+  it("错误轮保留已闭合的工具步骤，只丢弃失败 step 的半截草稿", () => {
     const turns: SessionEvent[][] = [
       [
         user("s1", "查询 X"),
         textChunk("s1", "先查一下"),
         toolCall("s1", "call_1", "echo", "{}"),
         toolResult("s1", "call_1", "结果"),
+        textChunk("s1", "失败 step 的半截"),
         { type: "error", sessionId: "s1", message: "连接中断", recoverable: false },
       ],
     ];
     const msgs = deriveMessages(turns);
-    expect(msgs).toEqual([{ role: "user", content: "查询 X" }]);
+    expect(msgs).toHaveLength(3);
+    expect(msgs[0]).toEqual({ role: "user", content: "查询 X" });
+    expect(msgs[1].role).toBe("assistant");
+    expect(msgs[1].toolCalls).toHaveLength(1);
+    expect(msgs[2]).toEqual({ role: "tool", content: "结果", toolCallId: "call_1" });
+    expect(msgs.some((m) => m.content.includes("失败 step 的半截"))).toBe(false);
   });
 
   it("空 assistant 跳过（无内容无工具）", () => {

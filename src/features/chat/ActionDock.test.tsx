@@ -36,7 +36,11 @@ function renderDock() {
   };
 }
 
-function setApproval(callId = "c1", command = "Get-Process") {
+function setApproval(
+  callId = "c1",
+  command = "Get-Process",
+  params = JSON.stringify({ command })
+) {
   const conversationId = useConversationStore.getState().activeId!;
   const events: SessionEvent[] = [
     {
@@ -44,7 +48,7 @@ function setApproval(callId = "c1", command = "Get-Process") {
       sessionId: "s1",
       callId,
       toolName: "run_command",
-      params: "{}",
+      params,
     },
     {
       type: "tool/approval-request",
@@ -155,6 +159,29 @@ describe("Action Dock · 优先级与阻塞", () => {
     expect(dock.text()).toContain("Remove-Item C:\\tmp\\x.txt");
     expect(dock.text()).toContain("确认执行");
     expect(dock.text()).not.toContain("重启并安装");
+    dock.unmount();
+  });
+
+  it("审批卡读取 tool/call 的完整命令，不把 512 字摘要当全文", () => {
+    const full = `Write-Output "${'a'.repeat(900)}"`;
+    setApproval("long", full.slice(0, 512), JSON.stringify({ command: full }));
+    const dock = renderDock();
+
+    expect(dock.text()).toContain(full);
+    expect(dock.text()).not.toContain(`${full.slice(0, 512)}…`);
+    dock.unmount();
+  });
+
+  it("完整命令不可用时禁止确认，只保留拒绝", () => {
+    setApproval("missing", "Get-Process", "{}");
+    const dock = renderDock();
+    const confirm = Array.from(dock.container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("确认执行")
+    );
+
+    expect(confirm).toBeDefined();
+    expect(confirm!.disabled).toBe(true);
+    expect(dock.text()).toContain("无法读取完整命令，不能确认");
     dock.unmount();
   });
 

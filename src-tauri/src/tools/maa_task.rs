@@ -55,7 +55,7 @@ impl Tool for MaaTaskTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["run", "stop", "screenshot", "status"],
+                    "enum": ["run", "stop", "status"],
                     "description": "省略时按 run。"
                 },
                 "tasks": {
@@ -150,8 +150,8 @@ impl Tool for MaaTaskTool {
         }
     }
 
-    /// 这个工具是**有状态且带副作用**的（桥连接、任务队列、截图落盘），
-    /// 必须串行执行。
+    /// 这个工具是**有状态且带副作用**的（桥连接、任务队列），必须串行执行。
+    /// 截图是独立的 `capture_game_screen` 工具，不属于这里。
     fn is_concurrency_safe(&self) -> bool {
         false
     }
@@ -1207,6 +1207,19 @@ fn summarize_tasks(tasks: &[Value]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameters_only_offer_executable_actions() {
+        // 截图已拆成独立工具；MAA 任务工具的参数定义不能再暴露它。
+        let params = MaaTaskTool.parameters();
+        let actions = params["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action.enum 必须是数组");
+        assert_eq!(actions, &vec![json!("run"), json!("stop"), json!("status")]);
+        let description = MaaTaskTool.description();
+        assert!(!description.contains("screenshot"), "{description}");
+        assert!(!description.contains("截图"), "{description}");
+    }
 
     #[test]
     fn current_state_picks_the_newest_action() {

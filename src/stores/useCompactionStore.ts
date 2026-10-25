@@ -112,7 +112,13 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     set({ compactingConversationId: conversationId });
     try {
       const outcome = await invoke<CompactOutcome>("compact_conversation", {
-        request: { conversationId, sessionId, foldedHistory: payload },
+        request: {
+          conversationId,
+          sessionId,
+          foldedHistory: payload,
+          provider: conv.provider ?? null,
+          model: conv.model ?? null,
+        },
       });
       convStore.applyCompaction(
         conversationId,

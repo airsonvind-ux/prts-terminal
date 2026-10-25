@@ -1,10 +1,10 @@
 // src/components/overlay/HistoryPanel.tsx
 // 历史对话面板
 //
-// 职责：展示全部对话列表（按时间倒序），支持切换和删除。
+// 职责：展示全部对话列表（按时间倒序），支持切换、重命名和删除。
 // 自身从 store 读写，不依赖 props——覆盖层体系中的自包含面板。
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useUIStore } from "../../stores/useUIStore";
 import styles from "./HistoryPanel.module.css";
@@ -21,6 +21,10 @@ export function HistoryPanel() {
   const [editValue, setEditValue] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const confirmYesRef = useRef<HTMLButtonElement>(null);
+  const editBtnRefs = useRef(new Map<string, HTMLButtonElement>());
+  const deleteBtnRefs = useRef(new Map<string, HTMLButtonElement>());
+
   /*
    * 排序：最新对话排最前。
    * 场景判断——用户打开历史面板最常见的动机是"回到刚才的对话"，
@@ -29,6 +33,11 @@ export function HistoryPanel() {
   const sorted = [...conversations].sort(
     (a, b) => b.createdAt - a.createdAt
   );
+
+  // 进入删除确认态时把焦点送到确认按钮；取消后送回删除按钮。
+  useEffect(() => {
+    if (deletingId) confirmYesRef.current?.focus();
+  }, [deletingId]);
 
   /*
    * 选择对话：切换 activeId 后立即关闭覆盖层。
@@ -48,16 +57,8 @@ export function HistoryPanel() {
   };
 
   /*
-   * 删除对话：移除对话记录后关闭覆盖层。
-   *
-   * 如果删除的是当前活跃对话，useConversationStore 内部会将 activeId 置为 null，
-   * ChatView 自动退回欢迎界面。
-   *
-   * stopPropagation 阻止事件冒泡到父级 div（否则会同时触发 handleSelect 和 handleDelete）。
-   */
-  /*
    * 删除对话（带确认）：首次点击进入确认态，再次点击 ✓ 才真正删除。
-   * 确认态下点击 ✗ 或列表其他区域取消。
+   * 确认态下点击 ✗、Escape 或列表其他区域取消。
    */
   const handleDelete = (id: string) => {
     deleteConversation(id);
@@ -71,7 +72,11 @@ export function HistoryPanel() {
   };
 
   const cancelDelete = () => {
+    const id = deletingId;
     setDeletingId(null);
+    if (id) {
+      window.setTimeout(() => deleteBtnRefs.current.get(id)?.focus(), 0);
+    }
   };
 
   /*
@@ -85,16 +90,24 @@ export function HistoryPanel() {
     setDeletingId(null);
   };
 
-  const commitEdit = () => {
-    if (editingId && editValue.trim()) {
+  const commitEdit = (restoreFocus = false) => {
+    const id = editingId;
+    if (id && editValue.trim()) {
       const trimmed = editValue.trim();
-      renameConversation(editingId, trimmed.length > 30 ? trimmed.slice(0, 30) : trimmed);
+      renameConversation(id, trimmed.length > 30 ? trimmed.slice(0, 30) : trimmed);
     }
     setEditingId(null);
+    if (restoreFocus && id) {
+      window.setTimeout(() => editBtnRefs.current.get(id)?.focus(), 0);
+    }
   };
 
-  const cancelEdit = () => {
+  const cancelEdit = (restoreFocus = false) => {
+    const id = editingId;
     setEditingId(null);
+    if (restoreFocus && id) {
+      window.setTimeout(() => editBtnRefs.current.get(id)?.focus(), 0);
+    }
   };
 
   // 空状态：没有任何对话记录
@@ -116,6 +129,8 @@ export function HistoryPanel() {
       <div className={styles.list}>
         {sorted.map((conv) => {
           const isDeleting = conv.id === deletingId;
+          const isEditing = conv.id === editingId;
+          const relativeTime = formatRelativeTime(conv.createdAt);
 
           return (
             <div
@@ -126,8 +141,19 @@ export function HistoryPanel() {
               onClick={() => {
                 if (isDeleting) {
                   cancelDelete();
-                } else {
+                } else if (!isEditing) {
                   handleSelect(conv.id);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (
+                  isDeleting &&
+                  e.key === "Escape" &&
+                  !e.nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelDelete();
                 }
               }}
             >
@@ -137,26 +163,31 @@ export function HistoryPanel() {
                   <span className={styles.confirmText}>确认删除？</span>
                   <div className={styles.confirmActions}>
                     <button
+                      ref={confirmYesRef}
+                      type="button"
                       className={styles.confirmYes}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(conv.id);
                       }}
                       title="确认删除"
+                      aria-label="确认删除"
                     >
-                      <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                      <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <polyline points="2,6 5,9 10,3" />
                       </svg>
                     </button>
                     <button
+                      type="button"
                       className={styles.confirmNo}
                       onClick={(e) => {
                         e.stopPropagation();
                         cancelDelete();
                       }}
                       title="取消删除"
+                      aria-label="取消删除"
                     >
-                      <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round">
+                      <svg viewBox="0 0 12 12" width="12" height="12" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" aria-hidden="true">
                         <line x1="3" y1="3" x2="9" y2="9" />
                         <line x1="9" y1="3" x2="3" y2="9" />
                       </svg>
@@ -165,46 +196,80 @@ export function HistoryPanel() {
                 </>
               ) : (
                 <>
-                  <div className={styles.itemInfo}>
-                    {conv.id === editingId ? (
+                  {isEditing ? (
+                    <div className={styles.itemInfo}>
                       <input
                         className={styles.editInput}
                         value={editValue}
                         onChange={(e) => setEditValue(e.target.value)}
-                        onBlur={commitEdit}
+                        onBlur={() => commitEdit(false)}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") commitEdit();
-                          if (e.key === "Escape") cancelEdit();
+                          if (e.nativeEvent.isComposing) return;
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            commitEdit(true);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            cancelEdit(true);
+                          }
                         }}
                         maxLength={30}
                         autoFocus
+                        aria-label="编辑对话标题"
                         onClick={(e) => e.stopPropagation()}
                       />
-                    ) : (
-                      <span className={styles.itemTitle}>{conv.title}</span>
-                    )}
-                    <span className={styles.itemTime}>{formatRelativeTime(conv.createdAt)}</span>
-                  </div>
+                      <span className={styles.itemTime}>{relativeTime}</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      data-focus-inset
+                      className={styles.selectBtn}
+                      data-overlay-autofocus={
+                        conv.id === activeId ? "" : undefined
+                      }
+                      aria-current={conv.id === activeId ? "true" : undefined}
+                      aria-label={`${conv.title}，${relativeTime}`}
+                    >
+                      <span className={styles.itemInfo}>
+                        <span className={styles.itemTitle}>{conv.title}</span>
+                        <span className={styles.itemTime}>{relativeTime}</span>
+                      </span>
+                    </button>
+                  )}
 
-                  {conv.id !== editingId && (
+                  {!isEditing && (
                     <div className={styles.actions}>
                       <button
+                        ref={(el) => {
+                          if (el) editBtnRefs.current.set(conv.id, el);
+                          else editBtnRefs.current.delete(conv.id);
+                        }}
+                        type="button"
                         className={styles.editBtn}
                         onClick={(e) => {
                           e.stopPropagation();
                           startEdit(conv.id, conv.title);
                         }}
                         title="编辑标题"
+                        aria-label="编辑标题"
                       >
                         ✎
                       </button>
                       <button
+                        ref={(el) => {
+                          if (el) deleteBtnRefs.current.set(conv.id, el);
+                          else deleteBtnRefs.current.delete(conv.id);
+                        }}
+                        type="button"
                         className={styles.deleteBtn}
                         onClick={(e) => {
                           e.stopPropagation();
                           requestDelete(conv.id);
                         }}
                         title="删除对话"
+                        aria-label="删除对话"
                       >
                         ×
                       </button>

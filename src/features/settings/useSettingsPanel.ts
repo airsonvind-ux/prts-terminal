@@ -2,7 +2,7 @@
 //
 // 组件只保留 tab 路由与 JSX；这里集中处理：
 //   1. get_settings / get_app_meta / list_skills 一次拉取
-//   2. updateSettings 单漏斗：busy 守卫 → 乐观合并 → invoke → 失败回滚 + toast
+//   2. updateSettings 单漏斗：busy 守卫 → 乐观合并 → 串行保存 → 失败摘除 + toast
 //   3. 工作区、技能、MAA 等页面的操作入口
 //   4. 上次所在页的读写与引导通知
 
@@ -11,6 +11,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ApiType,
   AppMeta,
+  ConversationConfigPatch,
+  ConversationModelConfig,
   MaaStatus,
   Settings,
   SettingsPatch,
@@ -24,15 +26,27 @@ import {
 import { showToast } from "../../stores/useToastStore";
 import { useUIStore } from "../../stores/useUIStore";
 import { useGuideStore } from "../../stores/useGuideStore";
+import { useConversationStore } from "../../stores/useConversationStore";
 import { SETTINGS_TAB_GUIDE } from "../guide/guideContent";
 import { mergeSettings } from "./settingsMerge";
 import type { SettingsTabKey } from "./settingsTabs";
 
+interface PendingSettingsSave {
+  patch: SettingsPatch;
+  label: string | undefined;
+  save: (p: SettingsPatch) => Promise<unknown>;
+}
+
 export function useSettingsPanel() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  // 权威引用：乐观合并 / 失败回滚的基准（无卸载批保存——ref 不再承担保存职责）
+  // 当前 UI 的乐观视图；由 confirmed + 待提交队列重算，不直接作为回滚基准。
   const settingsRef = useRef<Settings | null>(null);
+  // 最后一次确认已落盘的设置；失败时从这里重算，避免旧快照覆盖后一次成功。
+  const confirmedRef = useRef<Settings | null>(null);
+  // 已乐观更新、等待串行提交的 patch 队列。
+  const pendingSavesRef = useRef<PendingSettingsSave[]>([]);
+  const flushingSavesRef = useRef(false);
   // 应用只读元信息（关于页展示；空间页批 C2 复用同一份 props）
   const [appMeta, setAppMeta] = useState<AppMeta | null>(null);
   // 技能清单（技能页；null = 加载中/失败）
@@ -48,6 +62,11 @@ export function useSettingsPanel() {
   );
   // busy 订阅（M3-B 全局锁口径）：驱动漏斗守卫 + 模型页控件禁用
   const settingsBusy = useProcessingStore(isProcessingBusy);
+  // 当前对话 / 新对话草稿：设置页模型配置的唯一归属
+  const activeConv = useConversationStore((s) =>
+    s.activeId ? s.conversations.find((c) => c.id === s.activeId) : undefined
+  );
+  const draftConfig = useConversationStore((s) => s.draftConfig);
   // 引导键集是否已从后端拉到（未拉到不弹——宁可不弹，也不误弹）
   const guideHydrated = useGuideStore((s) => s.hydrated);
 
@@ -60,26 +79,153 @@ export function useSettingsPanel() {
     if (key) useGuideStore.getState().enqueueNotice(key);
   }, [activeTab, guideHydrated, panelReady]);
 
-  // active 供应商视角配置（模型页受控）：providers[active] 拼 LlmConfig
-  // （provider = active 名 + 段顶层 thinking_level），缺条目 = 空视角
+  // 设置页模型配置的三态：当前对话 → 新对话草稿 → 首次启动种子。
+  // 供应商凭据/BaseURL 仍从全局 providers 取；模型身份不读全局 active。
+  const effectiveModelConfig = useMemo<ConversationModelConfig | null>(() => {
+    if (!settings) return null;
+    if (activeConv?.provider && activeConv.model) {
+      return {
+        provider: activeConv.provider,
+        model: activeConv.model,
+        thinkingLevel: activeConv.thinkingLevel ?? null,
+      };
+    }
+    if (draftConfig?.provider && draftConfig.model) return draftConfig;
+    const seedProvider = settings.llm.active_provider;
+    const seedPc = settings.llm.providers[seedProvider];
+    if (seedProvider && seedPc?.model) {
+      return {
+        provider: seedProvider,
+        model: seedPc.model,
+        thinkingLevel: settings.llm.thinking_level ?? null,
+      };
+    }
+    return null;
+  }, [settings, activeConv?.provider, activeConv?.model, activeConv?.thinkingLevel, draftConfig]);
+
+  // 模型页受控视角：会话身份 + 该供应商的全局连接配置
   const activeLlmConfig = useMemo(() => {
     if (!settings) return null;
-    const active = settings.llm.active_provider;
-    const pc = settings.llm.providers[active];
+    const provider =
+      effectiveModelConfig?.provider ?? settings.llm.active_provider;
+    const pc = settings.llm.providers[provider];
     return {
-      provider: active,
+      provider,
       api_type: pc?.api_type ?? ("openai-completions" as ApiType),
-      model: pc?.model ?? "",
+      model: effectiveModelConfig?.model ?? pc?.model ?? "",
       api_key: pc?.api_key ?? "",
       base_url: pc?.base_url ?? null,
       headers: pc?.headers ?? null,
       max_tokens: pc?.max_tokens ?? 4096,
-      thinking_level: settings.llm.thinking_level ?? null,
+      thinking_level: effectiveModelConfig?.thinkingLevel ?? null,
     } as Settings["llm"]["providers"][string] & {
       provider: string;
       thinking_level: string | null;
     };
-  }, [settings]);
+  }, [settings, effectiveModelConfig]);
+
+  /** 模型显示名/窗口变化后补写会话展示字段（请求身份已先落）。 */
+  const refreshConversationModelDisplay = useCallback(
+    (conversationId: string, provider: string, model: string) => {
+      invoke<{
+        displayName: string;
+        contextLength: number;
+      } | null>("get_local_model_info", { provider, modelId: model })
+        .then((info) => {
+          useConversationStore
+            .getState()
+            .updateConversationModel(
+              conversationId,
+              info?.displayName ?? model,
+              info?.contextLength ?? 0
+            );
+        })
+        .catch(() => {
+          useConversationStore
+            .getState()
+            .updateConversationModel(conversationId, model, 0);
+        });
+    },
+    []
+  );
+
+  /** 设置页写模型身份：已有对话落会话；新对话落草稿（首条消息固化）。 */
+  const updateConversationConfig = useCallback(
+    (patch: ConversationConfigPatch) => {
+      const currentSettings = settingsRef.current;
+      if (!currentSettings) return;
+      const seedProvider = currentSettings.llm.active_provider;
+      const seedPc = currentSettings.llm.providers[seedProvider];
+      const base: ConversationModelConfig = effectiveModelConfig ?? {
+        provider: seedProvider,
+        model: seedPc?.model ?? "",
+        thinkingLevel: currentSettings.llm.thinking_level ?? null,
+      };
+      const provider = patch.provider ?? base.provider;
+      const providerChanged = provider !== base.provider;
+      const savedModel =
+        settingsRef.current?.llm.providers[provider]?.model ?? "";
+      const model =
+        patch.model ??
+        (providerChanged ? savedModel : base.model);
+      const next: ConversationModelConfig = {
+        provider,
+        model,
+        thinkingLevel:
+          patch.thinkingLevel !== undefined
+            ? patch.thinkingLevel
+            : providerChanged
+              ? null
+              : base.thinkingLevel,
+      };
+      const store = useConversationStore.getState();
+      const currentId = store.activeId;
+      if (currentId) {
+        // 窗口变小：先把当前用量与目标窗口比一次；超出则要求先压缩，
+        // 不静默截断，也不等下一轮请求失败。
+        const currentConv = store.conversations.find((c) => c.id === currentId);
+        const used =
+          currentConv?.contextTokens?.contextInputTokens ??
+          currentConv?.contextTokens?.inputTokens ??
+          0;
+        if (
+          patch.contextLength &&
+          patch.contextLength > 0 &&
+          used > patch.contextLength
+        ) {
+          showToast("当前上下文超过新模型窗口，请先压缩后再切换", {
+            kind: "warning",
+            dedupeKey: "model-window-too-small",
+          });
+          return;
+        }
+        store.updateConversationConfig(
+          currentId,
+          next,
+          patch.modelName,
+          patch.contextLength
+        );
+        if (
+          model.length > 0 &&
+          !patch.modelName &&
+          (providerChanged || model !== base.model)
+        ) {
+          refreshConversationModelDisplay(currentId, provider, model);
+        }
+        // 持久化：首轮尚未落盘时会失败（会话文件未建），随 append_turn 的
+        // metaSnapshot 补上；失败静默，不阻断设置页。
+        invoke("update_conversation_meta", {
+          conversationId: currentId,
+          provider: next.provider,
+          model: next.model,
+          thinkingLevel: next.thinkingLevel ?? "",
+        }).catch(() => {});
+      } else {
+        store.setDraftConfig(next);
+      }
+    },
+    [effectiveModelConfig, refreshConversationModelDisplay]
+  );
 
   // 挂载：get_settings + get_app_meta + list_skills 各一次（子页切换不重复拉取）
   useEffect(() => {
@@ -87,6 +233,7 @@ export function useSettingsPanel() {
     invoke<Settings>("get_settings")
       .then((s) => {
         if (!alive) return;
+        confirmedRef.current = s;
         settingsRef.current = s;
         setSettings(s);
       })
@@ -115,9 +262,46 @@ export function useSettingsPanel() {
   }, []);
 
   // ── 即时保存单漏斗（busy 守卫单点收敛） ──
-  // 乐观更新先落 UI → 执行保存（默认 set_settings patch；带窗口副作用的
-  // 专用命令由调用方传 save 实参，如 set_always_on_top）→ 失败回滚 + 可见
-  // toast（保存失败前端可见——设置页扩展定稿约束）。
+  // 乐观更新先落 UI → 串行提交（默认 set_settings patch；带窗口副作用的
+  // 专用命令由调用方传 save 实参，如 set_always_on_top）→ 失败只摘除该 patch
+  // 并重算 UI，避免晚到的失败回滚覆盖后一次成功。
+  const recomputeOptimistic = useCallback(() => {
+    const base = confirmedRef.current;
+    if (!base) return;
+    let next = base;
+    for (const item of pendingSavesRef.current) {
+      next = mergeSettings(next, item.patch);
+    }
+    settingsRef.current = next;
+    setSettings(next);
+  }, []);
+
+  const flushSaves = useCallback(async () => {
+    if (flushingSavesRef.current) return;
+    flushingSavesRef.current = true;
+    try {
+      while (pendingSavesRef.current.length > 0) {
+        const item = pendingSavesRef.current[0];
+        try {
+          await item.save(item.patch);
+          const base = confirmedRef.current;
+          if (base) confirmedRef.current = mergeSettings(base, item.patch);
+        } catch (err: unknown) {
+          showToast(`保存失败（${item.label ?? "设置"}）：${String(err)}`, {
+            kind: "warning",
+          });
+        } finally {
+          // 无论成功或失败都只摘除当前项；后提交的 patch 仍在队列中，
+          // 重算后会保留它们，不会退回更早的整份快照。
+          pendingSavesRef.current = pendingSavesRef.current.slice(1);
+          recomputeOptimistic();
+        }
+      }
+    } finally {
+      flushingSavesRef.current = false;
+    }
+  }, [recomputeOptimistic]);
+
   const commit = useCallback(
     (
       patch: SettingsPatch,
@@ -133,21 +317,12 @@ export function useSettingsPanel() {
         });
         return;
       }
-      const prev = settingsRef.current;
-      if (!prev) return;
-      const next = mergeSettings(prev, patch);
-      settingsRef.current = next;
-      setSettings(next);
-      save(patch).catch((err: unknown) => {
-        // 回滚到 prev + 用户可见失败（后端已拒 / 写盘失败）
-        settingsRef.current = prev;
-        setSettings(prev);
-        showToast(`保存失败（${label ?? "设置"}）：${String(err)}`, {
-          kind: "warning",
-        });
-      });
+      if (!settingsRef.current || !confirmedRef.current) return;
+      pendingSavesRef.current.push({ patch, label, save });
+      recomputeOptimistic();
+      void flushSaves();
     },
-    []
+    [flushSaves, recomputeOptimistic]
   );
 
   const updateSettings = useCallback(
@@ -357,6 +532,7 @@ export function useSettingsPanel() {
     activeTab,
     settingsBusy,
     activeLlmConfig,
+    updateConversationConfig,
     updateSettings,
     handleSetAlwaysOnTop,
     handleChooseWorkspace,

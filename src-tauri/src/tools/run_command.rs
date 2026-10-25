@@ -779,6 +779,9 @@ mod tests {
     fn execute_timeout_maps_to_command_failed() {
         let ws = unique_temp_dir("timeout");
         let t = tool(&ws);
+        // 首次受限 PowerShell 启动含探针成本；本用例只测超时回收，不计探针耗时。
+        t.execute(&ToolContext::new(), r#"{"command":"Write-Output warm"}"#)
+            .expect("预热探针");
         let start = std::time::Instant::now();
         let err = t
             .execute(

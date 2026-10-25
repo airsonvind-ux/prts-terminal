@@ -16,8 +16,7 @@ import { useCompactionStore } from "./useCompactionStore";
 import { showToast } from "./useToastStore";
 import { ensureActiveConversation } from "./processingConversation";
 import { composeReminderNotice } from "./processingReminder";
-import { buildSendHistory, willOverflowContext } from "./processingRequest";
-import { backendHistoryEnabled } from "./processingHistoryMode";
+import { derivePreviousTurnStatus, willOverflowContext } from "./processingRequest";
 import { getModelInfo } from "./processingModelInfo";
 import type { ProcessingState, ProcessingStore } from "./useProcessingStore";
 
@@ -52,14 +51,14 @@ export async function sendProcessingMessage(
   set: SetStore,
   input: string,
   attachments: Attachment[]
-): Promise<void> {
+): Promise<boolean> {
   // 上一轮错误不锁死发送：用户重新提交即为重试。
   useUIStore.getState().clearError();
   const convStore = useConversationStore.getState();
   const { processing } = get();
   const activeId = convStore.activeId;
 
-  if (activeId !== null && hasProcessingFor(processing, activeId)) return;
+  if (activeId !== null && hasProcessingFor(processing, activeId)) return false;
 
   // ── 模块 D：压缩中禁发（同会话）——压缩进行中 turns 处于状态转换窗口，
   // 新消息若随旧 turns 发送将与压缩结果错位（双向互斥的前端半边；后端
@@ -68,56 +67,72 @@ export async function sendProcessingMessage(
     activeId !== null &&
     useCompactionStore.getState().compactingConversationId === activeId
   )
-    return;
+    return false;
 
   // ── Reminder：拉取提醒数据（后端 get_reminder_data：快照＝值 + 有界事件）──
-  // 含块版本随轮归档冻结；invoke 失败仅进行中对话回滚（新对话不回滚为 0，
-  // 避免重放）。拉取失败 → 静默跳过本轮（游标不动 → 下轮重试）。
-  let noticeBlock = "";
-  let noticeAdvanceTo = 0;
-  let prevNoticeSeq = 0;
-  let noticeIsNewConversation = false;
+  // 含块版本随轮归档冻结；游标不在这里提前推进——只有 turn/end 正常完成才提交
+  // （见 ProcessingState.noticeAdvanceTo）。拉取失败 → 静默跳过本轮（游标不动 → 下轮重试）。
+  let reminderData: ReminderData = { seq: 0, dims: [], events: [] };
   try {
-    const data = (await invoke<ReminderData>("get_reminder_data")) ?? {
-      seq: 0,
-      dims: [],
-      events: [],
-    };
-    // await 后以最新对话状态为准（拉取期间状态可能被推进）
-    const st = useConversationStore.getState();
-    const conv = st.activeId !== null
-      ? st.conversations.find((c) => c.id === st.activeId)
-      : undefined;
-    const notice = composeReminderNotice(data, conv?.lastNoticeSeq);
-    noticeBlock = notice.block;
-    noticeAdvanceTo = notice.advanceTo;
-    prevNoticeSeq = notice.prevSeq;
-    noticeIsNewConversation = notice.isNewConversation;
+    reminderData = (await invoke<ReminderData>("get_reminder_data")) ?? reminderData;
   } catch {
-    // 提醒拉取失败：本轮不带通知，游标未动 → 下轮重试
+    // 提醒拉取失败：本轮不带环境通知，游标未动 → 下轮重试；
+    // 上一轮状态仍应传达，不能因为环境拉取失败一起丢掉。
   }
+  // await 后以最新对话状态为准（拉取期间状态可能被推进）。
+  // 上一轮状态走 reminder，不修改冻结的前缀 system prompt。
+  const reminderState = useConversationStore.getState();
+  const reminderConv = reminderState.activeId !== null
+    ? reminderState.conversations.find((c) => c.id === reminderState.activeId)
+    : undefined;
+  const previousTurnStatus = derivePreviousTurnStatus(reminderConv);
+  const notice = composeReminderNotice(
+    reminderData,
+    reminderConv?.lastNoticeSeq,
+    previousTurnStatus
+  );
+  const noticeBlock = notice.block;
+  const noticeAdvanceTo = notice.advanceTo;
   const displayContent = noticeBlock
     ? `${noticeBlock}\n\n${input}`
     : input;
 
-  // primary 模式下历史由后端官方 log 派生，前端不再发送完整 history；
-  // legacy/shadow 仍走原路径（shadow 需要对照旧行为）。
-  const primaryHistory = await backendHistoryEnabled();
-
-  // 准备传给 LLM 的完整对话历史（含本次 user 消息——含块版本随 history
-  // 发送并归档冻结，是 LLM 实际所见）。
   const st = useConversationStore.getState();
   const isNewNow = st.activeId === null;
   const conv = isNewNow
     ? undefined
     : st.conversations.find((c) => c.id === st.activeId);
-  const history = primaryHistory
-    ? []
-    : buildSendHistory(conv, displayContent, attachments);
+  // 设置页可能把供应商切到“尚未选模型”的状态；此时不能静默改用全局模型。
+  const sendInfo = getModelInfo();
+  const convHasPartialConfig =
+    Boolean(conv?.provider || conv?.model) &&
+    (!conv?.provider || !conv?.model);
+  const draft = st.draftConfig;
+  const draftHasPartialConfig =
+    isNewNow &&
+    Boolean(draft?.provider || draft?.model) &&
+    (!draft?.provider || !draft?.model);
+  const incompleteConfig = convHasPartialConfig || draftHasPartialConfig;
+  if (incompleteConfig) {
+    showToast("请先在设置中选择模型", {
+      kind: "warning",
+      dedupeKey: "model-missing",
+    });
+    return false;
+  }
+
+  if (import.meta.env.DEV && import.meta.env.MODE !== "test" && reminderConv) {
+    const last = reminderConv.turns[reminderConv.turns.length - 1];
+    console.debug("[previous-turn-status]", previousTurnStatus ?? "none", {
+      turns: reminderConv.turns.length,
+      tail: last?.slice(-3).map((e) => e.type),
+    });
+  }
 
   // ── 模块 D：上下文窗口硬拦（发送前预估）──
   // 拦截为提示而非自动压缩（共识：手动触发）。
-  const windowSize = getModelInfo()?.contextLength ?? 0;
+  const windowSize =
+    conv?.contextLength ?? getModelInfo()?.contextLength ?? 0;
   if (
     !isNewNow &&
     conv &&
@@ -127,7 +142,7 @@ export async function sendProcessingMessage(
       kind: "warning",
       dedupeKey: "ctx-window-full",
     });
-    return;
+    return false;
   }
 
   // 创建或复用对话，并维护自动标题现场
@@ -136,16 +151,12 @@ export async function sendProcessingMessage(
     .getState()
     .conversations.find((c) => c.id === conversationId);
 
-  // 游标推进：游标＝payload.seq（快照与增量同口径；含本次未拼入的事件，防下轮补放）。
-  if (noticeAdvanceTo > prevNoticeSeq) {
-    useConversationStore
-      .getState()
-      .advanceNoticeSeq(conversationId, noticeAdvanceTo);
-  }
+  // 游标不在发送前推进：只有本轮正常完成才由 finishProcessing 提交，
+  // 避免 invoke 失败后基线永久缺失（新对话重试仍会重发完整快照）。
 
   // await/创建期间可能已有本对话的处理中快照（快速连发）→ 重查并发保护
   // （双拉同时完成的理论窗口仍存在，UI 双击主场景被此覆盖）
-  if (hasProcessingFor(get().processing, conversationId)) return;
+  if (hasProcessingFor(get().processing, conversationId)) return false;
 
   const sessionId = generateId();
   // 函数式 set：合并最新 state.processing（await 期间其他对话可能已新增条目）
@@ -154,6 +165,9 @@ export async function sendProcessingMessage(
       ...state.processing,
       [sessionId]: {
         conversationId,
+        // 本轮提醒块对应的游标；正常完成后由 finishProcessing 提交
+        noticeAdvanceTo:
+          noticeAdvanceTo > 0 ? noticeAdvanceTo : undefined,
         // user/message 预置为第一条（含块版本；投影缓存进行态，归档时随轮落库）
         currentEvents: [makeUserEvent(sessionId, displayContent, attachments)],
         agentPhase: "processing",
@@ -171,9 +185,34 @@ export async function sendProcessingMessage(
   const metaNow = useConversationStore
     .getState()
     .conversations.find((c) => c.id === conversationId);
+  // 旧对话没有会话级配置 → 用当前全局种子固化一次；此后按对话隔离。
+  const infoNow = sendInfo;
+  const configNow =
+    metaNow?.provider && metaNow.model
+      ? {
+          provider: metaNow.provider,
+          model: metaNow.model,
+          thinkingLevel: metaNow.thinkingLevel ?? null,
+        }
+      : infoNow?.provider && infoNow.model
+        ? {
+            provider: infoNow.provider,
+            model: infoNow.model,
+            thinkingLevel: infoNow.thinkingLevel ?? null,
+          }
+        : null;
+  if (configNow && (!metaNow?.provider || !metaNow?.model)) {
+    useConversationStore
+      .getState()
+      .updateConversationConfig(
+        conversationId,
+        configNow,
+        infoNow?.name,
+        infoNow?.contextLength
+      );
+  }
   const request: AgentRequest = {
     input,
-    history,
     sessionId,
     conversationId,
     userContent: displayContent,
@@ -182,20 +221,17 @@ export async function sendProcessingMessage(
     conversationCreatedAt: metaNow?.createdAt,
     modelName: metaNow?.modelName,
     contextLength: metaNow?.contextLength,
+    provider: configNow?.provider,
+    model: configNow?.model,
+    thinkingLevel: configNow?.thinkingLevel ?? null,
     lastNoticeSeq: metaNow?.lastNoticeSeq,
   };
   invoke("agent_process", { request }).catch((err) => {
-    // invoke 本身的异常（后端进程崩溃、网络不可达等）：后端未跑 →
-    // 回滚通知游标（下轮重拉重拼，防丢失）。错误轮归档剥离块
+    // invoke 本身的异常（后端进程崩溃、网络不可达等）：后端未跑；游标没有
+    // 提前推进，因此无需回滚，下一轮会重发同一份提醒。错误轮归档剥离块
     // （failProcessing 内）——错误轮不对 LLM 可见，块不应残留历史。
     // Agent 处理过程中的错误通过 error 事件到达，不经过此 catch。
-    // 回滚语义：仅**进行中**对话回滚游标（防丢失）；新对话基线推进
-    // 不回滚为 0——否则重试时会把历史通知全量重放。
-    if (!noticeIsNewConversation && noticeAdvanceTo > prevNoticeSeq) {
-      useConversationStore
-        .getState()
-        .advanceNoticeSeq(conversationId, prevNoticeSeq);
-    }
     get().failProcessing(sessionId, String(err));
   });
+  return true;
 }

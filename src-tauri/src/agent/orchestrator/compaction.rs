@@ -185,7 +185,9 @@ fn build_summary_instruction() -> String {
 - 不调用任何工具；\n\
 - 只总结事实与任务状态，不编造摘要中不存在的信息；\n\
 - 区分「已完成 / 进行中 / 受阻」，保留关键结论、数据出处线索与后续步骤；\n\
-- 工具查询类结果不罗列原始数据，标注「（可重查）」即可；\n\
+- 只写上方这段较早对话中明确出现的事实；不补写、不推测；\n\
+- 保留可追溯证据：工具名、关键查询参数、数据版本、条目名、数值和错误串；结果只写关键结论，不搬运原始数据；\n\
+- 工具结果明确失败或未返回时，按原文保留失败状态；\n\
 - 保留与原文一致的关键词（干员名、关卡名、机制术语），总量控制在 {SUMMARY_TARGET_CHARS} 字内。\n\n\
 ## Goal\n\
 [用户正在达成什么目标；可多项]\n\n\
@@ -201,7 +203,11 @@ fn build_summary_instruction() -> String {
 ## Key Decisions\n\
 - [关键决策与理由]\n\n\
 ## Next Steps\n\
-1. [下一步]",
+1. [下一步]\n\n\
+## Critical Context\n\
+- [继续任务所需的旧对话上下文：决策、约束、用户偏好、未解决问题]\n\
+- [工具证据：工具名 + 关键参数 → 结果结论；数据版本或条目名如有则保留]\n\
+- [无则写（无）]",
         SUMMARY_TARGET_CHARS = SUMMARY_TARGET_CHARS
     )
 }
@@ -227,6 +233,14 @@ fn strip_reasoning(messages: &mut [ChatMessage], replay: &ResolvedCompat) -> Res
         }
     }
     for m in messages.iter_mut() {
+        // 空串是合法的“已记录为空”carrier，不是缺失；它也不占 token。
+        // 把它清成 None 会让摘要请求在本地被 ensure_reasoning_replay
+        // 拦成 Config 错误，等于压缩自己制造了历史缺口。
+        let tool_turn = m.role == MessageRole::Assistant
+            && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+        if tool_turn && m.reasoning_content.as_deref() == Some("") {
+            continue;
+        }
         m.reasoning_content = None;
     }
     Ok(())
@@ -257,7 +271,10 @@ fn truncate_head_tail(text: &str, max_chars: usize) -> String {
 /// 降级链 3：规则降级摘要（无 LLM）。折叠区消息渲染为大纲式 checkpoint，
 /// 文本自带标记（FALLBACK_MARKER），重启后仅读 meta 也能识别降级产物。
 fn build_fallback_summary(messages: &[ChatMessage]) -> String {
-    let mut tool_counts: Vec<(String, usize)> = Vec::new();
+    // 工具证据按 call_id 配对：调用先挂起，结果到达时合成一条可追溯锚点。
+    // 规则降级不能只留工具名和次数，否则用户追问依据时只剩“查过”这一层。
+    let mut pending_calls: Vec<(String, String, String)> = Vec::new();
+    let mut evidence: Vec<String> = Vec::new();
     let mut done_items: Vec<String> = Vec::new();
     let mut user_questions: Vec<String> = Vec::new();
 
@@ -271,12 +288,11 @@ fn build_fallback_summary(messages: &[ChatMessage]) -> String {
             MessageRole::Assistant => {
                 if let Some(calls) = &m.tool_calls {
                     for tc in calls {
-                        let name = tc.function.name.clone();
-                        if let Some(entry) = tool_counts.iter_mut().find(|(n, _)| *n == name) {
-                            entry.1 += 1;
-                        } else {
-                            tool_counts.push((name, 1));
-                        }
+                        pending_calls.push((
+                            tc.id.clone(),
+                            tc.function.name.clone(),
+                            tc.function.arguments.clone(),
+                        ));
                     }
                 }
                 if let Some(text) = first_line(&m.content, 120) {
@@ -285,10 +301,34 @@ fn build_fallback_summary(messages: &[ChatMessage]) -> String {
                     }
                 }
             }
-            // tool 结果与 system 不参与规则抽取（量大 / 前缀）
+            MessageRole::Tool => {
+                let call_id = m.tool_call_id.as_deref().unwrap_or("");
+                if let Some(pos) = pending_calls.iter().position(|(id, _, _)| id == call_id) {
+                    let (_, name, args) = pending_calls.remove(pos);
+                    evidence.push(format!(
+                        "- {name} {} → {}",
+                        compact_inline(&args, 80),
+                        compact_inline(&m.content, 140)
+                    ));
+                } else if !m.content.trim().is_empty() {
+                    evidence.push(format!(
+                        "- 工具结果 {call_id}：{}",
+                        compact_inline(&m.content, 140)
+                    ));
+                }
+            }
+            // system 不参与规则抽取（前缀）
             _ => {}
         }
     }
+
+    for (_, name, args) in pending_calls {
+        evidence.push(format!(
+            "- {name} {} → （未返回结果）",
+            compact_inline(&args, 80)
+        ));
+    }
+    evidence.truncate(8);
 
     let mut out = String::new();
     out.push_str(FALLBACK_MARKER);
@@ -311,16 +351,31 @@ fn build_fallback_summary(messages: &[ChatMessage]) -> String {
     out.push_str("\n### In Progress\n- （规则摘要无法可靠判定，以最近对话为准）\n");
     out.push_str("\n## Key Decisions\n- （规则摘要不归纳决策）\n");
     out.push_str("\n## Next Steps\n1. 继续处理最近一条保留的用户请求。\n");
-    if !tool_counts.is_empty() {
-        out.push_str("\n## Critical Context\n- 折叠区工具调用：");
-        let list: Vec<String> = tool_counts
-            .iter()
-            .map(|(n, c)| format!("{n}×{c}"))
-            .collect();
-        out.push_str(&list.join("、"));
-        out.push_str("（结果数据可重新查询）\n");
+    out.push_str("\n## Critical Context\n");
+    if evidence.is_empty() {
+        out.push_str("- （无工具调用或结果）\n");
+    } else {
+        for item in &evidence {
+            out.push_str(item);
+            out.push('\n');
+        }
     }
     out
+}
+
+/// 把多行文本压成单行，并截断到 max_chars（中文安全）。
+/// 规则摘要只保留证据锚点，不搬运原始数据。
+fn compact_inline(text: &str, max_chars: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "（空）".into();
+    }
+    if flat.chars().count() > max_chars {
+        let s: String = flat.chars().take(max_chars).collect();
+        format!("{s}…")
+    } else {
+        flat
+    }
 }
 
 /// 取文本首行（截断到 max_chars，中文安全）。
@@ -700,6 +755,86 @@ mod tests {
         assert!(err.contains("不可清空"), "got: {err}");
     }
 
+    #[test]
+    fn strip_reasoning_keeps_empty_tool_carrier() {
+        // 空串是“已记录为空”的合法 carrier，不是缺失；压缩不能把它清成 None。
+        let mut assistant = ChatMessage::assistant("结论");
+        assistant.reasoning_content = Some(String::new());
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "c1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        let mut messages = vec![ChatMessage::user("q"), assistant];
+        let replay = ResolvedCompat {
+            policy: ReasoningPolicy::RequireToolCall,
+            clearable: false,
+            ..Default::default()
+        };
+
+        strip_reasoning(&mut messages, &replay).unwrap();
+
+        assert_eq!(
+            messages[1].reasoning_content.as_deref(),
+            Some(""),
+            "工具轮空 carrier 必须保留"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversize_empty_tool_carrier_survives_summary_request() {
+        let mut assistant = fm("assistant", "结论");
+        assistant.reasoning_content = Some(String::new());
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "c1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "lookup".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+        let mut tool_result = fm("tool", "查询结果");
+        tool_result.tool_call_id = Some("c1".into());
+        let client = CaptureClient::new();
+        let replay = ResolvedCompat {
+            policy: ReasoningPolicy::RequireToolCall,
+            clearable: false,
+            ..Default::default()
+        };
+        let long = "长文本".repeat(10_000);
+
+        let out = run_summary_with_replay(
+            &client,
+            &cfg(),
+            vec![fm("user", &long), assistant, tool_result],
+            20_000,
+            &replay,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
+        assert!(!out.degraded, "截断后应回到 LLM 摘要路径");
+
+        let captured = client.last_messages.lock().unwrap().clone();
+        let tool_msg = captured
+            .iter()
+            .find(|m| {
+                m.role == MessageRole::Assistant
+                    && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty())
+            })
+            .expect("摘要请求应仍包含工具轮");
+        assert_eq!(
+            tool_msg.reasoning_content.as_deref(),
+            Some(""),
+            "超预算压缩后，工具轮空 carrier 仍应随请求发出"
+        );
+    }
+
     #[tokio::test]
     async fn extreme_oversize_falls_back_to_rules_without_llm() {
         // 无预设 Mock：若误走 LLM 会返回 Err("预设不足")——degraded 必须不调
@@ -725,25 +860,45 @@ mod tests {
     }
 
     #[test]
-    fn fallback_summary_lists_user_and_tool_names() {
+    fn fallback_summary_keeps_tool_evidence_anchors() {
         let mut tool_msg = ChatMessage::assistant("准备查询");
         tool_msg.tool_calls = Some(vec![ToolCall {
             id: "c1".into(),
             call_type: "function".into(),
             function: ToolCallFunction {
                 name: "query_enemy".into(),
-                arguments: "{}".into(),
+                arguments: r#"{"operator":"能天使"}"#.into(),
             },
         }]);
         let folded = vec![
             ChatMessage::user("博士：计算能天使总伤"),
             tool_msg,
-            ChatMessage::tool_result("c1", "rows…"),
+            ChatMessage::tool_result("c1", "攻击力 630，数据版本 2026-10"),
             ChatMessage::user("博士：换成早露再算"),
         ];
         let text = build_fallback_summary(&folded);
         assert!(text.contains("能天使总伤"), "应含 user 首行");
+        assert!(text.contains("## Critical Context"), "应含续接上下文段");
         assert!(text.contains("query_enemy"), "应含工具名");
+        assert!(text.contains("operator"), "应含关键参数");
+        assert!(text.contains("攻击力 630"), "应含结果锚点");
+        assert!(text.contains("数据版本 2026-10"), "应保留结果里的版本线索");
+    }
+
+    #[test]
+    fn fallback_summary_marks_tool_call_without_result() {
+        let mut tool_msg = ChatMessage::assistant("准备查询");
+        tool_msg.tool_calls = Some(vec![ToolCall {
+            id: "c1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "query_stage".into(),
+                arguments: r#"{"stage":"1-7"}"#.into(),
+            },
+        }]);
+        let text = build_fallback_summary(&[tool_msg]);
+        assert!(text.contains("query_stage"), "应含工具名");
+        assert!(text.contains("未返回结果"), "应标明证据不完整");
     }
 
     #[test]
@@ -849,7 +1004,14 @@ mod tests {
         assert!(text.contains("900"));
         assert!(text.contains("## Constraints & Preferences"));
         assert!(text.contains("## Next Steps"));
+        assert!(text.contains("## Critical Context"));
+        assert!(text.contains("工具名"), "应要求保留工具名");
+        assert!(text.contains("关键查询参数"), "应要求保留关键参数");
+        assert!(text.contains("不补写、不推测"), "应禁止补写缺失事实");
         assert!(!text.contains("<mood>"), "指令禁止模型输出内部叙事标记");
         assert!(text.contains("不调用任何工具"), "指令应禁止工具调用");
+        assert!(!text.contains("可重查"), "不应把工具证据降级为可重查");
+        assert!(!text.contains("未验证"), "不应引入验证状态标签");
+        assert!(!text.contains("折叠区"), "不应使用前端内部结构术语");
     }
 }

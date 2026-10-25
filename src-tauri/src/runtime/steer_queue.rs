@@ -7,7 +7,7 @@
 //! - FIFO 逐条消费：dispatch_turn 每个 step 的请求前 `take_next` 一条
 //!   （步边界领取——工具步之间也不再等回答段收尾；一条走完其回答段
 //!   再注入下一条）；
-//! - 条目携带会话内单调递增序号 id（cancel_steer 定位用）；
+//! - 条目携带队列内全局唯一 id（cancel_steer 定位用；跨 adopt 后仍可寻址）；
 //! - 中止/错误语义（2026-09-25 修订）：不再随中止清队列——命令层收尾把
 //!   未交付条目置保留态（`preserve`，归属 conversationId），同对话下一轮
 //!   `adopt` 领取合并（中止不丢字，对齐上游 keepInbox）。
@@ -16,12 +16,13 @@
 //! 既有 turn/end 收尾，不感知队列存在。
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// 单条待注入插话。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SteerEntry {
-    /// 条目定位（会话内单调递增序号字符串；注入/取消后失效，幂等无害）
+    /// 条目定位（队列内全局唯一序号字符串；注入/取消后失效，幂等无害）
     pub id: String,
     /// 待注入文本（入队时已 trim）
     pub text: String,
@@ -31,8 +32,6 @@ pub struct SteerEntry {
 #[derive(Debug, Default)]
 struct SteerPartition {
     entries: VecDeque<SteerEntry>,
-    /// 会话内序号计数器（注入即离队不回收，无跨会话复用）
-    next_seq: u64,
     /// 保留标记（2026-09-25）：非空 = 该分区在中止/错误轮收尾后留存，
     /// 值 = 归属 conversationId；同对话下一轮 adopt 时领取合并。
     preserved_for: Option<String>,
@@ -46,6 +45,8 @@ struct SteerPartition {
 #[derive(Debug, Default)]
 pub struct SteerQueue {
     partitions: Mutex<HashMap<String, SteerPartition>>,
+    /// 全局唯一 id 源：adopt 把条目搬到新分区后，旧 id 仍能在全表定位。
+    next_id: AtomicU64,
 }
 
 impl SteerQueue {
@@ -64,10 +65,8 @@ impl SteerQueue {
             return None;
         }
         let mut parts = self.partitions.lock().unwrap();
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let part = parts.entry(session_id.to_string()).or_default();
-        let seq = part.next_seq;
-        part.next_seq += 1;
-        let id = seq.to_string();
         part.entries.push_back(SteerEntry {
             id: id.clone(),
             text: text.to_string(),
@@ -140,19 +139,45 @@ impl SteerQueue {
 
     /// 按条目 id 移除待注入条目（cancel_steer）。
     ///
+    /// 先查提交轮 session；未命中再按全局唯一 id 查其他分区——同对话
+    /// 下一轮 `adopt` 会把保留条目搬到新 session，前端仍持旧 session id。
     /// 返回是否实际移除（不存在/已注入 → false，幂等）。
     pub fn cancel(&self, session_id: &str, entry_id: &str) -> bool {
         let mut parts = self.partitions.lock().unwrap();
-        let Some(part) = parts.get_mut(session_id) else {
+        if let Some(part) = parts.get_mut(session_id) {
+            if part.entries.iter().any(|e| e.id == entry_id) {
+                part.entries.retain(|e| e.id != entry_id);
+                if part.entries.is_empty() {
+                    parts.remove(session_id);
+                }
+                return true;
+            }
+        }
+        let target = parts
+            .iter()
+            .find(|(_, p)| p.entries.iter().any(|e| e.id == entry_id))
+            .map(|(sid, _)| sid.clone());
+        let Some(target) = target else {
             return false;
         };
-        let before = part.entries.len();
-        part.entries.retain(|e| e.id != entry_id);
-        let removed = part.entries.len() != before;
-        if part.entries.is_empty() {
-            parts.remove(session_id);
+        if let Some(part) = parts.get_mut(&target) {
+            part.entries.retain(|e| e.id != entry_id);
+            if part.entries.is_empty() {
+                parts.remove(&target);
+            }
+            return true;
         }
-        removed
+        false
+    }
+
+    /// 轮收尾：有条目且有 conversation 归属 → 置保留态；否则清空分区。
+    /// 命令层在正常返回与所有早退路径上都调用同一入口（RAII guard）。
+    pub fn finish_turn(&self, session_id: &str, conversation_id: &str) {
+        if self.len(session_id) > 0 && !conversation_id.is_empty() {
+            self.preserve(session_id, conversation_id);
+        } else {
+            self.clear(session_id);
+        }
     }
 
     /// 清空某 session 全部待注入条目（命令层兜底：无 conversation 归属的
@@ -263,12 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn partitions_are_isolated_with_independent_id_sequences() {
+    fn partitions_share_one_globally_unique_id_sequence() {
         let q = SteerQueue::new();
         let a = q.enqueue("s1", "甲").unwrap();
         let b = q.enqueue("s2", "乙").unwrap();
         assert_eq!(a, "0");
-        assert_eq!(b, "0", "各分区独立计数");
+        assert_eq!(b, "1", "跨分区全局唯一，取消可安全全表寻址");
         assert_eq!(q.len("s1"), 1);
         assert_eq!(q.len("s2"), 1);
     }
@@ -323,6 +348,32 @@ mod tests {
         );
         assert_eq!(q.take_next("s2").unwrap().text, "旧乙");
         assert_eq!(q.take_next("s2").unwrap().text, "新丙", "既有条目保序在后");
+    }
+
+    #[test]
+    fn cancel_still_finds_entry_after_adopt_moved_it() {
+        let q = SteerQueue::new();
+        let id = q.enqueue("s1", "跨轮插话").unwrap();
+        assert!(q.preserve("s1", "conv-1"));
+        assert_eq!(q.adopt("conv-1", "s2"), 1, "条目搬到新轮分区");
+        assert!(
+            q.cancel("s1", &id),
+            "前端仍用旧 sessionId，取消应命中已 adopt 的条目"
+        );
+        assert_eq!(q.len("s2"), 0);
+    }
+
+    #[test]
+    fn finish_turn_preserves_with_conversation_or_clears_without() {
+        let q = SteerQueue::new();
+        q.enqueue("s1", "甲");
+        q.finish_turn("s1", "conv-1");
+        assert_eq!(q.len("s1"), 1, "有归属 → 保留待下一轮 adopt");
+
+        let q2 = SteerQueue::new();
+        q2.enqueue("s2", "乙");
+        q2.finish_turn("s2", "");
+        assert_eq!(q2.len("s2"), 0, "无归属（旧前端）→ 兜底清空");
     }
 
     #[test]

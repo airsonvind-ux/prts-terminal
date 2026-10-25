@@ -87,7 +87,7 @@ pub fn validate_arguments(schema: &Value, args: &Value) -> Result<(), String> {
                     "参数 {name} 类型错误：期望 {expected}，实际 {actual}"
                 ));
             }
-            // minLength：string 参数的最小长度（空串防御，模块 C 缓存工具引入）
+            // minLength：string 参数的最小长度（空串防御）
             if let Some(min) = spec.get("minLength").and_then(|m| m.as_u64()) {
                 if let Some(s) = val.as_str() {
                     if (s.chars().count() as u64) < min {
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn min_length_rejects_empty_string() {
-        // 模块 C 缓存工具：key/content 空串防御（minLength 关键字）
+        // 字符串参数：空串防御（minLength 关键字）
         let schema = json!({
             "type": "object",
             "properties": { "key": { "type": "string", "minLength": 1 } }

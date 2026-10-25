@@ -19,6 +19,11 @@ pub struct CompactRequest {
     pub session_id: String,
     /// 折叠区历史（前端派生；链式压缩时含旧摘要消息）
     pub folded_history: Vec<FrontendMessage>,
+    /// 会话级请求身份；缺省时回退全局配置。思考档由后台任务策略决定。
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// compact_conversation 成功载荷（camelCase 序列化给前端）。
@@ -56,6 +61,8 @@ pub async fn compact_conversation(
     request: CompactRequest,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
+    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     model_registry: State<'_, Arc<ModelRegistry>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
@@ -110,10 +117,46 @@ pub async fn compact_conversation(
         let snap = snaps.get_or_freeze(conversation_key, &live_system, &live_tools);
         (snap.system, snap.tool_defs)
     };
-    let cfg = config
-        .lock()
-        .map_err(|e| format!("配置锁获取失败: {e}"))?
-        .clone();
+    let mut cfg = match (
+        request.provider.as_deref().filter(|p| !p.is_empty()),
+        request.model.as_deref().filter(|m| !m.is_empty()),
+    ) {
+        (Some(provider), Some(model)) => {
+            let st = settings_store
+                .lock()
+                .map_err(|e| format!("设置锁获取失败: {e}"))?;
+            let creds = credentials
+                .lock()
+                .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+            st.settings
+                .llm
+                .resolve_for(provider, model, None, |p| {
+                    creds
+                        .get(&crate::credentials::provider_key_ref(p))
+                        .map(|s| s.to_string())
+                })
+                .ok_or_else(|| format!("会话使用的供应商「{provider}」未配置"))?
+        }
+        _ => config
+            .lock()
+            .map_err(|e| format!("配置锁获取失败: {e}"))?
+            .clone(),
+    };
+    cfg.thinking_level = crate::llm::thinking::utility_level(
+        &model_registry,
+        &cfg.provider,
+        &cfg.model,
+        crate::llm::thinking::UtilityTask::Compaction,
+    )
+    .map(str::to_string);
+    eprintln!(
+        "[utility] task=compaction conversation={} provider={} model={} api={:?} thinking={}",
+        request.conversation_id,
+        cfg.provider,
+        cfg.model,
+        cfg.api_type,
+        cfg.thinking_level.as_deref().unwrap_or("none")
+    );
     let client = llm
         .select(&cfg.api_type)
         .ok_or_else(|| format!("协议 {:?} 暂未支持", cfg.api_type))?;

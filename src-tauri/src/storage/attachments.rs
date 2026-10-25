@@ -61,6 +61,11 @@ pub const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const TARGET_BASE64_CHARS: usize = 850 * 1024;
 /// 缩边上限（Anthropic 建议的 1568 长边）。
 const MAX_EDGE: u32 = 1568;
+/// 解码前的尺寸闸：覆盖 4K 与常见手机照片，挡住异常巨大的解压炸弹。
+const MAX_IMAGE_EDGE: u32 = 16_384;
+const MAX_IMAGE_PIXELS: u64 = 64_000_000;
+/// 单张图解码的内存上限（64MP RGBA 约 256MB）。
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
 
 /// 会话附件落点目录（不建目录，调用方按需 create_dir_all）。
 ///
@@ -237,8 +242,15 @@ pub fn materialize_images(paths: &[String]) -> Vec<ImagePart> {
 
 /// 读取并规范化单张图片：小图原样 base64；超限图缩边 + 逐档 JPEG 质量。
 fn encode_image(path: &Path) -> Result<ImagePart, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("读取失败: {e}"))?;
     let mime = mime_for_path(path);
+    if !is_allowed_image_mime(&mime) {
+        return Err("不是支持的图片格式".into());
+    }
+    // 即使 base64 没超限、不需要本地重编码，也先看尺寸：
+    // 小文件大尺寸的图不能在“原样发出”分支绕过闸门。
+    check_image_dimensions(path)?;
+
+    let bytes = std::fs::read(path).map_err(|e| format!("读取失败: {e}"))?;
     let b64 = base64_encode(&bytes);
     if b64.len() <= TARGET_BASE64_CHARS {
         return Ok(ImagePart {
@@ -246,11 +258,8 @@ fn encode_image(path: &Path) -> Result<ImagePart, String> {
             mime_type: mime,
         });
     }
-    if !is_allowed_image_mime(&mime) {
-        return Err("非可压缩图片且超过体积上限".into());
-    }
 
-    let img = image::open(path).map_err(|e| format!("图像解码失败: {e}"))?;
+    let img = decode_with_limits(path)?;
     // 逐轮：先按长边缩到 MAX_EDGE，质量档递增下降；仍超限则尺寸再降一档。
     let mut scale = 1.0f32;
     for _ in 0..4 {
@@ -270,6 +279,42 @@ fn encode_image(path: &Path) -> Result<ImagePart, String> {
         scale *= 0.85;
     }
     Err("图像压缩后仍超过体积上限".into())
+}
+
+/// 读图片头尺寸；超过上限直接拒绝。解压炸弹通常在头里就写着巨大宽高。
+fn check_image_dimensions(path: &Path) -> Result<(), String> {
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| format!("图像解码失败: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("图像格式识别失败: {e}"))?;
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|e| format!("读取图片尺寸失败: {e}"))?;
+    if width == 0 || height == 0 {
+        return Err("图片尺寸无效".into());
+    }
+    if width.max(height) > MAX_IMAGE_EDGE
+        || u64::from(width).saturating_mul(u64::from(height)) > MAX_IMAGE_PIXELS
+    {
+        return Err(format!(
+            "图片尺寸过大（{width}×{height}，上限 {MAX_IMAGE_EDGE} 单边 / {MAX_IMAGE_PIXELS} 像素）"
+        ));
+    }
+    Ok(())
+}
+
+/// 带内存上限的解码；避免格式头欺骗导致 `image::open` 申请巨大缓冲区。
+fn decode_with_limits(path: &Path) -> Result<image::DynamicImage, String> {
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| format!("图像解码失败: {e}"))?
+        .with_guessed_format()
+        .map_err(|e| format!("图像格式识别失败: {e}"))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_EDGE);
+    limits.max_image_height = Some(MAX_IMAGE_EDGE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC);
+    reader.limits(limits);
+    reader.decode().map_err(|e| format!("图像解码失败: {e}"))
 }
 
 /// 等比缩放到长边不超过 `edge`（已足够小则原样返回引用）。
@@ -357,6 +402,32 @@ mod base64_decode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_dimension_gate_rejects_oversized_header_before_decoding() {
+        let dir = std::env::temp_dir().join(format!(
+            "prts-image-gate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let normal = dir.join("normal.png");
+        image::RgbaImage::new(8, 8).save(&normal).unwrap();
+        assert!(check_image_dimensions(&normal).is_ok());
+
+        let wide = dir.join("wide.png");
+        image::RgbaImage::new(MAX_IMAGE_EDGE + 1, 1)
+            .save(&wide)
+            .unwrap();
+        let err = check_image_dimensions(&wide).unwrap_err();
+        assert!(err.contains("尺寸过大"), "got: {err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn session_files_dir_rejects_path_components() {

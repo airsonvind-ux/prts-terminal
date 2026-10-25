@@ -19,13 +19,6 @@ pub const ORDER_CATALOG: i32 = 100;
 /// 记忆区区间（Phase 4 任务二 · 批 1）：置于 Catalog 之后（system 尾部，
 /// 「跨对话分叉段后置」）。对话内冻结快照，不随记忆变化重组装。
 pub const ORDER_MEMORY: i32 = 150;
-// —— 动态层区间已移除（2026-08 上下文管理修正：动态内容改为消息注入，
-//    不再进 system prompt）。保留注释供未来记忆系统复用。
-// /// Active 层区间（激活 Skill 动态注入）
-// pub const ORDER_ACTIVE: i32 = 200;
-// /// Reference 层区间（知识/缓存动态注入，缓存条目在场层）
-// pub const ORDER_REFERENCE: i32 = 300;
-
 /// 静态提示词 section（注册制）。
 ///
 /// 对应上游 `PromptSection`（name/order/text）的 Rust 近似：

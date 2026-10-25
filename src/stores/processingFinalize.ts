@@ -55,6 +55,25 @@ export function finishProcessingImpl(
   const snap = processing[sessionId];
   if (!snap) return; // failProcessing 已清理（如停滞路径 error 先到）→ 幂等
 
+  const convStore = useConversationStore.getState();
+  // 提醒游标只在本轮正常完成时提交。发送时未提前推进，因此失败/中止轮
+  // 下一次发送会重新带上同一份提醒；新对话首轮失败后也能重发完整快照。
+  if (
+    (reason === undefined || reason === "completed") &&
+    snap.noticeAdvanceTo !== undefined
+  ) {
+    const conv = convStore.conversations.find(
+      (c) => c.id === snap.conversationId
+    );
+    if (
+      !conv ||
+      conv.lastNoticeSeq === undefined ||
+      conv.lastNoticeSeq < snap.noticeAdvanceTo
+    ) {
+      convStore.advanceNoticeSeq(snap.conversationId, snap.noticeAdvanceTo);
+    }
+  }
+
   // M3-B §4.2：aborted 轮归档前在 currentEvents 末尾合成轮中止标记
   // （前端私有事件——derive/展示层忽略、MessageList 轮尾展示；持久化
   // 随轮 events_json 原样写盘 → 重启可见）。R-07 的截断标记同构。
@@ -63,16 +82,28 @@ export function finishProcessingImpl(
   const abortedMarker: SessionEvent = { type: "turn/aborted", sessionId };
   const truncatedMarker: SessionEvent = { type: "turn/truncated", sessionId };
   const stagnatedMarker: SessionEvent = { type: "turn/stagnated", sessionId };
+  // 归档时把真实终止原因一并写入：前端 marker 只表达“中止”，不携带
+  // aborted / app-shutdown / interrupted 的区别；下一轮状态派生必须
+  // 依赖 turn/end.reason，否则三种关闭方式在模型侧完全同形。
+  const terminal = (r: TurnEndReason): SessionEvent => ({
+    type: "turn/end",
+    sessionId,
+    reason: r,
+    usage: turnUsage ?? null,
+  });
   const archiveEvents: SessionEvent[] =
-    reason === "aborted"
-      ? [...snap.currentEvents, abortedMarker]
+    reason === "aborted" ||
+    reason === "interrupted" ||
+    reason === "app-shutdown"
+      ? [...snap.currentEvents, terminal(reason), abortedMarker]
       : reason === "max-tokens"
-        ? [...snap.currentEvents, truncatedMarker]
+        ? [...snap.currentEvents, terminal(reason), truncatedMarker]
         : reason === "stagnation"
-          ? [...snap.currentEvents, stagnatedMarker]
-          : snap.currentEvents;
+          ? [...snap.currentEvents, terminal(reason), stagnatedMarker]
+          : // 正常完成也必须写终态。assistant/message 只是内容聚合，不是
+            // 生命周期终点；缺 turn/end 的归档会让重启后的状态派生只能靠猜。
+            [...snap.currentEvents, terminal(reason ?? "completed")];
 
-  const convStore = useConversationStore.getState();
   // 本次轮是否挂着自动标题现场（失败轮/中止轮会清掉；下一轮正常发送再挂上）。
   const hadTitleGen = hasTitleGen(snap.conversationId);
   // 上下文 Token 用量（覆盖式）：最后一个 assistant/message 的 usage 快照。
@@ -163,8 +194,8 @@ export function failProcessingImpl(
   // 轮次序列本身就是时间线——错误自然属于它发生的那一轮，
   // 后续 user 消息追加在其后，无需手动清除。
   // M1 Reminder：归档 user 消息剥离 [prts_reminder] 块——错误轮（invoke
-  // 失败路径）后端未跑、块未生效，不应残留历史（游标已在 sendMessage
-  // catch 回滚 → 下轮重拼；纯输入进错误轮避免派生链出现重复块）。
+  // 失败路径）后端未跑、块未生效，不应残留历史（游标未提前推进，下轮
+  // 重拼；纯输入进错误轮避免派生链出现重复块）。
   const convStore = useConversationStore.getState();
   // currentEvents[0] 恒为前端合成的 user/message（快照预置不变量），
   // 类型层收窄后剥离块（错误轮归档纯输入）

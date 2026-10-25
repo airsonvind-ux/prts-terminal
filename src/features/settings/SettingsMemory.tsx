@@ -21,6 +21,7 @@ import {
   LibraryView,
   type MemView,
 } from "./SettingsMemoryViews";
+import { useConfirmFocus } from "./useConfirmFocus";
 import styles from "./SettingsMemory.module.css";
 
 export interface SettingsMemoryProps {
@@ -36,6 +37,9 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [tidying, setTidying] = useState(false);
   const [tidyMsg, setTidyMsg] = useState<string | null>(null);
+  const { modalRef, handleKeyDown } = useConfirmFocus(confirmClear, () =>
+    setConfirmClear(false)
+  );
 
   const load = useCallback(async () => {
     try {
@@ -139,6 +143,8 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
               {overview.growth.map((g) => (
                 <button
                   key={g.name}
+                  type="button"
+                  data-focus-inset
                   className={styles.row}
                   onClick={() => setView({ kind: "growth", name: g.name })}
                   title={g.brief || undefined}
@@ -209,9 +215,18 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
       {/* ── 清除确认浮层 ── */}
       {confirmClear && (
         <div className={styles.backdrop} onClick={() => setConfirmClear(false)}>
-          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={modalRef}
+            className={styles.modal}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="memory-clear-title"
+            tabIndex={-1}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={handleKeyDown}
+          >
             <div className={styles.modalHeader}>
-              <span>清除经历记忆</span>
+              <span id="memory-clear-title">清除经历记忆</span>
             </div>
             <div className={styles.modalBody}>
               <SectionNote>
@@ -219,7 +234,12 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
               </SectionNote>
             </div>
             <div className={styles.modalFooter}>
-              <button className={styles.btn} onClick={() => setConfirmClear(false)}>
+              <button
+                type="button"
+                className={styles.btn}
+                data-confirm-cancel
+                onClick={() => setConfirmClear(false)}
+              >
                 取消
               </button>
               <button

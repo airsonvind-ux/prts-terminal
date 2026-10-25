@@ -76,7 +76,9 @@ impl Instance {
         let p = cstring(params_json)?;
         let task_id = unsafe { (self.core.fns.append_task)(self.handle, t.as_ptr(), p.as_ptr()) };
         if task_id == 0 {
-            Err(format!("AsstAppendTask 返回 0（任务类型 {type_} 未被接受）"))
+            Err(format!(
+                "AsstAppendTask 返回 0（任务类型 {type_} 未被接受）"
+            ))
         } else {
             self.tasks
                 .lock()

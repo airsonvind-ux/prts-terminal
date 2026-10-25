@@ -21,7 +21,7 @@
 //!
 //! 不引入第三方 SSE crate。手动解析字节流：按 `\n` 拆行，过滤 `data: ` 前缀，
 //! 每行反序列化为 JSON。tool_call arguments 跨 chunk 分片到达，通过
-//! `HashMap<usize, ToolCallAccumulator>` 按 index 累积，`[DONE]` 时统一 emit。
+//! `HashMap<usize, ToolCallAccumulator>` 按 index 累积，流终止时统一 emit。
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -256,10 +256,11 @@ impl OpenAiCompatibleClient {
             if !has_tool_calls {
                 continue;
             }
+            // 空串是合法的“已记录为空”carrier；只有缺键才是历史缺失。
             let has_reasoning = obj
                 .get("reasoning_content")
                 .and_then(Value::as_str)
-                .is_some_and(|text| !text.is_empty());
+                .is_some();
             if !has_reasoning {
                 return Err(LlmError::Config(
                     "当前模型的思考模式要求工具调用轮回传推理内容，但历史中缺失；请压缩会话或新建会话后重试。"
@@ -658,8 +659,19 @@ where
         return Err(LlmError::Transport(error_msg));
     }
 
-    // 既没有 [DONE] 也没有 finish_reason：连接在响应中途结束。
-    // 不能把已收到的半截内容当成正常回答。
+    // 合法终止有两种：`[DONE]`，或流在收到 finish_reason 后正常结束。
+    // 后者兼容不发 [DONE] 的 OpenAI-compatible 网关（MiniMax 兼容通道、
+    // 企业内网网关等）；finish_reason 是供应商给出的明确完成信号。
+    // 两者都没有时仍 fail closed，避免把真正截断的流归档为 completed。
+    // 残余风险：供应商发完 finish_reason 后连接立即断开，会被视为完成；
+    // 这个取舍只影响“已明确声称完成”的流，不再让整类供应商每轮全失败。
+    log::debug!(
+        "[LLM] stream terminal saw_done={} finish_reason={:?} text_len={} tool_calls={}",
+        saw_done,
+        finish_reason,
+        text.chars().count(),
+        tool_call_acc.len()
+    );
     if !saw_done && finish_reason.is_none() {
         return Err(LlmError::Transport(
             "流提前结束：未收到 [DONE] 或 finish_reason".into(),
@@ -708,7 +720,8 @@ where
 
 /// 处理单个 SSE 事件帧（一帧即一条 JSON，多 `data:` 行属同一 JSON 的换行拼接）。
 ///
-/// `data: [DONE]` 标记流终止——此时如果 choices 为空的 chunk 带 usage，
+/// `data: [DONE]` 是标准终止标记；不发 `[DONE]` 时，收到 `finish_reason`
+/// 后正常 EOF 也算终止。终止前如果 choices 为空的 chunk 带 usage，
 /// 该 usage 已被上一轮 process_sse_chunk 暂存。
 fn process_sse_frame(
     frame: &str,
@@ -993,7 +1006,23 @@ mod tests {
         let stream = sse_stream(&lines);
         let on_event = |_e: StreamEvent| {};
         let err = parse_sse_stream(stream, &on_event).await.unwrap_err();
-        assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
+        assert!(
+            matches!(err, LlmError::Transport(ref msg) if msg.contains("finish_reason")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_reason_without_done_is_accepted() {
+        // 兼容不发 [DONE] 的 OpenAI-compatible 网关：finish_reason 已是
+        // 供应商给出的明确完成信号。
+        let lines = vec![
+            text_delta_line("完整回答"),
+            r#"data: {"choices":[{"finish_reason":"stop","delta":{}}]}"#.to_string(),
+        ];
+        let (_, result) = collect_events(&lines).await;
+        assert_eq!(result.text, "完整回答");
+        assert_eq!(result.finish_reason, Some(crate::llm::FinishReason::Normal));
     }
 
     #[tokio::test]
@@ -1053,6 +1082,25 @@ mod tests {
         assert_eq!(result.tool_calls[0].function.name, "echo");
         // 契约不变量 I2/I5：arguments 端到端 raw（分片累积后原样直通）
         super::super::assert_stream_contract(&events, &result);
+    }
+
+    #[tokio::test]
+    async fn tool_call_with_finish_reason_without_done_is_emitted() {
+        let lines = vec![
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"echo","arguments":"{}"}}]}}]}"#.to_string(),
+            r#"data: {"choices":[{"finish_reason":"tool_calls","delta":{}}]}"#.to_string(),
+        ];
+        let (events, result) = collect_events(&lines).await;
+
+        assert!(matches!(
+            &events[0],
+            StreamEvent::ToolCall { id, name, .. } if id == "call_1" && name == "echo"
+        ));
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(
+            result.finish_reason,
+            Some(crate::llm::FinishReason::ToolCalls)
+        );
     }
 
     #[tokio::test]
@@ -1282,6 +1330,21 @@ mod tests {
                     "role": "assistant",
                     "content": "",
                     "reasoning_content": "先查资料",
+                    "tool_calls": [{"id": "c1"}]
+                }
+            ]
+        });
+        assert!(OpenAiCompatibleClient::ensure_reasoning_replay(&body).is_ok());
+    }
+
+    #[test]
+    fn empty_reasoning_carrier_on_tool_call_passes() {
+        let body = serde_json::json!({
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "",
                     "tool_calls": [{"id": "c1"}]
                 }
             ]

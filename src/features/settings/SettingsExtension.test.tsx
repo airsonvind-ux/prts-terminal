@@ -245,4 +245,25 @@ describe("SettingsExtension（扩展页）", () => {
     });
     expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
   });
+
+  it("自动检测复选框：Enter 也可取消", async () => {
+    currentStatus = status();
+    const onPatch = vi.fn();
+    await render(MAA, false, onPatch);
+
+    const auto = container!.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]'
+    )!;
+    auto.focus();
+    act(() => {
+      auto.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+    expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
+  });
 });

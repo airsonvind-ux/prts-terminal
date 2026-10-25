@@ -2,7 +2,6 @@
 // 启动时装配 State 与命令，将各模块接入 Tauri 运行时
 //
 // 新架构（2026-07）：中枢调度 + 外围组件
-// 旧代码已归档至 src_old/，仅作实现参考
 
 // 模块声明
 mod agent;
@@ -11,6 +10,7 @@ mod integrations;
 mod llm;
 mod platform;
 mod runtime;
+mod session_id;
 mod storage;
 mod tools;
 
@@ -23,7 +23,7 @@ pub use app::{commands, config, db_seed, events, workspace};
 pub use integrations::maa;
 pub use platform::{machine, notices, observability, updater};
 pub use runtime::{approval, exec, exec_settings, path_guard, policy, steer_queue, turn_registry};
-pub use storage::{attachments, cache, credentials, db, session, session_store, settings};
+pub use storage::{attachments, credentials, db, session, session_store, settings};
 
 use std::sync::{Arc, Mutex};
 
@@ -511,13 +511,14 @@ pub fn run() {
     let session_store = Arc::new(Mutex::new(crate::session_store::SessionStore::new(
         &config::data_dir(),
     )));
-
-    // ── 缓存区（工作记忆）State 已注释（2026-08：缓存工具取消注册，
-    // 缓存系统停用，待升级为记忆系统；未来复用时可恢复）──
-    // let cache_stores = Arc::new(Mutex::new(crate::cache::CacheStores::new()));
-    //
-    // ── 上轮卸载摘要（模块 B/C）已注释（2026-08：卸载机制移除）──
-    // let last_unloads = Arc::new(Mutex::new(std::collections::HashMap::<String, String>::new()));
+    // 上次进程可能在 turn 结束前退出：先恢复轮内日志，再让前端加载会话。
+    if let Ok(mut store) = session_store.lock() {
+        match store.recover_inflight() {
+            Ok(0) => {}
+            Ok(n) => eprintln!("[startup] 已恢复 {n} 个未完成轮"),
+            Err(e) => eprintln!("[startup] 恢复未完成轮失败：{e}"),
+        }
+    }
 
     // ── 命令执行模式（M3-A：全局声明层设置，默认操作前询问）──
     // 装配自 settings.exec 段（2026-09：持久化兑现，落盘 settings.json）；
@@ -545,6 +546,12 @@ pub fn run() {
     // 命令层 agent_process 在 turn 起点 register / 返回后无条件 unregister；
     // abort_turn 命令置位中止；设置闸（set_settings）消费 active_count()。
     let turn_registry = Arc::new(TurnRegistry::new());
+
+    // ── 设置写闸（R-21）──
+    // set_settings 全程持有；agent_process 在读取本轮配置/工作区快照并注册
+    // turn 的短窗口内持有。把「设置保存」与「turn 起始快照」串行化，消除
+    // 检查 active_count 之后才 root.set 的竞态。
+    let settings_write_gate = Arc::new(tokio::sync::Mutex::new(()));
 
     // ── 插话待注入队列（2026-09-25 语义修订：步边界领取 + 保留交付）──
     // 键 = session_id（与 turn_registry 同键）；命令层 steer_message 入队 /
@@ -596,12 +603,19 @@ pub fn run() {
         .manage(maa_settings)
         .manage(approval_registry)
         .manage(turn_registry)
+        .manage(settings_write_gate)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 不立即销毁窗口：先中止活动 turn，给本轮日志一个提交窗口。
+                eprintln!("[close] CloseRequested");
+                api.prevent_close();
+                commands::install_close_handler(window.app_handle());
+            }
+        })
         .manage(steer_queue)
         .manage(settings_store)
         .manage(credentials_store)
         .manage(workspace_root_handle)
-        // .manage(cache_stores)
-        // .manage(last_unloads)
         .manage(Arc::clone(&boot_facts))
         // 置顶初值：tauri.conf.json 静态 alwaysOnTop=true 为窗口创建兜底；
         // settings.window.always_on_top=false 时启动即关闭（文件值优先）。
@@ -652,7 +666,6 @@ pub fn run() {
             commands::agent_process,
             commands::get_settings,
             commands::get_credentials_status,
-            commands::get_backend_history_mode,
             commands::get_guide_seen,
             commands::mark_guide_seen,
             commands::set_settings,
@@ -716,7 +729,6 @@ pub fn run() {
             commands::memory_tidy,
             commands::upload_attachment,
             commands::upload_attachment_blob,
-            // commands::clear_conversation_cache, // 已注释（2026-08：缓存系统停用）
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

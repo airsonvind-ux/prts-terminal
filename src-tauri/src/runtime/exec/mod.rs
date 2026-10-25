@@ -7,6 +7,7 @@
 //! - [`risk`]：CRIT 恒拦名单 + 命令语义族数据层（命令 → OpKind / 选项白名单）
 //! - [`gate`]：自动化模式"地域性信任"放行门（evaluate 判定管道 + 子集 G 词法）
 
+pub(crate) mod env;
 pub mod gate;
 pub mod risk;
 pub mod runner;

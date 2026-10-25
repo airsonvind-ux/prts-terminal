@@ -22,9 +22,22 @@ export function ensureActiveConversation(
   if (isNewNow) {
     const info = getModelInfo();
     const dTitle = defaultTitleFromInput(input);
-    const conversationId = useConversationStore
-      .getState()
-      .createConversation(dTitle, info?.name, info?.contextLength);
+    const store = useConversationStore.getState();
+    const config =
+      store.draftConfig ??
+      (info?.provider && info.model
+        ? {
+            provider: info.provider,
+            model: info.model,
+            thinkingLevel: info.thinkingLevel ?? null,
+          }
+        : null);
+    const conversationId = store.createConversation(
+      dTitle,
+      info?.name,
+      info?.contextLength,
+      config
+    );
     // 自动标题现场注册（仅新对话首轮）：哨兵 + 素材累积起点
     registerTitleGen(conversationId, dTitle);
     return conversationId;

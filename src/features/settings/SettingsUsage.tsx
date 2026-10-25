@@ -9,7 +9,12 @@
 //  - 分类区：四行（对话 / 压缩 / 记忆 / 标题），每行 = 类别名 + 占比条 + 用量 · 命中
 // 交互仅三：范围切换、滚动、（对话列表由轮末自动更新，无手动刷新）。
 
-import { useMemo, useState } from "react";
+import {
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useConversationStore } from "../../stores/useConversationStore";
 import type {
   CategoryUsage,
@@ -86,6 +91,29 @@ export function SettingsUsage() {
   const conversations = useConversationStore((s) => s.conversations);
   const [scope, setScope] = useState<string>("all");
   const [open, setOpen] = useState(false);
+  const scopeBtnRef = useRef<HTMLButtonElement>(null);
+
+  const closeScope = () => {
+    setOpen(false);
+    scopeBtnRef.current?.focus();
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (
+      open &&
+      event.key === "Escape" &&
+      !event.nativeEvent.isComposing
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeScope();
+    }
+  };
+
+  const chooseScope = (next: string) => {
+    setScope(next);
+    closeScope();
+  };
 
   const allUsage = useMemo(() => sumUsage(conversations), [conversations]);
   const hasAny = useMemo(() => conversations.some((c) => c.usage), [conversations]);
@@ -113,11 +141,15 @@ export function SettingsUsage() {
   );
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} onKeyDown={handleKeyDown}>
       <button
+        ref={scopeBtnRef}
+        type="button"
         className={styles.scopeBtn}
         onClick={() => setOpen((v) => !v)}
         aria-label="选择统计范围"
+        aria-expanded={open}
+        aria-controls="usage-scope-list"
       >
         <span className={styles.scopeLabel} title={scopeLabel}>
           {scopeLabel}
@@ -128,13 +160,18 @@ export function SettingsUsage() {
       </button>
 
       {open && (
-        <div className={styles.scopeList}>
+        <div
+          className={styles.scopeList}
+          id="usage-scope-list"
+          role="group"
+          aria-label="统计范围"
+        >
           <button
+            type="button"
+            data-focus-inset
             className={`${styles.scopeItem}${effectiveScope === "all" ? ` ${styles.scopeItemActive}` : ""}`}
-            onClick={() => {
-              setScope("all");
-              setOpen(false);
-            }}
+            aria-pressed={effectiveScope === "all"}
+            onClick={() => chooseScope("all")}
           >
             <span className={styles.itemTitle}>全部对话</span>
             <span className={styles.itemValue}>{formatCompact(usageTotal(allUsage))}</span>
@@ -142,11 +179,11 @@ export function SettingsUsage() {
           {listed.map((c) => (
             <button
               key={c.id}
+              type="button"
+              data-focus-inset
               className={`${styles.scopeItem}${effectiveScope === c.id ? ` ${styles.scopeItemActive}` : ""}`}
-              onClick={() => {
-                setScope(c.id);
-                setOpen(false);
-              }}
+              aria-pressed={effectiveScope === c.id}
+              onClick={() => chooseScope(c.id)}
             >
               <span className={styles.itemTitle} title={c.title}>
                 {c.title}

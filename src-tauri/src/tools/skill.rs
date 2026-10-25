@@ -78,7 +78,6 @@ impl Tool for ActivateSkillTool {
             .ok_or_else(|| ToolError::Parse("参数 name 必须是字符串".into()))?;
 
         // 索引经 ToolContext 通道注入（turn 级快照）；Mock 场景未注入 → 明确报错
-        // （与缓存工具 cache_channel 缺失时报「缓存区不可用」同风格）
         let index = ctx
             .skill_index
             .as_ref()
@@ -196,9 +195,8 @@ mod tests {
         let tool = ActivateSkillTool;
 
         let out = tool.execute(&ctx, r#"{"name":"阿尔法"}"#).unwrap();
-        // 正文（剥 frontmatter）随工具结果注入历史；不再携带上下文变更指令
+        // 正文（剥 frontmatter）随工具结果注入历史
         assert_eq!(out.summary, "已激活 Skill「阿尔法」\n\n## 正文 A");
-        assert!(out.context_ops.is_empty(), "消息注入不再需要 ContextOp");
         assert_eq!(
             out.skill_events,
             vec![SkillEventMark::Activate {

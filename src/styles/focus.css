@@ -1,0 +1,25 @@
+/* styles/focus.css */
+
+/*
+ * 键盘焦点环。
+ *
+ * 只在 :focus-visible 时出现，鼠标点击不改变现有视觉。
+ * 使用 accent 而不是浏览器默认蓝，和终端配色一致。
+ */
+
+:where(
+  button,
+  a[href],
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 滚动容器、列表、工具栏边缘和相邻卡片用内缩环，避免被 overflow 裁掉。 */
+:where([data-focus-inset]):focus-visible {
+  outline-offset: -2px;
+}

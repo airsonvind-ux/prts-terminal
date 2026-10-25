@@ -62,9 +62,6 @@ pub struct Settings {
     pub workspace: WorkspaceSettings,
     #[serde(default)]
     pub window: WindowSettings,
-    /// 实验开关（默认值见各字段；未知字段由 serde 忽略）。
-    #[serde(default)]
-    pub experimental: ExperimentalSettings,
     /// 界面态（非配置）：引导「已看过」键集等。与配置同文件不同段——它的写入
     /// 不受 set_settings 的 busy 闸约束（那道闸管的是配置），走独立命令。
     #[serde(default)]
@@ -80,53 +77,8 @@ impl Default for Settings {
             maa: MaaSettings::default(),
             workspace: WorkspaceSettings::default(),
             window: WindowSettings::default(),
-            experimental: ExperimentalSettings::default(),
             ui: UiSection::default(),
         }
-    }
-}
-
-/// 会话历史来源模式（C-lite）。
-///
-/// - `legacy`：前端 history + 前端 append_turn（旧路径，回滚用）
-/// - `shadow`：后端写影子日志，仍用前端 history（对比用）
-/// - `primary`：后端读写官方 log，前端 append_turn 只更新元数据
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum BackendHistoryMode {
-    #[default]
-    Legacy,
-    Shadow,
-    Primary,
-}
-
-impl BackendHistoryMode {
-    /// 读取环境变量 `PRTS_BACKEND_HISTORY`；未设置时用 settings 值。
-    pub fn resolved(setting: Self) -> Self {
-        match std::env::var("PRTS_BACKEND_HISTORY")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "legacy" => Self::Legacy,
-            "shadow" => Self::Shadow,
-            "primary" => Self::Primary,
-            _ => setting,
-        }
-    }
-}
-
-/// 实验段。字段用 serde default，新增不升 settings schema。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ExperimentalSettings {
-    #[serde(default)]
-    pub backend_history: BackendHistoryMode,
-}
-
-impl Settings {
-    /// 当前生效的历史模式（env 覆盖 settings）。
-    pub fn backend_history_mode(&self) -> BackendHistoryMode {
-        BackendHistoryMode::resolved(self.experimental.backend_history)
     }
 }
 
@@ -237,6 +189,35 @@ impl LlmSection {
             max_tokens: pc.max_tokens,
             thinking_level: self.thinking_level.clone(),
         }
+    }
+
+    /// 按会话保存的 provider/model/thinking 解析请求配置；凭据仍从全局
+    /// 连接配置取（对话只决定“用哪家、哪个模型、什么档”）。
+    ///
+    /// provider 未配置 → None（调用方应明确报错，不做静默回退）。
+    pub fn resolve_for<F>(
+        &self,
+        provider: &str,
+        model: &str,
+        thinking_level: Option<&str>,
+        lookup: F,
+    ) -> Option<LlmConfig>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let pc = self.providers.get(provider)?;
+        Some(LlmConfig {
+            provider: provider.to_string(),
+            api_type: pc.api_type,
+            model: model.to_string(),
+            api_key: lookup(provider).unwrap_or_default(),
+            base_url: pc.base_url.clone(),
+            headers: pc.headers.clone(),
+            max_tokens: pc.max_tokens,
+            thinking_level: thinking_level
+                .filter(|v| !v.trim().is_empty())
+                .map(str::to_string),
+        })
     }
 }
 

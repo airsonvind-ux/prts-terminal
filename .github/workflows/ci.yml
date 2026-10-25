@@ -56,3 +56,31 @@ jobs:
           workspaces: bridge
       - name: Test bridge
         run: cargo test --locked --manifest-path bridge/Cargo.toml
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: npm
+
+      - run: npm ci
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit src-tauri dependencies
+        working-directory: src-tauri
+        run: cargo audit
+
+      - name: Audit bridge dependencies
+        working-directory: bridge
+        run: cargo audit

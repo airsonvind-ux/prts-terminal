@@ -7,7 +7,7 @@
 // 架构升级 · 模块 1：对话数据为投影缓存（turns: SessionEvent[][]），
 // 消息气泡/事件卡片由 MessageList 内部投影派生。
 
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types";
 import { useConversationStore } from "../../stores/useConversationStore";
@@ -17,6 +17,10 @@ import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
 import { useGuideStore } from "../../stores/useGuideStore";
+import {
+  draftKeyFor,
+  useComposerDraftStore,
+} from "../../stores/useComposerDraftStore";
 import { Toolbar } from "./Toolbar";
 import { MessageList } from "./MessageList";
 import { BootSequence } from "./BootSequence";
@@ -33,7 +37,11 @@ interface Props {
   onDragHandle?: (e: MouseEvent) => void;
 }
 
+const EMPTY_ATTACHMENTS: Attachment[] = [];
+
 export function ChatView({ onDragHandle }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
   // ── 活跃对话数据（投影缓存） ──
   const activeId = useConversationStore((s) => s.activeId);
   const conversations = useConversationStore((s) => s.conversations);
@@ -73,6 +81,15 @@ export function ChatView({ onDragHandle }: Props) {
   const restoring = useUIStore((s) => s.restoring);
   // 覆盖层面板（设置 / 历史）：开着时欢迎页导览不弹——锚点会被盖住
   const overlay = useUIStore((s) => s.overlay);
+
+  // 覆盖层打开期间把聊天区从交互和可访问树中移除。覆盖层本身与遮罩
+  // 是 sibling，不受影响，所以点击遮罩关闭仍然有效。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (overlay !== null) el.setAttribute("inert", "");
+    else el.removeAttribute("inert");
+  }, [overlay]);
   // 启动演出覆盖层（2026-09 定稿）：播完（含淡出）才撤下、露出对话
   const [bootVisible, setBootVisible] = useState(true);
   const handleBootDone = useCallback(() => setBootVisible(false), []);
@@ -108,14 +125,39 @@ export function ChatView({ onDragHandle }: Props) {
       : EMPTY_STEER_PENDING
   );
 
-  // ── 附件（旁路输入：拖入 / 粘贴；无按钮）──
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const addAttachments = useCallback((list: Attachment[]) => {
-    if (list.length > 0) setAttachments((prev) => [...prev, ...list]);
-  }, []);
-  const removeAttachment = useCallback((index: number) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  // ── 草稿与附件（按对话隔离；S-02）──
+  const draftKey = draftKeyFor(activeId);
+  const draftText = useComposerDraftStore(
+    (s) => s.textByKey[draftKey] ?? ""
+  );
+  const attachments = useComposerDraftStore(
+    (s) => s.attachmentsByKey[draftKey] ?? EMPTY_ATTACHMENTS
+  );
+  const setDraftText = useCallback(
+    (text: string) =>
+      useComposerDraftStore.getState().setText(draftKey, text),
+    [draftKey]
+  );
+  const addAttachments = useCallback(
+    (list: Attachment[]) =>
+      useComposerDraftStore.getState().addAttachments(draftKey, list),
+    [draftKey]
+  );
+  const removeAttachment = useCallback(
+    (index: number) =>
+      useComposerDraftStore.getState().removeAttachment(draftKey, index),
+    [draftKey]
+  );
+
+  // 新对话是草稿：切到已有对话或新建时丢弃，避免旧草稿串到下一次新对话。
+  const prevActiveRef = useRef<string | null>(activeId);
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    if ((prev === null && activeId !== null) || (prev !== null && activeId === null)) {
+      useComposerDraftStore.getState().clearNewDraft();
+    }
+    prevActiveRef.current = activeId;
+  }, [activeId]);
 
   /** 拖入的路径 → 上传（落点按当前对话分区）。 */
   const uploadPaths = useCallback(
@@ -193,7 +235,7 @@ export function ChatView({ onDragHandle }: Props) {
   }, [uploadPaths]);
 
   const handleSubmit = useCallback(
-    (text: string) => {
+    async (text: string): Promise<boolean> => {
       const hasImage = attachments.some((a) => a.mimeType.startsWith("image/"));
       if (hasImage && getModelInfo()?.supportsVision !== true) {
         showToast("当前模型不支持图像输入，图片将按文件发送（模型看不到内容）", {
@@ -201,10 +243,13 @@ export function ChatView({ onDragHandle }: Props) {
           dedupeKey: "text-model-image-file-only",
         });
       }
-      sendMessage(text, attachments);
-      setAttachments([]);
+      const accepted = await sendMessage(text, attachments);
+      if (accepted) {
+        useComposerDraftStore.getState().clear(draftKey);
+      }
+      return accepted;
     },
-    [attachments, sendMessage]
+    [attachments, draftKey, sendMessage]
   );
 
   // ── 插话提交（生成中）：入队成功（返回条目 id）→ 登记 pending → 清输入；
@@ -214,8 +259,7 @@ export function ChatView({ onDragHandle }: Props) {
     async (text: string): Promise<boolean> => {
       // 无活动轮（竞态窗口）：直接降级为普通发送
       if (!processingSessionId || !activeId) {
-        await sendMessage(text);
-        return true;
+        return await sendMessage(text);
       }
       try {
         const id = await invoke<string>("steer_message", {
@@ -238,8 +282,7 @@ export function ChatView({ onDragHandle }: Props) {
             useProcessingStore.getState().processing
           ).some((p) => p.conversationId === activeId);
           if (stillProcessing) return false;
-          await sendMessage(text);
-          return true;
+          return await sendMessage(text);
         }
         showToast(msg, { kind: "warning", dedupeKey: "steer-failed" });
         return false;
@@ -327,7 +370,7 @@ export function ChatView({ onDragHandle }: Props) {
   ]);
 
   return (
-    <div className={styles.container}>
+    <div ref={containerRef} className={styles.container}>
       <Toolbar onDragHandle={onDragHandle} showTitle={chromeVisible} />
       <DragOverlay active={dragActive} />
       <div className={styles.messageArea}>
@@ -369,6 +412,9 @@ export function ChatView({ onDragHandle }: Props) {
               揭示时靠它自己的 width 过渡把输入框自然地向右缩过去 */}
           <ContextIndicator reveal={chromeVisible} />
           <InputArea
+            key={draftKey}
+            value={draftText}
+            onChange={setDraftText}
             onSubmit={handleSubmit}
             onSteer={handleSteer}
             onStop={handleStop}

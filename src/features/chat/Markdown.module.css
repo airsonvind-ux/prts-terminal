@@ -113,7 +113,15 @@
   text-decoration: underline;
 }
 
-/* R-38：远程图片加载失败后的 alt 回落，中性字色，不用警告色。 */
+/* 本地图片按消息宽度收缩，避免大图撑开对话区。 */
+.root img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* 外部图片不直连：hardenRemoteImages 替换为中性占位（R-62 / D-019）。 */
+.root [data-remote-image],
 .imageAlt {
   display: inline-block;
   padding: 1px 6px;

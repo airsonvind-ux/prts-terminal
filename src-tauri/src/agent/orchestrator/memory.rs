@@ -212,6 +212,14 @@ pub async fn run_experience_pipeline_with(
     }
 
     // ── 4. 应用 + 推进水位 ──
+    // 已中止（应用关闭/被替换）时不再落库：LLM 结果尚未写入，水位不前移，
+    // 下一次可从同一位置重跑。单飞闸之外的第二道保护。
+    if abort.is_aborted() {
+        return Ok(PipelineOutcome {
+            skipped: Some("aborted".into()),
+            ..Default::default()
+        });
+    }
     let report = {
         let mut s = store
             .lock()
@@ -692,6 +700,36 @@ mod tests {
         assert!(out.contains("用户：帮我算伤害"));
         assert!(!out.contains("prts_reminder"));
         assert!(out.contains("助手：算好了"));
+    }
+
+    #[test]
+    fn render_delta_keeps_tool_call_and_result_anchors() {
+        let line = r#"[{"type":"user/message","content":"查能天使"},
+                       {"type":"tool/call","callId":"c1","toolName":"query_operator","params":"{\"name\":\"能天使\"}"},
+                       {"type":"tool/result","callId":"c1","toolName":"query_operator","summary":"攻击力 630，数据版本 2026-10","ok":true}]"#;
+        let out = render_delta(&[line.to_string()]);
+        assert!(out.contains("工具调用：query_operator"), "应含工具名");
+        assert!(out.contains("能天使"), "应含关键参数");
+        assert!(
+            out.contains("query_operator结果：攻击力 630"),
+            "应含结果锚点"
+        );
+        assert!(out.contains("数据版本 2026-10"), "应保留版本线索");
+    }
+
+    #[test]
+    fn render_delta_truncates_long_tool_material() {
+        let long = "甲".repeat(400);
+        let line = format!(
+            r#"[{{"type":"tool/call","callId":"c1","toolName":"query","params":"{long}"}},
+                {{"type":"tool/result","callId":"c1","toolName":"query","summary":"{long}","ok":true}}]"#
+        );
+        let out = render_delta(&[line]);
+        assert!(out.contains('…'), "长材料应截断");
+        assert!(
+            out.chars().filter(|c| *c == '甲').count() < 600,
+            "不应整段搬运工具输出"
+        );
     }
 
     #[test]

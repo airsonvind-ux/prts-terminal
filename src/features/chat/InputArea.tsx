@@ -17,8 +17,12 @@ import { measureWithoutScrollJump } from "./messageScroll";
 import styles from "./InputArea.module.css";
 
 interface Props {
-  /** 空闲发送（ready 态；乐观清空输入）。附件由 ChatView 侧持有并随本次发送附加。 */
-  onSubmit: (text: string) => void;
+  /** 受控草稿文本（按对话隔离，由 ChatView 的草稿 store 提供） */
+  value: string;
+  /** 草稿变化（含发送成功后的清空） */
+  onChange: (text: string) => void;
+  /** 空闲发送；返回 true = 已接受（清空草稿），false = 拒绝（保留草稿）。 */
+  onSubmit: (text: string) => Promise<boolean>;
   /** 已有附件（允许“无文字仅附件”发送） */
   hasAttachments?: boolean;
   /** 粘贴图片（无路径 blob）→ 交给上层上传 */
@@ -35,8 +39,7 @@ interface Props {
   aborting?: boolean;
 }
 
-export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, aborting = false, hasAttachments = false, onPasteImage }: Props) {
-  const [input, setInput] = useState("");
+export function InputArea({ value, onChange, onSubmit, onSteer, onStop, generating, disabled, aborting = false, hasAttachments = false, onPasteImage }: Props) {
   const [isFocused, setIsFocused] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   // 多行态：内容超过单行时切换（右端凹弧退场 → 对称圆角），见 .multiline
@@ -72,12 +75,12 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
    * 早期加速（前几个字符填满大部分）→ 后期渐近（每字符增量递减）。
    * IME 拼写期间 effectiveLen 冻结，确认后统一更新。
    */
-  const effectiveLen = isComposing ? frozenInputRef.current.length : input.length;
+  const effectiveLen = isComposing ? frozenInputRef.current.length : value.length;
   const charge = effectiveLen === 0
     ? 0
     : Math.min((Math.log(effectiveLen + 1) / Math.log(31)) * 100, 100);
 
-  const hasText = input.trim().length > 0;
+  const hasText = value.trim().length > 0;
   const canSubmit = hasText || hasAttachments;
 
   const isCircle = isFocused;
@@ -99,7 +102,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
    * 发送后清空输入并复位高度。统一失焦（插话与普通发送一致；按回车即可继续输入）。
    */
   const clearAfterSend = () => {
-    setInput("");
+    onChange("");
     frozenInputRef.current = "";
     // 清空后复位输入框高度（回落到 CSS 默认 28px）与单行态
     if (textareaRef.current) {
@@ -122,7 +125,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
    */
   const submit = () => {
     if (disabled) return;
-    const trimmed = input.trim();
+    const trimmed = value.trim();
     if (trimmed.length === 0 && !hasAttachments) return;
     setSendRipple(true);
     if (generating) {
@@ -130,8 +133,9 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
         if (ok) clearAfterSend();
       });
     } else {
-      onSubmit(trimmed);
-      clearAfterSend();
+      void onSubmit(trimmed).then((ok) => {
+        if (ok) clearAfterSend();
+      });
     }
   };
 
@@ -191,7 +195,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
 
   /** 输入变化：文本状态 + 高度/多行同步 */
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    onChange(e.target.value);
     resizeToContent();
   };
 
@@ -246,7 +250,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
   };
 
   const handleCompositionStart = (_e: CompositionEvent<HTMLTextAreaElement>) => {
-    frozenInputRef.current = input;
+    frozenInputRef.current = value;
     setIsComposing(true);
   };
 
@@ -266,7 +270,7 @@ export function InputArea({ onSubmit, onSteer, onStop, generating, disabled, abo
       <textarea
         ref={textareaRef}
         className={`${styles.textarea}${multiline ? ` ${styles.multiline}` : ""}`}
-        value={input}
+        value={value}
         onChange={handleChange}
         onFocus={handleFocus}
         onBlur={handleBlur}

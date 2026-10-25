@@ -33,6 +33,9 @@ pub(crate) const TAIL_MEM_BYTES: usize = 64 * 1024;
 const READ_CHUNK_BYTES: usize = 8 * 1024;
 /// 超时 watchdog 轮询间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// 进程回收后等待输出线程结束的上限；超时则封存已收集输出并返回，
+/// 不让继承管道的后台进程把整个回合成败无限挂住。
+const READ_JOIN_GRACE: Duration = Duration::from_millis(500);
 
 /// shell 选择（run_command 参数 shell 枚举）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -374,9 +377,9 @@ pub fn run_command(spec: &CommandSpec, options: &RunOptions) -> RunOutput {
                 if cancelled || timed_out {
                     // 树杀 + 收尸（受限 = TerminateJobObject 收敛；std = taskkill /T /F）
                     spawned.kill_tree();
-                    // 读线程此刻应因管道 EOF 自然结束
-                    let _ = t_out.map(|h| h.join());
-                    let _ = t_err.map(|h| h.join());
+                    // 读线程通常因管道 EOF 结束；后台孙进程可能仍握着写端，
+                    // 因此只等有界时间，超时后封存当前输出，不让回合约无限挂起。
+                    join_read_threads([t_out, t_err], READ_JOIN_GRACE);
                     let (stdout_tail, stderr_tail, truncated, full_stdout, full_stderr, total) =
                         finalize_collectors(&stdout_collector, &stderr_collector);
                     return RunOutput {
@@ -402,8 +405,7 @@ pub fn run_command(spec: &CommandSpec, options: &RunOptions) -> RunOutput {
         }
     };
 
-    let _ = t_out.map(|h| h.join());
-    let _ = t_err.map(|h| h.join());
+    join_read_threads([t_out, t_err], READ_JOIN_GRACE);
 
     let (stdout_tail, stderr_tail, truncated, full_stdout, full_stderr, total) =
         finalize_collectors(&stdout_collector, &stderr_collector);
@@ -455,6 +457,20 @@ fn finalize_collectors(
 
 /// 默认落盘词干：进程 id + 时间戳（Tool::execute 无 session/callId 可达，
 /// 命名无法携带会话上下文——见实现要点说明）。
+/// 在总时间预算内等待读线程结束；超时后只丢弃 JoinHandle（线程自行退出），
+/// 不阻塞调用方。已完成线程正常 join，避免留下可回收资源。
+fn join_read_threads(handles: [Option<std::thread::JoinHandle<()>>; 2], grace: Duration) {
+    let deadline = Instant::now() + grace;
+    for handle in handles.into_iter().flatten() {
+        while !handle.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
+    }
+}
+
 fn default_stem() -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -489,6 +505,18 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn read_thread_join_is_bounded() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _ = rx.recv();
+        });
+        let started = Instant::now();
+        join_read_threads([Some(handle), None], Duration::from_millis(50));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = tx.send(());
     }
 
     #[test]

@@ -11,6 +11,13 @@
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 
+/// 单帧上限，与核心侧 `Bridge::MAX_FRAME` 保持一致。
+///
+/// 长度字段来自对端，不能无条件相信：没有上限时，一个 4GiB 的声明会让
+/// 读端先分配 4GiB 再等正文。正常命令只有几百字节到几 KB，64MiB 足够覆盖
+/// 大任务列表与识别帧。
+const MAX_FRAME: usize = 64 * 1024 * 1024;
+
 /// 事件/响应的写出端。多个线程（回调转发、命令处理）共用，内部加锁串行化。
 pub struct Sink {
     out: Mutex<Box<dyn Write + Send>>,
@@ -18,9 +25,7 @@ pub struct Sink {
 
 impl Sink {
     pub fn from_writer(w: Box<dyn Write + Send>) -> Self {
-        Sink {
-            out: Mutex::new(w),
-        }
+        Sink { out: Mutex::new(w) }
     }
 
     /// 无 TCP 时的回退：直接写 stdout（会有被第三方 DLL 污染的风险）。
@@ -30,7 +35,7 @@ impl Sink {
 
     pub fn emit(&self, value: &serde_json::Value) -> io::Result<()> {
         let bytes = serde_json::to_vec(value)?;
-        if bytes.len() > u32::MAX as usize {
+        if bytes.len() > MAX_FRAME {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "帧过大"));
         }
         let mut out = self.out.lock().unwrap_or_else(|e| e.into_inner());
@@ -49,6 +54,12 @@ pub fn read_frame(input: &mut (impl Read + ?Sized)) -> io::Result<Option<Vec<u8>
         Err(e) => return Err(e),
     }
     let len = u32::from_be_bytes(header) as usize;
+    if len > MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("帧长度超限：{len}（上限 {MAX_FRAME}）"),
+        ));
+    }
     let mut buf = vec![0u8; len];
     input.read_exact(&mut buf)?;
     Ok(Some(buf))
@@ -112,6 +123,16 @@ mod tests {
 
         let mut short_body = io::Cursor::new(vec![0u8, 0, 0, 8, b'{']);
         assert!(read_frame(&mut short_body).is_err());
+    }
+
+    #[test]
+    fn read_frame_rejects_declared_length_over_limit_before_reading_body() {
+        // 只有帧头、没有正文：若实现先分配/读正文，会得到 UnexpectedEof；
+        // 正确实现应在读正文前就以 InvalidData 拒绝。
+        let header = (MAX_FRAME as u32 + 1).to_be_bytes();
+        let mut cursor = io::Cursor::new(header.to_vec());
+        let err = read_frame(&mut cursor).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

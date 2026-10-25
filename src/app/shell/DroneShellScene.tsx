@@ -11,10 +11,10 @@
 // 比例系 24:4:3（正面:左面:底面），viewBox 整数化表达。
 
 import { type ReactNode, type MouseEvent, useRef, useEffect } from "react";
-import { smoothPolygon } from "svg-smoother";
 import type { ResizeDirection } from "../../hooks/resizeGeometry";
 import { buildWing, DEFAULT_WING, DEFAULT_WING_LEFT } from "./wingGeometry";
 import { computeTailPath } from "./tailAnimation";
+import { roundedPolygonPath } from "./roundedPolygon";
 import { droneEngine } from "../../animation/droneEngine";
 import styles from "./DroneShellScene.module.css";
 
@@ -56,7 +56,7 @@ const BOTTOM_FACE = {
 const JUNCTION = {
   viewBox: "0 0 28 27",
   lines: [
-    { x1: 4.05, y1: 0.2, x2: 4.05, y2: 24 },     // 正面左缘，x 与左面前下溢位对齐；y1 微降 0.2
+    { x1: 4.05, y1: 0.19, x2: 4.05, y2: 24 },     // 正面左缘，x 与左面前下溢位对齐；y1 微降 0.19
     { x1: 4, y1: 24, x2: 27.85, y2: 24 },      // 正面底缘，x2 溢 -0.15 防接缝
     { x1: 4, y1: 24, x2: 0.2, y2: 26.8 },   // 左面底缘（斜线），端点溢出对齐两面交汇处
   ],
@@ -123,14 +123,14 @@ export function DroneShellScene({
         {/* 左面 */}
         <svg className={styles.leftFace} viewBox={LEFT_FACE.viewBox} xmlns="http://www.w3.org/2000/svg" onMouseDown={onDragHandle}>
           <path
-            d={smoothPolygon(LEFT_FACE.vertices, { radius: 0.4 })}
+            d={roundedPolygonPath(LEFT_FACE.vertices, 0.4)}
             fill="#1a1a1a"
           />
         </svg>
         {/* 底面 */}
         <svg className={styles.bottomFace} viewBox={BOTTOM_FACE.viewBox} xmlns="http://www.w3.org/2000/svg" onMouseDown={onDragHandle}>
           <path
-            d={smoothPolygon(BOTTOM_FACE.vertices, { radius: 0.4 })}
+            d={roundedPolygonPath(BOTTOM_FACE.vertices, 0.4)}
             fill="#2a2a2a"
           />
         </svg>

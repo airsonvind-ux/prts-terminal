@@ -33,9 +33,64 @@ pub fn get_local_model_info(
 /// 设置页"通用"标签中的"关闭终端"按钮调用此命令。
 /// 无人机悬浮窗无原生窗口控件（关闭/最小化/最大化），
 /// 关闭入口统一收在设置页内。
-#[tauri::command]
-pub fn quit_app(app_handle: AppHandle) {
+///
+/// 退出前先中止所有活动 turn，给 orchestrator 一个有限窗口写
+/// turn/end 并提交本轮日志；超时则强制退出。真正硬杀/断电仍由
+/// 启动恢复负责。
+/// 同步进入关闭流程并立即置位所有活动 turn。
+///
+/// 必须在窗口事件/命令入口同步调用：如果先 spawn 异步任务再 abort，
+/// 关闭事件到达到 abort 之间会留下一个窗口，turn 可能先完成并写
+/// `turn/end(completed)`。返回 false = 关闭流程已由其它入口启动。
+pub fn begin_shutdown_and_abort(registry: &crate::turn_registry::TurnRegistry) -> bool {
+    if !registry.begin_shutdown() {
+        return false;
+    }
+    registry.abort_all();
+    true
+}
+
+async fn wait_and_exit(app_handle: AppHandle, registry: Arc<crate::turn_registry::TurnRegistry>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while registry.active_count() > 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // 给前端 append_turn / 后端最终 flush 留一个短暂落盘窗口。
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     app_handle.exit(0);
+}
+
+async fn shutdown_and_exit(
+    app_handle: AppHandle,
+    registry: Arc<crate::turn_registry::TurnRegistry>,
+) {
+    if !begin_shutdown_and_abort(&registry) {
+        return;
+    }
+    wait_and_exit(app_handle, registry).await;
+}
+
+#[tauri::command]
+pub async fn quit_app(
+    app_handle: AppHandle,
+    turn_registry: State<'_, Arc<crate::turn_registry::TurnRegistry>>,
+) -> Result<(), String> {
+    shutdown_and_exit(app_handle, Arc::clone(&turn_registry)).await;
+    Ok(())
+}
+
+/// OS 关闭/Alt+F4 等窗口关闭入口：先阻止立即销毁，走同一收尾流程。
+pub fn install_close_handler(app: &tauri::AppHandle) {
+    let registry = app.state::<Arc<crate::turn_registry::TurnRegistry>>();
+    // 关键：在窗口事件线程同步 abort，不能先 spawn 再 abort。
+    if !begin_shutdown_and_abort(&registry) {
+        return;
+    }
+    let app_handle = app.clone();
+    let registry = Arc::clone(&registry);
+    tauri::async_runtime::spawn(async move {
+        wait_and_exit(app_handle, registry).await;
+    });
 }
 
 // ═══════════════════════════════════════════════════════

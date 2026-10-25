@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::llm::ToolDef;
 use crate::memory::store::atomic_write;
+use crate::session_id::is_safe_session_id;
 
 /// 冻结的完整前缀：渲染后的 system 全文 + 发送给 LLM 的工具定义。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +104,7 @@ impl PrefixSnapshotStore {
     ) -> PrefixSnapshot {
         let live = || PrefixSnapshot::fresh(live_system, live_tools);
         let cid = match conversation_id {
-            Some(c) if is_safe_id(c) => c,
+            Some(c) if is_safe_session_id(c) => c,
             _ => return live(),
         };
         if let Some(v) = self.cache.get(cid) {
@@ -149,7 +150,7 @@ impl PrefixSnapshotStore {
         live_system: &str,
         live_tools: &[ToolDef],
     ) -> bool {
-        if !is_safe_id(conversation_id) {
+        if !is_safe_session_id(conversation_id) {
             return false;
         }
         let live = PrefixSnapshot::fresh(live_system, live_tools);
@@ -182,7 +183,7 @@ impl PrefixSnapshotStore {
     /// 删除对话时清快照（内存 + 盘上；幂等）。
     pub fn remove(&mut self, conversation_id: &str) {
         self.cache.remove(conversation_id);
-        if is_safe_id(conversation_id) {
+        if is_safe_session_id(conversation_id) {
             let _ = std::fs::remove_file(self.sidecar_path(conversation_id));
         }
     }
@@ -191,7 +192,7 @@ impl PrefixSnapshotStore {
     #[allow(dead_code)] // 诊断/测试消费
     pub fn is_frozen(&self, conversation_id: &str) -> bool {
         self.cache.contains_key(conversation_id)
-            || (is_safe_id(conversation_id) && self.sidecar_path(conversation_id).exists())
+            || (is_safe_session_id(conversation_id) && self.sidecar_path(conversation_id).exists())
     }
 
     /// 启动清扫：删除 `sessions/` 下的**孤儿**前缀快照（无对应 `{id}.jsonl`）。
@@ -211,7 +212,7 @@ impl PrefixSnapshotStore {
             let Some(id) = name.strip_suffix(".prefix.json") else {
                 continue;
             };
-            if !is_safe_id(id) {
+            if !is_safe_session_id(id) {
                 continue;
             }
             // 有主：会话内容文件存在 → 保留；否则删除
@@ -233,19 +234,6 @@ fn tool_defs_eq(a: &[ToolDef], b: &[ToolDef]) -> bool {
                 && x.function.description == y.function.description
                 && x.function.parameters == y.function.parameters
         })
-}
-
-/// 会话 id 文件名安全校验。
-///
-/// **口径与 `session_store::valid_id` / `memory::snapshot::is_safe_id` /
-/// `skills_snapshot::is_safe_id` 严格一致**（仅 `[A-Za-z0-9_-]`，非空，不以 '.'
-/// 开头）；多处为不同模块的独立实现，修改任一侧时必须同步。
-fn is_safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.starts_with('.')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // ═══════════════════════════════════════════════════════

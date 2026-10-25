@@ -12,6 +12,7 @@
 /* ── 圆环容器 ── */
 
 .ringWrapper {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -25,18 +26,32 @@
 }
 
 .visible {
-  width: 28px;
+  width: 30px;
   opacity: 1;
 }
 
 /* ── SVG 圆环 ── */
 
 .ring {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
   transform: scale(0);
   transition: transform 0.2s ease 0.08s;
+}
+
+/* 供应商标记：内嵌圆环中心；形状 = 供应商，明度 = 思考档。
+   装饰层不接管点击（圆环点击仍是压缩菜单）。 */
+.providerIcon {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 12px;
+  height: 12px;
+  color: var(--text-1);
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.15s ease;
 }
 
 .visible .ring {

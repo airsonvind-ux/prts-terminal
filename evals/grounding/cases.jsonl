@@ -1,0 +1,3 @@
+{"id":"enemy-defense","question":"源石虫的防御力是多少？","required_tools":["query_enemy"],"evidence_terms":["防御力"],"answer_terms":["防御力"],"compression_terms":[],"forbidden_answer_terms":[],"notes":"基础数据查询：回答必须能回到 tool/result，不得只凭记忆给数值。"}
+{"id":"stage-recommend","question":"某个关卡推荐等级是多少？","required_tools":["query_stage"],"evidence_terms":["推荐等级"],"answer_terms":["推荐等级"],"compression_terms":[],"forbidden_answer_terms":[],"notes":"关卡查询：推荐等级必须来自工具结果。"}
+{"id":"compaction-evidence","question":"压缩后还记得源石虫防御力吗？","required_tools":[],"evidence_terms":[],"answer_terms":["防御力"],"compression_terms":["query_enemy","防御力"],"forbidden_answer_terms":[],"notes":"压缩后仍应保留工具名与关键证据锚点。"}

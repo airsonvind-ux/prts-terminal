@@ -14,8 +14,6 @@
 // 注意：serde 的 internally tagged enum 不支持 enum 级别的 rename_all 对 variant
 // 内部字段生效——必须在每个 variant 上单独声明 #[serde(rename_all = "camelCase")]。
 // 确认：本文件末尾有序列化测试验证 session_id → sessionId。
-//
-// 旧代码中的 AgentEvent 定义（src_old/ai/mod.rs）已被此文件取代。
 
 use serde::Serialize;
 

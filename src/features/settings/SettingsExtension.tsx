@@ -14,7 +14,12 @@
 // 文案口径：只说我们做了什么，不替 MAA 打包票——截图增强写"用模拟器自带截图"，
 // 不写"已生效"，因为 MAA 在增强不可用时会静默降级。
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   MaaPatch,
@@ -126,6 +131,14 @@ export function SettingsExtension({
   /** 自动检测开着：连接节那四项由我们识别，置灰 */
   const auto = maa.auto_detect;
   const selected = pickResolved(status, maa.emulator);
+
+  // 复选框原生只用 Space 切换；额外接受 Enter，方便把它当按钮用的键盘用户。
+  const toggleCheckboxOnEnter = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      e.currentTarget.click();
+    }
+  };
   /** 自动检测中显示判定值（不可改）；关掉后显示用户自己的值 */
   const shown = (autoValue: string | undefined, own: string) =>
     auto ? (autoValue ?? "") : own;
@@ -181,6 +194,7 @@ export function SettingsExtension({
               disabled={locked}
               checked={auto}
               onChange={(e) => onPatch({ auto_detect: e.target.checked }, "自动检测")}
+              onKeyDown={toggleCheckboxOnEnter}
             />
           }
         />
@@ -296,6 +310,7 @@ export function SettingsExtension({
                   onChange={(e) =>
                     onPatch({ screenshot_extras: e.target.checked }, "截图增强")
                   }
+                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />
@@ -312,6 +327,7 @@ export function SettingsExtension({
                   onChange={(e) =>
                     onPatch({ touch_extras: e.target.checked }, "触控增强")
                   }
+                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />

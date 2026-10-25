@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::memory::store::atomic_write;
 use crate::skills::trust::{self, PackageInspection, SkillScriptFile, SkillTrust};
-use crate::skills::{parse_skill_frontmatter, MAX_SKILL_DESCRIPTION_CHARS};
+use crate::skills::{is_reparse_point, parse_skill_frontmatter, MAX_SKILL_DESCRIPTION_CHARS};
 use crate::skills_index::SkillIndex;
 use serde::Serialize;
 
@@ -289,7 +289,32 @@ fn validate_skill_name(raw: &str) -> Result<String, String> {
             "技能名含非法字符（路径分隔符 / Windows 保留字符 / 控制字符）：{name}"
         ));
     }
+    if is_windows_reserved_name(name) {
+        return Err(format!(
+            "技能名「{name}」是 Windows 保留设备名，不能作为文件名"
+        ));
+    }
     Ok(name.to_string())
+}
+
+/// Windows 设备名检查：`CON.md` 在 Win32 下仍按设备解析，不能作为普通文件落盘。
+fn is_windows_reserved_name(name: &str) -> bool {
+    let base = name
+        .trim_end_matches(&[' ', '.'][..])
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    if matches!(
+        base.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    let bytes = base.as_bytes();
+    bytes.len() == 4
+        && (base.starts_with("COM") || base.starts_with("LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
 }
 
 /// 目标路径查重与准备：技能名不撞活体索引；目标（文件与目录两种形态）
@@ -345,9 +370,9 @@ fn assert_no_symlinks(dir: &Path) -> Result<(), String> {
         let path = entry.path();
         let meta = std::fs::symlink_metadata(&path)
             .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
-        if meta.file_type().is_symlink() {
+        if is_reparse_point(&meta) {
             return Err(format!(
-                "技能文件夹含符号链接，出于安全考虑拒绝安装：{}",
+                "技能文件夹含符号链接或目录重解析点，出于安全考虑拒绝安装：{}",
                 path.display()
             ));
         }
@@ -368,6 +393,9 @@ fn dir_total_bytes(dir: &Path) -> Result<u64, String> {
         let path = entry.path();
         let meta = std::fs::symlink_metadata(&path)
             .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
+        if is_reparse_point(&meta) {
+            continue;
+        }
         if meta.is_dir() {
             total += dir_total_bytes(&path)?;
         } else {
@@ -413,6 +441,13 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
         let to = dst.join(entry.file_name());
         let meta = std::fs::symlink_metadata(&from)
             .map_err(|e| format!("读取元数据失败（{}）：{e}", from.display()))?;
+        // 入口已拒绝重解析点；复制前再查一次，缩小检查后被替换的窗口。
+        if is_reparse_point(&meta) {
+            return Err(format!(
+                "技能文件夹含符号链接或目录重解析点，出于安全考虑拒绝安装：{}",
+                from.display()
+            ));
+        }
         if meta.is_dir() {
             copy_tree(&from, &to)?;
         } else {
@@ -486,6 +521,16 @@ mod tests {
         );
         let err = validate_meta(&text).unwrap_err();
         assert!(err.contains("描述过长"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_skill_name_rejects_windows_reserved_names() {
+        for name in ["CON", "con", "CON.md", "PRN", "AUX", "NUL", "COM1", "LPT9"] {
+            let err = validate_skill_name(name).unwrap_err();
+            assert!(err.contains("保留设备名"), "{name}: {err}");
+        }
+        assert!(validate_skill_name("console").is_ok());
+        assert!(validate_skill_name("COM0").is_ok());
     }
 
     #[test]

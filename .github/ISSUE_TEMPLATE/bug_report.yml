@@ -1,0 +1,98 @@
+name: Bug 报告
+description: 报告可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先阅读 CONTRIBUTING.md 的 Issue 规则。
+        这里只描述问题，不写修复方案、补丁或 diff。
+        安全问题请按 SECURITY.md 走私密报告，不要公开提交。
+
+  - type: input
+    id: version
+    attributes:
+      label: PRTS 版本
+      placeholder: "例如 0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: data-version
+    attributes:
+      label: 数据版本
+      description: 关于页可以看到
+      placeholder: "例如 2026.10.23.1"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本
+      placeholder: "例如 Windows 11 23H2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: 安装方式
+      options:
+        - NSIS 安装包
+        - 从源码运行
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 按顺序写。偶发问题请写发生时间。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据
+      description: 日志、截图或错误原文。不要提交 API Key、会话内容或个人信息。
+    validations:
+      required: false
+
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: 是否稳定复现
+      options:
+        - 稳定复现
+        - 偶发
+        - 只出现一次
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我确认这不是安全问题；安全问题已按 SECURITY.md 私密报告
+          required: true
+        - label: 我确认报告只描述问题，没有附修复方案、补丁或 diff
+          required: true

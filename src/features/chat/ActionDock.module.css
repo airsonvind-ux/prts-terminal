@@ -122,8 +122,18 @@
   font-family: "Cascadia Code", Consolas, monospace;
   font-size: 11px;
   line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+  overscroll-behavior: contain;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.commandWarning {
+  margin-top: 4px;
+  color: #c98080;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .notes,

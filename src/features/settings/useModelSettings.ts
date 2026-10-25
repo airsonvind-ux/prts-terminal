@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ApiType,
+  ConversationConfigPatch,
   LlmConfig,
   LlmPatch,
   ModelInfo,
@@ -15,7 +16,6 @@ import type {
   ProviderPatch,
 } from "../../types";
 import { setModelInfo, setModelThinking } from "../../stores/useProcessingStore";
-import { useConversationStore } from "../../stores/useConversationStore";
 import { showToast } from "../../stores/useToastStore";
 import { resolveThinking, thinkingLabel } from "../../thinking";
 import { MASKED_SECRET } from "./SettingsPanel";
@@ -39,7 +39,8 @@ export const modelListCache: Record<string, ModelInfo[]> = {};
 export function useModelSettings(
   llm: LlmConfig,
   busy: boolean,
-  onPatch: (patch: LlmPatch, label?: string) => void
+  onPatch: (patch: LlmPatch, label?: string) => void,
+  onConfigPatch: (patch: ConversationConfigPatch) => void
 ) {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providersLoading, setProvidersLoading] = useState(true);
@@ -200,9 +201,8 @@ export function useModelSettings(
     setModelThinking(thinkingLabel(llm.thinking_level, selectedModelInfo));
   }, [llm.thinking_level, selectedModelInfo]);
 
-  // 供应商 / 模型变化时刷新全局模型快照。不能只依赖 selectModel()：
-  // 切供应商只 patch active_provider，若该家模型已保存就不会再经过模型列表点击。
-  // 同时同步活跃对话的展示元数据，避免新会话 / append_turn 继续写旧模型名。
+  // 模型页当前视角变化时刷新全局模型快照（发送前上下文检查 / 图片能力用）。
+  // 对话展示字段由 useSettingsPanel 的写入路径维护，这里不重复写。
   useEffect(() => {
     const provider = llm.provider;
     const modelId = llm.model;
@@ -210,26 +210,15 @@ export function useModelSettings(
     let cancelled = false;
     const apply = (info: LocalModelInfo | null) => {
       if (cancelled) return;
-      const next = info
-        ? {
-            name: info.displayName,
-            contextLength: info.contextLength,
-            supportsVision: info.supportsVision,
-            thinking: thinkingLabel(llm.thinking_level, info),
-          }
-        : {
-            name: modelId,
-            contextLength: 0,
-            supportsVision: false,
-            thinking: null,
-          };
-      setModelInfo(next);
-      const activeId = useConversationStore.getState().activeId;
-      if (activeId) {
-        useConversationStore
-          .getState()
-          .updateConversationModel(activeId, next.name, next.contextLength);
-      }
+      setModelInfo({
+        name: info?.displayName ?? modelId,
+        contextLength: info?.contextLength ?? 0,
+        supportsVision: info?.supportsVision ?? false,
+        provider,
+        model: modelId,
+        thinkingLevel: llm.thinking_level ?? null,
+        thinking: info ? thinkingLabel(llm.thinking_level, info) : null,
+      });
     };
     invoke<LocalModelInfo | null>("get_local_model_info", { provider, modelId })
       .then(apply)
@@ -239,10 +228,10 @@ export function useModelSettings(
     };
   }, [llm.provider, llm.model, llm.thinking_level]);
 
-  // ── 供应商切换（只 patch active_provider；各家配置分区保留） ──
+  // ── 供应商切换（只改当前对话/草稿的 provider；各家连接配置分区保留） ──
   const handleProviderChange = (newProvider: string) => {
     if (newProvider === "__custom__") {
-      // 进入自定义草稿（名称保存才切 active）
+      // 进入自定义草稿（名称保存才切 provider）
       setCustomDraft(true);
       setCustomName("");
       setCustomApiType("openai-completions");
@@ -250,17 +239,16 @@ export function useModelSettings(
       return;
     }
     setCustomDraft(false);
-    onPatch({ active_provider: newProvider }, "供应商");
+    onConfigPatch({ provider: newProvider });
   };
 
-  /** 保存自定义供应商：切 active + 建条目（类型/URL 来自草稿） */
+  /** 保存自定义供应商：建连接条目 + 切当前对话/草稿的 provider */
   const saveCustom = () => {
     const name = customName.trim();
     if (!name) return;
     setCustomDraft(false);
     onPatch(
       {
-        active_provider: name,
         providers: {
           [name]: {
             api_type: customApiType,
@@ -270,6 +258,7 @@ export function useModelSettings(
       },
       "供应商"
     );
+    onConfigPatch({ provider: name });
     setCustomName("");
     setCustomBaseUrl("");
   };
@@ -349,15 +338,22 @@ export function useModelSettings(
     }
   };
 
-  // ── 模型选择（选完即刷新悬停卡快照）──
+  // ── 模型选择（写入当前对话/草稿；选完即刷新悬停卡快照）──
   const selectModel = (id: string) => {
-    onPatch(home({ model: id }), "模型");
     const m = modelList.find((mi) => mi.id === id);
+    onConfigPatch({
+      model: id,
+      modelName: m?.displayName,
+      contextLength: m?.contextLength,
+    });
     if (m) {
       setModelInfo({
         name: m.displayName,
         contextLength: m.contextLength,
         supportsVision: m.supportsVision,
+        provider: llm.provider,
+        model: id,
+        thinkingLevel: llm.thinking_level ?? null,
         thinking: thinkingLabel(llm.thinking_level, m),
       });
     }

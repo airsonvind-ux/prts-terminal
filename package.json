@@ -12,6 +12,8 @@
     "build": "tsc && vite build",
     "build:sidecar": "python src-tauri/build-sidecar.py",
     "preview": "vite preview",
+    "release:manifest": "node scripts/prepare-release.mjs",
+    "verify:signature": "node scripts/verify-update-signature.mjs",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -23,7 +25,6 @@
     "marked": "^18.0.7",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "svg-smoother": "^2.1.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

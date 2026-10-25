@@ -22,10 +22,6 @@ export interface Settings {
   maa: MaaSettings;
   workspace: WorkspaceSettings;
   window: WindowSettings;
-  /** 实验段（C-lite 历史模式等；旧后端缺省）。 */
-  experimental?: {
-    backend_history?: "legacy" | "shadow" | "primary";
-  };
 }
 
 // ── 凭据层状态（get_credentials_status）──

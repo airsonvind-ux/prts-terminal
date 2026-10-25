@@ -25,6 +25,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CompactionMeta,
   Conversation,
+  ConversationModelConfig,
   SessionEvent,
   TokenUsage,
   UsageDelta,
@@ -32,6 +33,7 @@ import type {
 } from "../types";
 import { generateId } from "../utils";
 import { useUIStore } from "./useUIStore";
+import { useComposerDraftStore } from "./useComposerDraftStore";
 import {
   addUsageDelta,
   appendTurnImpl,
@@ -43,6 +45,8 @@ export interface ConversationStore {
   activeId: string | null;
   /** 新对话占位标题：newChat 点击后显示，首条消息发送时清除。不进入 conversations 数组 */
   pendingTitle: string | null;
+  /** 新对话草稿配置：newChat 继承上一对话；首条消息固化；切走丢弃 */
+  draftConfig: ConversationModelConfig | null;
 
   /** 新建对话，设为活跃，返回对话 ID。
    *  title / modelName / contextLength 由调用方传入
@@ -50,7 +54,8 @@ export interface ConversationStore {
   createConversation: (
     title: string,
     modelName?: string,
-    contextLength?: number
+    contextLength?: number,
+    config?: ConversationModelConfig | null
   ) => string;
   /** 向已有对话归档一轮事件序列（turn/end 或错误发生时）。
    *  内存归档先行（同步）；随后 fire-and-forget 提交后端持久化
@@ -96,6 +101,15 @@ export interface ConversationStore {
     modelName?: string,
     contextLength?: number
   ) => void;
+  /** 更新会话级请求身份 + 展示元数据（设置页写入；持久化由调用方提交 meta）。 */
+  updateConversationConfig: (
+    id: string,
+    config: ConversationModelConfig,
+    modelName?: string,
+    contextLength?: number
+  ) => void;
+  /** 更新新对话草稿配置（未落盘；切走/关闭即丢）。 */
+  setDraftConfig: (config: ConversationModelConfig | null) => void;
   /** 更新对话的上下文 Token 用量（覆盖式，非累加）。
    *  归档时从 assistant/message 的 usage 快照读取。
    *  纯内存 action：持久化随 append_turn 的 metaSnapshot（usage 参数）提交，
@@ -106,8 +120,8 @@ export interface ConversationStore {
 
   /**
    * 推进对话的环境通知游标（M1 Reminder，覆盖式）。
-   * sendMessage 拼装通知后推进（防同对话重复拼）；invoke 失败时以旧值回滚
-   * （防丢失——下轮重拉重拼）。对话不存在时防御性跳过。
+   * 发送时只拼装、不提前推进；turn/end 正常完成后由 finishProcessing 提交
+   * （失败/中止不提交，下一轮重发同一份提醒）。对话不存在时防御性跳过。
    * 游标为会话元数据的一部分——**持久化随轮提交**：本 action 保持纯内存
    * （推进/回滚语义不动），appendTurn 的 metaSnapshot 携带当前内存游标值经
    * append_turn 落盘（随轮提交决策；丢失窗口 = 游标推进后、轮末提交前崩溃，
@@ -130,9 +144,11 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   conversations: [],
   activeId: null,
   pendingTitle: null,
+  draftConfig: null,
 
-  createConversation: (title, modelName, contextLength) => {
+  createConversation: (title, modelName, contextLength, config) => {
     const id = generateId();
+    const inherited = config ?? get().draftConfig;
     const conv: Conversation = {
       id,
       title,
@@ -142,11 +158,15 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       createdAt: Date.now(),
       modelName,
       contextLength,
+      provider: inherited?.provider,
+      model: inherited?.model,
+      thinkingLevel: inherited?.thinkingLevel ?? null,
     };
     set({
       conversations: [...get().conversations, conv],
       activeId: id,
       pendingTitle: null,
+      draftConfig: null,
     });
     return id;
   },
@@ -168,20 +188,36 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   switchConversation: (id) => {
     // 错误属于上一段对话的失败轮，切走后不再锁当前界面。
     useUIStore.getState().clearError();
+    // 新对话草稿不跨对话保留（已有对话草稿按 key 保留）。
+    useComposerDraftStore.getState().clearNewDraft();
     // 经历管线触发（Phase 4 任务二）：切走旧对话前 fire-and-forget 提炼其增量。
     const prev = get().activeId;
     if (prev && prev !== id) {
       void invoke("finalize_memory", { conversationId: prev }).catch(() => {});
     }
-    set({ activeId: id, pendingTitle: null });
+    set({ activeId: id, pendingTitle: null, draftConfig: null });
   },
 
   newChat: () => {
     useUIStore.getState().clearError();
-    const { conversations } = get();
+    useComposerDraftStore.getState().clearNewDraft();
+    const { conversations, activeId } = get();
+    // 新对话继承上一个对话的配置；无活跃对话时取列表最后一个（最近创建）。
+    const source = activeId
+      ? conversations.find((c) => c.id === activeId)
+      : conversations[conversations.length - 1];
+    const inherited: ConversationModelConfig | null =
+      source?.provider && source.model
+        ? {
+            provider: source.provider,
+            model: source.model,
+            thinkingLevel: source.thinkingLevel ?? null,
+          }
+        : null;
     set({
       activeId: null,
       pendingTitle: conversations.length > 0 ? "新对话" : null,
+      draftConfig: inherited,
     });
   },
 
@@ -208,6 +244,7 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
       conversations: remaining,
       activeId: newActiveId,
       pendingTitle: newPendingTitle,
+      draftConfig: activeId === id ? null : get().draftConfig,
     });
 
     // 对话删除 → 后端持久文件随之删除（Phase 4）。
@@ -269,6 +306,25 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         return { ...c, modelName: nextName, contextLength: nextContext };
       }),
     })),
+
+  updateConversationConfig: (id, config, modelName, contextLength) =>
+    set((state) => ({
+      conversations: state.conversations.map((c) => {
+        if (c.id !== id) return c;
+        const next = {
+          ...c,
+          provider: config.provider,
+          model: config.model,
+          thinkingLevel: config.thinkingLevel,
+          modelName: modelName ?? (config.model ? c.modelName : ""),
+          contextLength:
+            contextLength ?? (config.model ? c.contextLength : 0),
+        };
+        return next;
+      }),
+    })),
+
+  setDraftConfig: (config) => set({ draftConfig: config }),
 
   updateContextTokens: (conversationId, usage) =>
     set((state) => ({

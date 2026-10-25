@@ -6,6 +6,7 @@
 
 import "./styles/tokens.css";
 import "./styles/reset.css";
+import "./styles/focus.css";
 import "./styles/scrollbar.css";
 import "./styles/highlights.css";
 import { StrictMode } from "react";

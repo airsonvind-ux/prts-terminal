@@ -18,6 +18,7 @@ import {
   deriveTextSegments,
   isMetaEvent,
 } from "../../projection";
+import { derivePreviousTurnStatus } from "../processingRequest";
 import type { SessionEvent } from "../../types";
 
 function resetAllStores(): void {
@@ -69,14 +70,32 @@ describe("finishProcessing(sid, 'aborted') 归档语义", () => {
       (c) => c[0] === "append_turn"
     );
     expect(appendCalls).toHaveLength(1);
-    const archived = JSON.parse(appendCalls[0][1].eventsJson) as SessionEvent[];
-    expect(archived[archived.length - 1]).toEqual({
-      type: "turn/aborted",
-      sessionId: sid,
-    });
+    expect("eventsJson" in appendCalls[0][1]).toBe(false);
     // contextTokens 缺省（usage null → 不覆盖旧值；新对话 meta 为 null）
     expect(appendCalls[0][1].contextTokens).toBeNull();
   });
+
+  it.each(["aborted", "app-shutdown", "interrupted"] as const)(
+    "归档保留具体终止原因：%s",
+    async (reason) => {
+      const store = useProcessingStore.getState();
+      await store.sendMessage("原因测试");
+      const { sid } = getSingle();
+      store.appendCurrentEvent(chunk(sid, "半截回答"));
+      store.finishProcessing(sid, reason);
+
+      const turn = useConversationStore.getState().conversations[0].turns[0];
+      const terminal = turn.find((e) => e.type === "turn/end");
+      expect(terminal).toMatchObject({ type: "turn/end", sessionId: sid, reason });
+      expect(turn[turn.length - 1]).toEqual({
+        type: "turn/aborted",
+        sessionId: sid,
+      });
+      expect(
+        derivePreviousTurnStatus(useConversationStore.getState().conversations[0])
+      ).toBe(reason);
+    }
+  );
 
   it("max-tokens 轮：保留半截回答 + 轮尾 turn/truncated 标记", async () => {
     const store = useProcessingStore.getState();
@@ -99,11 +118,7 @@ describe("finishProcessing(sid, 'aborted') 归档语义", () => {
       (c) => c[0] === "append_turn"
     );
     expect(appendCalls).toHaveLength(1);
-    const archived = JSON.parse(appendCalls[0][1].eventsJson) as SessionEvent[];
-    expect(archived[archived.length - 1]).toEqual({
-      type: "turn/truncated",
-      sessionId: sid,
-    });
+    expect("eventsJson" in appendCalls[0][1]).toBe(false);
   });
 
   it("stagnation 轮：保留半截内容、工具记录、usage，并补轮尾标记", async () => {
@@ -225,14 +240,26 @@ describe("finishProcessing(sid, 'aborted') 归档语义", () => {
     store.finishProcessing(sid, "completed");
     let turn = useConversationStore.getState().conversations[0].turns[0];
     expect(turn.some((e) => e.type === "turn/aborted")).toBe(false);
+    expect(turn[turn.length - 1]).toEqual({
+      type: "turn/end",
+      sessionId: sid,
+      reason: "completed",
+      usage: null,
+    });
 
     // 缺省 reason（旧调用路径兼容）
     const store2 = useProcessingStore.getState();
     await store2.sendMessage("无参");
     const { sid: sid2 } = getSingle();
     useProcessingStore.getState().finishProcessing(sid2);
-    turn = useConversationStore.getState().conversations[0].turns[0];
+    turn = useConversationStore.getState().conversations[0].turns[1];
     expect(turn.some((e) => e.type === "turn/aborted")).toBe(false);
+    expect(turn[turn.length - 1]).toEqual({
+      type: "turn/end",
+      sessionId: sid2,
+      reason: "completed",
+      usage: null,
+    });
   });
 
   it("快照已清理（failProcessing 先到）时幂等：不产孤儿轮", async () => {

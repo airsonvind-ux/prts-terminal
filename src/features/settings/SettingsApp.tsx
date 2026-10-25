@@ -7,6 +7,7 @@
 // 退出节：关闭终端（quit_app，危险按钮样式，原通用页迁入）。
 // 节间大间距分隔由 SettingsSection 规范样式承载。
 
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SettingsSection } from "./ui/SettingsSection";
 import choiceStyles from "./ui/choice.module.css";
@@ -20,8 +21,14 @@ export interface SettingsAppProps {
 }
 
 export function SettingsApp({ alwaysOnTop, onSetAlwaysOnTop }: SettingsAppProps) {
-  const handleQuit = () => {
-    invoke("quit_app");
+  const [quitting, setQuitting] = useState(false);
+
+  const handleQuit = async () => {
+    if (quitting) return;
+    setQuitting(true);
+    // 由后端统一 abort_all（原因 app-shutdown）并等待本轮收尾；
+    // 正常关闭/窗口关闭都走同一条路径。
+    await invoke("quit_app").catch(() => setQuitting(false));
   };
 
   return (
@@ -33,6 +40,12 @@ export function SettingsApp({ alwaysOnTop, onSetAlwaysOnTop }: SettingsAppProps)
             className={choiceStyles.choice}
             checked={alwaysOnTop}
             onChange={(e) => onSetAlwaysOnTop(e.target.checked)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.click();
+              }
+            }}
           />
           <span className={styles.topTitle}>置顶显示</span>
         </label>
@@ -41,7 +54,11 @@ export function SettingsApp({ alwaysOnTop, onSetAlwaysOnTop }: SettingsAppProps)
 
       <SettingsSection title="退出">
         <div className={styles.quitWrap}>
-          <button className={styles.quitButton} onClick={handleQuit}>
+          <button
+            className={styles.quitButton}
+            onClick={() => void handleQuit()}
+            disabled={quitting}
+          >
             关闭终端
           </button>
         </div>

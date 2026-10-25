@@ -9,7 +9,7 @@
 // InputArea 为纯 props 组件（无 tauri 依赖），直接注入 mock props。
 
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import React, { act } from "react";
+import React, { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { InputArea } from "./InputArea";
 
@@ -47,7 +47,9 @@ function renderInput(props: Partial<React.ComponentProps<typeof InputArea>>) {
   document.body.appendChild(container);
   root = createRoot(container);
   const callbacks = {
-    onSubmit: vi.fn<(text: string) => void>(),
+    onSubmit: vi.fn<(text: string) => Promise<boolean>>(() =>
+      Promise.resolve(true)
+    ),
     onSteer: vi.fn<(text: string) => Promise<boolean>>(() =>
       Promise.resolve(true)
     ),
@@ -57,17 +59,21 @@ function renderInput(props: Partial<React.ComponentProps<typeof InputArea>>) {
     aborting: false,
     ...props,
   };
+  function Harness() {
+    const [value, setValue] = useState("");
+    return React.createElement(InputArea, {
+      value,
+      onChange: setValue,
+      onSubmit: callbacks.onSubmit,
+      onSteer: callbacks.onSteer,
+      onStop: callbacks.onStop,
+      generating: callbacks.generating,
+      disabled: callbacks.disabled,
+      aborting: callbacks.aborting,
+    });
+  }
   act(() => {
-    root.render(
-      React.createElement(InputArea, {
-        onSubmit: callbacks.onSubmit,
-        onSteer: callbacks.onSteer,
-        onStop: callbacks.onStop,
-        generating: callbacks.generating,
-        disabled: callbacks.disabled,
-        aborting: callbacks.aborting,
-      })
-    );
+    root.render(React.createElement(Harness));
   });
   const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
   // 发送按钮以 data-mode 标记（新增附件按钮不带该属性，避免误选）
@@ -137,6 +143,18 @@ describe("InputArea · 三态按钮", () => {
     expect(textarea.value).toBe("");
   });
 
+  it("发送被拒（上下文超窗 / 并发保护）→ 输入保留，不乐观清空", async () => {
+    const onSubmit = vi.fn<(text: string) => Promise<boolean>>(() =>
+      Promise.resolve(false)
+    );
+    const { textarea, button } = renderInput({ onSubmit });
+    typeText(textarea, "这段不能丢");
+    click(button);
+    await flush();
+    expect(onSubmit).toHaveBeenCalledWith("这段不能丢");
+    expect(textarea.value).toBe("这段不能丢");
+  });
+
   it("生成中有字 → steer（发送样式同款 data-mode=steer）；点击 → 插话提交", async () => {
     const { callbacks, button, textarea } = renderInput({ generating: true });
     typeText(textarea, "插句话");
@@ -180,12 +198,13 @@ describe("InputArea · 三态按钮", () => {
 });
 
 describe("InputArea · Enter 行为", () => {
-  it("空闲有字回车 → onSubmit；输入清空", () => {
+  it("空闲有字回车 → onSubmit；输入清空", async () => {
     const { callbacks, textarea } = renderInput({});
     typeText(textarea, "发送这条");
     pressEnter(textarea);
     expect(callbacks.onSubmit).toHaveBeenCalledWith("发送这条");
     expect(callbacks.onSteer).not.toHaveBeenCalled();
+    await flush();
     expect(textarea.value).toBe("");
   });
 

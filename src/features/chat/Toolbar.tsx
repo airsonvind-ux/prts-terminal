@@ -55,21 +55,27 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
 
   return (
     <div className={styles.bar} onMouseDown={onDragHandle} onContextMenu={(e) => e.preventDefault()}>
-      <span
+      <button
+        type="button"
         className={`${styles.title} ${isHistoryOpen ? styles.titleActive : ""}`}
+        data-focus-inset
         data-guide="conv-title"
-        onClick={
-          showTitle && displayTitle
-            ? () => toggleOverlay("history")
-            : undefined
+        aria-label={
+          displayTitle ? `历史对话：${displayTitle}` : "历史对话"
         }
+        aria-haspopup="dialog"
+        aria-expanded={isHistoryOpen}
+        disabled={!showTitle || !displayTitle}
+        onClick={() => toggleOverlay("history")}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {typedTitle}
-      </span>
+      </button>
       <div className={styles.actions}>
         <button
+          type="button"
           className={styles.btn}
+          data-focus-inset
           data-guide="new-chat"
           style={{ "--btn-expand-ratio": "0.283" } as React.CSSProperties}
           onClick={newChat}
@@ -79,7 +85,9 @@ export function Toolbar({ onDragHandle, showTitle = true }: Props) {
           <span className={styles.label}>新对话</span>
         </button>
         <button
+          type="button"
           className={btn("settings")}
+          data-focus-inset
           data-guide="settings"
           style={{ "--btn-expand-ratio": "0.217" } as React.CSSProperties}
           onClick={() => toggleOverlay("settings")}

@@ -1,61 +1,96 @@
 use super::*;
 
+use crate::session::{ImageDeliveryFact, ImageOmitReason};
+
+/// 模型视觉能力的三态判定。
+///
+/// `Unknown` 与 `Unsupported` 分开：未收录模型不能被写成"不支持"，
+/// 否则历史会留下一句无法证伪的假话。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VisionSupport {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
 /// 请求前图像准备（**每次** LLM 请求前调用）。
 ///
 /// 判据：只给「最后一条 assistant **之后**」的消息物化像素，
 /// 之前的（历史）一律不读字节——它们只保留文本标记（`[附件：名，路径：落点]`、
 /// 工具结果文本里的路径），模型据此知道曾有附件、也能按路径自己读。
 ///
-/// 必须每次请求前跑，而不是轮起点：工具返回的图（如 MAA 截图）是轮内
-/// 追加的，轮起点那次看不到它。
-///
-/// 模型没有视觉时，图进不去——但得把「图没进去」这件事说清楚，
-/// 否则读者会当自己看过了（见 [`NO_VISION_NOTICE`]）。
-pub(super) fn prepare_request_images(messages: &mut [ChatMessage], supports_vision: bool) {
+/// 返回值是本轮实际图片投递事实：只看 `msg.images` 的最终状态，
+/// 不看模型能力声明。调用方把它写成 `image/delivery` 事件后，
+/// 后续轮次就能从日志稳定重建同一条历史。
+pub(super) fn prepare_request_images(
+    messages: &mut [ChatMessage],
+    vision: VisionSupport,
+) -> Vec<ImageDeliveryFact> {
     let last_assistant_idx = messages
         .iter()
         .rposition(|m| matches!(m.role, crate::llm::MessageRole::Assistant));
+    let mut facts = Vec::new();
+
     for (i, msg) in messages.iter_mut().enumerate() {
         let current_turn = match last_assistant_idx {
             Some(idx) => i > idx,
             None => true,
         };
-        if current_turn && supports_vision {
-            if msg.images.is_none() {
-                if let Some(paths) = msg.image_paths.take() {
-                    let parts = crate::attachments::materialize_images(&paths);
-                    if !parts.is_empty() {
-                        msg.images = Some(parts);
-                    }
-                }
-            }
-        } else {
-            // 本轮带图、但模型看不见：把这件事说清楚，别的都不说。
-            // 只补事实，不写行为指令（要不要描述画面由读者自己决定）。
-            // 历史消息的图早该退化成文本标记，不补——否则每轮都会堆一句。
-            if current_turn && (msg.images.is_some() || msg.image_paths.is_some()) {
-                push_notice(&mut msg.content, NO_VISION_NOTICE);
-            }
+
+        // 历史消息只去掉像素，保留文本标记；不在这里补投递事实。
+        if !current_turn {
             msg.image_paths = None;
             msg.images = None;
+            continue;
         }
-    }
-}
 
-/// 模型没有视觉时，对带图消息追加的唯一一句话。
-///
-/// 只陈述事实（模型看不见），不给行为指令。
-pub(super) const NO_VISION_NOTICE: &str = "[当前模型不支持视觉，无法查看图片内容]";
+        let had_image = msg.images.is_some() || msg.image_paths.is_some();
+        if !had_image {
+            continue;
+        }
 
-/// 往正文末尾补一句提示；已出现过就不再补（同一轮可被多次请求，会重进这里）。
-fn push_notice(content: &mut String, notice: &str) {
-    if content.contains(notice) {
-        return;
+        let mut reason = None;
+        let included = match vision {
+            VisionSupport::Supported => {
+                if msg.images.is_none() {
+                    if let Some(paths) = msg.image_paths.take() {
+                        let parts = crate::attachments::materialize_images(&paths);
+                        if !parts.is_empty() {
+                            msg.images = Some(parts);
+                        }
+                    }
+                }
+                let included = msg.images.as_ref().is_some_and(|v| !v.is_empty());
+                if !included {
+                    reason = Some(ImageOmitReason::MaterializeFailed);
+                }
+                included
+            }
+            VisionSupport::Unsupported => {
+                reason = Some(ImageOmitReason::UnsupportedVision);
+                false
+            }
+            VisionSupport::Unknown => {
+                reason = Some(ImageOmitReason::UnknownVision);
+                false
+            }
+        };
+
+        msg.image_paths = None;
+        if !included {
+            msg.images = None;
+            SessionLog::append_image_omitted_notice(&mut msg.content);
+        }
+
+        facts.push(ImageDeliveryFact {
+            user_event_offset: msg.image_event_seq,
+            tool_call_id: msg.image_tool_call_id.clone(),
+            included,
+            reason,
+        });
     }
-    if !content.is_empty() {
-        content.push('\n');
-    }
-    content.push_str(notice);
+
+    facts
 }
 
 /// 带通用重试的 LLM 调用（缺陷 3）。
@@ -307,10 +342,27 @@ async fn call_llm_and_stream(
     if let Ok(mut guard) = guard.lock() {
         guard.sanitize_result(&mut result);
     }
-    if result.is_empty_response() {
-        return Err(OrchestratorError::Llm(crate::llm::LlmError::EmptyResponse));
+    if let Some(error) = stream_result_error(&result) {
+        return Err(OrchestratorError::Llm(error));
     }
     Ok(result)
+}
+
+/// 把“流正常结束但用户没有可用回答”分类成可解释的错误。
+///
+/// 只有推理、没有最终正文的结果不在这里报错：模型偶尔只输出思考过程，
+/// 这是可接受的模型行为，不应伪装成系统故障。
+fn stream_result_error(result: &crate::llm::StreamResult) -> Option<crate::llm::LlmError> {
+    if result.finish_reason == Some(crate::llm::FinishReason::ContentFilter)
+        && result.text.trim().is_empty()
+        && result.tool_calls.is_empty()
+    {
+        return Some(crate::llm::LlmError::ContentFilter);
+    }
+    if result.is_empty_response() {
+        return Some(crate::llm::LlmError::EmptyResponse);
+    }
+    None
 }
 
 /// 单个 StreamEvent 的处理逻辑（双写：IPC 事件 + session log）。
@@ -416,5 +468,51 @@ pub(super) fn handle_stream_event_collect(
                 &content,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{FinishReason, LlmError, StreamResult};
+
+    fn result(finish_reason: FinishReason, text: &str, reasoning: Option<&str>) -> StreamResult {
+        StreamResult {
+            text: text.into(),
+            tool_calls: Vec::new(),
+            reasoning: reasoning.map(str::to_string),
+            usage: None,
+            finish_reason: Some(finish_reason),
+        }
+    }
+
+    #[test]
+    fn content_filter_without_content_is_classified() {
+        let result = result(FinishReason::ContentFilter, "", None);
+        assert!(matches!(
+            stream_result_error(&result),
+            Some(LlmError::ContentFilter)
+        ));
+    }
+
+    #[test]
+    fn content_filter_with_text_is_not_treated_as_empty() {
+        let result = result(FinishReason::ContentFilter, "半截回答", None);
+        assert!(stream_result_error(&result).is_none());
+    }
+
+    #[test]
+    fn normal_empty_response_is_classified() {
+        let result = result(FinishReason::Normal, "", None);
+        assert!(matches!(
+            stream_result_error(&result),
+            Some(LlmError::EmptyResponse)
+        ));
+    }
+
+    #[test]
+    fn reasoning_only_is_allowed() {
+        let result = result(FinishReason::Normal, "", Some("只想了没回答"));
+        assert!(stream_result_error(&result).is_none());
     }
 }

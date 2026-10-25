@@ -114,7 +114,8 @@ fn local_target_outside(name: &str, args: &str, workspace_root: &Path) -> bool {
     }
 }
 
-/// 审批请求事件中的命令回显截断长度（M3-A §5.1：command ≤ 512 字符）。
+/// 审批请求事件中的命令摘要上限（完整命令由 tool/call params 保留；
+/// 前端确认卡读取原始调用，避免用户只看到摘要就确认）。
 const MAX_COMMAND_EVENT_CHARS: usize = 512;
 
 /// 从工具参数 JSON 提取命令串（解析失败/缺 command → None，交给执行段自然报错）。
@@ -477,8 +478,6 @@ pub(super) async fn preflight_tool_calls(
 /// 非安全工具严格串行。所有结果按**调用顺序**收集后统一 emit/入 log，
 /// 保证 log 事件顺序确定（回放/派生不依赖执行调度）。
 ///
-/// 上下文变更指令（context_ops）已停用（2026-08：动态层移除，
-/// 工具不再携带变更标记，ActiveContext 已注释）。
 #[allow(clippy::too_many_arguments)] // 与 process/dispatch_turn 相同的全链路参数集合
 #[allow(dead_code)] // 测试兼容包装；生产走 execute_tools_and_append_with_blocks
 pub(super) fn execute_tools_and_append(
@@ -496,6 +495,7 @@ pub(super) fn execute_tools_and_append(
         session_id,
         messages,
         result,
+        ReasoningPolicy::Preserve,
         tools,
         ctx,
         sink,
@@ -511,6 +511,7 @@ pub(super) fn execute_tools_and_append_with_blocks(
     session_id: &str,
     messages: &mut Vec<ChatMessage>,
     result: &StreamResult,
+    policy: ReasoningPolicy,
     tools: &ToolRegistry,
     ctx: &ToolContext,
     sink: &EventSink,
@@ -525,10 +526,21 @@ pub(super) fn execute_tools_and_append_with_blocks(
     //    修复前此处为 String::new()，模型轮内对自身输出失明，自指任务会退化成
     //    工具调用死循环（实测 21 步）。
     //    RequireToolCall 策略仅丢弃"无工具轮次"的推理链，工具轮次保留。
+    // 工具轮的 reasoning 必须和派生历史使用同一套 carrier 语义：
+    // RequireToolCall 模型没有返回推理时，写空串表示“已记录为空”，
+    // 不能在这里留下 None。否则本轮下一步请求会因为历史缺键被本地
+    // replay guard 拦下，表现得像“工具调用到一半系统中止”。
+    let tool_reasoning = match result.reasoning.clone() {
+        Some(reasoning) => Some(reasoning),
+        None if policy == ReasoningPolicy::RequireToolCall && !result.tool_calls.is_empty() => {
+            Some(String::new())
+        }
+        None => None,
+    };
     let assistant_msg = ChatMessage::assistant_with_tools(
         result.text.clone(),
         result.tool_calls.clone(),
-        result.reasoning.clone(),
+        tool_reasoning,
     )
     .with_provider_blocks(provider_blocks.to_vec());
     messages.push(assistant_msg);
@@ -669,20 +681,23 @@ pub(super) fn execute_tools_and_append_with_blocks(
                         .with_provenance(output.provenance.clone()),
                     );
                 }
-                messages.push(ChatMessage::tool_result(&tc.id, output.summary.clone()));
+                messages.push(ChatMessage::tool_result_with_status(
+                    &tc.id,
+                    output.summary.clone(),
+                    true,
+                ));
                 // 工具声明了图片（如 MAA 截图）：另起一条 user 消息送进模型。
                 // 不塞进 tool 消息——OpenAI 的 tool 角色只吃文本，Anthropic 的
                 // tool_result 才带图；追加一条 user 消息是三家协议都成立的落法。
                 // 像素只在当前轮送达（prepare_request_images 按区间决定），
                 // 但消息本身落账、跟轮重建，序列不缺项。
-                if let Some(msg) = crate::session::SessionLog::tool_image_message(
+                if let Some(mut msg) = crate::session::SessionLog::tool_image_message(
                     Some(&tc.function.name),
                     &image_attachments,
                 ) {
+                    msg.image_tool_call_id = Some(tc.id.clone());
                     messages.push(msg);
                 }
-                // 缓存操作落账已停用（2026-08：缓存工具取消注册，
-                // CacheEventMark 无生产者；未来记忆系统复用时可恢复）
                 for mark in &output.skill_events {
                     match mark {
                         SkillEventMark::Activate { name } => {
@@ -715,7 +730,11 @@ pub(super) fn execute_tools_and_append_with_blocks(
                 ));
                 // 工具失败不中断循环：LLM 看到错误结果后可自行决定
                 // 重试（修正参数）、换用其他工具、或承认无法完成
-                messages.push(ChatMessage::tool_result(&tc.id, err_msg.clone()));
+                messages.push(ChatMessage::tool_result_with_status(
+                    &tc.id,
+                    err_msg.clone(),
+                    false,
+                ));
                 // 失败也录指纹：报错重试是四种停滞模式之一
                 state.record_fingerprint(&tc.function.name, &tc.function.arguments, &err_msg);
             }
@@ -743,7 +762,11 @@ pub(super) fn execute_tools_and_append_with_blocks(
                     &summary,
                     false,
                 ));
-                messages.push(ChatMessage::tool_result(&tc.id, summary.clone()));
+                messages.push(ChatMessage::tool_result_with_status(
+                    &tc.id,
+                    summary.clone(),
+                    false,
+                ));
                 // 拦截/拒绝也录指纹：LLM 若原样重试会被停滞检测捕获
                 state.record_fingerprint(&tc.function.name, &tc.function.arguments, &summary);
             }

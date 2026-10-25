@@ -22,6 +22,7 @@ import { useAnimationMapping } from "./hooks/useAnimationMapping";
 import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useUpdaterEvents } from "./hooks/useUpdaterEvents";
 import { useConversationHydration } from "./hooks/useConversationHydration";
+import { useActiveModelInfo } from "./hooks/useActiveModelInfo";
 import { setModelInfo } from "./stores/useProcessingStore";
 import { useGuideStore } from "./stores/useGuideStore";
 import { showToast } from "./stores/useToastStore";
@@ -38,6 +39,7 @@ export function App() {
   // 启动会话恢复（Phase 4）：list → 并行 get → 装载 store + 导航决策。
   // 导航决策收敛于本 hook 单点（欢迎界面/开屏流程改造只改此处）
   useConversationHydration();
+  useActiveModelInfo();
 
   // ── 引导键集（"看过没"）拉一次：说明层由它去重 ──
   useEffect(() => {
@@ -91,6 +93,9 @@ export function App() {
                   name: info.displayName,
                   contextLength: info.contextLength,
                   supportsVision: info.supportsVision,
+                  provider: active,
+                  model,
+                  thinkingLevel: settings.llm.thinking_level ?? null,
                   // 生效思考档（悬停信息用）：按 thinking.ts 的口径算好后存快照
                   thinking: thinkingLabel(settings.llm.thinking_level, info),
                 });
@@ -100,6 +105,9 @@ export function App() {
                   name: model,
                   contextLength: 0,
                   supportsVision: false,
+                  provider: active,
+                  model,
+                  thinkingLevel: settings.llm.thinking_level ?? null,
                   thinking: null,
                 });
               }
@@ -109,6 +117,9 @@ export function App() {
                 name: model,
                 contextLength: 0,
                 supportsVision: false,
+                provider: active,
+                model,
+                thinkingLevel: settings.llm.thinking_level ?? null,
                 thinking: null,
               });
             });

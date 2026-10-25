@@ -235,58 +235,33 @@ mod tests {
     fn agent_request_deserializes_camelcase() {
         let json = r#"{
             "input": "你好",
-            "history": [
-                { "role": "user", "content": "之前的问题" },
-                { "role": "assistant", "content": "之前的回答" }
-            ],
-            "sessionId": "abc-123"
+            "sessionId": "abc-123",
+            "userContent": "带提醒的正文"
         }"#;
 
         let req: AgentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.input, "你好");
         assert_eq!(req.session_id, "abc-123");
-        assert_eq!(req.history.len(), 2);
-        assert_eq!(req.history[0].role, "user");
-        assert_eq!(req.history[1].role, "assistant");
+        assert_eq!(req.user_content, "带提醒的正文");
     }
 
     #[test]
-    fn agent_request_deserializes_with_error_messages() {
-        // error 消息不做过滤——那是 orchestrator 的职责
-        let json = r#"{
-            "input": "重试",
-            "history": [
-                { "role": "user", "content": "你好" },
-                { "role": "error", "content": "超时了" },
-                { "role": "user", "content": "重试" }
-            ],
-            "sessionId": "xyz-456"
-        }"#;
-
-        let req: AgentRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.history.len(), 3);
-        assert_eq!(req.history[1].role, "error");
-    }
-
-    #[test]
-    fn agent_request_empty_history() {
+    fn agent_request_user_content_defaults_to_empty() {
         let json = r#"{
             "input": "第一句话",
-            "history": [],
             "sessionId": "new-001"
         }"#;
 
         let req: AgentRequest = serde_json::from_str(json).unwrap();
-        assert!(req.history.is_empty());
+        assert_eq!(req.user_content, "");
         assert_eq!(req.input, "第一句话");
     }
 
     #[test]
     fn agent_request_with_conversation_id() {
-        // 新前端：携带 conversationId（缓存区按对话分区的维度）
+        // 新前端：携带 conversationId（对话级快照的维度）
         let json = r#"{
             "input": "你好",
-            "history": [],
             "sessionId": "abc-123",
             "conversationId": "conv-7"
         }"#;

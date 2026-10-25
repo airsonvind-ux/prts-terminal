@@ -357,29 +357,6 @@ pub fn stop() -> Result<(), String> {
     Ok(())
 }
 
-/// 截当前屏幕，写到 `path`，返回实际落盘路径。
-///
-/// 目录得先建好：桥那边只管写文件，路径不存在它只会报「系统找不到指定的路径」。
-pub fn screenshot(path: &Path) -> Result<PathBuf, String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("建截图目录失败（{}）：{e}", parent.display()))?;
-    }
-    let mut m = lock()?;
-    ensure(&mut m)?;
-    let bridge = m.bridge.as_ref().ok_or("桥不可用")?;
-    let data = bridge
-        .command(
-            json!({ "cmd": "screenshot", "path": path.to_string_lossy() }),
-            TASK_TIMEOUT,
-        )
-        .map_err(|e| e.to_string())?;
-    data.get("path")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .ok_or_else(|| "桥没有返回截图路径".to_string())
-}
-
 /// 设置页用的只读状态视图。
 ///
 /// **不触发连接、不起桥、不改任何状态**：只看已经存在的东西。要看最新结果，

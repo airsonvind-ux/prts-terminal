@@ -312,6 +312,7 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
                   <div className={styles.licenseSection} key={section.id}>
                     <button
                       type="button"
+                      data-focus-inset
                       className={styles.licenseSectionHead}
                       onClick={() => toggleLicenseSection(section.id)}
                       aria-expanded={expanded}

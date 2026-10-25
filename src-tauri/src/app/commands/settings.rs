@@ -17,9 +17,10 @@ pub(super) const CONFIG_WRITE_GUARD_MSG: &str = "对话处理中不能修改设�
 /// get_settings / copy_api_key / get_app_meta / verify_saved_connection /
 /// list_models 等只读命令不拦截。
 ///
-/// 快照隔离事实：轮内 config 是 turn 起始快照（agent_process 已 clone），
-/// 本闸并非数据一致性必需，而是「busy 期间设置锁定」的 UX 规则强制面——
-/// 勿按数据竞态防护理解而误删（防后人重构时顺手拿掉）。
+/// 快照隔离事实：轮内 config 是 turn 起始快照（agent_process 已 clone）。
+/// R-21 起，`settings_write_gate` 负责把设置保存与 turn 起始快照串行化；
+/// 本闸仍是「busy 期间设置锁定」的 UX 强制面，不再单独承担 workspace
+/// 根的一致性防护。勿按纯 UX 理解而误删。
 pub(super) fn guard_config_write(turn_registry: &TurnRegistry) -> Result<(), String> {
     if turn_registry.active_count() > 0 {
         return Err(CONFIG_WRITE_GUARD_MSG.into());
@@ -119,20 +120,6 @@ pub fn get_settings(
     Ok(out)
 }
 
-/// 当前生效的会话历史模式（C-lite；env 覆盖 settings）。前端据此决定是否
-/// 发送完整 history。返回值：`legacy` / `shadow` / `primary`。
-#[tauri::command]
-pub fn get_backend_history_mode(
-    store: State<'_, Arc<Mutex<SettingsStore>>>,
-) -> Result<String, String> {
-    let s = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
-    Ok(match s.settings.backend_history_mode() {
-        crate::settings::BackendHistoryMode::Legacy => "legacy".into(),
-        crate::settings::BackendHistoryMode::Shadow => "shadow".into(),
-        crate::settings::BackendHistoryMode::Primary => "primary".into(),
-    })
-}
-
 /// 引导「已看过」键集（界面态，只读；不设闸）。见 `settings::UiSection`。
 #[tauri::command]
 pub fn get_guide_seen(store: State<'_, Arc<Mutex<SettingsStore>>>) -> Result<Vec<String>, String> {
@@ -224,6 +211,7 @@ pub fn get_credentials_status(
 /// 是被占着的——同步命令会把这份等待摊到 UI 上（连接测试中改设置会卡住）。
 #[tauri::command]
 pub async fn set_settings(
+    settings_write_gate: State<'_, Arc<tokio::sync::Mutex<()>>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
     store: State<'_, Arc<Mutex<SettingsStore>>>,
     credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
@@ -234,6 +222,10 @@ pub async fn set_settings(
     root: State<'_, crate::workspace::WorkspaceRoot>,
     patch: SettingsPatch,
 ) -> Result<(), String> {
+    // R-21：与 agent_process 的 turn 起始快照串行化。必须先拿写闸再检查
+    // active_count；否则检查通过后 turn 仍可能注册，随后 root.set 会把本轮
+    // 工作区从预检快照下换掉。
+    let _settings_gate = settings_write_gate.lock().await;
     guard_config_write(&turn_registry)?;
     let mut st = store.lock().map_err(|e| format!("设置锁获取失败: {e}"))?;
     if st.is_readonly() {

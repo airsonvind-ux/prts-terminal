@@ -55,6 +55,11 @@ use tokio::sync::Notify;
 pub struct AbortSignal {
     flag: Arc<AtomicBool>,
     notify: Arc<Notify>,
+    /// 中止源是否为应用关闭（区分用户主动 stop）。
+    app_shutdown: Arc<AtomicBool>,
+    /// 终态提交与 abort 的互斥锁：保证“关闭先到”与“完成先提交”
+    /// 不会在检查与 emit 之间互相穿透。
+    terminal_lock: Arc<Mutex<()>>,
 }
 
 impl AbortSignal {
@@ -63,6 +68,8 @@ impl AbortSignal {
         Self {
             flag: Arc::new(AtomicBool::new(false)),
             notify: Arc::new(Notify::new()),
+            app_shutdown: Arc::new(AtomicBool::new(false)),
+            terminal_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -76,8 +83,35 @@ impl AbortSignal {
     /// 顺序固定：先写 flag 再 notify（消费方「复查 flag」依赖此顺序——
     /// 任何 notify 到达时 flag 必已可见）。
     pub fn abort(&self) {
+        // 与终态提交互斥：如果完成分支已经拿到锁并正在 emit turn/end，
+        // 这次 abort 只能算“完成之后的关闭”；如果 abort 先拿到锁，
+        // 完成分支必须在提交前看到 flag 并放弃 completed。
+        let _guard = self.terminal_lock.lock().unwrap();
         self.flag.store(true, Ordering::SeqCst);
         self.notify.notify_waiters();
+    }
+
+    /// 在“已经决定正常结束”的临界区内提交终态。
+    ///
+    /// 返回 false 表示 abort 先到，调用方必须改走 Aborted，不能写 completed。
+    /// 闭包内只做同步 emit，不能 await。
+    pub fn commit_terminal(&self, emit_terminal: impl FnOnce()) -> bool {
+        let _guard = self.terminal_lock.lock().unwrap();
+        if self.flag.load(Ordering::SeqCst) {
+            return false;
+        }
+        emit_terminal();
+        true
+    }
+
+    /// 标记本次中止来自应用关闭，再置位。
+    pub fn abort_for_app_shutdown(&self) {
+        self.app_shutdown.store(true, Ordering::SeqCst);
+        self.abort();
+    }
+
+    pub fn is_app_shutdown(&self) -> bool {
+        self.app_shutdown.load(Ordering::SeqCst)
     }
 
     /// 等待中止信号（async 段消费）。
@@ -143,11 +177,24 @@ pub struct ActiveTurn {
 #[derive(Debug, Default)]
 pub struct TurnRegistry {
     turns: Mutex<HashMap<String, ActiveTurn>>,
+    /// 应用关闭流程已开始：拒绝新 turn，只允许现有 turn 收尾。
+    shutting_down: std::sync::atomic::AtomicBool,
 }
 
 impl TurnRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 标记关闭流程开始；返回 true 表示本次是第一个发起者。
+    pub fn begin_shutdown(&self) -> bool {
+        !self
+            .shutting_down
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// 注册一个活动 turn，返回中止信号句柄。
@@ -211,6 +258,18 @@ impl TurnRegistry {
         }
     }
 
+    /// 置位所有活动 turn 的中止信号（应用退出用）。
+    ///
+    /// 返回被置位的 turn 数；幂等。调用方仍需等待 active_count 归零，
+    /// 让 orchestrator 有机会写 turn/end 并提交本轮日志。
+    pub fn abort_all(&self) -> usize {
+        let turns = self.turns.lock().unwrap();
+        for turn in turns.values() {
+            turn.signal.abort_for_app_shutdown();
+        }
+        turns.len()
+    }
+
     /// 置位中止。返回 true = 找到活动 turn 并已置位；false = 无（幂等，
     /// abort_turn 命令以 Ok(false) 表达，非错误）。
     pub fn abort(&self, session_id: &str) -> bool {
@@ -261,6 +320,48 @@ mod tests {
     use std::time::Duration;
 
     // ── TurnRegistry ──
+
+    #[test]
+    fn shutdown_gate_is_idempotent() {
+        let reg = TurnRegistry::new();
+        assert!(!reg.is_shutting_down());
+        assert!(reg.begin_shutdown());
+        assert!(!reg.begin_shutdown());
+        assert!(reg.is_shutting_down());
+    }
+
+    #[test]
+    fn abort_before_terminal_commit_wins() {
+        let signal = AbortSignal::new();
+        signal.abort();
+        let mut emitted = false;
+        let committed = signal.commit_terminal(|| emitted = true);
+        assert!(!committed, "abort 已先到，完成分支必须放弃");
+        assert!(!emitted, "abort 先到时不能 emit completed");
+    }
+
+    #[test]
+    fn terminal_commit_before_abort_is_kept() {
+        let signal = AbortSignal::new();
+        let mut emitted = false;
+        let committed = signal.commit_terminal(|| emitted = true);
+        signal.abort();
+        assert!(committed, "完成先提交，abort 只能算完成之后的关闭");
+        assert!(emitted);
+    }
+
+    #[test]
+    fn abort_all_flags_every_active_turn() {
+        let reg = TurnRegistry::new();
+        let s1 = reg.register("s1", "c1");
+        let s2 = reg.register("s2", "c2");
+        assert_eq!(reg.abort_all(), 2);
+        assert!(s1.is_aborted());
+        assert!(s2.is_aborted());
+        assert!(s1.is_app_shutdown());
+        assert!(s2.is_app_shutdown());
+        assert_eq!(reg.abort_all(), 2, "abort 幂等");
+    }
 
     #[test]
     fn register_unregister_roundtrip() {

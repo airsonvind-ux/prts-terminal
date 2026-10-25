@@ -727,6 +727,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
     }
 
+    /// F7：无开发者模式时文件符号链接测试会静默跳过。
+    /// 目录 junction 不依赖该权限，用它在 Windows 上提供真实覆盖。
+    #[cfg(windows)]
+    #[test]
+    fn write_junction_to_outside_rejected() {
+        let ws = ws_fixture("wr-junction");
+        let policy = make_policy(&ws);
+        let other = unique_temp_dir("wr-junction-target");
+        std::fs::write(other.join("a.txt"), "outside").unwrap();
+        let link = ws.join("junction");
+
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&other)
+            .output()
+            .expect("运行 mklink /J");
+        assert!(
+            output.status.success(),
+            "mklink /J 失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let err = resolve_write(&policy, "junction/a.txt").unwrap_err();
+        assert!(
+            matches!(&err, PathGuardError::OutsideWorkspace(_)),
+            "junction 越界应拒绝，got: {err}"
+        );
+        let err2 = resolve_write_create(&policy, "junction/b.txt").unwrap_err();
+        assert!(
+            matches!(&err2, PathGuardError::OutsideWorkspace(_)),
+            "write_file 经 junction 越界同样应拒绝，got: {err2}"
+        );
+
+        // 只删除 junction 本身；rmdir 不进入目标目录。
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "rmdir"])
+            .arg(&link)
+            .output();
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     /// 工作区内软链接到工作区外文件：最终目标 canonicalize 后应判为区外。
     #[test]
     fn write_symlink_to_outside_rejected() {

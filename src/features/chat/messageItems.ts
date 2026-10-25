@@ -214,6 +214,20 @@ export function buildArchivedItems(
     }
     items.push(...archivedItemsForTurn(turns[i]));
   }
+  // 全部折叠时 retainedFrom === turns.length，上面的循环到不了该下标；
+  // 在列表末尾补一张压缩卡，让 toast 的“查看分界”有落点。下一轮有新 turn
+  // 后，正常分支会在 retainedFrom 处插卡，这张末尾卡随之消失。
+  if (
+    compaction &&
+    compaction.retainedFrom > 0 &&
+    compaction.retainedFrom >= turns.length
+  ) {
+    items.push({
+      type: "compaction",
+      summary: compaction.summary,
+      foldedCount: compaction.retainedFrom,
+    });
+  }
   return items;
 }
 

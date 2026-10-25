@@ -25,7 +25,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::skills::trust::{self, SkillTrust};
-use crate::skills::{SkillMeta, MAX_SKILL_DESCRIPTION_CHARS};
+use crate::skills::{is_reparse_point, SkillMeta, MAX_SKILL_DESCRIPTION_CHARS};
+
+/// 技能目录扫描上限：坏目录最多被忽略，不能把每轮入口拖死。
+const MAX_SCAN_DEPTH: usize = 6;
+const MAX_SCAN_ENTRIES: usize = 4096;
+const MAX_SKILL_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_INDEX_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Skill 索引：name → 元数据 + 正文（剥 frontmatter）+ 源文件路径。
 #[derive(Debug)]
@@ -63,22 +69,26 @@ impl SkillIndex {
         // 队列式遍历（避免递归深度问题）；read_dir 迭代顺序 OS 依赖：
         // 每层先收集为 Vec、按 file_name() 排序再处理（目录与文件统一按名
         // 排序），保证遍历顺序确定（仿 KnowledgeIndex）。
-        let mut queue: std::collections::VecDeque<PathBuf> =
-            std::collections::VecDeque::from([dir.to_path_buf()]);
-        while let Some(d) = queue.pop_front() {
+        let mut queue: std::collections::VecDeque<(PathBuf, usize)> =
+            std::collections::VecDeque::from([(dir.to_path_buf(), 0)]);
+        let mut entries_seen = 0usize;
+        let mut index_bytes = 0u64;
+        'scan: while let Some((d, depth)) = queue.pop_front() {
             // 技能包目录（根级含 SKILL.md，且非运行根自身）：作为一个技能
             // 单元收录，不再下钻——其 references 等资源不产生独立条目。
-            if d.as_path() != dir && d.join("SKILL.md").is_file() {
-                register_skill(
-                    &mut skills,
-                    &mut bodies,
-                    &mut paths,
-                    &mut trust,
-                    &mut resource_dirs,
-                    &mut package_hashes,
-                    &d.join("SKILL.md"),
-                )?;
-                continue;
+            if d.as_path() != dir {
+                if let Some(skill_md) = regular_skill_md(&d)? {
+                    register_skill(
+                        &mut skills,
+                        &mut bodies,
+                        &mut paths,
+                        &mut trust,
+                        &mut resource_dirs,
+                        &mut package_hashes,
+                        &skill_md,
+                    )?;
+                    continue;
+                }
             }
             let rd = std::fs::read_dir(&d)
                 .map_err(|e| format!("读取 Skill 目录失败（{}）：{e}", d.display()))?;
@@ -87,6 +97,15 @@ impl SkillIndex {
                 .map_err(|e| format!("读取 Skill 目录失败（{}）：{e}", d.display()))?;
             dir_entries.sort_by_key(|e| e.file_name());
             for entry in dir_entries {
+                if entries_seen >= MAX_SCAN_ENTRIES {
+                    eprintln!(
+                        "[skills] 技能目录条目超过上限 {MAX_SCAN_ENTRIES}，停止扫描：{}",
+                        d.display()
+                    );
+                    break 'scan;
+                }
+                entries_seen += 1;
+
                 let path = entry.path();
                 // '.' 前缀条目（隐藏文件 / 安装残留临时目录）不入索引
                 if path
@@ -98,8 +117,21 @@ impl SkillIndex {
                     continue;
                 }
 
-                if path.is_dir() {
-                    queue.push_back(path);
+                let meta = std::fs::symlink_metadata(&path)
+                    .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
+                // 不跟随符号链接 / junction：否则一个自环目录能让每轮扫描永不返回。
+                if is_reparse_point(&meta) {
+                    continue;
+                }
+                if meta.is_dir() {
+                    if depth < MAX_SCAN_DEPTH {
+                        queue.push_back((path, depth + 1));
+                    } else {
+                        eprintln!(
+                            "[skills] 目录深度超过上限 {MAX_SCAN_DEPTH}，跳过：{}",
+                            path.display()
+                        );
+                    }
                     continue;
                 }
 
@@ -110,6 +142,21 @@ impl SkillIndex {
                 if file_name == "_index.md" || !file_name.ends_with(".md") {
                     continue;
                 }
+                if meta.len() > MAX_SKILL_FILE_BYTES {
+                    eprintln!(
+                        "[skills] 单文件超过上限 {MAX_SKILL_FILE_BYTES} 字节，跳过：{}",
+                        path.display()
+                    );
+                    continue;
+                }
+                if index_bytes.saturating_add(meta.len()) > MAX_INDEX_BYTES {
+                    eprintln!(
+                        "[skills] 索引正文超过上限 {MAX_INDEX_BYTES} 字节，停止扫描：{}",
+                        d.display()
+                    );
+                    break 'scan;
+                }
+                index_bytes += meta.len();
 
                 register_skill(
                     &mut skills,
@@ -251,6 +298,22 @@ fn source_label(raw: Option<&str>) -> &'static str {
     }
 }
 
+/// 目录若含普通（非重解析点）的 `SKILL.md`，返回其路径。
+/// junction / 符号链接形式的 `SKILL.md` 不当作技能包标记。
+fn regular_skill_md(dir: &Path) -> Result<Option<PathBuf>, String> {
+    let path = dir.join("SKILL.md");
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("读取元数据失败（{}）：{e}", path.display())),
+    };
+    if meta.is_file() && !is_reparse_point(&meta) {
+        Ok(Some(path))
+    } else {
+        Ok(None)
+    }
+}
+
 /// 读取并注册一个技能文件（解析失败 → 告警跳过；重名 → 告警保留先注册的）。
 #[allow(clippy::too_many_arguments)] // 索引各表一一对应，拆结构会扩大改动面
 fn register_skill(
@@ -262,6 +325,13 @@ fn register_skill(
     package_hashes: &mut HashMap<String, String>,
     path: &Path,
 ) -> Result<(), String> {
+    // 调用方已做上限检查；这里再守一次，避免未来新增调用点绕过。
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
+    if !meta.is_file() || is_reparse_point(&meta) || meta.len() > MAX_SKILL_FILE_BYTES {
+        eprintln!("[skills] 跳过不可索引的文件：{}", path.display());
+        return Ok(());
+    }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("读取 Skill 文件失败（{}）：{e}", path.display()))?;
     let Some(meta) = crate::skills::parse_skill_frontmatter(&text) else {
@@ -601,6 +671,60 @@ mod tests {
         let beta = idx.resolve("贝塔").unwrap();
         assert_eq!(beta.description, "条目 B");
         assert_eq!(idx.body("贝塔"), Some("## 正文 B"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn load_skips_junction_dirs() {
+        let root = unique_temp_dir("junction-root");
+        let outside = unique_temp_dir("junction-outside");
+        std::fs::write(
+            outside.join("SKILL.md"),
+            "---\nname: 外部技能\ndescription: 不应被索引\n---",
+        )
+        .unwrap();
+        let link = root.join("link");
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .expect("运行 mklink /J");
+        assert!(
+            output.status.success(),
+            "mklink /J 失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let idx = SkillIndex::load(&root).unwrap();
+        assert!(idx.resolve("外部技能").is_none(), "junction 目录不应被跟随");
+
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "rmdir"])
+            .arg(&link)
+            .output();
+        let _ = std::fs::remove_dir_all(&outside);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_skips_directories_beyond_depth_limit() {
+        let root = unique_temp_dir("depth");
+        let mut deep = root.clone();
+        for _ in 0..=MAX_SCAN_DEPTH {
+            deep = deep.join("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(
+            deep.join("SKILL.md"),
+            "---\nname: 太深\ndescription: 不应被索引\n---",
+        )
+        .unwrap();
+
+        let idx = SkillIndex::load(&root).unwrap();
+        assert!(idx.resolve("太深").is_none(), "超过深度上限的目录应跳过");
 
         let _ = std::fs::remove_dir_all(&root);
     }

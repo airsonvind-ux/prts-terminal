@@ -62,6 +62,9 @@ function meta(over: Partial<ConversationMeta>): ConversationMeta {
     updatedAt: 1,
     modelName: null,
     contextLength: null,
+    provider: null,
+    model: null,
+    thinkingLevel: null,
     contextTokens: null,
     lastNoticeSeq: null,
     compaction: null,
@@ -258,6 +261,37 @@ describe("F6 恢复 hydrate", () => {
       expect.arrayContaining([
         { type: "turn/stagnated", sessionId: "s" },
         { type: "assistant/chunk", sessionId: "s", kind: "text", content: "半截回答" },
+      ])
+    );
+  });
+
+  it("primary 日志的 turn/end(interrupted) 恢复为轮尾中止标记", async () => {
+    const metaX = meta({ id: "i", updatedAt: 2 });
+    const turnLine = JSON.stringify([
+      { type: "user/message", sessionId: "i", content: "关闭前的问题" },
+      {
+        type: "assistant/chunk",
+        sessionId: "i",
+        kind: "text",
+        content: "关闭前的半截",
+      },
+      { type: "turn/end", sessionId: "i", reason: "interrupted" },
+    ]);
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "list_conversations") return Promise.resolve([metaX]);
+      if (cmd === "get_conversation") {
+        return Promise.resolve({ meta: metaX, turns: [turnLine] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await restoreConversations();
+
+    const turn = useConversationStore.getState().conversations[0].turns[0];
+    expect(turn).toEqual(
+      expect.arrayContaining([
+        { type: "assistant/chunk", sessionId: "i", kind: "text", content: "关闭前的半截" },
+        { type: "turn/aborted", sessionId: "i" },
       ])
     );
   });

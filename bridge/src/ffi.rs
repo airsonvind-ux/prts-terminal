@@ -29,11 +29,7 @@ pub type AsstStaticOptionKey = i32;
 pub type AsstInstanceOptionKey = i32;
 
 pub type AsstApiCallback = Option<
-    unsafe extern "system" fn(
-        msg: AsstMsgId,
-        details_json: *const c_char,
-        custom_arg: *mut c_void,
-    ),
+    unsafe extern "system" fn(msg: AsstMsgId, details_json: *const c_char, custom_arg: *mut c_void),
 >;
 
 macro_rules! define_fns {
@@ -119,7 +115,9 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadError::NotFound(p) => write!(f, "找不到 MaaCore.dll：{}", p.display()),
-            LoadError::Library(e) => write!(f, "MaaCore.dll 加载失败（常见原因：依赖 DLL 未解析）：{e}"),
+            LoadError::Library(e) => {
+                write!(f, "MaaCore.dll 加载失败（常见原因：依赖 DLL 未解析）：{e}")
+            }
             LoadError::Symbol { name, detail } => {
                 write!(f, "缺少导出符号 {name}（MaaCore 版本不兼容）：{detail}")
             }

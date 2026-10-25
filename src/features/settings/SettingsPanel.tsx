@@ -3,6 +3,11 @@
 //
 // 状态、挂载拉取与保存逻辑在 useSettingsPanel；本文件只保留 tab 路由与 JSX。
 
+import {
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { SettingsAbout } from "./SettingsAbout";
 import { SettingsApp } from "./SettingsApp";
 import { SettingsExtension } from "./SettingsExtension";
@@ -28,6 +33,7 @@ export function SettingsPanel() {
     activeTab,
     settingsBusy,
     activeLlmConfig,
+    updateConversationConfig,
     updateSettings,
     handleSetAlwaysOnTop,
     handleChooseWorkspace,
@@ -44,6 +50,18 @@ export function SettingsPanel() {
     handleRemoveSkill,
     switchTab,
   } = useSettingsPanel();
+
+  const activeTabRef = useRef<HTMLButtonElement>(null);
+
+  // 覆盖层先渲染对话框根、设置数据随后到位：若焦点还停在根上，
+  // 数据到位后把它交给当前页签，避免键盘用户面对一个没有可见焦点的面板。
+  useEffect(() => {
+    if (!settings) return;
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    if (dialog && document.activeElement === dialog) {
+      activeTabRef.current?.focus();
+    }
+  }, [settings]);
 
   // ── 加载 / 失败态 ──
 
@@ -64,34 +82,89 @@ export function SettingsPanel() {
 
   const activeLabel = TABS.find((t) => t.key === activeTab)?.label ?? "";
 
+  const handleTabKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) => {
+    let nextIndex: number;
+    if (event.key === "ArrowDown") {
+      nextIndex = Math.min(TABS.length - 1, index + 1);
+    } else if (event.key === "ArrowUp") {
+      nextIndex = Math.max(0, index - 1);
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = TABS.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const next = TABS[nextIndex];
+    if (!next) return;
+    const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+      '[role="tab"]'
+    );
+    tabs?.[nextIndex]?.focus();
+    switchTab(next.key);
+  };
+
   return (
     <div className={styles.container}>
       {/* ── 左侧导航（9 项，全 2 字名；侧栏不扩张） ── */}
-      <nav className={styles.sidebar}>
+      <div className={styles.sidebar}>
         <div className={styles.sidebarTitle}>设置</div>
-        {TABS.map((tab) => (
-          <div
-            key={tab.key}
-            data-tab={tab.key}
-            className={`${styles.navItem} ${
-              activeTab === tab.key ? styles.navItemActive : ""
-            }`}
-            onClick={() => switchTab(tab.key)}
-          >
-            {tab.label}
-          </div>
-        ))}
-      </nav>
+        <nav
+          className={styles.tabList}
+          role="tablist"
+          aria-label="设置页签"
+          aria-orientation="vertical"
+        >
+          {TABS.map((tab, index) => (
+            <button
+              key={tab.key}
+              ref={activeTab === tab.key ? activeTabRef : undefined}
+              type="button"
+              id={`settings-tab-${tab.key}`}
+              role="tab"
+              data-focus-inset
+              data-tab={tab.key}
+              aria-selected={activeTab === tab.key}
+              aria-controls="settings-panel"
+              tabIndex={activeTab === tab.key ? 0 : -1}
+              data-overlay-autofocus={
+                activeTab === tab.key ? "" : undefined
+              }
+              className={`${styles.navItem} ${
+                activeTab === tab.key ? styles.navItemActive : ""
+              }`}
+              onClick={() => switchTab(tab.key)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       {/* ── 右侧内容（active-only：仅当前页渲染） ── */}
       <div className={styles.content}>
         <div className={styles.contentTitle}>{activeLabel}</div>
-        <div className={styles.contentBody} data-guide="settings-body">
+        <div
+          className={styles.contentBody}
+          data-guide="settings-body"
+          id="settings-panel"
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${activeTab}`}
+          data-focus-inset
+          tabIndex={0}
+        >
           {activeTab === "model" && (
             <SettingsModel
               llm={activeLlmConfig!}
               busy={settingsBusy}
               onPatch={(patch, label) => updateSettings({ llm: patch }, label)}
+              onConfigPatch={updateConversationConfig}
             />
           )}
           {activeTab === "safety" && (

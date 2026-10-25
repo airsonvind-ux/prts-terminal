@@ -12,6 +12,7 @@
 //! 落点：`<data>/screenshots/`（唯一名 + `latest.png` 展示别名 + 保留 N 张）。
 //! 与 MAA 的截图（`<data>/maa/screenshots/`）在目录上就是分开的。
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -47,6 +48,10 @@ const LIST_BUDGET: Duration = Duration::from_millis(1200);
 const LIST_RETRY_GAP: Duration = Duration::from_millis(300);
 /// 单条 connect 的等待上限（不超总预算）。
 const CONNECT_EACH: Duration = Duration::from_millis(1200);
+/// 模拟器截图输出上限。正常 1280×720 PNG 通常只有几百 KB 到几 MB。
+const MAX_ADB_BYTES: u64 = 32 * 1024 * 1024;
+/// 模拟器取帧总时限。超过就杀掉 adb，不把整轮对话挂住。
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 截图落在哪一端。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,25 +398,125 @@ fn capture_emulator(adb: &Path, serial: &str, out: &Path) -> Result<(), String> 
     }
 
     let mut child = command.spawn().map_err(|e| format!("启动 adb 失败：{e}"))?;
-    let mut file = std::fs::File::create(out).map_err(|e| format!("创建截图文件失败：{e}"))?;
-    {
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "adb 输出不可读。".to_string())?;
-        std::io::copy(&mut stdout, &mut file).map_err(|e| format!("读取 adb 输出失败：{e}"))?;
-    }
-    let status = child.wait().map_err(|e| format!("等 adb 结束失败：{e}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "adb 输出不可读。".to_string())?;
+
+    // 读 stdout 放到独立线程：主线程负责看超时和子进程状态。
+    // 读线程只读到上限 + 1 字节，超限就返回错误；主线程随后杀掉 adb。
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let _ = tx.send(read_capped(&mut stdout, MAX_ADB_BYTES));
+    });
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    let read_result = loop {
+        if let Ok(result) = rx.try_recv() {
+            break result;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                // adb 已退出，读线程应很快收尾；给它一秒收尾时间。
+                break rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap_or_else(|_| Err(std::io::Error::other("adb 已退出，但输出没有读完")));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                let _ = std::fs::remove_file(out);
+                return Err(format!("等待 adb 结束失败：{e}"));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = std::fs::remove_file(out);
+            return Err("模拟器取帧超时（15 秒）：adb 没有返回完整画面。".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let bytes = match read_result {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            let _ = std::fs::remove_file(out);
+            return Err(format!("读取 adb 输出失败：{e}"));
+        }
+    };
+
+    let status = match wait_child(&mut child, deadline) {
+        Ok(status) => status,
+        Err(e) => {
+            let _ = reader.join();
+            let _ = std::fs::remove_file(out);
+            return Err(e);
+        }
+    };
+    let _ = reader.join();
     if !status.success() {
+        let _ = std::fs::remove_file(out);
         return Err("模拟器取帧失败：adb 返回了失败状态。".to_string());
+    }
+    if let Err(e) = std::fs::write(out, &bytes) {
+        let _ = std::fs::remove_file(out);
+        return Err(format!("写截图文件失败：{e}"));
     }
     verify_png(out)
 }
 
+/// 读取上限内的字节；超过上限返回 `InvalidData`，不把输出全收进内存。
+fn read_capped<R: Read>(reader: &mut R, cap: u64) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut limited = reader.take(cap.saturating_add(1));
+    limited.read_to_end(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("输出超过 {cap} 字节上限"),
+        ));
+    }
+    Ok(buf)
+}
+
+/// 在截止时间内等子进程退出；超时就杀掉，避免 adb 卡死拖住整轮。
+fn wait_child(
+    child: &mut std::process::Child,
+    deadline: Instant,
+) -> Result<std::process::ExitStatus, String> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("等待 adb 结束失败：{e}"));
+            }
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("模拟器取帧超时（15 秒）：adb 没有返回完整画面。".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// 校验落盘的是不是 PNG（防「取到了别的东西却当图交出去」）。
 fn verify_png(path: &Path) -> Result<(), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("读取截图失败：{e}"))?;
-    if bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("读取截图失败：{e}"))?;
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)
+        .map_err(|_| "取到的不是有效图片。".to_string())?;
+    if magic != PNG_MAGIC {
         return Err("取到的不是有效图片。".to_string());
     }
     Ok(())
@@ -633,6 +738,16 @@ mod tests {
         let latest = latest_path();
         assert_eq!(latest.file_name().unwrap(), LATEST_FILE);
         assert_eq!(latest.parent().unwrap().file_name().unwrap(), "screenshots");
+    }
+
+    #[test]
+    fn read_capped_accepts_exact_limit_and_rejects_over_limit() {
+        let mut exact = std::io::Cursor::new(vec![0u8; 8]);
+        assert_eq!(read_capped(&mut exact, 8).unwrap().len(), 8);
+
+        let mut over = std::io::Cursor::new(vec![0u8; 9]);
+        let err = read_capped(&mut over, 8).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

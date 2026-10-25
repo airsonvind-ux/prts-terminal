@@ -198,6 +198,24 @@ describe("deriveActiveHistory", () => {
     const zero = { ...compaction, retainedFrom: 0 };
     expect(deriveActiveHistory(turns, zero)).toEqual(deriveMessages(turns));
   });
+
+  it("retainedFrom 超出 turns 长度 → 摘要 + 全部现存轮，不只剩摘要", () => {
+    const beyond = { ...compaction, retainedFrom: turns.length + 2 };
+    const msgs = deriveActiveHistory(turns, beyond);
+    expect(msgs[0].content).toContain(SUMMARY_BLOCK_START);
+    const joined = msgs.map((m) => m.content).join("|");
+    expect(joined).toContain("较早问题");
+    expect(joined).toContain("较早回答");
+    expect(joined).toContain("近期问题");
+    expect(joined).toContain("近期回答");
+  });
+
+  it("retainedFrom === turns.length（合法全部折叠）→ 只发摘要", () => {
+    const allFolded = { ...compaction, retainedFrom: turns.length };
+    const msgs = deriveActiveHistory(turns, allFolded);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toContain(SUMMARY_BLOCK_START);
+  });
 });
 
 // ═══════════════════════════════════════════════════════

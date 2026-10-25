@@ -130,6 +130,7 @@
   margin: 0;
   padding: 10px;
   overflow-y: auto;
+  user-select: text;
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
   background: var(--depth-4);
@@ -251,6 +252,7 @@
   margin: 0;
   padding: 10px;
   overflow-y: auto;
+  user-select: text;
   border-top: 1px solid var(--depth-1);
   background: var(--depth-4);
   color: var(--text-2);

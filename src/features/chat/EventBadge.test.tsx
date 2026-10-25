@@ -435,6 +435,30 @@ describe("EventBadge · 审批终态（事件派生）", () => {
   });
 });
 
+describe("EventBadge · 归档轮未完成推理", () => {
+  const reasoningChunk = {
+    type: "assistant/chunk" as const,
+    sessionId: "s1",
+    kind: "reasoning" as const,
+    content: "正在想",
+  };
+
+  it("进行中轮最后仍是推理 chunk → 显示正在思考", () => {
+    const { text, unmount } = renderBadge([reasoningChunk], true);
+    expect(text()).toContain("正在思考");
+    unmount();
+  });
+
+  it("重启后归档轮停在推理 chunk → 显示思考未完成，不显示正在思考", () => {
+    // MessageList 只把 meta 事件交给 EventBadge，turn/aborted 不会进入 events；
+    // 归档轮的最后一条可能仍是推理 chunk。
+    const { text, unmount } = renderBadge([reasoningChunk], false);
+    expect(text()).toContain("思考未完成");
+    expect(text()).not.toContain("正在思考");
+    unmount();
+  });
+});
+
 describe("EventBadge · 归档轮未完成工具", () => {
   it("重启后无 result 的工具显示未完成，不显示正在调用", () => {
     const { text, unmount } = renderBadge([toolCall("query_enemy", C1)], false);

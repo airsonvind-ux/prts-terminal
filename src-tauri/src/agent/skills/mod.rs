@@ -27,6 +27,27 @@ use crate::knowledge::parse_frontmatter_fields;
 /// Skill 描述上限（字符数）：目录会逐轮进入 system prompt，描述必须可预算。
 pub const MAX_SKILL_DESCRIPTION_CHARS: usize = 300;
 
+/// 判断一个目录项是否是重解析点（符号链接 / Windows junction）。
+///
+/// Windows 上用 `FILE_ATTRIBUTE_REPARSE_POINT` 判断，不能只看
+/// `FileType::is_symlink()`：junction 也属于重解析点，索引器若跟随它
+/// 可能走进自环目录，导致每一轮扫描都卡死。
+pub fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Skill 目录条目元数据。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SkillMeta {

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::memory::store::atomic_write;
+use crate::session_id::is_safe_session_id;
 
 /// 技能目录冻结快照存储：内存缓存 + 盘上 sidecar。
 pub struct SkillSnapshotStore {
@@ -56,7 +57,7 @@ impl SkillSnapshotStore {
         live_catalog: Option<&str>,
     ) -> String {
         let cid = match conversation_id {
-            Some(c) if is_safe_id(c) => c,
+            Some(c) if is_safe_session_id(c) => c,
             _ => return live_catalog.unwrap_or_default().to_string(),
         };
         if let Some(v) = self.cache.get(cid) {
@@ -89,7 +90,7 @@ impl SkillSnapshotStore {
     /// 调用时机由压缩命令保证：只在摘要**成功**（含降级规则产出）后调用——
     /// 该对话后续轮次的 system 前缀切到最新目录（压缩已重建上下文，属预期）。
     pub fn refresh(&mut self, conversation_id: &str, live_catalog: Option<&str>) -> bool {
-        if !is_safe_id(conversation_id) {
+        if !is_safe_session_id(conversation_id) {
             return false;
         }
         let Some(live) = live_catalog else {
@@ -116,7 +117,7 @@ impl SkillSnapshotStore {
     /// 删除对话时清快照（内存 + 盘上；幂等）。
     pub fn remove(&mut self, conversation_id: &str) {
         self.cache.remove(conversation_id);
-        if is_safe_id(conversation_id) {
+        if is_safe_session_id(conversation_id) {
             let _ = std::fs::remove_file(self.sidecar_path(conversation_id));
         }
     }
@@ -125,7 +126,7 @@ impl SkillSnapshotStore {
     #[allow(dead_code)] // 诊断/测试消费
     pub fn is_frozen(&self, conversation_id: &str) -> bool {
         self.cache.contains_key(conversation_id)
-            || (is_safe_id(conversation_id) && self.sidecar_path(conversation_id).exists())
+            || (is_safe_session_id(conversation_id) && self.sidecar_path(conversation_id).exists())
     }
 
     /// 启动清扫：删除 `sessions/` 下的**孤儿**技能快照（无对应 `{id}.jsonl`）。
@@ -145,7 +146,7 @@ impl SkillSnapshotStore {
             let Some(id) = name.strip_suffix(".skills.txt") else {
                 continue;
             };
-            if !is_safe_id(id) {
+            if !is_safe_session_id(id) {
                 continue;
             }
             // 有主：会话内容文件存在 → 保留；否则删除
@@ -156,19 +157,6 @@ impl SkillSnapshotStore {
         }
         removed
     }
-}
-
-/// 会话 id 文件名安全校验。
-///
-/// **口径与 `session_store::valid_id` / `memory::snapshot::is_safe_id` 严格一致**
-/// （仅 `[A-Za-z0-9_-]`，非空，不以 '.' 开头）；多处为不同模块的独立实现，
-/// 修改任一侧时必须同步（同一 conversationId 要能同时当 jsonl 与 sidecar 文件名）。
-fn is_safe_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.starts_with('.')
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // ═══════════════════════════════════════════════════════
@@ -311,12 +299,12 @@ mod tests {
 
     #[test]
     fn safe_id_rules() {
-        assert!(is_safe_id("a-b_c1"));
-        assert!(is_safe_id("abc123"));
-        assert!(!is_safe_id(""));
-        assert!(!is_safe_id("a/b"));
-        assert!(!is_safe_id(".hidden"));
-        assert!(!is_safe_id("a b"));
+        assert!(is_safe_session_id("a-b_c1"));
+        assert!(is_safe_session_id("abc123"));
+        assert!(!is_safe_session_id(""));
+        assert!(!is_safe_session_id("a/b"));
+        assert!(!is_safe_session_id(".hidden"));
+        assert!(!is_safe_session_id("a b"));
     }
 
     #[test]

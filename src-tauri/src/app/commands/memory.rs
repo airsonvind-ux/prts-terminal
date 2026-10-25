@@ -11,12 +11,86 @@ const MEMORY_CATCH_UP_SCAN: usize = 20;
 /// 启动补偿单次返回的待补会话数上限。
 const MEMORY_CATCH_UP_LIMIT: usize = 5;
 
+/// 记忆管线单飞闸：finalize_memory 与 memory_tidy 同一时刻只跑一条。
+/// 两次调用若都先读旧水位再各自 apply，会重复创建条目；在读取水位前
+/// 串行化，后到者能看到前一条已推进的水位并自然 no-op。
+fn memory_pipeline_gate() -> &'static tokio::sync::Mutex<()> {
+    static GATE: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 /// 推送记忆用量事件（前端镜像进投影；后端已累加，前端不回写）。
 fn emit_memory_usage(app_handle: &AppHandle, conversation_id: &str, usage: UsageStat) {
     let event = IpcEvent::Agent(AgentEvent::memory_usage(conversation_id, usage));
     if let Err(e) = app_handle.emit("agent-event", event) {
         eprintln!("[commands] 记忆用量事件推送失败: {e}");
     }
+}
+
+/// 记忆提炼的会话配置：模型身份按 conversationId 隔离，思考档按任务策略。
+///
+/// - 会话有 provider/model → 解析该家配置。
+/// - 旧会话无 provider/model → 回退全局种子。
+/// - 只有一半配置 → None（不猜、不换模型）。
+/// - provider 未配置 → None（后台静默跳过；手动整理由调用方报错）。
+fn resolve_memory_config(
+    store: &Mutex<SessionStore>,
+    settings_store: &Mutex<SettingsStore>,
+    credentials: &Mutex<crate::credentials::CredentialsStore>,
+    fallback: &Mutex<LlmConfig>,
+    model_registry: &ModelRegistry,
+    conversation_id: &str,
+) -> Result<Option<LlmConfig>, String> {
+    let meta = {
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        match s.meta(conversation_id) {
+            Ok(meta) => meta,
+            Err(_) => return Ok(None),
+        }
+    };
+
+    let mut cfg = match (meta.provider.as_deref(), meta.model.as_deref()) {
+        (Some(provider), Some(model)) => {
+            let st = settings_store
+                .lock()
+                .map_err(|e| format!("设置锁获取失败: {e}"))?;
+            let creds = credentials
+                .lock()
+                .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+            let resolved = st.settings.llm.resolve_for(provider, model, None, |p| {
+                creds
+                    .get(&crate::credentials::provider_key_ref(p))
+                    .map(|s| s.to_string())
+            });
+            match resolved {
+                Some(cfg) => cfg,
+                None => return Ok(None),
+            }
+        }
+        (None, None) => fallback
+            .lock()
+            .map_err(|e| format!("配置锁获取失败: {e}"))?
+            .clone(),
+        _ => return Ok(None),
+    };
+    cfg.thinking_level = crate::llm::thinking::utility_level(
+        model_registry,
+        &cfg.provider,
+        &cfg.model,
+        crate::llm::thinking::UtilityTask::Memory,
+    )
+    .map(str::to_string);
+    eprintln!(
+        "[utility] task=memory conversation={} provider={} model={} api={:?} thinking={}",
+        conversation_id,
+        cfg.provider,
+        cfg.model,
+        cfg.api_type,
+        cfg.thinking_level.as_deref().unwrap_or("none")
+    );
+    Ok(Some(cfg))
 }
 
 /// 触发经历管线（fire-and-forget）：对指定对话"水位线之后的增量"做提炼。
@@ -30,6 +104,9 @@ pub async fn finalize_memory(
     app_handle: AppHandle,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
+    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
+    model_registry: State<'_, Arc<ModelRegistry>>,
     store: State<'_, Arc<Mutex<SessionStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     ledger: State<'_, Arc<Mutex<Notices>>>,
@@ -39,10 +116,17 @@ pub async fn finalize_memory(
     if conversation_id.trim().is_empty() {
         return Ok(());
     }
-    // turn 起始配置快照
-    let llm_config = {
-        let guard = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
-        guard.clone()
+    let _pipeline_gate = memory_pipeline_gate().lock().await;
+    let Some(llm_config) = resolve_memory_config(
+        &store,
+        &settings_store,
+        &credentials,
+        &config,
+        &model_registry,
+        &conversation_id,
+    )?
+    else {
+        return Ok(());
     };
     let Some(client) = llm.select(&llm_config.api_type) else {
         return Ok(()); // 协议未支持 → 静默
@@ -577,6 +661,9 @@ pub async fn memory_tidy(
     app_handle: AppHandle,
     llm: State<'_, Arc<ClientRegistry>>,
     config: State<'_, Arc<Mutex<LlmConfig>>>,
+    settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
+    model_registry: State<'_, Arc<ModelRegistry>>,
     store: State<'_, Arc<Mutex<SessionStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     ledger: State<'_, Arc<Mutex<Notices>>>,
@@ -587,9 +674,23 @@ pub async fn memory_tidy(
         return Err("缺少 conversationId".into());
     }
     ensure_not_busy(&turn_registry)?;
-    let llm_config = {
-        let guard = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
-        guard.clone()
+    let _pipeline_gate = memory_pipeline_gate().lock().await;
+    let Some(llm_config) = resolve_memory_config(
+        &store,
+        &settings_store,
+        &credentials,
+        &config,
+        &model_registry,
+        &conversation_id,
+    )?
+    else {
+        return Ok(MemoryTidyDto {
+            status: "failed".into(),
+            message: "该对话的模型不可用".into(),
+            created: 0,
+            rewritten: 0,
+            compressed: false,
+        });
     };
     let Some(client) = llm.select(&llm_config.api_type) else {
         return Ok(MemoryTidyDto {

@@ -9,6 +9,10 @@ import { useSyncExternalStore } from "react";
 export interface ModelInfoCache {
   name: string;
   contextLength: number;
+  /** 请求身份：当前活跃对话（或新对话种子）的 provider/model/思考档 */
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string | null;
   /** 当前模型是否支持图像输入（未知/未收录 → false；必填防止调用点漏写） */
   supportsVision: boolean;
   /**

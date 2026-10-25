@@ -19,6 +19,51 @@ function error(message: string): SessionEvent {
   };
 }
 
+describe("buildArchivedItems · 压缩卡", () => {
+  it("全部折叠时在列表末尾补卡，点击分界有落点", () => {
+    const items = buildArchivedItems(
+      [[user("早期问题")], [user("最近问题")]],
+      false,
+      { retainedFrom: 2, summary: "摘要", tokensBefore: 100, at: 1 }
+    );
+
+    expect(items[items.length - 1]).toEqual({
+      type: "compaction",
+      summary: "摘要",
+      foldedCount: 2,
+    });
+    expect(items.filter((item) => item.type === "compaction")).toHaveLength(1);
+  });
+
+  it("retainedFrom 超出 turns 长度时仍在末尾补卡", () => {
+    const items = buildArchivedItems(
+      [[user("早期问题")], [user("最近问题")]],
+      false,
+      { retainedFrom: 3, summary: "摘要", tokensBefore: 100, at: 1 }
+    );
+
+    expect(items[items.length - 1]).toEqual({
+      type: "compaction",
+      summary: "摘要",
+      foldedCount: 3,
+    });
+  });
+
+  it("正常切点仍在保留段第一轮之前", () => {
+    const items = buildArchivedItems(
+      [[user("早期问题")], [user("最近问题")]],
+      false,
+      { retainedFrom: 1, summary: "摘要", tokensBefore: 100, at: 1 }
+    );
+
+    expect(items.map((item) => item.type)).toEqual([
+      "message",
+      "compaction",
+      "message",
+    ]);
+  });
+});
+
 describe("buildArchivedItems · 错误轮", () => {
   it("先渲染半截回答，再标回答未完成，最后显示错误", () => {
     const items = buildArchivedItems(

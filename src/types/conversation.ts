@@ -1,10 +1,35 @@
 // PRTS 终端 · IPC 请求、对话持久化与记忆页类型
 
-import type { Attachment, ChatMessage } from "./chat";
+import type { Attachment } from "./chat";
 import type { SessionEvent } from "./events";
 import type { ConversationUsage, TokenUsage, UsageStat } from "./llm";
 
 // ── IPC 请求契约 ──
+
+/** 会话级模型配置：决定请求身份；凭据/base URL 仍属全局连接配置。 */
+export interface ConversationModelConfig {
+  provider: string;
+  model: string;
+  thinkingLevel: string | null;
+}
+
+/** 设置页对当前对话/新对话草稿的模型配置补丁。 */
+export interface ConversationConfigPatch {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string | null;
+  modelName?: string;
+  contextLength?: number;
+}
+
+/** 上一轮非正常结束状态（经 [prts_reminder] 块随 user 消息传递，不修改冻结前缀）。 */
+export type PreviousTurnStatus =
+  | "aborted"
+  | "error"
+  | "stagnation"
+  | "max-tokens"
+  | "interrupted"
+  | "app-shutdown";
 
 /**
  * agent_process invoke 的请求体。
@@ -13,11 +38,6 @@ import type { ConversationUsage, TokenUsage, UsageStat } from "./llm";
 export interface AgentRequest {
   /** 用户原始输入（纯文本） */
   input: string;
-  /**
-   * 完整对话历史（含本次 user 消息）。
-   * legacy/shadow 模式使用；primary 模式下后端从官方 log 读，此处传空数组。
-   */
-  history: ChatMessage[];
   /** 本次调用的唯一会话标识，随所有事件回传以路由事件 */
   sessionId: string;
   /**
@@ -26,16 +46,20 @@ export interface AgentRequest {
    * 后端缺失时退化为 sessionId 兜底。
    */
   conversationId?: string;
-  /** 本轮 user 消息完整正文（含 reminder 块）；primary 模式写官方 log 用。 */
+  /** 本轮 user 消息完整正文（含 reminder 块），写入官方 log。 */
   userContent?: string;
-  /** 本轮 user 消息附件；primary 模式写官方 log 用。 */
+  /** 本轮 user 消息附件，写入官方 log。 */
   userAttachments?: Attachment[];
-  /** primary 模式首轮建文件用（后端不从前端 history 猜标题）。 */
+  /** 首轮建文件用（后端不从前端猜标题）。 */
   conversationTitle?: string;
   conversationCreatedAt?: number;
   modelName?: string;
   contextLength?: number;
-  /** 环境通知游标；primary 模式随轮写 index。 */
+  /** 会话级请求身份；缺省时后端回退全局 LlmConfig（旧前端兼容）。 */
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string | null;
+  /** 环境通知游标；随轮写 index。 */
   lastNoticeSeq?: number;
 }
 
@@ -87,6 +111,10 @@ export interface ConversationMeta {
   updatedAt: number;
   modelName: string | null;
   contextLength: number | null;
+  /** 会话级请求身份；旧存档缺字段为 null。 */
+  provider: string | null;
+  model: string | null;
+  thinkingLevel: string | null;
   contextTokens: TokenUsage | null;
   lastNoticeSeq: number | null;
   /** 压缩记录（模块 D；null = 未压缩过；旧存档缺字段兼容） */
@@ -240,6 +268,10 @@ export interface Conversation {
   modelName?: string;
   /** 创建对话时模型的上下文窗口大小（Token 数） */
   contextLength?: number;
+  /** 会话级请求身份；旧对话缺省时由全局配置兜底，首次发送/切换后固化。 */
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string | null;
   /** 最近一轮 assistant/message 的上下文 Token 用量快照（覆盖式更新） */
   contextTokens?: TokenUsage;
   /**

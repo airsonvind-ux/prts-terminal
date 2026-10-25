@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use super::is_reparse_point;
+
 /// 视为可执行/脚本载荷的扩展名（小写比较）。
 pub const SCRIPT_EXTENSIONS: &[&str] = &[
     "exe", "dll", "bat", "cmd", "ps1", "py", "js", "mjs", "cjs", "vbs", "lnk", "url", "scr", "msi",
@@ -150,7 +152,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         let path = entry.path();
         let meta = std::fs::symlink_metadata(&path)
             .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
-        if meta.file_type().is_symlink() {
+        if is_reparse_point(&meta) {
             continue;
         }
         if meta.is_dir() {

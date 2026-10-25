@@ -9,6 +9,7 @@ import {
   fmtDate,
 } from "./memoryViewShared";
 import type { MemoryDetail, MemoryGrowthPage } from "../../types";
+import { useConfirmFocus } from "./useConfirmFocus";
 import styles from "./SettingsMemory.module.css";
 
 // ═══════════════════════════════════════════════════════
@@ -40,6 +41,9 @@ export function GrowthView({
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const { modalRef, handleKeyDown } = useConfirmFocus(confirmDel, () =>
+    setConfirmDel(false)
+  );
 
   // 正文编辑框随内容自增（与阅读态展示框同尺寸；CSS 已去原生缩放柄）
   useEffect(() => {
@@ -196,9 +200,20 @@ export function GrowthView({
 
           {confirmDel && (
             <div className={styles.backdrop} onClick={() => setConfirmDel(false)}>
-              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+              <div
+                ref={modalRef}
+                className={styles.modal}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="memory-delete-title"
+                tabIndex={-1}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={handleKeyDown}
+              >
                 <div className={styles.modalHeader}>
-                  <span>{name === PROFILE_NAME ? "复位「关于博士」" : "删除专题"}</span>
+                  <span id="memory-delete-title">
+                    {name === PROFILE_NAME ? "复位「关于博士」" : "删除专题"}
+                  </span>
                 </div>
                 <div className={styles.modalBody}>
                   <SectionNote>
@@ -208,7 +223,12 @@ export function GrowthView({
                   </SectionNote>
                 </div>
                 <div className={styles.modalFooter}>
-                  <button className={styles.btn} onClick={() => setConfirmDel(false)}>
+                  <button
+                    type="button"
+                    className={styles.btn}
+                    data-confirm-cancel
+                    onClick={() => setConfirmDel(false)}
+                  >
                     取消
                   </button>
                   <button

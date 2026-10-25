@@ -5,7 +5,7 @@
 本脚本把它推到 `src-tauri/resources/arknights.db`（随包发布、运行时读取的种子），
 并在发布副本里写入 `meta` 表、生成 `DATA_MANIFEST.json`。
 
-用法：
+用法（示例）：
     python push.py --dry-run --data-version 2026.10.18 --source-commit <commit>
     python push.py --data-version 2026.10.18 --source-commit <commit>
     python push.py --manifest-only --data-contract-status passed \

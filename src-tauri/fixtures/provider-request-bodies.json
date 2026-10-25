@@ -11736,20 +11736,18 @@
       "stream": true,
       "tools": [
         {
-          "function": {
-            "description": "Look up a value.",
-            "name": "lookup",
-            "parameters": {
-              "properties": {
-                "q": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "q"
-              ],
-              "type": "object"
-            }
+          "description": "Look up a value.",
+          "name": "lookup",
+          "parameters": {
+            "properties": {
+              "q": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "q"
+            ],
+            "type": "object"
           },
           "type": "function"
         }

@@ -148,6 +148,22 @@ impl OpenAIResponsesClient {
         input
     }
 
+    /// Responses 的工具定义是平铺结构（name/description/parameters 在顶层），
+    /// 与 Chat Completions 的 `function` 嵌套结构不同。
+    fn tool_defs(tools: &[ToolDef]) -> Vec<Value> {
+        tools
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "type": &tool.tool_type,
+                    "name": &tool.function.name,
+                    "description": &tool.function.description,
+                    "parameters": &tool.function.parameters,
+                })
+            })
+            .collect()
+    }
+
     /// 构造普通 input message，保留 user 图片的 Responses 多模态格式。
     fn message_item(m: &ChatMessage) -> Value {
         if let Some(images) = m.images.as_ref().filter(|v| !v.is_empty()) {
@@ -209,9 +225,7 @@ impl OpenAIResponsesClient {
         }
 
         if !tools.is_empty() {
-            // Responses API 使用与 Chat Completions 相同的工具格式
-            body["tools"] = serde_json::to_value(tools)
-                .map_err(|e| LlmError::Parse(format!("工具列表序列化失败: {e}")))?;
+            body["tools"] = Value::Array(Self::tool_defs(tools));
         }
 
         // 思考强度注入（设置页思考强度；None = 不干预——已设档才进 responses wire）。
@@ -817,6 +831,21 @@ mod tests {
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["role"], "user");
         assert_eq!(input[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn responses_tool_defs_are_flat() {
+        let tools = vec![ToolDef::new(
+            "lookup",
+            "查询",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        let value = Value::Array(OpenAIResponsesClient::tool_defs(&tools));
+        assert_eq!(value[0]["type"], "function");
+        assert_eq!(value[0]["name"], "lookup");
+        assert_eq!(value[0]["description"], "查询");
+        assert!(value[0]["parameters"].is_object());
+        assert!(value[0].get("function").is_none());
     }
 
     #[test]

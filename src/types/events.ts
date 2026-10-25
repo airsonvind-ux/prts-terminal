@@ -43,14 +43,12 @@ export type SessionEvent =
   | AssistantMessageEvent
   | ToolCallEvent
   | ToolResultEvent
+  | ImageDeliveryEvent
   | ToolApprovalRequestEvent
   | ToolApprovalResultEvent
   | MoodEvent
   | RequestHeaderEvent
   | SessionErrorEvent
-  | CacheStoreEvent
-  | CacheLoadEvent
-  | CacheRemoveEvent
   // M3-B：轮中止标记（前端私有事件，非后端事件；mood/event 同款先例——
   // derive/展示层不派生内容，仅 MessageList 轮尾展示 + 存储透传）
   | TurnAbortedEvent
@@ -108,7 +106,9 @@ export type TurnEndReason =
   | "error"
   | "aborted"
   | "stagnation"
-  | "max-tokens";
+  | "max-tokens"
+  | "interrupted"
+  | "app-shutdown";
 
 /** turn 开始：一次 agent_process 处理周期 */
 export interface TurnStartEvent {
@@ -252,6 +252,18 @@ export interface ToolResultEvent {
   provenance?: ToolProvenance;
 }
 
+/** 图片投递事实（log-only）：记录某条 user/tool 消息的 image block 是否进入请求体。 */
+export interface ImageDeliveryEvent {
+  type: "image/delivery";
+  sessionId: string;
+  /** user/message 在当前 turn 内的相对序号；工具图片走 toolCallId */
+  userEventOffset?: number;
+  toolCallId?: string;
+  /** image block 是否真的进入请求体（不是模型能力判断） */
+  included: boolean;
+  reason?: "unsupported_vision" | "unknown_vision" | "materialize_failed";
+}
+
 /** 工具审批请求（M3-A §5.1 / M4）：run_command 询问用户确认时后端推送 */
 export interface ToolApprovalRequestEvent {
   type: "tool/approval-request";
@@ -299,40 +311,6 @@ export interface SessionErrorEvent {
   sessionId: string;
   message: string;
   recoverable: boolean;
-}
-
-/**
- * 缓存桶判别（模块 7：静态桶常驻提醒 / 动态桶会话级）。
- * 缓存区与 log 分层：CacheStore 独立于 log，cache_* 操作入 log 可回放。
- */
-export type CacheBucket = "static" | "dynamic";
-
-/** 缓存区写操作（第三轮 cache_store 工具接线后推送） */
-export interface CacheStoreEvent {
-  type: "cache/store";
-  sessionId: string;
-  key: string;
-  bucket: CacheBucket;
-  /** 静态桶的来源知识条目名（None = 动态桶） */
-  sourceEntry: string | null;
-}
-
-/** 缓存区读取操作（注入动作入 log） */
-export interface CacheLoadEvent {
-  type: "cache/load";
-  sessionId: string;
-  key: string;
-  bucket: CacheBucket;
-  hit: boolean;
-}
-
-/** 缓存区移除操作 */
-export interface CacheRemoveEvent {
-  type: "cache/remove";
-  sessionId: string;
-  key: string;
-  bucket: CacheBucket;
-  existed: boolean;
 }
 
 /**

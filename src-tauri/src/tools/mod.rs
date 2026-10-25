@@ -4,7 +4,6 @@
 //! ToolRegistry 查找对应工具并执行，结果作为 tool_result 消息回传给 LLM
 //! 参与后续推理。每个工具实现 Tool trait，在应用启动时注册到 Registry。
 
-// mod cache; // 已注释（2026-08：缓存工具取消注册；未来记忆系统复用时可恢复）
 mod capture;
 pub(crate) mod common;
 pub(crate) mod common_fmt;
@@ -35,7 +34,6 @@ mod web_fetch;
 mod web_search;
 pub mod wiki;
 
-// pub use cache::{CacheListTool, CacheRemoveTool, CacheRetrieveTool, CacheStoreTool};
 pub use display::{DisplayLink, ToolDisplay};
 pub use fs::{ListDirTool, ReadFileTool};
 pub use fs_grep::GrepTool;
@@ -83,8 +81,6 @@ use crate::turn_registry::AbortSignal;
 ///
 /// `skill_index` 为 Skill 通道（turn 级索引快照）：Skill 激活工具
 /// 查询目录与正文，索引由 orchestrator 在 process 入口重建后经本通道注入。
-/// 缓存通道（cache_stores / conversation_id）已注释（2026-08：
-/// 缓存工具取消注册；未来记忆系统复用时可恢复）。
 ///
 /// `abort` 为中止信号通道（M3-B）：orchestrator 在 dispatch_turn 注入
 /// （与 skill_index 同模式）；执行类工具（run_command）读入自身执行选项
@@ -96,11 +92,6 @@ use crate::turn_registry::AbortSignal;
 #[derive(Debug)]
 pub struct ToolContext {
     pub(crate) db: Option<Arc<Database>>,
-    // /// 对话分区缓存集合（进程级共享状态，std::sync::Mutex 保护）。
-    // /// 工具通过 conversation_id 定位本对话的分区。
-    // pub(crate) cache_stores: Option<Arc<Mutex<crate::cache::CacheStores>>>,
-    // /// 当前对话标识（与后端 agent_process 的 conversationId 一致）。
-    // pub(crate) conversation_id: Option<String>,
     /// turn 级 Skill 索引快照（process 入口重建，Arc 共享零拷贝）。
     /// None = Mock 测试场景未注入（激活工具报「Skill 目录不可用」）。
     pub(crate) skill_index: Option<Arc<crate::skills_index::SkillIndex>>,
@@ -117,8 +108,6 @@ impl ToolContext {
     pub fn new() -> Self {
         Self {
             db: None,
-            // cache_stores: None,
-            // conversation_id: None,
             skill_index: None,
             abort: None,
             taint: Arc::new(crate::runtime::taint::TaintState::default()),
@@ -130,8 +119,6 @@ impl ToolContext {
     pub fn with_db(db: Arc<Database>) -> Self {
         Self {
             db: Some(db),
-            // cache_stores: None,
-            // conversation_id: None,
             skill_index: None,
             abort: None,
             taint: Arc::new(crate::runtime::taint::TaintState::default()),
@@ -158,23 +145,6 @@ impl ToolContext {
             .ok()
             .and_then(|slot| slot.clone())
     }
-
-    // /// 注入缓存区通道（对话分区 + 对话标识；db 为 None）。
-    // ///
-    // /// 供 orchestrator 在 db 为 None（Mock 测试场景）时构造；
-    // /// 生产路径（有 db）用 `with_db()` 后再补 `cache_stores` /
-    // /// `conversation_id` 字段，两者语义等价。
-    // pub(crate) fn with_cache(
-    //     cache_stores: Arc<Mutex<crate::cache::CacheStores>>,
-    //     conversation_id: String,
-    // ) -> Self {
-    //     Self {
-    //         db: None,
-    //         cache_stores: Some(cache_stores),
-    //         conversation_id: Some(conversation_id),
-    //         skill_index: None,
-    //     }
-    // }
 }
 
 impl Default for ToolContext {
@@ -214,86 +184,15 @@ impl fmt::Display for ToolError {
 impl std::error::Error for ToolError {}
 
 // ═══════════════════════════════════════════════════════
-// ContextOp —— 工具→中枢的上下文变更指令（Reference 层标记协议）
-// ═══════════════════════════════════════════════════════
-
-/// 工具执行后携带的上下文变更指令（设计决策 A.4：工具**不**直接修改
-/// ActiveContext，返回标记由调度中枢统一应用）。
-///
-/// 纯数据定义：仅含 String 字段，tools 模块不依赖 orchestrator 的任何类型
-/// （依赖方向单向——orchestrator 消费本类型），应用逻辑在
-/// orchestrator 侧 `ActiveContext::apply_ops`。
-/// 序列化形态为 tag = "op" 的 discriminated union，变体名 kebab-case，
-/// 与日志/回放词汇一致（reference-load / reference-remove / reference-clear /
-/// active-load）。
-///
-/// 变体名的 Reference/Active 前缀是接口契约（kebab-case op 值由变体名派生，
-/// 协议定型后不可更名）；Reference* 由缓存工具构造，ActiveLoad 由
-/// Skill 激活工具（activate_skill）构造。
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "op", rename_all = "kebab-case")]
-#[allow(clippy::enum_variant_names)] // 前缀为接口契约，见上方说明
-#[allow(dead_code)] // 2026-08：动态层移除、缓存工具取消注册，无生产者；未来记忆系统复用时可恢复
-pub enum ContextOp {
-    /// 载入/更新 Reference 缓存条目（同名覆盖，key → content）
-    ReferenceLoad { key: String, content: String },
-    /// 移除单条 Reference 缓存条目
-    ReferenceRemove { key: String },
-    /// 清空 Reference 层载入状态
-    #[allow(dead_code)] // reset_workspace 工具接线时构造（当前仅测试使用）
-    ReferenceClear,
-    /// 载入/更新 Active 层条目（Skill 激活，name → 正文）。
-    /// 属 Active 层（Skill 激活），与 Reference 层变体共用同一标记协议——
-    /// 生命周期相同（每 turn 重建，轮末自动卸载）。
-    ActiveLoad { name: String, content: String },
-}
-
-// ═══════════════════════════════════════════════════════
-// CacheEventMark —— 缓存操作标记（工具→中枢，模块 C）
-// ═══════════════════════════════════════════════════════
-
-/// 缓存操作标记（工具→中枢）：orchestrator 统一转为 session log 的 cache/* 事件。
-/// 与 ContextOp 同哲学：工具不改 log，只陈述操作事实。
-///
-/// 纯数据定义（无需序列化）：工具执行后随 ToolOutput 携带，由调度中枢在
-/// `execute_tools_and_append` 中按调用顺序统一落账（sink.log_only）——
-/// 缓存区与 log 分层（session.rs）：log 只记录 `cache_*` 操作可回放，
-/// 条目内容只活在 CacheStore 中。
-#[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // 2026-08：缓存工具取消注册，无生产者；未来记忆系统复用时可恢复
-pub enum CacheEventMark {
-    /// 写入/覆盖桶条目
-    Store {
-        key: String,
-        bucket: crate::session::CacheBucket,
-        source_entry: Option<String>,
-    },
-    /// 读取桶条目（命中则载入 Reference 层）
-    Load {
-        key: String,
-        bucket: crate::session::CacheBucket,
-        hit: bool,
-    },
-    /// 移除桶条目
-    Remove {
-        key: String,
-        bucket: crate::session::CacheBucket,
-        existed: bool,
-    },
-}
-
-// ═══════════════════════════════════════════════════════
 // SkillEventMark —— Skill 激活标记（工具→中枢，模块 B）
 // ═══════════════════════════════════════════════════════
 
 /// Skill 激活标记（工具→中枢）：orchestrator 统一转为 session log 的
-/// skill/activate 事件。与 ContextOp / CacheEventMark 同哲学：工具不改 log，
-/// 只陈述操作事实。
+/// skill/activate 事件。工具不改 log，只陈述操作事实。
 ///
 /// 纯数据定义（无需序列化）：工具执行后随 ToolOutput 携带，由调度中枢在
 /// `execute_tools_and_append` 中按调用顺序统一落账（sink.log_only）——
-/// 激活状态本身由 ActiveContext 每 turn 重建（天然卸载），log 只记录
-/// 何时激活了哪个 Skill（可回放）。
+/// 激活状态不跨轮保留，log 只记录何时激活了哪个 Skill（可回放）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillEventMark {
     /// 激活指定 Skill
@@ -306,16 +205,9 @@ pub enum SkillEventMark {
 
 /// 工具执行的结构化输出：canonical 值 + presentation（渲染文本）分离。
 ///
-/// 架构升级提案 · 模块 3（P0）：`QueryResult{rows, dropped_fields}`
-/// 显式化为 canonical 值，渲染文本（LLM 与前端可见的 summary）与其解耦。
-/// canonical 供后续消费者使用（缓存/记忆/统计/回放重建），
-/// 文本型工具退化为 `{"text": summary}`。
-///
-/// `context_ops` 为上下文变更指令（Active/Reference 层标记协议）：工具不直接改
-/// 状态，通过输出携带指令，由调度中枢统一应用。只读查询工具恒为空。
-///
-/// `cache_events` 为缓存操作标记（模块 C）：缓存工具陈述操作事实，
-/// 由调度中枢统一转为 session log 的 cache/* 事件（与 ContextOp 同哲学）。
+/// 运行时只消费 `summary`（LLM 与前端可见）；`canonical` 是工具输出的结构化
+/// 契约，当前由工具测试消费，不进入生产链路。文本型工具退化为
+/// `{"text": summary}`。
 ///
 /// `skill_events` 为 Skill 激活标记（模块 B）：激活工具陈述操作事实，
 /// 由调度中枢统一转为 session log 的 skill/activate 事件。
@@ -374,20 +266,12 @@ pub struct ToolOutput {
     pub canonical: serde_json::Value,
     /// 渲染后的展示文本（presentation），LLM 与前端可见。
     pub summary: String,
-    /// 上下文变更指令（按调用顺序由中枢统一应用，详见 [`ContextOp`]）。
-    pub context_ops: Vec<ContextOp>,
     /// 工具要交给模型的图片（本地路径）。中枢会另起一条 user 消息送出——
     /// 工具结果本身只带文本，图片得走消息附件的现成物化通路。
     /// 纯内部通道，不序列化（前端与日志不消费；用户侧的图由工具自己的
     /// 展示切片给可点链接）。
     #[serde(skip)]
     pub images: Vec<String>,
-    /// 缓存操作标记（按调用顺序由中枢统一落账为 cache/* 事件）。
-    /// 纯内部通道，不序列化（skip：前端/日志不消费，日志形态为 cache/* 事件）。
-    /// 2026-08：缓存工具取消注册后无生产者，保留供未来记忆系统复用。
-    #[serde(skip)]
-    #[allow(dead_code)]
-    pub cache_events: Vec<CacheEventMark>,
     /// Skill 激活标记（按调用顺序由中枢统一落账为 skill/activate 事件）。
     /// 纯内部通道，不序列化（skip：日志形态为 skill/activate 事件）。
     #[serde(skip)]
@@ -402,9 +286,7 @@ impl ToolOutput {
             canonical: serde_json::json!({ "text": summary }),
             summary,
             provenance: None,
-            context_ops: Vec::new(),
             images: Vec::new(),
-            cache_events: Vec::new(),
             skill_events: Vec::new(),
         }
     }
@@ -415,9 +297,7 @@ impl ToolOutput {
             canonical,
             summary: summary.into(),
             provenance: None,
-            context_ops: Vec::new(),
             images: Vec::new(),
-            cache_events: Vec::new(),
             skill_events: Vec::new(),
         }
     }
@@ -476,7 +356,7 @@ pub trait Tool: Send + Sync {
     /// 是否可并发执行（模块 3 P2）。
     ///
     /// 默认 true：PRTS 当前全部内置工具为只读查询（线程安全）；
-    /// **写工具（cache_store、破坏性操作等）必须覆写为 false** 走串行——
+    /// **写工具（write_file / edit、破坏性操作等）必须覆写为 false** 走串行——
     /// 未来破坏性工具落地（模块 10 沙箱）时以 guard 管线强制检查此项。
     fn is_concurrency_safe(&self) -> bool {
         true
@@ -700,15 +580,8 @@ pub fn register_builtin(
     reg.register(Box::new(ReadKnowledgeTool::new(knowledge.clone())))?;
     // 模块 A 追加优化：知识库导航（目录清单 + 节级阅读的目录侧能力）
     reg.register(Box::new(ListKnowledgeTool::new(knowledge)))?;
-    // 模块 C 缓存工具已取消注册（2026-08：缓存系统停用，待升级为记忆系统；
-    // 代码保留在 tools/cache.rs，未来复用时可恢复注册）
-    // reg.register(Box::new(CacheStoreTool))?;
-    // reg.register(Box::new(CacheListTool))?;
-    // reg.register(Box::new(CacheRetrieveTool))?;
-    // reg.register(Box::new(CacheRemoveTool))?;
     // 模块 B：Skill 激活工具（行为规则渐进披露的正文加载通道）。
-    // 激活不改状态——经 ContextOp::ActiveLoad 标记由中枢统一应用
-    // （同缓存工具哲学）；is_concurrency_safe=false（激活时序确定）
+    // 激活结果以工具结果消息进入历史；is_concurrency_safe=false（激活时序确定）
     reg.register(Box::new(ActivateSkillTool))?;
     // 记忆系统（Phase 4 任务二）：成长记忆读写（写成功经台账发记忆变化通知）
     // + 经历记忆只读（经历写入只走后台管线，memory_experience 无写参数面）。
@@ -843,53 +716,6 @@ mod tests {
         assert_eq!(out.summary, "渲染文本");
         assert_eq!(out.canonical["rows"][0]["名称"], "源石虫");
         assert_eq!(out.canonical["dropped_fields"][0], "未知列");
-    }
-
-    // ── ContextOp 标记协议（Reference 层）──
-
-    #[test]
-    fn context_op_serializes_with_op_tag_and_kebab_case() {
-        // 序列化形态：tag = "op"，变体名 kebab-case
-        let load = serde_json::to_value(ContextOp::ReferenceLoad {
-            key: "enemy.unit_1001".into(),
-            content: "源石虫".into(),
-        })
-        .unwrap();
-        assert_eq!(load["op"], "reference-load");
-        assert_eq!(load["key"], "enemy.unit_1001");
-        assert_eq!(load["content"], "源石虫");
-
-        let remove = serde_json::to_value(ContextOp::ReferenceRemove { key: "k".into() }).unwrap();
-        assert_eq!(remove["op"], "reference-remove");
-        assert_eq!(remove["key"], "k");
-
-        let clear = serde_json::to_value(ContextOp::ReferenceClear).unwrap();
-        assert_eq!(clear["op"], "reference-clear");
-        assert!(clear.get("key").is_none(), "无字段变体不应携带多余字段");
-
-        // Active 层（Skill 激活）：与 Reference 层变体共用同一标记协议
-        let active_load = serde_json::to_value(ContextOp::ActiveLoad {
-            name: "推演分析".into(),
-            content: "## 正文".into(),
-        })
-        .unwrap();
-        assert_eq!(active_load["op"], "active-load");
-        assert_eq!(active_load["name"], "推演分析");
-        assert_eq!(active_load["content"], "## 正文");
-    }
-
-    #[test]
-    fn tool_output_constructors_default_empty_context_ops() {
-        // 已注册工具零改动的前提：两个构造函数默认不携带变更指令
-        let text = ToolOutput::text("纯文本");
-        assert!(text.context_ops.is_empty());
-        assert!(text.cache_events.is_empty());
-        assert!(text.skill_events.is_empty());
-
-        let json = ToolOutput::json(serde_json::json!({ "rows": [] }), "结构化");
-        assert!(json.context_ops.is_empty());
-        assert!(json.cache_events.is_empty());
-        assert!(json.skill_events.is_empty());
     }
 
     #[test]
@@ -1042,7 +868,7 @@ mod tests {
         // + 网络域 2 工具（M5：web_search/web_fetch）+ 时间 1 工具（Phase4 1.3）
         // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）
         // + MAA 1 工具（run_maa_task）+ 截图 1 工具（capture_game_screen）= 26；
-        // echo 为测试辅助不注册（2026-08-31）；4 个缓存工具已取消注册（2026-08）。
+        // echo 为测试辅助不注册（2026-08-31）；缓存工具已移除（2026-08）。
         assert_eq!(reg.list_defs().len(), 26);
 
         // 记忆工具确已注册且名字稳定

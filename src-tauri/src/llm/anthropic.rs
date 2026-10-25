@@ -95,11 +95,17 @@ impl AnthropicMessagesClient {
                 }
                 MessageRole::Tool => {
                     let tc_id = msg.tool_call_id.as_deref().unwrap_or("");
-                    pending_tool_results.push(serde_json::json!({
+                    let mut block = serde_json::json!({
                         "type": "tool_result",
                         "tool_use_id": tc_id,
                         "content": msg.content,
-                    }));
+                    });
+                    // 失败结果显式标记，模型才能按错误语义处理；
+                    // 旧数据/未知状态不带 is_error（与历史行为一致）。
+                    if msg.tool_ok == Some(false) {
+                        block["is_error"] = serde_json::Value::Bool(true);
+                    }
+                    pending_tool_results.push(block);
                 }
                 MessageRole::User => {
                     let image_blocks: Vec<Value> = msg
@@ -651,6 +657,22 @@ where
         ));
     }
 
+    // message_stop 只是“到达终点”的信号，不等于协议完整：
+    // Anthropic 要求先有 stop_reason，且所有已开启的 content block 都已闭合。
+    // 对齐 DSH：message_stop without settled blocks and stop reason → malformed。
+    if finish_reason.is_none() {
+        return Err(LlmError::Parse(
+            "message_stop 缺少 stop_reason，无法确认本轮正常完成".into(),
+        ));
+    }
+    if !blocks.is_empty() {
+        let mut open: Vec<usize> = blocks.keys().copied().collect();
+        open.sort_unstable();
+        return Err(LlmError::Parse(format!(
+            "message_stop 到达时仍有未闭合的 content block：{open:?}"
+        )));
+    }
+
     Ok(StreamResult {
         text,
         tool_calls,
@@ -1002,6 +1024,19 @@ mod tests {
         assert_eq!(arr[0]["type"], "tool_result");
         assert_eq!(arr[0]["tool_use_id"], "toolu_1");
         assert_eq!(arr[0]["content"], "HP: 100");
+        assert!(arr[0].get("is_error").is_none(), "成功结果不标 is_error");
+    }
+
+    #[test]
+    fn failed_tool_result_sets_is_error() {
+        let msgs = vec![ChatMessage::tool_result_with_status(
+            "toolu_1",
+            "查询失败",
+            false,
+        )];
+        let (_sys, an_msgs) = AnthropicMessagesClient::convert_messages(&msgs);
+        let arr = an_msgs[0]["content"].as_array().unwrap();
+        assert_eq!(arr[0]["is_error"], true);
     }
 
     #[test]
@@ -1047,6 +1082,9 @@ mod tests {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         };
         let (_sys, an_msgs) = AnthropicMessagesClient::convert_messages(&[msg]);
         assert_eq!(an_msgs.len(), 1);
@@ -1190,6 +1228,70 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn message_stop_without_stop_reason_is_parse_error() {
+        let frames = &[
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":3}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"半截回答"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ];
+        let on_event = |_e: StreamEvent| {};
+        let stream = anthropic_sse_stream(frames);
+        let err = parse_anthropic_sse_stream(stream, &on_event)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, LlmError::Parse(ref msg) if msg.contains("stop_reason")),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_stop_with_unclosed_block_is_parse_error() {
+        let frames = &[
+            (
+                "message_start",
+                r#"{"type":"message_start","message":{"usage":{"input_tokens":3}}}"#,
+            ),
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"半截回答"}}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ];
+        let on_event = |_e: StreamEvent| {};
+        let stream = anthropic_sse_stream(frames);
+        let err = parse_anthropic_sse_stream(stream, &on_event)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, LlmError::Parse(ref msg) if msg.contains("未闭合")),
+            "{err:?}"
+        );
     }
 
     #[tokio::test]

@@ -4,8 +4,7 @@ use super::prelude::*;
 
 use crate::attachments::Attachment;
 use crate::orchestrator::HistorySeed;
-use crate::session::{SessionEvent, SessionLog};
-use crate::settings::BackendHistoryMode;
+use crate::session::{SessionEvent, SessionLog, TurnEndReason};
 
 // ═══════════════════════════════════════════════════════
 // 请求类型
@@ -15,27 +14,24 @@ use crate::settings::BackendHistoryMode;
 ///
 /// 对应 `types.ts` 的 AgentRequest：
 ///   input            — 用户原始输入
-///   history          — legacy/shadow 的完整历史；primary 传空数组
 ///   sessionId        — 本次请求的唯一标识，随所有 AgentEvent 回传
-///   conversationId   — 对话标识（模块 C：缓存区按此分区；可选字段，
+///   conversationId   — 对话标识（记忆/目录/前缀快照按此冻结；可选字段，
 ///                      旧前端不传时后端用 sessionId 兜底）
 ///
 /// rename_all = "camelCase" 将 Rust 的 snake_case 字段名
 /// 自动映射为前端传来的 camelCase JSON key，无需手动 rename。
-/// 2026-10（C-lite）：conversation_id 与 user_content 在 primary 模式被消费；
-/// input 仍是纯用户输入（不含 reminder 块），legacy 兼容保留。
+/// 2026-10（C-lite）：conversation_id 与 user_content 是唯一历史入口；
+/// input 仍是纯用户输入（不含 reminder 块）。
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct AgentRequest {
     pub input: String,
-    pub history: Vec<FrontendMessage>,
     pub session_id: String,
     /// 对话标识（可选：旧前端不传 → 反序列化为空串，命令层兜底为 session_id）
     #[serde(default)]
     pub conversation_id: String,
-    /// 本轮 user 消息的完整正文（含 `[prts_reminder]` 块）。
-    /// primary 模式下写入官方 log 的就是这一份；legacy 模式仍用 history。
+    /// 本轮 user 消息的完整正文（含 `[prts_reminder]` 块），写入官方 log。
     #[serde(default)]
     pub user_content: String,
     /// 本轮 user 消息附件（primary 模式入 log）。
@@ -50,6 +46,13 @@ pub struct AgentRequest {
     pub model_name: Option<String>,
     #[serde(default)]
     pub context_length: Option<u64>,
+    /// 会话级请求身份（新前端）；缺省时回退全局 LlmConfig。
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking_level: Option<String>,
     /// 环境通知游标（primary 模式随轮写 index）。
     #[serde(default)]
     pub last_notice_seq: Option<u64>,
@@ -71,6 +74,133 @@ impl Drop for TurnGuard {
     fn drop(&mut self) {
         self.registry.unregister_if(&self.session_id, &self.signal);
     }
+}
+
+/// 插话队列的 RAII 收尾：正常返回、错误与所有 `?` 早退都走同一出口。
+/// 未交付条目有 conversation 归属时置保留态，同对话下一轮 adopt 领取。
+struct SteerGuard {
+    queue: Arc<SteerQueue>,
+    session_id: String,
+    conversation_id: String,
+}
+
+impl Drop for SteerGuard {
+    fn drop(&mut self) {
+        self.queue
+            .finish_turn(&self.session_id, &self.conversation_id);
+    }
+}
+
+/// 预检失败也按真实原因归档一轮，避免重启恢复把它猜成 interrupted。
+///
+/// 触发时机：journal 已建立、但 `process_with_log` 尚未开始。此时模型
+/// 没有请求过，工具也没有执行过；用户需要看到的是实际失败原因，而不是
+/// “应用异常退出”。这里把日志补成完整的 error 轮并提交，随后原错误仍
+/// 返回给前端做即时展示。
+fn persist_preflight_failure(
+    store: &Arc<Mutex<SessionStore>>,
+    log: &Arc<Mutex<SessionLog>>,
+    request: &AgentRequest,
+    llm_config: &LlmConfig,
+    user_event: &SessionEvent,
+    error: &str,
+) -> Result<(), String> {
+    // 与 process_with_log 的轮起点同形：turn/start + user 在边界之前，
+    // 边界之后的 error / turn/end 才会写入 journal。
+    {
+        let mut log = log.lock().map_err(|e| format!("会话日志锁获取失败: {e}"))?;
+        log.append(SessionEvent::turn_start(&request.session_id));
+        log.append(user_event.clone());
+        log.mark_turn_boundary();
+        log.append(SessionEvent::error(&request.session_id, error, false));
+        log.append(SessionEvent::turn_end(
+            &request.session_id,
+            TurnEndReason::Error,
+        ));
+    }
+
+    let events = {
+        let log = log.lock().map_err(|e| format!("会话日志锁获取失败: {e}"))?;
+        log.archive_events(&request.session_id, user_event)
+    };
+    let events_json =
+        serde_json::to_string(&events).map_err(|e| format!("失败轮事件序列化失败：{e}"))?;
+    let req = AppendTurnReq {
+        conversation_id: request.conversation_id.clone(),
+        events_json,
+        title: request.conversation_title.clone(),
+        created_at: request.conversation_created_at,
+        model_name: request
+            .model_name
+            .clone()
+            .or_else(|| Some(llm_config.model.clone())),
+        context_length: request.context_length,
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        thinking_level: request.thinking_level.clone(),
+        context_tokens: None,
+        last_notice_seq: request.last_notice_seq,
+        usage_deltas: None,
+    };
+    {
+        let mut s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        s.append_turn(&req)?;
+    }
+
+    // 提交成功后关闭并删除 journal；失败时保留 journal，让启动恢复
+    // 带着已经写入的 turn/end(error) 重新提交，而不是丢掉真实失败原因。
+    if let Ok(mut log) = log.lock() {
+        log.close_journal();
+    }
+    if let Ok(s) = store.lock() {
+        s.finish_inflight(&request.session_id);
+    }
+    Ok(())
+}
+
+fn combine_preflight_error(original: String, persisted: Result<(), String>) -> String {
+    match persisted {
+        Ok(()) => original,
+        Err(e) => format!("{original}；失败记录保存失败：{e}"),
+    }
+}
+
+/// 错误轮也必须把真实原因写进 journal，并补上终止标记。
+///
+/// 协议选择失败发生在 `process_with_log` 建立 turn 之前，此时 log 还是空的；
+/// 这样 journal 里只有 begin_inflight 写的 user，崩溃恢复会把已知错误误判成
+/// interrupted。这里补齐 turn/start、user、error、turn/end，保证恢复时仍能
+/// 带着原始错误原因落盘。
+fn record_error_terminal(
+    log: &Arc<Mutex<SessionLog>>,
+    session_id: &str,
+    user_event: &SessionEvent,
+    error: &str,
+) -> Result<(), String> {
+    let mut log = log.lock().map_err(|e| format!("会话日志锁获取失败: {e}"))?;
+
+    let has_turn_start = log
+        .events()
+        .iter()
+        .any(|e| matches!(e, SessionEvent::TurnStart { .. }));
+    if !has_turn_start {
+        log.append(SessionEvent::turn_start(session_id));
+        log.append(user_event.clone());
+        log.mark_turn_boundary();
+    }
+
+    log.append(SessionEvent::error(session_id, error, false));
+
+    let has_turn_end = log
+        .events()
+        .iter()
+        .any(|e| matches!(e, SessionEvent::TurnEnd { .. }));
+    if !has_turn_end {
+        log.append(SessionEvent::turn_end(session_id, TurnEndReason::Error));
+    }
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════
@@ -104,8 +234,10 @@ pub async fn agent_process(
     exec_settings: State<'_, Arc<Mutex<crate::exec_settings::ExecutionSettings>>>,
     approval_registry: State<'_, Arc<crate::approval::ApprovalRegistry>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
+    settings_write_gate: State<'_, Arc<tokio::sync::Mutex<()>>>,
     steer_queue: State<'_, Arc<SteerQueue>>,
     settings_store: State<'_, Arc<Mutex<SettingsStore>>>,
+    credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
@@ -124,7 +256,6 @@ pub async fn agent_process(
     let snapshot_store = Arc::clone(&snapshot_store);
     let skills_snapshot_store = Arc::clone(&skills_snapshot_store);
     let prefix_snapshot_store = Arc::clone(&prefix_snapshot_store);
-    // 缓存 State 已注释（2026-08：缓存系统停用，待升级为记忆系统）
 
     // ── 包装 emit 回调：AppHandle.emit → 闭包 ──
     let emit_app_handle = app_handle.clone();
@@ -136,10 +267,39 @@ pub async fn agent_process(
         }
     };
 
-    // ── 读取配置（短暂持锁） ──
+    // R-21：持有设置写闸完成本轮配置/工作区快照与 turn 注册。
+    // set_settings 也持同一把闸；两边因此只能一前一后，不会出现
+    // “检查 active_count 通过 → turn 注册 → root.set 换根”的中间态。
+    let settings_gate = settings_write_gate.lock().await;
+
+    // ── 读取请求配置（短暂持锁）──
+    // 新前端随请求携带会话级 provider/model/thinking；缺省时回退全局配置，
+    // 兼容旧前端。provider 存在但未配置 → 明确报错，不静默换模型。
     let llm_config = {
-        let guard = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
-        guard.clone()
+        let requested_provider = request.provider.as_deref().filter(|p| !p.is_empty());
+        let requested_model = request.model.as_deref().filter(|m| !m.is_empty());
+        match (requested_provider, requested_model) {
+            (Some(provider), Some(model)) => {
+                let st = settings_store
+                    .lock()
+                    .map_err(|e| format!("设置锁获取失败: {e}"))?;
+                let creds = credentials
+                    .lock()
+                    .map_err(|e| format!("凭据锁获取失败: {e}"))?;
+                st.settings
+                    .llm
+                    .resolve_for(provider, model, request.thinking_level.as_deref(), |p| {
+                        creds
+                            .get(&crate::credentials::provider_key_ref(p))
+                            .map(|s| s.to_string())
+                    })
+                    .ok_or_else(|| format!("会话使用的供应商「{provider}」未配置"))?
+            }
+            _ => {
+                let guard = config.lock().map_err(|e| format!("配置锁获取失败: {e}"))?;
+                guard.clone()
+            }
+        }
     };
 
     // ── 命令执行模式快照（M3-A）：turn 起始读一次 → 本 turn 内模式不变
@@ -155,6 +315,9 @@ pub async fn agent_process(
     // ── 注册活动 turn（M3-B §2.2）：取得 abort 句柄；
     // process 返回（含中止/错误）后无条件注销——busy 口径释放点。
     // conversation_id 为 AgentRequest 已收字段（serde 到位，此前未消费）。
+    if turn_registry.is_shutting_down() {
+        return Err("应用正在关闭，不能开始新的对话轮".into());
+    }
     let conversation_id = request.conversation_id.clone();
     let abort_signal = turn_registry.register(&session_id, &conversation_id);
     // RAII 收尾：注册后任何错误出口（含 `?`）都会注销 busy 位
@@ -162,6 +325,12 @@ pub async fn agent_process(
         registry: Arc::clone(&turn_registry),
         session_id: session_id.clone(),
         signal: abort_signal.clone(),
+    };
+    // 注册成功后立即接管插话队列收尾：后续任何早退都不会留下无归属孤儿。
+    let _steer_guard = SteerGuard {
+        queue: Arc::clone(&steer_queue),
+        session_id: session_id.clone(),
+        conversation_id: conversation_id.clone(),
     };
 
     // ── workspace_root（地域性信任门信任根）：settings.workspace 段取一次
@@ -172,6 +341,8 @@ pub async fn agent_process(
             .map_err(|e| format!("设置锁获取失败: {e}"))?;
         st.workspace_root()
     };
+    // 快照与注册已完成；后续长轮不再占用设置写闸。
+    drop(settings_gate);
 
     // ── 记忆区冻结快照（Phase 4 任务二）：按 conversationId 取 ──
     // 有真实 conversationId → 组装 + 落盘 sidecar（对话内冻结，唯一刷新点＝新对话）；
@@ -227,6 +398,8 @@ pub async fn agent_process(
             stale.then_some(snap.app_version),
         )
     };
+    // 上一轮状态不修改 system prompt：前缀必须冻结，状态经前端
+    // [prts_reminder] 块随 user 消息传递。
     if let Some(version) = snapshot_stale {
         if let Err(e) = app_handle.emit(
             "agent-event",
@@ -246,16 +419,6 @@ pub async fn agent_process(
         steer_queue.adopt(&conversation_id, &session_id);
     }
 
-    // ── 历史来源（C-lite）：primary 从官方 log 读，legacy 仍用前端 history ──
-    let history_mode = {
-        let st = settings_store
-            .lock()
-            .map_err(|e| format!("设置锁获取失败: {e}"))?;
-        st.settings.backend_history_mode()
-    };
-    let primary_history =
-        matches!(history_mode, BackendHistoryMode::Primary) && !conversation_id.is_empty();
-
     let log = Arc::new(Mutex::new(SessionLog::new()));
     let user_content = if request.user_content.is_empty() {
         request.input.as_str()
@@ -271,7 +434,47 @@ pub async fn agent_process(
             request.user_attachments.clone(),
         )
     };
-    let history_seed = if primary_history {
+    // 轮内 journal：在 LLM 请求前先落 meta + turn/start + user。
+    // 后续 chunk/tool 事件由 SessionLog 追加；进程被杀时启动恢复读取。
+    let inflight_meta = InflightMeta {
+        conversation_id: conversation_id.clone(),
+        session_id: session_id.clone(),
+        title: request.conversation_title.clone(),
+        created_at: request.conversation_created_at,
+        model_name: request.model_name.clone(),
+        context_length: request.context_length,
+        provider: request.provider.clone(),
+        model: request.model.clone(),
+        thinking_level: request.thinking_level.clone(),
+        last_notice_seq: request.last_notice_seq,
+        user_event: Some(user_event.clone()),
+    };
+    let journal_path = if conversation_id.is_empty() {
+        None
+    } else {
+        let s = store
+            .lock()
+            .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
+        Some(s.begin_inflight(
+            &inflight_meta,
+            &[SessionEvent::turn_start(&session_id), user_event.clone()],
+        )?)
+    };
+    if let Some(path) = &journal_path {
+        let attached = log
+            .lock()
+            .map_err(|e| format!("会话日志锁获取失败: {e}"))
+            .and_then(|mut log| log.attach_journal(path));
+        if let Err(e) = attached {
+            let persisted =
+                persist_preflight_failure(&store, &log, &request, &llm_config, &user_event, &e);
+            return Err(combine_preflight_error(e, persisted));
+        }
+    }
+
+    // 预检阶段：还没请求模型。这里的失败必须按真实原因归档成 error 轮，
+    // 不能只留下 journal 让重启恢复猜成 interrupted。
+    let preflight = (|| -> Result<HistorySeed, String> {
         let title = request.conversation_title.as_deref().unwrap_or("新对话");
         {
             let mut s = store
@@ -283,6 +486,9 @@ pub async fn agent_process(
                 request.conversation_created_at,
                 request.model_name.as_deref(),
                 request.context_length,
+                request.provider.as_deref(),
+                request.model.as_deref(),
+                request.thinking_level.as_deref(),
             )?;
         }
         let (turns, compaction) = {
@@ -293,13 +499,19 @@ pub async fn agent_process(
             let compaction = s.meta(&conversation_id)?.compaction;
             (turns, compaction)
         };
-        HistorySeed::Log {
+        Ok(HistorySeed::Log {
             turns,
             user: Box::new(user_event.clone()),
             compaction,
+        })
+    })();
+    let history_seed = match preflight {
+        Ok(seed) => seed,
+        Err(e) => {
+            let persisted =
+                persist_preflight_failure(&store, &log, &request, &llm_config, &user_event, &e);
+            return Err(combine_preflight_error(e, persisted));
         }
-    } else {
-        HistorySeed::Frontend(request.history)
     };
 
     // ── 调用调度中枢（abort 透传：取消点消费；冻结目录 + 记忆区注入 system）──
@@ -323,77 +535,20 @@ pub async fn agent_process(
     )
     .await;
 
-    // ── shadow：写影子日志并对比派生消息；仍走 legacy 读写，不影响用户 ──
-    if matches!(history_mode, BackendHistoryMode::Shadow) && !conversation_id.is_empty() {
-        let events = log
-            .lock()
-            .map_err(|e| format!("会话日志锁获取失败: {e}"))?
-            .events()
-            .to_vec();
-        let mut current = log
-            .lock()
-            .map_err(|e| format!("会话日志锁获取失败: {e}"))?
-            .turn_events()
-            .to_vec();
-        // legacy 播种时当前 user 在 history 里，turn_events 不含它；
-        // 影子日志按轮追加时必须补回，否则相邻轮会被派生合并。
-        current.insert(0, user_event.clone());
-        if !events.is_empty() {
-            let mut s = store
-                .lock()
-                .map_err(|e| format!("会话存储锁获取失败: {e}"))?;
-            // 压缩是对话级状态转换：legacy 从摘要 + 保留段重新开始，
-            // shadow 也必须用同一基线，不能继续拿完整历史对比。
-            if let Some(compaction) = s.meta(&conversation_id)?.compaction {
-                let marker = s.shadow_compaction_marker(&conversation_id)?;
-                if marker != Some(compaction.at) {
-                    s.reset_shadow(&conversation_id)?;
-                    s.set_shadow_compaction_marker(&conversation_id, compaction.at)?;
-                }
-            }
-            let prior = s.load_shadow_turns(&conversation_id)?;
-            let line = if prior.is_empty() { &events } else { &current };
-            if !line.is_empty() {
-                let json =
-                    serde_json::to_string(line).map_err(|e| format!("影子事件序列化失败: {e}"))?;
-                s.append_shadow_events(&conversation_id, &json)?;
-            }
-            let policy = model_registry
-                .get_resolved_compat(&llm_config.provider, &llm_config.model, llm_config.api_type)
-                .policy;
-            let legacy = log
-                .lock()
-                .map_err(|e| format!("会话日志锁获取失败: {e}"))?
-                .derive_messages(policy);
-            let mut shadow_log = SessionLog::new();
-            for turn in s.load_shadow_turns(&conversation_id)? {
-                shadow_log.seed_events(turn);
-            }
-            let shadow = shadow_log.derive_messages(policy);
-            if serde_json::to_value(&legacy).ok() != serde_json::to_value(&shadow).ok() {
-                let legacy_json = serde_json::to_string(&legacy).unwrap_or_default();
-                let shadow_json = serde_json::to_string(&shadow).unwrap_or_default();
-                let diff = format!(
-                    "[{}] shadow diff\nlegacy: {}\nshadow: {}\n\n",
-                    conversation_id, legacy_json, shadow_json
-                );
-                let _ = s.append_shadow_diff(&diff);
-                eprintln!("[shadow] 派生消息不一致：{conversation_id}");
-            }
+    // 错误事件也是本轮持久事实：写入 log 供重启后 UI 重建错误提示；
+    // derive_messages 会忽略它，不进入模型历史。
+    if let Err(e) = &result {
+        if let Err(err) = record_error_terminal(&log, &session_id, &user_event, &e.to_string()) {
+            eprintln!("[commands] 错误轮终态写入失败：{err}");
         }
     }
 
-    // ── primary：本轮事件写官方 log（唯一 writer；前端 append_turn 在 primary
-    // 只更新元数据，见 conversation 命令）──
-    if primary_history {
-        let mut events: Vec<SessionEvent> = vec![SessionEvent::turn_start(&session_id)];
-        {
+    // ── 本轮事件写官方 log（唯一 writer；前端 append_turn 只更新元数据）──
+    {
+        let events = {
             let log = log.lock().map_err(|e| format!("会话日志锁获取失败: {e}"))?;
-            events.extend(log.turn_events().iter().cloned());
-        }
-        if events.len() <= 1 {
-            return Err("本轮没有产生可落盘的事件".into());
-        }
+            log.archive_events(&session_id, &user_event)
+        };
         let events_json =
             serde_json::to_string(&events).map_err(|e| format!("本轮事件序列化失败: {e}"))?;
         let context_tokens = events.iter().rev().find_map(|event| match event {
@@ -421,6 +576,9 @@ pub async fn agent_process(
                 .clone()
                 .or_else(|| Some(llm_config.model.clone())),
             context_length: request.context_length,
+            provider: request.provider.clone(),
+            model: request.model.clone(),
+            thinking_level: request.thinking_level.clone(),
             context_tokens,
             last_notice_seq: request.last_notice_seq,
             usage_deltas: usage_deltas.map(|delta| vec![delta]),
@@ -432,17 +590,16 @@ pub async fn agent_process(
             .map_err(|e| format!("本轮历史落盘失败：{e}"))?;
     }
 
-    // ── 插话队列收尾（保留语义，2026-09-25 修订）：不再无条件清空——
-    // 未交付条目在有 conversation 归属时进入保留态：同对话下一轮
-    // agent_process 开头 adopt 领取，于首步请求前注入交付（中止/错误也
-    // 不丢字，对齐上游 keepInbox）。无 conversation 归属（旧前端）保持
-    // 原兜底清空；正常轮队列在 turn/end 前已消费至空，此处零行为。
-    if steer_queue.len(&session_id) > 0 && !conversation_id.is_empty() {
-        steer_queue.preserve(&session_id, &conversation_id);
-    } else {
-        steer_queue.clear(&session_id);
+    // journal 句柄必须在删除文件前关闭（Windows 不允许删除仍打开的文件）。
+    if let Ok(mut log) = log.lock() {
+        log.close_journal();
     }
-    // busy 位由 `_turn_guard` Drop 统一注销（含上方所有错误出口）
+    if let Ok(s) = store.lock() {
+        s.finish_inflight(&session_id);
+    }
+
+    // 插话队列与 busy 位分别由 `_steer_guard` / `_turn_guard` Drop 统一收尾
+    // （含上方所有错误出口）；正常轮队列在 turn/end 前已消费至空。
 
     // ── 错误处理：调度中枢报错 → 推送错误事件到前端（新词汇）──
     if let Err(e) = result {
@@ -461,25 +618,180 @@ pub async fn agent_process(
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════
-// clear_conversation_cache —— 已注释（2026-08：缓存系统停用，
-// 待升级为记忆系统。此前为 AI 自行添加、前端无对应功能，一并停用）
-// ═══════════════════════════════════════════════════════
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-// /// 清空指定对话的缓存分区（前端删除对话时调用）。
-// ///
-// /// 缓存区是单对话工作记忆，生命周期绑定对话（见 cache.rs 顶部的
-// /// 「边界（缓存 ≠ 记忆）」声明）：对话删除即整体失效。此处移除对应
-// /// 分区，释放进程内内存；分区不存在时幂等（remove_partition 返回 false），
-// /// 命令仍返回 Ok——重复清理不视为错误。
-// #[tauri::command]
-// pub fn clear_conversation_cache(
-//     conversation_id: String,
-//     cache_stores: State<'_, Arc<Mutex<crate::cache::CacheStores>>>,
-// ) -> Result<(), String> {
-//     let mut stores = cache_stores
-//         .lock()
-//         .map_err(|e| format!("缓存区锁获取失败: {e}"))?;
-//     stores.remove_partition(&conversation_id);
-//     Ok(())
-// }
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("prts-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn request() -> AgentRequest {
+        AgentRequest {
+            input: "查一下".into(),
+            session_id: "s1".into(),
+            conversation_id: "c1".into(),
+            user_content: "查一下".into(),
+            user_attachments: Vec::new(),
+            conversation_title: Some("预检失败".into()),
+            conversation_created_at: Some(1),
+            model_name: None,
+            context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
+            last_notice_seq: None,
+        }
+    }
+
+    fn inflight_meta(user: &SessionEvent) -> InflightMeta {
+        InflightMeta {
+            conversation_id: "c1".into(),
+            session_id: "s1".into(),
+            title: Some("预检失败".into()),
+            created_at: Some(1),
+            model_name: None,
+            context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
+            last_notice_seq: None,
+            user_event: Some(user.clone()),
+        }
+    }
+
+    #[test]
+    fn protocol_selection_error_records_terminal_and_message() {
+        let log = Arc::new(Mutex::new(SessionLog::new()));
+        let user = SessionEvent::user_message("s1", "查一下");
+
+        record_error_terminal(&log, "s1", &user, "协议暂未支持").unwrap();
+
+        let events = log.lock().unwrap().archive_events("s1", &user);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SessionEvent::UserMessage { .. }))
+                .count(),
+            1,
+            "user 只能出现一次"
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SessionEvent::Error { message, .. } if message == "协议暂未支持"
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Error,
+                ..
+            }
+        )));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Interrupted,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn dispatch_error_does_not_duplicate_terminal() {
+        let log = Arc::new(Mutex::new(SessionLog::new()));
+        let user = SessionEvent::user_message("s1", "查一下");
+        {
+            let mut log = log.lock().unwrap();
+            log.append(SessionEvent::turn_start("s1"));
+            log.append(user.clone());
+            log.mark_turn_boundary();
+            log.append(SessionEvent::turn_end("s1", TurnEndReason::Error));
+        }
+
+        record_error_terminal(&log, "s1", &user, "模型请求失败").unwrap();
+
+        let events = log.lock().unwrap().archive_events("s1", &user);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, SessionEvent::TurnEnd { .. }))
+                .count(),
+            1,
+            "turn/end 只能有一个"
+        );
+        assert!(events.iter().any(|e| matches!(
+            e,
+            SessionEvent::Error { message, .. } if message == "模型请求失败"
+        )));
+    }
+
+    #[test]
+    fn preflight_failure_is_archived_as_error_not_interrupted() {
+        let dir = unique_temp_dir("preflight-error");
+        let store = Arc::new(Mutex::new(SessionStore::new(&dir)));
+        let log = Arc::new(Mutex::new(SessionLog::new()));
+        let request = request();
+        let user = SessionEvent::user_message("s1", "查一下");
+
+        let path = store
+            .lock()
+            .unwrap()
+            .begin_inflight(
+                &inflight_meta(&user),
+                &[SessionEvent::turn_start("s1"), user.clone()],
+            )
+            .unwrap();
+        log.lock().unwrap().attach_journal(&path).unwrap();
+
+        persist_preflight_failure(
+            &store,
+            &log,
+            &request,
+            &LlmConfig::default(),
+            &user,
+            "会话文件读取失败",
+        )
+        .unwrap();
+
+        assert!(!path.exists(), "提交后 journal 应删除");
+        let mut s = store.lock().unwrap();
+        assert_eq!(s.recover_inflight().unwrap(), 0, "已提交轮不应再被恢复");
+        let turns = s.load_turns("c1").unwrap();
+        assert_eq!(turns.len(), 1);
+        let turn = &turns[0];
+        assert_eq!(
+            turn.iter()
+                .filter(|e| matches!(e, SessionEvent::UserMessage { .. }))
+                .count(),
+            1,
+            "user 只能出现一次"
+        );
+        assert!(turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::Error { message, .. } if message == "会话文件读取失败"
+        )));
+        assert!(turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Error,
+                ..
+            }
+        )));
+        assert!(!turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Interrupted,
+                ..
+            }
+        )));
+
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

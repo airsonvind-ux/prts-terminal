@@ -535,6 +535,17 @@ pub struct ChatMessage {
     /// 各 client 在 build 时展开为 provider 的 content 数组；不序列化。
     #[serde(skip)]
     pub images: Option<Vec<ImagePart>>,
+    /// 工具结果是否成功。仅 Anthropic 的 tool_result.is_error 使用；
+    /// 不序列化进 OpenAI 消息体，None = 旧数据/未知。
+    #[serde(skip)]
+    pub tool_ok: Option<bool>,
+    /// 派生自 user/message 事件时记下 turn 内相对序号，供 image/delivery 定位。
+    /// 用相对序号：归档后 turn 重新拼接，绝对 seq 会漂移。
+    #[serde(skip)]
+    pub image_event_seq: Option<usize>,
+    /// 派生自工具图片消息时记下 call id，供 image/delivery 定位。
+    #[serde(skip)]
+    pub image_tool_call_id: Option<String>,
 }
 
 /// 图像输入块（已编码）。
@@ -639,6 +650,9 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 
@@ -652,6 +666,9 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 
@@ -666,6 +683,9 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: Some(image_paths),
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 
@@ -679,6 +699,9 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 
@@ -696,6 +719,9 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 
@@ -718,6 +744,30 @@ impl ChatMessage {
             provider_blocks: None,
             image_paths: None,
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
+        }
+    }
+
+    /// 带成功/失败状态的工具结果（Anthropic `tool_result.is_error` 用）。
+    pub fn tool_result_with_status(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        ok: bool,
+    ) -> Self {
+        Self {
+            role: MessageRole::Tool,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+            reasoning_content: None,
+            provider_blocks: None,
+            image_paths: None,
+            images: None,
+            tool_ok: Some(ok),
+            image_event_seq: None,
+            image_tool_call_id: None,
         }
     }
 }
@@ -1050,6 +1100,8 @@ pub enum LlmError {
     Transport(String),
     /// 供应商正常结束，但没有任何正文、推理或工具调用
     EmptyResponse,
+    /// 供应商明确以内容安全策略拦截本轮回答
+    ContentFilter,
     /// 账户额度、余额或预算已耗尽；重试不会恢复
     Quota(String),
     /// 网络超时
@@ -1080,7 +1132,8 @@ impl std::fmt::Display for LlmError {
             }
             Self::Parse(msg) => write!(f, "LLM 响应解析错误：{msg}"),
             Self::Transport(msg) => write!(f, "LLM 网络连接失败：{msg}"),
-            Self::EmptyResponse => write!(f, "LLM 没有返回任何内容"),
+            Self::EmptyResponse => write!(f, "供应商返回了空响应，本轮没有可显示的内容"),
+            Self::ContentFilter => write!(f, "供应商安全策略拦截了本轮回答，未生成内容"),
             Self::Quota(msg) => {
                 if msg.trim().is_empty() {
                     write!(f, "LLM 账户额度或余额不足")

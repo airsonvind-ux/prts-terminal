@@ -7,7 +7,7 @@
 //   - 供应商/API 类型切换 → 即时 patch（llm 段）
 //   - 思考强度：声明集（deepseek v4 [off,low,high,max] 默认 high 高亮）/
 //     推断集（无声明 [off,medium,high] 默认 medium）/ 非 reasoning 隐藏
-//   - 选择档位 → patch llm.thinking_level
+//   - 选择档位 → patch 当前对话/草稿 thinkingLevel
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import React, { act, useState } from "react";
@@ -16,7 +16,11 @@ import { SettingsModel, modelListCache } from "./SettingsModel";
 import { getModelInfo, setModelInfo } from "../../stores/useProcessingStore";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useToastStore } from "../../stores/useToastStore";
-import type { LlmConfig, LlmPatch } from "../../types";
+import type {
+  ConversationConfigPatch,
+  LlmConfig,
+  LlmPatch,
+} from "../../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -25,6 +29,7 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 // 带签名的 mock（类型即 (patch, label?) => void，可断言调用）
 let onPatch = vi.fn((_p: LlmPatch, _l?: string) => {});
+let onConfigPatch = vi.fn((_p: ConversationConfigPatch) => {});
 
 const PROVIDERS = [
   { id: "deepseek", displayName: "DeepSeek", apiType: "openai-completions", baseUrl: "https://api.deepseek.com/v1", compat: {} },
@@ -103,7 +108,12 @@ function renderModel(llm: LlmConfig, busy = false): void {
   root = createRoot(container);
   act(() => {
     root.render(
-      React.createElement(SettingsModel, { llm, busy, onPatch })
+      React.createElement(SettingsModel, {
+        llm,
+        busy,
+        onPatch,
+        onConfigPatch,
+      })
     );
   });
 }
@@ -139,6 +149,18 @@ function Harness({ llm, busy = false }: { llm: LlmConfig; busy?: boolean }) {
     onPatch: (p: LlmPatch, label?: string) => {
       onPatch(p, label);
       setState((prev) => mergeLlm(prev, p));
+    },
+    onConfigPatch: (p: ConversationConfigPatch) => {
+      onConfigPatch(p);
+      setState((prev) => ({
+        ...prev,
+        provider: p.provider ?? prev.provider,
+        model: p.model ?? prev.model,
+        thinking_level:
+          p.thinkingLevel !== undefined
+            ? p.thinkingLevel
+            : prev.thinking_level,
+      }));
     },
   });
 }
@@ -189,7 +211,7 @@ async function fetchAndSelectModel(displayName: string): Promise<void> {
     await flush();
   }
   // 点模型行（displayName；css module 类名含 modelItem 子串）
-  const row = Array.from(container!.querySelectorAll("div")).find(
+  const row = Array.from(container!.querySelectorAll("button")).find(
     (d) =>
       typeof d.className === "string" &&
       d.className.includes("modelItem") &&
@@ -212,6 +234,7 @@ beforeEach(() => {
   // 清模块级模型列表缓存（防跨用例污染：切供应商 effect 会读缓存跳 fetch）
   for (const k of Object.keys(modelListCache)) delete modelListCache[k];
   onPatch = vi.fn((_p: LlmPatch, _l?: string) => {});
+  onConfigPatch = vi.fn((_p: ConversationConfigPatch) => {});
   installRoutes();
 });
 
@@ -311,14 +334,9 @@ describe("SettingsModel · 思考强度", () => {
 
     await fetchAndSelectModel("DeepSeek V4 Flash");
 
-    // 调试断言：模型行点击应已产生 model patch（Harness 受控回显）
-    expect(onPatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providers: expect.objectContaining({
-          deepseek: expect.objectContaining({ model: "deepseek-v4-flash" }),
-        }),
-      }),
-      "模型"
+    // 模型选择写入当前对话/草稿配置（Harness 受控回显）
+    expect(onConfigPatch).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-v4-flash" })
     );
 
     // 思考强度行：dropdown 同款控件；trigger 显示当前档（默认 high → 高）
@@ -333,20 +351,22 @@ describe("SettingsModel · 思考强度", () => {
     await flush();
 
     // 可见集 = 声明集 [off,low,high,max]（展示名含默认标注）
-    const menuTexts = Array.from(container!.querySelectorAll("div"))
+    const menuTexts = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    )
       .map((d) => (d.textContent ?? "").trim())
       .filter((t) => ["关闭", "低", "高（默认）", "极致"].includes(t));
     expect(menuTexts).toEqual(["关闭", "低", "高（默认）", "极致"]);
 
-    // 选「低」→ patch thinking_level
-    const lowItem = Array.from(container!.querySelectorAll("div")).find(
-      (d) => (d.textContent ?? "").trim() === "低"
-    )!;
+    // 选「低」→ patch 当前对话/草稿 thinkingLevel
+    const lowItem = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    ).find((d) => (d.textContent ?? "").trim() === "低")!;
     act(() =>
-      lowItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+      lowItem.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     );
     await flush();
-    expect(onPatch).toHaveBeenCalledWith({ thinking_level: "low" }, "思考强度");
+    expect(onConfigPatch).toHaveBeenCalledWith({ thinkingLevel: "low" });
   });
 
   it("无声明 reasoning 模型：推断集 [off,medium,high]、默认 medium", async () => {
@@ -375,7 +395,9 @@ describe("SettingsModel · 思考强度", () => {
     );
     await flush();
 
-    const menuTexts = Array.from(container!.querySelectorAll("div"))
+    const menuTexts = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    )
       .map((d) => (d.textContent ?? "").trim())
       .filter((t) => ["关闭", "中（默认）", "高"].includes(t));
     expect(menuTexts).toEqual(["关闭", "中（默认）", "高"]);
@@ -410,7 +432,7 @@ describe("SettingsModel · 思考强度", () => {
 });
 
 describe("SettingsModel · 供应商切换（分区：只 patch active）", () => {
-  it("已有保存模型时挂载即刷新快照，并同步活跃对话元数据", async () => {
+  it("已有保存模型时挂载即刷新模型快照", async () => {
     useConversationStore.setState({
       conversations: [
         {
@@ -437,9 +459,6 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
 
     expect(getModelInfo()?.name).toBe("DeepSeek V4 Flash");
     expect(getModelInfo()?.contextLength).toBe(1_000_000);
-    const conv = useConversationStore.getState().conversations[0];
-    expect(conv.modelName).toBe("DeepSeek V4 Flash");
-    expect(conv.contextLength).toBe(1_000_000);
   });
 
   it("切供应商且该家已有保存模型 → 立即刷新快照（不依赖再次点模型）", async () => {
@@ -455,8 +474,9 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
       return React.createElement(SettingsModel, {
         llm,
         busy: false,
-        onPatch: (p: LlmPatch) => {
-          if (p.active_provider === "openai") {
+        onPatch: (_p: LlmPatch) => {},
+        onConfigPatch: (p: ConversationConfigPatch) => {
+          if (p.provider === "openai") {
             setLlm(
               maskedLlm({ provider: "openai", model: "deepseek-v4-flash" })
             );
@@ -478,17 +498,17 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
     )!;
     act(() => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
-    const item = Array.from(container.querySelectorAll("div")).find(
-      (d) => d.textContent === "OpenAI"
-    )!;
-    act(() => item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    const item = Array.from(
+      container.querySelectorAll('[role="option"]')
+    ).find((d) => d.textContent === "OpenAI")!;
+    act(() => item.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
 
     expect(getModelInfo()?.name).toBe("DeepSeek V4 Flash");
     expect(getModelInfo()?.supportsVision).toBe(false);
   });
 
-  it("切供应商 → active_provider patch（不清 key；配置分区保留）", async () => {
+  it("切供应商 → 当前对话 provider patch（不改全局 active）", async () => {
     renderModel(maskedLlm());
     await flush();
     const trigger = Array.from(container!.querySelectorAll("button")).find(
@@ -496,18 +516,17 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
     )!;
     act(() => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
-    const item = Array.from(container!.querySelectorAll("div")).find(
-      (d) => d.textContent === "OpenAI"
-    )!;
-    act(() => item.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    const item = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    ).find((d) => d.textContent === "OpenAI")!;
+    act(() => item.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
 
-    const patch = onPatch.mock.calls[0]?.[0] as LlmPatch;
-    expect(patch).toEqual({ active_provider: "openai" });
-    expect(patch.providers).toBeUndefined(); // 不触碰其它家（含 key）
+    expect(onConfigPatch).toHaveBeenCalledWith({ provider: "openai" });
+    expect(onPatch).not.toHaveBeenCalled();
   });
 
-  it("思考强度 patch 为段顶层（跨供应商全局）", async () => {
+  it("思考强度写入当前对话/草稿配置", async () => {
     renderHarness(maskedLlm({ model: "" }));
     await flush();
     await fetchAndSelectModel("DeepSeek V4 Flash");
@@ -518,14 +537,14 @@ describe("SettingsModel · 供应商切换（分区：只 patch active）", () =
       trigger.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     );
     await flush();
-    const lowItem = Array.from(container!.querySelectorAll("div")).find(
-      (d) => (d.textContent ?? "").trim() === "低"
-    )!;
+    const lowItem = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    ).find((d) => (d.textContent ?? "").trim() === "低")!;
     act(() =>
-      lowItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+      lowItem.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     );
     await flush();
-    expect(onPatch).toHaveBeenCalledWith({ thinking_level: "low" }, "思考强度");
+    expect(onConfigPatch).toHaveBeenCalledWith({ thinkingLevel: "low" });
   });
 });
 
@@ -597,11 +616,11 @@ describe("SettingsModel · 自动拉取模型列表（方案 b）", () => {
     )!;
     act(() => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
-    const openaiItem = Array.from(container!.querySelectorAll("div")).find(
-      (d) => d.textContent === "OpenAI"
-    )!;
+    const openaiItem = Array.from(
+      container!.querySelectorAll('[role="option"]')
+    ).find((d) => d.textContent === "OpenAI")!;
     act(() =>
-      openaiItem.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+      openaiItem.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     );
     await flush();
     const calls = listModelsCalls();
@@ -635,7 +654,7 @@ describe("SettingsModel · 未收录标记（U 徽章）", () => {
     expect(unknownBadges[0].textContent).toBe("U");
 
     // 归属：U 徽章只在未收录行内（已收录行无）
-    const rows = Array.from(container!.querySelectorAll("div")).filter(
+    const rows = Array.from(container!.querySelectorAll("button")).filter(
       (d) =>
         typeof d.className === "string" && d.className.includes("modelItem")
     );
@@ -654,13 +673,8 @@ describe("SettingsModel · 未收录标记（U 徽章）", () => {
     renderHarness(maskedLlm({ model: "" }));
     await flush();
     await fetchAndSelectModel("deepseek-flash");
-    expect(onPatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providers: expect.objectContaining({
-          deepseek: expect.objectContaining({ model: "deepseek-flash" }),
-        }),
-      }),
-      "模型"
+    expect(onConfigPatch).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "deepseek-flash" })
     );
   });
 });

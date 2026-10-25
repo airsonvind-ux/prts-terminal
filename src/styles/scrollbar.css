@@ -29,6 +29,12 @@
   background: transparent;
 }
 
+/* 横竖滚动条交汇的角落：默认会露出白底，缩小时尤其明显。透明后
+   让面板自己的底色透出来。 */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
   /* 常态隐藏；显色与加深由滚动类 / :hover 驱动。
      注意：着色一律用 background-color——background 简写会重置

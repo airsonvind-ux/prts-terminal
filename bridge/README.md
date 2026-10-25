@@ -73,4 +73,4 @@ prts-maa-bridge.exe --maa-dir "<MAA安装目录>" --port 41231 [--user-dir <工�
 - 窗口发现（Windows）：`list_windows` · `find_window`（`{title}`）
 - 退出：`shutdown`
 
-> 现状：`ffi` + `engine` + `events` + `ipc` 与命令面已就绪；**ADB（模拟器）通道已端到端跑通**（MuMu 12 + 截图增强，OperBox 429，见 `_maa-bridge-设计.md` §7.9）。**Win32（PC 端）曾端到端跑通，评估后搁置**（实验性、暂不启用，见 §7.4）。待办：扩任务覆盖、桥随 PRTS 的分发形态。
+> 现状：`ffi` + `engine` + `events` + `ipc` 与命令面已就绪；**ADB（模拟器）通道已端到端跑通**（MuMu 12 + 截图增强，OperBox 429）。**Win32（PC 端）曾端到端跑通，评估后搁置**（实验性、暂不启用）。桥已作为 sidecar 随 PRTS 分发；待办只剩扩任务覆盖。

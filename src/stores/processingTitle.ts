@@ -142,6 +142,8 @@ function triggerTitleGeneration(
     userText: material.userText,
     assistantText: material.assistantText,
     expectedTitle: material.expectedTitle,
+    provider: conv.provider ?? null,
+    model: conv.model ?? null,
   }).catch(() => {});
 }
 

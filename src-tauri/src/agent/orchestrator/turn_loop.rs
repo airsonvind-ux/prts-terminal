@@ -1,4 +1,4 @@
-use super::llm_call::{call_llm_with_retry_collect, prepare_request_images};
+use super::llm_call::{call_llm_with_retry_collect, prepare_request_images, VisionSupport};
 use super::*;
 
 /// 调度循环：turn 内反复执行 step（调 LLM → 判断是否需要工具 → 执行工具 → 继续），
@@ -24,11 +24,11 @@ pub(super) async fn dispatch_turn_with_memory(
     steer_queue: &SteerQueue,
     workspace_root: &Path,
     system_prompt: &str,
-    supports_vision: bool,
+    vision_support: VisionSupport,
 ) -> Result<TurnOutcome, OrchestratorError> {
     // tool_ctx 构造：有 db 用 with_db（生产路径），无 db 用 new（Mock 场景）。
-    // 缓存通道已移除（2026-08：缓存工具取消注册）；Skill 索引注入
-    // （Arc::clone 共享 process 的 turn 级快照，索引小、工具只读，零拷贝）；
+    // Skill 索引注入（Arc::clone 共享 process 的 turn 级快照，索引小、
+    // 工具只读，零拷贝）；
     // abort 注入（M3-B：run_command execute 读 ctx.abort → RunOptions.cancel）。
     let mut ctx = match db {
         Some(ref db) => ToolContext::with_db(Arc::clone(db)),
@@ -92,7 +92,11 @@ pub(super) async fn dispatch_turn_with_memory(
 
         // 请求前图像准备：当前轮（最后一条 assistant 之后）的图物化为像素，
         // 历史图只留文本标记。必须**每次请求前**跑——工具图生于轮内。
-        prepare_request_images(messages.as_mut_slice(), supports_vision);
+        // 返回的是实际投递事实；写进日志后，下一轮 derive 才能稳定重建同一条历史。
+        let deliveries = prepare_request_images(messages.as_mut_slice(), vision_support);
+        for fact in deliveries {
+            sink.log_only(SessionEvent::image_delivery(session_id, fact));
+        }
 
         // 请求前估算（模块 8 双锚：estimate 兜底锚入 log，
         // 与 step/end 的 provider usage 基线锚对齐）
@@ -167,6 +171,14 @@ pub(super) async fn dispatch_turn_with_memory(
             );
         }
 
+        // 中止可能发生在最后一段流式输出期间：此时 result 没有工具调用，
+        // 若继续按 completed 收尾，会把半截回答归档成正常轮，前端拿不到
+        // turn/end(aborted/app-shutdown)，下一轮也不会产生状态 reminder。
+        // 必须在最终回答分支前复查 abort。
+        if abort.is_aborted() {
+            return Ok(TurnOutcome::Aborted(state.stat));
+        }
+
         // ── 终止判断：没有工具调用，或工具调用属于截断输出 → completed ──
         if result.tool_calls.is_empty() || truncated_tool_calls {
             // 最终回答归档进上下文（与 log 的 chunk 序列一致；推理链按策略附载，
@@ -198,6 +210,11 @@ pub(super) async fn dispatch_turn_with_memory(
                 reasoning,
                 usage,
             ));
+            // 关闭信号可能恰好落在最终聚合事件与 turn/end 之间：
+            // 不能再补发 completed，否则前端会按正常轮归档。
+            if abort.is_aborted() {
+                return Ok(TurnOutcome::Aborted(state.stat));
+            }
             let elapsed_ms = t0.elapsed().as_millis() as u64;
             sink.emit(SessionEvent::step_end(
                 session_id,
@@ -205,6 +222,9 @@ pub(super) async fn dispatch_turn_with_memory(
                 result.usage,
                 elapsed_ms,
             ));
+            if abort.is_aborted() {
+                return Ok(TurnOutcome::Aborted(state.stat));
+            }
 
             // ── 插话关轮重读（2026-09-25 语义修订）──
             // 本段已收尾（assistant 消息归档、step/end 已闭）：重读队列——
@@ -217,16 +237,31 @@ pub(super) async fn dispatch_turn_with_memory(
             if steer_queue.len(session_id) > 0 {
                 continue;
             }
+            if abort.is_aborted() {
+                return Ok(TurnOutcome::Aborted(state.stat));
+            }
 
-            sink.emit(SessionEvent::turn_end_with_usage(
-                session_id,
-                if result.finish_reason == Some(crate::llm::FinishReason::MaxTokens) {
-                    TurnEndReason::MaxTokens
-                } else {
-                    TurnEndReason::Completed
-                },
-                Some(state.stat),
-            ));
+            // 关键临界区：abort 与“正常完成”互斥。
+            // 关闭若在 emit 前到达，必须赢；关闭若在 turn/end 之后到达，
+            // 才是“完成之后的关闭”，不能再改写成 aborted。
+            let committed = abort.commit_terminal(|| {
+                sink.emit(SessionEvent::turn_end_with_usage(
+                    session_id,
+                    if result.finish_reason == Some(crate::llm::FinishReason::MaxTokens) {
+                        TurnEndReason::MaxTokens
+                    } else {
+                        TurnEndReason::Completed
+                    },
+                    Some(state.stat),
+                ));
+            });
+            if !committed {
+                debug!(
+                    "step" => step,
+                    "action" => "terminal_commit_rejected_by_abort"
+                );
+                return Ok(TurnOutcome::Aborted(state.stat));
+            }
             return Ok(TurnOutcome::Completed);
         }
 
@@ -255,6 +290,7 @@ pub(super) async fn dispatch_turn_with_memory(
             session_id,
             messages,
             &result,
+            policy,
             tools,
             &tool_ctx,
             sink,
@@ -287,11 +323,16 @@ pub(super) async fn dispatch_turn_with_memory(
             // R-33：只发 turn/end(stagnation)，不再先发终止 error。
             // 终止 error 会让前端按错误轮收尾，丢掉半截内容、工具记录和 usage；
             // 轮尾说明由前端按 reason 合成。
-            sink.emit(SessionEvent::turn_end_with_usage(
-                session_id,
-                TurnEndReason::Stagnation,
-                Some(state.stat),
-            ));
+            let committed = abort.commit_terminal(|| {
+                sink.emit(SessionEvent::turn_end_with_usage(
+                    session_id,
+                    TurnEndReason::Stagnation,
+                    Some(state.stat),
+                ));
+            });
+            if !committed {
+                return Ok(TurnOutcome::Aborted(state.stat));
+            }
             debug!(
                 "action" => "turn_stagnated",
                 "steps" => step

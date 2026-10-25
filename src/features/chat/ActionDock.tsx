@@ -33,10 +33,30 @@ interface PendingApprovalView {
   conversationId: string;
   conversationTitle: string;
   command: string;
+  commandAvailable: boolean;
   phrase: string;
   ruleId: string | null;
   privilege: "restricted" | "full";
   justification: string | null;
+}
+
+function commandFromParams(params: string | undefined): string | null {
+  if (!params) return null;
+  try {
+    const parsed: unknown = JSON.parse(params);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "command" in parsed &&
+      typeof parsed.command === "string" &&
+      parsed.command.trim().length > 0
+    ) {
+      return parsed.command;
+    }
+  } catch {
+    // 旧/异常调用参数：回退到审批事件里的摘要，并禁止确认。
+  }
+  return null;
 }
 
 function collectPendingApprovals(
@@ -61,13 +81,15 @@ function collectPendingApprovals(
         (candidate): candidate is Extract<SessionEvent, { type: "tool/call" }> =>
           candidate.type === "tool/call" && candidate.callId === event.callId
       );
+      const fullCommand = commandFromParams(call?.params);
       views.push({
         key,
         sessionId: event.sessionId,
         callId: event.callId,
         conversationId: snapshot.conversationId,
         conversationTitle: "",
-        command: event.command,
+        command: fullCommand ?? event.command,
+        commandAvailable: fullCommand !== null,
         phrase: toolAction(call?.toolName ?? "run_command"),
         ruleId: event.ruleId,
         privilege: event.privilege,
@@ -215,6 +237,11 @@ export function ActionDock() {
               </div>
             )}
             <pre className={styles.command}>{primary.command}</pre>
+            {!primary.commandAvailable && (
+              <div className={styles.commandWarning}>
+                无法读取完整命令，不能确认
+              </div>
+            )}
           </div>
           <div className={styles.actions}>
             {decided ? (
@@ -232,7 +259,7 @@ export function ActionDock() {
                 </button>
                 <button
                   className={`${styles.btn} ${styles.primary}`}
-                  disabled={submitted}
+                  disabled={submitted || !primary.commandAvailable}
                   onClick={() => void resolve(primary, "approved")}
                 >
                   {submitted ? "提交中…" : "确认执行"}

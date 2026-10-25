@@ -3,7 +3,7 @@
 ## 开发环境
 
 - Windows 10/11 x64
-- Node.js 20+
+- Node.js 22.22.2+（22.x）、24.15+ 或 26+（与 `package.json` 的 `engines` 和 `.nvmrc` 一致）
 - Rust stable（MSVC）
 - Python 3.11+（构建 MAA 桥需要；维护数据管线也需要）
 
@@ -26,6 +26,14 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml
 ```powershell
 cargo test --manifest-path bridge/Cargo.toml
 ```
+
+只想验证安装包能构建、不需要更新签名时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1 -NoSign
+```
+
+`-NoSign` 产物不能用于自动更新；正式发布构建需要签名私钥。
 
 ## 代码约定
 
@@ -56,3 +64,19 @@ cargo test --manifest-path bridge/Cargo.toml
 - 测试：`docs/testing.md`
 - 数据：`docs/data-pipeline.md`
 - 安全：`docs/security.md`
+
+## Issue 规则
+
+- 只接受 Bug 报告和功能请求。
+- 使用问题请先看 `使用说明.md`。
+- 安全问题不要开公开 Issue，按 `SECURITY.md` 私密报告。
+- Issue 只描述问题或需求，不写修复方案、补丁、diff 或实现代码。
+- Bug 报告需要版本、数据版本、Windows 版本、安装方式、复现步骤、期望/实际行为和证据。
+- 功能请求只写使用场景、期望效果和验收条件。
+
+## Pull Request
+
+项目核心暂不接受外部 Pull Request。
+
+- GitHub 上的外部 PR 会被自动留言并关闭。
+- 想修改项目请先开 Issue；是否实现由维护者决定。

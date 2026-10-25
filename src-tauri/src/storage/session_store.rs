@@ -15,7 +15,7 @@
 //!
 //! 写盘触发：
 //! - `primary`：后端在 agent_process 结束时追加本轮事件（唯一 writer）
-//! - `legacy`/`shadow`：前端轮末归档（append_turn）
+//! - `primary`：后端写轮事件，前端 `append_turn` 只更新元数据
 //!
 //! - 首轮（内容文件不存在）→ 写 header + 轮行 + index 插入条目
 //! - 后续轮 → 校验 header 归属（防串写）→ 追加轮行 → index 更新 updatedAt，
@@ -44,7 +44,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::llm::{TokenUsage, UsageStat};
-use crate::session::SessionEvent;
+use crate::session::{SessionEvent, TurnEndReason};
+use crate::session_id::is_safe_session_id;
 
 /// 当前 schema 版本（内容文件 header 与 index.json 共用；升版走迁移，见方案 §1.3）。
 pub const SCHEMA_VERSION: u32 = 1;
@@ -72,6 +73,14 @@ pub struct ConversationMeta {
     pub created_at: u64,
     pub model_name: Option<String>,
     pub context_length: Option<u64>,
+    /// 会话级请求身份（provider + model + thinkingLevel）。
+    /// 旧 index 缺字段 → None；展示名仍用 modelName。
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking_level: Option<String>,
     /// 最近一轮归档的上下文 Token 用量快照（随轮覆盖提交）
     pub context_tokens: Option<TokenUsage>,
     /// 环境通知已告知游标（M1 Reminder；随轮覆盖提交，单调递增）
@@ -216,6 +225,12 @@ pub struct AppendTurnReq {
     pub model_name: Option<String>,
     #[serde(default)]
     pub context_length: Option<u64>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking_level: Option<String>,
     /// 每轮随轮覆盖提交（非 None 才更新 index）
     #[serde(default)]
     pub context_tokens: Option<TokenUsage>,
@@ -224,6 +239,28 @@ pub struct AppendTurnReq {
     /// 本次归档随附的用量增量（主对话 + 首轮未归档时携带的标题用量）
     #[serde(default)]
     pub usage_deltas: Option<Vec<UsageDelta>>,
+}
+
+/// 轮内崩溃恢复日志的元数据（`sessions/.inflight/{sessionId}.jsonl` 首行）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InflightMeta {
+    pub conversation_id: String,
+    pub session_id: String,
+    pub title: Option<String>,
+    pub created_at: Option<u64>,
+    pub model_name: Option<String>,
+    pub context_length: Option<u64>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking_level: Option<String>,
+    pub last_notice_seq: Option<u64>,
+    /// 兜底 user 事件：prefix 只写了一半时仍能从 meta 恢复用户输入。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_event: Option<SessionEvent>,
 }
 
 /// update_conversation_meta 补丁（只更新非 None 字段；文件必须存在）。
@@ -235,6 +272,10 @@ pub struct MetaPatch {
     pub expected_title: Option<String>,
     pub context_tokens: Option<TokenUsage>,
     pub last_notice_seq: Option<u64>,
+    /// 会话级请求身份；Some 才更新。thinking_level 的 Some("") = 清除回模型默认。
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub thinking_level: Option<String>,
     /// 压缩记录（模块 D）：Some(Some) = 覆盖写入新记录。None = 不更新。
     /// （不支持置 None 清除——压缩不可逆，回退态只出现在 index 自愈重建）
     pub compaction: Option<CompactionMeta>,
@@ -314,6 +355,236 @@ impl SessionStore {
         Self { dir }
     }
 
+    // ── 轮内崩溃恢复日志 ──
+
+    fn inflight_dir(&self) -> PathBuf {
+        self.dir.join(".inflight")
+    }
+
+    fn inflight_path(&self, session_id: &str) -> Result<PathBuf, String> {
+        if !is_safe_session_id(session_id) {
+            return Err(format!(
+                "sessionId 非法（仅允许字母数字与 - _）：{session_id:?}"
+            ));
+        }
+        Ok(self.inflight_dir().join(format!("{session_id}.jsonl")))
+    }
+
+    /// 在 LLM 请求前建立本轮 journal：meta + turn/start + user。
+    ///
+    /// 后续事件由 `SessionLog` 追加。文件存在 = 本轮尚未提交；
+    /// 正常提交后由 append_turn 或启动恢复删除。
+    pub fn begin_inflight(
+        &self,
+        meta: &InflightMeta,
+        prefix: &[SessionEvent],
+    ) -> Result<PathBuf, String> {
+        std::fs::create_dir_all(self.inflight_dir())
+            .map_err(|e| format!("创建轮内日志目录失败：{e}"))?;
+        let path = self.inflight_path(&meta.session_id)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| format!("创建轮内日志失败（{}）：{e}", path.display()))?;
+        // 文件已创建：后续任一步失败都要清掉半成品。否则下次启动会把
+        // “连 meta/prefix 都没写完的文件”当成真实中断轮恢复。
+        let write_result = (|| -> Result<(), String> {
+            let meta_json = serde_json::to_string(meta)
+                .map_err(|e| format!("轮内日志 meta 序列化失败：{e}"))?;
+            writeln!(file, "{meta_json}").map_err(|e| format!("写入轮内日志失败：{e}"))?;
+            for event in prefix {
+                let line = serde_json::to_string(event)
+                    .map_err(|e| format!("轮内日志事件序列化失败：{e}"))?;
+                writeln!(file, "{line}").map_err(|e| format!("写入轮内日志失败：{e}"))?;
+            }
+            file.flush()
+                .map_err(|e| format!("flush 轮内日志失败：{e}"))?;
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        Ok(path)
+    }
+
+    /// 删除已提交轮的 journal；幂等。
+    pub fn finish_inflight(&self, session_id: &str) {
+        let Ok(path) = self.inflight_path(session_id) else {
+            return;
+        };
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!(
+                "[session-store] 删除轮内日志失败（{}）：{e}",
+                path.display()
+            ),
+        }
+    }
+
+    /// 启动时恢复所有未提交轮。
+    ///
+    /// 已有完整轮（按 sessionId 去重）→ 只删 journal；否则补
+    /// synthetic tool result + turn/end(interrupted) 后落盘。
+    pub fn recover_inflight(&mut self) -> Result<usize, String> {
+        let dir = self.inflight_dir();
+        if !dir.is_dir() {
+            return Ok(0);
+        }
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|e| format!("读取轮内日志目录失败（{}）：{e}", dir.display()))?;
+        let mut recovered = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+                continue;
+            }
+            match self.recover_one_inflight(&path) {
+                Ok(true) => recovered += 1,
+                Ok(false) => {}
+                Err(e) => eprintln!(
+                    "[session-store] 恢复轮内日志失败（{}）：{e}",
+                    path.display()
+                ),
+            }
+        }
+        Ok(recovered)
+    }
+
+    fn recover_one_inflight(&mut self, path: &Path) -> Result<bool, String> {
+        let file = std::fs::File::open(path).map_err(|e| format!("打开轮内日志失败：{e}"))?;
+        let mut lines = BufReader::new(file).lines();
+        let Some(meta_line) = lines.next() else {
+            let _ = std::fs::remove_file(path);
+            return Ok(false);
+        };
+        let meta_line = meta_line.map_err(|e| format!("读取轮内日志 meta 失败：{e}"))?;
+        let meta: InflightMeta =
+            serde_json::from_str(&meta_line).map_err(|e| format!("轮内日志 meta 损坏：{e}"))?;
+
+        let mut events: Vec<SessionEvent> = Vec::new();
+        for line in lines.by_ref() {
+            let line = match line {
+                Ok(line) => line,
+                Err(_) => break,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<SessionEvent>(&line) {
+                Ok(event) => events.push(event),
+                // 崩溃时最后一行可能只写了一半：保留前面完整事件。
+                Err(_) => break,
+            }
+        }
+        drop(lines);
+        // prefix 可能在 turn/start 或 user 写到一半时被打断；
+        // meta 里的 user 事件是最后兜底。
+        if !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::TurnStart { .. }))
+        {
+            events.insert(0, SessionEvent::turn_start(&meta.session_id));
+        }
+        if !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::UserMessage { .. }))
+        {
+            if let Some(user) = meta.user_event.clone() {
+                events.insert(1, user);
+            } else {
+                let _ = std::fs::remove_file(path);
+                return Ok(false);
+            }
+        }
+
+        // 已由正常路径提交过：只清 journal，绝不重复写一轮。
+        // 首轮崩溃时对话文件还不存在；存在但读取失败则保留 journal，
+        // 不在不确定的会话上重复追加。
+        let conversation_path = self.file_path(&meta.conversation_id)?;
+        let existing = if conversation_path.exists() {
+            self.load_turns(&meta.conversation_id)?
+        } else {
+            Vec::new()
+        };
+        let already = existing.iter().flatten().any(|event| {
+            serde_json::to_value(event)
+                .ok()
+                .and_then(|v| {
+                    v.get("sessionId")
+                        .and_then(|s| s.as_str())
+                        .map(str::to_string)
+                })
+                .as_deref()
+                == Some(meta.session_id.as_str())
+        });
+        if already {
+            self.finish_inflight(&meta.session_id);
+            return Ok(true);
+        }
+
+        // 没有 turn/end = 进程在收尾前死亡。补工具结果和终止原因，
+        // 保留已经产生的可见前缀。
+        if !events
+            .iter()
+            .any(|e| matches!(e, SessionEvent::TurnEnd { .. }))
+        {
+            let mut declared: Vec<(String, Option<String>)> = Vec::new();
+            let mut resulted: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for event in &events {
+                match event {
+                    SessionEvent::ToolCall {
+                        call_id, tool_name, ..
+                    } => declared.push((call_id.clone(), Some(tool_name.clone()))),
+                    SessionEvent::ToolResult { call_id, .. } => {
+                        resulted.insert(call_id.clone());
+                    }
+                    _ => {}
+                }
+            }
+            for (call_id, tool_name) in declared {
+                if resulted.contains(&call_id) {
+                    continue;
+                }
+                events.push(SessionEvent::tool_result(
+                    &meta.session_id,
+                    &call_id,
+                    tool_name.as_deref(),
+                    "工具调用结果未记录：应用在结果落盘前退出。结果未知；涉及副作用的操作不要盲目重试，先确认外部状态。",
+                    false,
+                ));
+            }
+            events.push(SessionEvent::turn_end(
+                &meta.session_id,
+                TurnEndReason::Interrupted,
+            ));
+        }
+
+        let events_json =
+            serde_json::to_string(&events).map_err(|e| format!("恢复事件序列化失败：{e}"))?;
+        let req = AppendTurnReq {
+            conversation_id: meta.conversation_id,
+            events_json,
+            title: meta.title,
+            created_at: meta.created_at,
+            model_name: meta.model_name,
+            context_length: meta.context_length,
+            provider: meta.provider,
+            model: meta.model,
+            thinking_level: meta.thinking_level,
+            context_tokens: None,
+            last_notice_seq: meta.last_notice_seq,
+            usage_deltas: None,
+        };
+        self.append_turn(&req)?;
+        self.finish_inflight(&meta.session_id);
+        Ok(true)
+    }
+
     // ── 写路径 ──
 
     /// 追加一轮事件。
@@ -362,6 +633,9 @@ impl SessionStore {
                 updated_at: now_ms(),
                 model_name: req.model_name.clone(),
                 context_length: req.context_length,
+                provider: req.provider.clone(),
+                model: req.model.clone(),
+                thinking_level: normalize_thinking(req.thinking_level.clone()),
                 context_tokens: req.context_tokens,
                 last_notice_seq: req.last_notice_seq,
                 compaction: None,
@@ -412,6 +686,15 @@ impl SessionStore {
         match index.iter_mut().find(|m| m.id == req.conversation_id) {
             Some(meta) => {
                 meta.updated_at = now_ms();
+                if let Some(p) = &req.provider {
+                    meta.provider = Some(p.clone());
+                }
+                if let Some(m) = &req.model {
+                    meta.model = Some(m.clone());
+                }
+                if req.thinking_level.is_some() {
+                    meta.thinking_level = normalize_thinking(req.thinking_level.clone());
+                }
                 if let Some(t) = req.context_tokens {
                     meta.context_tokens = Some(t);
                 }
@@ -431,6 +714,15 @@ impl SessionStore {
                 );
                 let mut meta = meta_from_header(header);
                 meta.updated_at = now_ms();
+                if let Some(p) = &req.provider {
+                    meta.provider = Some(p.clone());
+                }
+                if let Some(m) = &req.model {
+                    meta.model = Some(m.clone());
+                }
+                if req.thinking_level.is_some() {
+                    meta.thinking_level = normalize_thinking(req.thinking_level.clone());
+                }
                 if let Some(t) = req.context_tokens {
                     meta.context_tokens = Some(t);
                 }
@@ -459,6 +751,9 @@ impl SessionStore {
                 req.created_at,
                 req.model_name.as_deref(),
                 req.context_length,
+                req.provider.as_deref(),
+                req.model.as_deref(),
+                req.thinking_level.as_deref(),
             )?;
         }
         let usage_deltas: Vec<UsageDelta> = req
@@ -476,6 +771,9 @@ impl SessionStore {
             title: req.title.clone(),
             context_tokens: req.context_tokens,
             last_notice_seq: req.last_notice_seq,
+            provider: req.provider.clone(),
+            model: req.model.clone(),
+            thinking_level: req.thinking_level.clone(),
             usage_deltas,
             ..MetaPatch::default()
         };
@@ -487,6 +785,7 @@ impl SessionStore {
     ///
     /// 与 `append_turn` 的区别：只写 header + index 元数据，不写轮行。
     /// 已存在时只校验归属并补齐缺失的 index 条目；不覆盖 title/createdAt。
+    #[allow(clippy::too_many_arguments)] // 字段一一对应，拆结构会扩大调用面
     pub fn ensure_conversation(
         &mut self,
         conversation_id: &str,
@@ -494,6 +793,9 @@ impl SessionStore {
         created_at: Option<u64>,
         model_name: Option<&str>,
         context_length: Option<u64>,
+        provider: Option<&str>,
+        model: Option<&str>,
+        thinking_level: Option<&str>,
     ) -> Result<(), String> {
         let path = self.file_path(conversation_id)?;
         let mut index = self.load_or_rebuild()?;
@@ -513,6 +815,9 @@ impl SessionStore {
             let mut meta = meta_from_header(header);
             meta.model_name = model_name.map(str::to_string);
             meta.context_length = context_length;
+            meta.provider = provider.map(str::to_string);
+            meta.model = model.map(str::to_string);
+            meta.thinking_level = normalize_thinking(thinking_level.map(str::to_string));
             meta.updated_at = now_ms();
             index.retain(|m| m.id != conversation_id);
             index.push(meta);
@@ -545,6 +850,9 @@ impl SessionStore {
             updated_at: now_ms(),
             model_name: model_name.map(str::to_string),
             context_length,
+            provider: provider.map(str::to_string),
+            model: model.map(str::to_string),
+            thinking_level: normalize_thinking(thinking_level.map(str::to_string)),
             context_tokens: None,
             last_notice_seq: None,
             compaction: None,
@@ -579,6 +887,15 @@ impl SessionStore {
                     meta.title = t.clone();
                 }
             }
+        }
+        if let Some(p) = &patch.provider {
+            meta.provider = Some(p.clone());
+        }
+        if let Some(m) = &patch.model {
+            meta.model = Some(m.clone());
+        }
+        if patch.thinking_level.is_some() {
+            meta.thinking_level = normalize_thinking(patch.thinking_level.clone());
         }
         if let Some(t) = patch.context_tokens {
             meta.context_tokens = Some(t);
@@ -892,104 +1209,6 @@ impl SessionStore {
         Ok(turns)
     }
 
-    /// 清空影子日志与压缩标记（压缩后重建对照基线）。
-    pub fn reset_shadow(&mut self, conversation_id: &str) -> Result<(), String> {
-        let path = self.shadow_path(conversation_id)?;
-        let marker = self.shadow_compaction_marker_path(conversation_id)?;
-        let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(marker);
-        Ok(())
-    }
-
-    /// 影子日志对应的压缩标记（compaction.at；None = 未记录）。
-    pub fn shadow_compaction_marker(&self, conversation_id: &str) -> Result<Option<u64>, String> {
-        let path = self.shadow_compaction_marker_path(conversation_id)?;
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => Ok(raw.trim().parse::<u64>().ok()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(format!("读取影子压缩标记失败（{}）：{e}", path.display())),
-        }
-    }
-
-    /// 写入影子压缩标记。
-    pub fn set_shadow_compaction_marker(
-        &self,
-        conversation_id: &str,
-        at: u64,
-    ) -> Result<(), String> {
-        let path = self.shadow_compaction_marker_path(conversation_id)?;
-        std::fs::write(&path, at.to_string())
-            .map_err(|e| format!("写入影子压缩标记失败（{}）：{e}", path.display()))
-    }
-
-    fn shadow_compaction_marker_path(&self, conversation_id: &str) -> Result<PathBuf, String> {
-        if !Self::valid_id(conversation_id) {
-            return Err(format!(
-                "conversationId 非法（仅允许字母数字与 - _）：{conversation_id:?}"
-            ));
-        }
-        let dir = self.dir.join(".shadow");
-        std::fs::create_dir_all(&dir).ok();
-        Ok(dir.join(format!("{conversation_id}.compaction")))
-    }
-
-    /// 读取影子日志的轮事件（shadow 模式对比用）。
-    pub fn load_shadow_turns(
-        &mut self,
-        conversation_id: &str,
-    ) -> Result<Vec<Vec<SessionEvent>>, String> {
-        let path = self.shadow_path(conversation_id)?;
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取影子日志失败（{}）：{e}", path.display()))?;
-        let mut turns = Vec::new();
-        for line in raw.split('\n') {
-            let line = line.trim_end_matches('\r');
-            if line.is_empty() {
-                continue;
-            }
-            if let Ok(events) = serde_json::from_str::<Vec<SessionEvent>>(line) {
-                turns.push(events);
-            }
-        }
-        Ok(turns)
-    }
-
-    /// 追加一条影子轮事件（不污染官方 log）。
-    pub fn append_shadow_events(
-        &mut self,
-        conversation_id: &str,
-        events_json: &str,
-    ) -> Result<(), String> {
-        if serde_json::from_str::<Vec<serde_json::Value>>(events_json).is_err() {
-            return Err("影子日志事件不是合法 JSON 数组".into());
-        }
-        let path = self.shadow_path(conversation_id)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| format!("打开影子日志失败（{}）：{e}", path.display()))?;
-        file.write_all(format!("{}\n", events_json.trim_end_matches(['\r', '\n'])).as_bytes())
-            .map_err(|e| format!("写入影子日志失败（{}）：{e}", path.display()))
-    }
-
-    /// 记录 shadow 对比结果（追加，便于跨轮审计）。
-    pub fn append_shadow_diff(&mut self, text: &str) -> Result<(), String> {
-        let dir = self.dir.join(".shadow");
-        std::fs::create_dir_all(&dir).ok();
-        let path = dir.join("shadow-diff.log");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|e| format!("打开 shadow-diff 失败（{}）：{e}", path.display()))?;
-        file.write_all(text.as_bytes())
-            .map_err(|e| format!("写入 shadow-diff 失败（{}）：{e}", path.display()))
-    }
-
     /// 原子创建文件：先写同目录临时文件，再 rename。首轮/空会话建文件用。
     fn write_atomic(path: &Path, content: &str) -> Result<(), String> {
         let tmp = path.with_file_name(format!(
@@ -1075,29 +1294,10 @@ impl SessionStore {
         Ok(())
     }
 
-    fn shadow_path(&self, conversation_id: &str) -> Result<PathBuf, String> {
-        if !Self::valid_id(conversation_id) {
-            return Err(format!(
-                "conversationId 非法（仅允许字母数字与 - _）：{conversation_id:?}"
-            ));
-        }
-        let dir = self.dir.join(".shadow");
-        std::fs::create_dir_all(&dir).ok();
-        Ok(dir.join(format!("{conversation_id}.jsonl")))
-    }
-
     // ── 内部辅助 ──
 
-    /// conversationId 文件名安全校验（仅 [A-Za-z0-9_-]，排除路径分隔与 "."/".."）。
-    fn valid_id(id: &str) -> bool {
-        !id.is_empty()
-            && id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    }
-
     fn file_path(&self, id: &str) -> Result<PathBuf, String> {
-        if !Self::valid_id(id) {
+        if !is_safe_session_id(id) {
             return Err(format!(
                 "conversationId 非法（仅允许字母数字与 - _）：{id:?}"
             ));
@@ -1398,7 +1598,7 @@ impl SessionStore {
                 }
                 Err(e) => {
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if !Self::valid_id(stem) {
+                    if !is_safe_session_id(stem) {
                         eprintln!("[session_store] 跳过无效会话文件 {}：{e}", path.display());
                         continue;
                     }
@@ -1458,6 +1658,9 @@ fn meta_from_header(h: SessionHeader) -> ConversationMeta {
         updated_at: h.created_at,
         model_name: None,
         context_length: None,
+        provider: None,
+        model: None,
+        thinking_level: None,
         context_tokens: None,
         last_notice_seq: None,
         compaction: None,
@@ -1475,6 +1678,11 @@ fn merge_usage(meta: &mut ConversationMeta, deltas: &[UsageDelta]) {
         u.category_mut(d.category).add_stat(&d.stat());
     }
     meta.usage = Some(u);
+}
+
+/// 空串 = 清除回模型默认；非空保留。
+fn normalize_thinking(value: Option<String>) -> Option<String> {
+    value.filter(|v| !v.trim().is_empty())
 }
 
 /// 当前时间（unix 毫秒；clock 异常时回退 0）。
@@ -1713,6 +1921,9 @@ mod tests {
             created_at: None,
             model_name: None,
             context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
             context_tokens: None,
             last_notice_seq: None,
             usage_deltas: None,
@@ -1723,8 +1934,17 @@ mod tests {
     fn ensure_conversation_creates_empty_file_then_load_turns_parses_mixed_events() {
         let dir = unique_temp_dir("ensure-load");
         let mut s = SessionStore::new(&dir);
-        s.ensure_conversation("p1", Some("测试"), Some(123), Some("model"), Some(1000))
-            .unwrap();
+        s.ensure_conversation(
+            "p1",
+            Some("测试"),
+            Some(123),
+            Some("model"),
+            Some(1000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(s.get("p1").unwrap().turns.len(), 0);
 
         // 旧事件 + 前端私有事件同轮：后端读取时未知事件应被跳过，不整体失败。
@@ -1745,7 +1965,7 @@ mod tests {
     fn append_meta_only_updates_meta_without_writing_events() {
         let dir = unique_temp_dir("meta-only");
         let mut s = SessionStore::new(&dir);
-        s.ensure_conversation("m1", Some("旧"), Some(1), None, None)
+        s.ensure_conversation("m1", Some("旧"), Some(1), None, None, None, None, None)
             .unwrap();
         let mut r = req("m1", &ev_user("不应落盘"));
         r.title = Some("新标题".into());
@@ -1853,6 +2073,144 @@ mod tests {
     /// 简单轮事件（user 消息）。
     fn ev_user(content: &str) -> String {
         format!(r#"[{{"type":"user/message","sessionId":"s1","content":"{content}"}}]"#)
+    }
+
+    #[test]
+    fn recover_inflight_repairs_partial_turn_and_pending_tool_call() {
+        use crate::session::ChunkKind;
+
+        let dir = unique_temp_dir("inflight-recover");
+        let mut s = SessionStore::new(&dir);
+        let meta = InflightMeta {
+            conversation_id: "c1".into(),
+            session_id: "s1".into(),
+            title: Some("崩溃轮".into()),
+            created_at: Some(1),
+            model_name: Some("m".into()),
+            context_length: Some(1000),
+            provider: None,
+            model: None,
+            thinking_level: None,
+            last_notice_seq: None,
+            user_event: None,
+        };
+        let path = s
+            .begin_inflight(
+                &meta,
+                &[
+                    SessionEvent::turn_start("s1"),
+                    SessionEvent::user_message("s1", "查一下"),
+                ],
+            )
+            .unwrap();
+        {
+            let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+            for event in [
+                SessionEvent::assistant_chunk("s1", ChunkKind::Text, "半截回答"),
+                SessionEvent::tool_call("s1", "call-1", "read_file", "{}"),
+            ] {
+                writeln!(f, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+            }
+        }
+
+        assert_eq!(s.recover_inflight().unwrap(), 1);
+        assert!(!path.exists(), "恢复后 journal 应删除");
+        let turns = s.load_turns("c1").unwrap();
+        assert_eq!(turns.len(), 1);
+        let turn = &turns[0];
+        assert!(turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::ToolResult { call_id, ok: false, .. } if call_id == "call-1"
+        )));
+        assert!(turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Interrupted,
+                ..
+            }
+        )));
+        assert!(turn.iter().any(|e| matches!(
+            e,
+            SessionEvent::AssistantChunk { content, .. } if content == "半截回答"
+        )));
+    }
+
+    #[test]
+    fn recover_inflight_falls_back_to_meta_user_when_prefix_is_truncated() {
+        let dir = unique_temp_dir("inflight-meta-user");
+        let mut s = SessionStore::new(&dir);
+        let user = SessionEvent::user_message("s1", "写到一半的用户消息");
+        let meta = InflightMeta {
+            conversation_id: "c3".into(),
+            session_id: "s1".into(),
+            title: Some("截断前缀".into()),
+            created_at: None,
+            model_name: None,
+            context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
+            last_notice_seq: None,
+            user_event: Some(user.clone()),
+        };
+        // 模拟 meta 写完、prefix 还没写就崩溃。
+        let path = s.begin_inflight(&meta, &[]).unwrap();
+        assert_eq!(s.recover_inflight().unwrap(), 1);
+        assert!(!path.exists());
+        let turns = s.load_turns("c3").unwrap();
+        assert_eq!(turns.len(), 1);
+        assert!(turns[0].iter().any(|e| matches!(
+            e,
+            SessionEvent::UserMessage { content, .. } if content == "写到一半的用户消息"
+        )));
+        assert!(turns[0].iter().any(|e| matches!(
+            e,
+            SessionEvent::TurnEnd {
+                reason: TurnEndReason::Interrupted,
+                ..
+            }
+        )));
+        assert_eq!(user_session_id(&turns[0]), Some("s1".to_string()));
+    }
+
+    fn user_session_id(events: &[SessionEvent]) -> Option<String> {
+        events.iter().find_map(|event| match event {
+            SessionEvent::UserMessage { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn recover_inflight_dedupes_already_committed_turn() {
+        let dir = unique_temp_dir("inflight-dedupe");
+        let mut s = SessionStore::new(&dir);
+        s.append_turn(&req("c2", &ev_user("已提交"))).unwrap();
+        let meta = InflightMeta {
+            conversation_id: "c2".into(),
+            session_id: "s1".into(),
+            title: Some("重复".into()),
+            created_at: None,
+            model_name: None,
+            context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
+            last_notice_seq: None,
+            user_event: None,
+        };
+        let path = s
+            .begin_inflight(
+                &meta,
+                &[
+                    SessionEvent::turn_start("s1"),
+                    SessionEvent::user_message("s1", "已提交"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(s.recover_inflight().unwrap(), 1);
+        assert!(!path.exists());
+        assert_eq!(s.load_turns("c2").unwrap().len(), 1, "不能重复追加");
     }
 
     fn read_lines(dir: &Path, id: &str) -> Vec<String> {
@@ -2135,7 +2493,7 @@ mod tests {
     fn header_only_file_without_trailing_newline_survives_append() {
         let dir = unique_temp_dir("r6-header-no-newline");
         let mut s = SessionStore::new(&dir);
-        s.ensure_conversation("c11", Some("T"), Some(1), None, None)
+        s.ensure_conversation("c11", Some("T"), Some(1), None, None, None, None, None)
             .unwrap();
         let path = dir.join("sessions").join("c11.jsonl");
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -2416,6 +2774,9 @@ mod tests {
                 expected_title: None,
                 context_tokens: None,
                 last_notice_seq: Some(11),
+                provider: None,
+                model: None,
+                thinking_level: None,
                 compaction: None,
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
@@ -2469,6 +2830,9 @@ mod tests {
                 expected_title: None,
                 context_tokens: None,
                 last_notice_seq: None,
+                provider: None,
+                model: None,
+                thinking_level: None,
                 compaction: Some(record.clone()),
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
@@ -2492,6 +2856,9 @@ mod tests {
                 expected_title: None,
                 context_tokens: None,
                 last_notice_seq: None,
+                provider: None,
+                model: None,
+                thinking_level: None,
                 compaction: None,
                 context_tokens_clear: false,
                 last_notice_seq_clear: false,
@@ -2589,6 +2956,9 @@ mod tests {
                 expected_title: None,
                 context_tokens: None,
                 last_notice_seq: None,
+                provider: None,
+                model: None,
+                thinking_level: None,
                 compaction: Some(CompactionMeta {
                     retained_from: 3,
                     summary: "## Goal\n摘要".into(),
@@ -2780,6 +3150,34 @@ mod tests {
             list[0].last_notice_seq, None,
             "清空应持久化（重启后游标仍为空）"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversation_model_config_roundtrips_and_clears_thinking() {
+        let dir = unique_temp_dir("model-config");
+        let mut s = SessionStore::new(&dir);
+        let mut r = req("cfg", &ev_user("你好"));
+        r.provider = Some("deepseek".into());
+        r.model = Some("deepseek-v4-flash".into());
+        r.thinking_level = Some("high".into());
+        s.append_turn(&r).unwrap();
+
+        let meta = &s.list().unwrap()[0];
+        assert_eq!(meta.provider.as_deref(), Some("deepseek"));
+        assert_eq!(meta.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(meta.thinking_level.as_deref(), Some("high"));
+
+        s.update_meta(
+            "cfg",
+            &MetaPatch {
+                thinking_level: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(s.list().unwrap()[0].thinking_level, None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

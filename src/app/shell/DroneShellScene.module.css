@@ -115,7 +115,7 @@
   flex-direction: column;  /* 为 Step 6 内容区（标题栏+内容+输入）预留 */
 }
 
-/* ── 左面（SVG 平行四边形，stroke-linejoin round 圆角） ── */
+/* ── 左面（SVG 平行四边形，路径圆角） ── */
 
 .leftFace {
   position: absolute;
@@ -129,13 +129,13 @@
   /*
    * 退远向量 = (-left-width, bottom-height)。
    * viewBox 比例 4:27 = left-width : (face-size + bottom-height)，来自 24:4:3。
-   * 具体顶点坐标见 TSX 中 smoothPolygon 调用，此处为几何约定注释。
+   * 具体顶点坐标见 TSX 中 roundedPolygonPath 调用，此处为几何约定注释。
    *   后上左 (0, 3)    前上左 (x≈4, y≈0)    x 溢出防接缝，y 微降贴 border
    *   后下左 (0, 27)   前下左 (x≈4, y=24)
    */
 }
 
-/* ── 底面（SVG 平行四边形，stroke-linejoin round 圆角） ── */
+/* ── 底面（SVG 平行四边形，路径圆角） ── */
 
 .bottomFace {
   position: absolute;
@@ -149,7 +149,7 @@
   /*
    * 退远向量 = (-left-width, bottom-height)，与左面一致。
    * viewBox 比例 28:3 = (face-size + left-width) : bottom-height，来自 24:4:3。
-   * 具体顶点坐标见 TSX 中 smoothPolygon 调用（含手动微调的溢出补偿）。
+   * 具体顶点坐标见 TSX 中 roundedPolygonPath 调用（含手动微调的溢出补偿）。
    *   前下左 (x≈4, 0)    前下右 (x≈28, 0)
    *   后下右 (x=24, 3)    后下左 (0, 3)   ← 与左面后下左共享
    */

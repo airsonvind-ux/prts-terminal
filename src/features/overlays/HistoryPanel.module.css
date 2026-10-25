@@ -56,7 +56,8 @@
   transition: border-left-color 0.15s ease, background 0.12s ease;
 }
 
-.item:hover {
+.item:hover,
+.item:focus-within {
   background: var(--depth-4);
   border-left-color: var(--text-3);
 }
@@ -78,6 +79,20 @@
 }
 
 /* ── 左侧信息区：标题 + 时间 ── */
+
+.selectBtn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 
 .itemInfo {
   flex: 1;
@@ -133,7 +148,8 @@
   transition: opacity 0.12s ease;
 }
 
-.item:hover .actions {
+.item:hover .actions,
+.item:focus-within .actions {
   opacity: 1;
 }
 

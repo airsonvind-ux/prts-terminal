@@ -51,6 +51,77 @@ pub const INFERRED_LEVELS: [&str; 3] = ["off", "medium", "high"];
 /// 推断默认档：全局默认 medium。
 pub const INFERRED_DEFAULT: &str = "medium";
 
+/// 后台任务类型：思考档按任务策略覆盖，不跟随会话的聊天档。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtilityTask {
+    /// 标题：短文本，优先关闭思考。
+    Title,
+    /// 压缩 / 记忆：重要摘要，取最低非 off 档（优先 low）。
+    Compaction,
+    Memory,
+}
+
+fn declared_levels(entry: &super::ModelEntry) -> Vec<&'static str> {
+    if !entry.reasoning {
+        return Vec::new();
+    }
+    if entry.thinking_levels.is_empty() {
+        return INFERRED_LEVELS.to_vec();
+    }
+    LEVELS
+        .iter()
+        .copied()
+        .filter(|level| {
+            entry
+                .thinking_levels
+                .iter()
+                .any(|declared| canonical(declared) == Some(*level))
+        })
+        .collect()
+}
+
+/// 任务策略：不读会话的 reasoning 偏好；只按模型声明集选档。
+///
+/// - 标题：优先 off；模型不允许 off 时取最低可用档。
+/// - 压缩 / 记忆：优先 low；没有 low 时取最低非 off 档；
+///   只有 off 可用时才用 off。
+/// - 非 reasoning / 未收录模型：None，不注入思考参数。
+pub fn utility_level(
+    registry: &ModelRegistry,
+    provider: &str,
+    model: &str,
+    task: UtilityTask,
+) -> Option<&'static str> {
+    let entry = registry.get_model(provider, model)?;
+    if !entry.reasoning {
+        return None;
+    }
+    let levels = declared_levels(entry);
+    if levels.is_empty() {
+        return None;
+    }
+    match task {
+        UtilityTask::Title => {
+            if levels.contains(&"off") {
+                Some("off")
+            } else {
+                levels.first().copied()
+            }
+        }
+        UtilityTask::Compaction | UtilityTask::Memory => {
+            if levels.contains(&"low") {
+                Some("low")
+            } else {
+                levels
+                    .iter()
+                    .copied()
+                    .find(|level| *level != "off")
+                    .or_else(|| levels.first().copied())
+            }
+        }
+    }
+}
+
 /// 解析本次请求最终思考档。
 ///
 /// 当前语义（未声明也显示并注入默认档）：
@@ -652,5 +723,47 @@ mod tests {
         let mut b = serde_json::json!({"model": "gpt"});
         apply_responses(&mut b, "max");
         assert_eq!(b["reasoning"]["effort"], "max");
+    }
+
+    #[test]
+    fn utility_task_levels_follow_model_declaration() {
+        let registry = ModelRegistry::from_json(
+            r#"{
+                "p": {
+                    "defaults": {"api_type": "openai-completions", "base_url": "https://x/v1"},
+                    "models": {
+                        "m": {"name": "M", "context": 1000, "reasoning": true,
+                              "thinking_levels": ["off", "low", "high"]},
+                        "no-low": {"name": "NoLow", "context": 1000, "reasoning": true,
+                              "thinking_levels": ["off", "medium", "high"]},
+                        "no-off": {"name": "NoOff", "context": 1000, "reasoning": true,
+                              "thinking_levels": ["low", "high", "max"]},
+                        "plain": {"name": "Plain", "context": 1000}
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            utility_level(&registry, "p", "m", UtilityTask::Title),
+            Some("off")
+        );
+        assert_eq!(
+            utility_level(&registry, "p", "m", UtilityTask::Compaction),
+            Some("low")
+        );
+        assert_eq!(
+            utility_level(&registry, "p", "no-low", UtilityTask::Memory),
+            Some("medium")
+        );
+        assert_eq!(
+            utility_level(&registry, "p", "no-off", UtilityTask::Title),
+            Some("low")
+        );
+        assert_eq!(
+            utility_level(&registry, "p", "plain", UtilityTask::Memory),
+            None
+        );
     }
 }

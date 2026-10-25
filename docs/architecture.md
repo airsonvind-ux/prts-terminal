@@ -60,7 +60,7 @@ tools → storage / integrations
 ## 一次 turn 的生命周期
 
 1. 前端提交本轮输入与会话元数据；`primary` 模式下不再提交完整历史。
-2. `app` 层检查是否有活跃 turn，从官方 session log 读取历史（legacy 模式退回前端 history），组装冻结的 system prompt 与工具定义。
+2. `app` 层检查是否有活跃 turn，从官方 session log 读取历史，组装冻结的 system prompt 与工具定义。
 3. `agent` 播种会话日志，进入 step 循环。
 4. LLM 流式返回 reasoning、文本和工具调用；`EventSink` 把持久事实写入 session log，同时推送 IPC。
 5. 工具调用进入审批与执行阶段：权限判断、路径检查、命令沙箱、取消点。

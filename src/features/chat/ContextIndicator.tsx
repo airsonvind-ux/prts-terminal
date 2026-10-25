@@ -19,14 +19,26 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import { useConversationStore } from "../../stores/useConversationStore";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { useUIStore } from "../../stores/useUIStore";
 import { useModelInfo } from "../../stores/useProcessingStore";
 import { CONTEXT_WARNING_RATIO } from "../../projection";
+import { resolveThinking, thinkingLabel } from "../../thinking";
+import { ProviderIcon } from "./ProviderIcon";
 import styles from "./ContextIndicator.module.css";
 
-const SIZE = 20;
+interface ActiveModelFacts {
+  displayName: string;
+  contextLength: number;
+  supportsVision: boolean;
+  supportsReasoning?: boolean;
+  thinkingLevels?: string[] | null;
+  defaultThinkingLevel?: string | null;
+}
+
+const SIZE = 22;
 const STROKE = 2;
 const RADIUS = (SIZE - STROKE) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
@@ -41,6 +53,24 @@ function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}K` : `${k.toFixed(1)}K`;
+}
+
+/** 思考档 → 供应商标记明度（不使用色相，外环颜色只表示用量）。 */
+function thinkingOpacity(level?: string | null): number {
+  switch (level) {
+    case "off":
+      return 0.3;
+    case "low":
+      return 0.45;
+    case "medium":
+      return 0.62;
+    case "high":
+      return 0.8;
+    case "max":
+      return 1;
+    default:
+      return 0.55;
+  }
 }
 
 /**
@@ -117,9 +147,62 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
   const compacting = activeId !== null && compactingConversationId === activeId;
 
   const modelInfo = useModelInfo();
-  const modelName = modelInfo?.name;
-  const modelThinking = modelInfo?.thinking;
-  const contextWindow = modelInfo?.contextLength ?? 0;
+  const [activeModelFacts, setActiveModelFacts] =
+    useState<ActiveModelFacts | null>(null);
+  const useGlobalModelFallback =
+    !activeConv || (!activeConv.provider && !activeConv.model);
+  const configProvider = useGlobalModelFallback
+    ? modelInfo?.provider
+    : activeConv.provider;
+  const configModel = useGlobalModelFallback
+    ? modelInfo?.model
+    : activeConv.model;
+
+  // 当前对话的模型事实按会话配置查询；全局 modelInfo 只作旧对话兜底。
+  useEffect(() => {
+    if (!configProvider || !configModel) {
+      setActiveModelFacts(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<ActiveModelFacts | null>("get_local_model_info", {
+      provider: configProvider,
+      modelId: configModel,
+    })
+      .then((info) => {
+        if (!cancelled) setActiveModelFacts(info);
+      })
+      .catch(() => {
+        if (!cancelled) setActiveModelFacts(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configProvider, configModel]);
+
+  const storedThinking =
+    activeConv?.provider && activeConv.model
+      ? activeConv.thinkingLevel ?? null
+      : modelInfo?.thinkingLevel ?? null;
+  const thinkingView = resolveThinking(storedThinking, activeModelFacts);
+  const modelName =
+    activeModelFacts?.displayName ??
+    activeConv?.modelName ??
+    (configModel ? configModel : modelInfo?.name);
+  const modelThinking = thinkingView
+    ? thinkingLabel(storedThinking, activeModelFacts)
+    : activeModelFacts
+      ? null
+      : modelInfo?.thinking;
+  const contextWindow =
+    activeModelFacts?.contextLength ??
+    activeConv?.contextLength ??
+    modelInfo?.contextLength ??
+    0;
+  const providerForIcon = activeConv?.provider ?? modelInfo?.provider;
+  const iconOpacity = thinkingView
+    ? thinkingOpacity(thinkingView.effective)
+    : 0.6;
 
   // 水位口径（模块 D 修正）：input 侧。output 是成本信息非水位。
   // step/end 写入的 liveContextTokens 优先；轮末归档后 live 清空，回退持久快照。
@@ -193,6 +276,7 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
       <div
         ref={setRingEl}
         data-guide="context-ring"
+        data-focus-inset
         className={`${styles.ringWrapper} ${shown ? styles.visible : ""}`}
         onMouseEnter={handleRingEnter}
         onMouseLeave={handleRingLeave}
@@ -257,6 +341,13 @@ export function ContextIndicator({ reveal = true }: { reveal?: boolean } = {}) {
             />
           )}
         </svg>
+        {providerForIcon && (
+          <ProviderIcon
+            provider={providerForIcon}
+            className={styles.providerIcon}
+            opacity={iconOpacity}
+          />
+        )}
       </div>
 
       {/* hover 纯信息浮层（压缩菜单打开时抑制） */}

@@ -57,11 +57,14 @@ export function ModelListSection({
       {models.length > 0 && (
         <div className={styles.modelList}>
           {models.map((m) => (
-            <div
+            <button
               key={m.id}
+              type="button"
+              data-focus-inset
               className={`${styles.modelItem} ${
                 m.id === selectedModel ? styles.modelItemActive : ""
               }`}
+              aria-pressed={m.id === selectedModel}
               onClick={() => onSelect(m.id)}
             >
               <span className={styles.modelItemName}>
@@ -92,7 +95,7 @@ export function ModelListSection({
               <span className={styles.modelItemContext}>
                 {m.contextLength > 0 ? formatContext(m.contextLength) : "—"}
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}

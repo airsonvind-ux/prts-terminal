@@ -71,7 +71,9 @@ use crate::events::AgentEvent;
 #[cfg(test)]
 use crate::llm::TokenUsage;
 
-use crate::events::{AgentPhase, FrontendMessage, IpcEvent};
+#[cfg(test)]
+use crate::events::FrontendMessage;
+use crate::events::{AgentPhase, IpcEvent};
 use crate::exec_settings::ExecutionMode;
 use crate::llm::{
     usage_stat, ChatMessage, ClientRegistry, LlmClient, LlmConfig, LlmError, ModelRegistry,
@@ -177,6 +179,7 @@ enum TurnOutcome {
 /// 会话日志侧（不可见，供回放/遥测）：
 /// turn/start → 播种历史 → request/header（仅变化时追加）→
 /// step/start × N … step/end × N → assistant/message → turn/end{reason}
+#[cfg(test)]
 #[allow(dead_code)] // 测试用无目录无记忆薄包装；生产走 process_with_memory
 #[allow(clippy::too_many_arguments)]
 pub async fn process(
@@ -219,6 +222,7 @@ pub async fn process(
 /// `system_prompt` 为对话冻结的完整前缀全（人格 + 界面 + 目录 + 记忆区），
 /// `tool_defs` 与之同源（同一快照）。冻结后整个对话逐字节不变，故每 step
 /// 重写 `messages[0]` 的内容恒定，`push_header` 去重不误判（前缀缓存不破）。
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub async fn process_with_memory(
     session_id: &str,
@@ -259,8 +263,9 @@ pub async fn process_with_memory(
     .await
 }
 
-/// 历史来源：前端 history（legacy）或后端官方 log（primary）。
+/// 历史来源。生产只用后端官方 log；Frontend 仅保留给测试夹具。
 pub enum HistorySeed {
+    #[cfg(test)]
     Frontend(Vec<FrontendMessage>),
     Log {
         turns: Vec<Vec<SessionEvent>>,
@@ -311,7 +316,7 @@ pub async fn process_with_log(
     // M1 修复（Reminder 投递机制）：历史完全由前端决定（含块 user 消息由
     // 前端拼装后随请求到达并归档冻结），后端零注入——seed 只做原样播种。
     // Skill 目录索引：turn 级快照（每 turn 入口重建——Skill 生命周期绑定
-    // 本轮对话：轮内激活、轮末随 ActiveContext 自动卸载，跨轮按需重新激活）。
+    // 本轮对话：轮内激活、轮末随本轮结束失效，跨轮按需重新激活）。
     // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
     // 加载失败降级为空索引（激活工具恒未命中），不阻断本轮处理。
     let skill_index = Arc::new(
@@ -323,14 +328,15 @@ pub async fn process_with_log(
             }
         },
     );
-    // 上下文管理修正（2026-08）：Active/Reference 动态层已移除，无状态容器。
+    // 上下文管理修正（2026-08）：动态注入层已移除，无状态容器。
     // 动态内容（skill 正文等）一律以工具结果消息进历史，不再进 system prompt。
     let persist_tool_calls = matches!(&history, HistorySeed::Log { .. });
     {
         let mut log = log.lock().unwrap();
-        log.append(SessionEvent::turn_start(session_id));
         match history {
+            #[cfg(test)]
             HistorySeed::Frontend(history) => {
+                log.append(SessionEvent::turn_start(session_id));
                 log.seed_from_history(session_id, history);
                 log.mark_turn_boundary();
             }
@@ -355,6 +361,9 @@ pub async fn process_with_log(
                 for turn in kept {
                     log.seed_events(turn);
                 }
+                // 当前轮的 turn_start 必须排在历史之后：image/delivery 的
+                // user_event_offset 以它为锚，归档重放才能保持同一相对位置。
+                log.append(SessionEvent::turn_start(session_id));
                 log.append(*user);
                 // primary：当前轮从 user 消息开始（历史只用于派生，不写回官方 log）。
                 log.mark_turn_boundary();
@@ -371,10 +380,11 @@ pub async fn process_with_log(
     // 图像物化**不在这里做**：它必须发生在每次 LLM 请求前（见 dispatch 循环的
     // prepare_request_images）——工具返回的图是轮内追加的，只在轮起点处理会
     // 让它永远送不到模型手里（2026-10-06 修复：MAA 截图曾因此只到路径）。
-    let supports_vision = model_registry
-        .get_model(&config.provider, &config.model)
-        .map(|m| m.supports_vision)
-        .unwrap_or(false);
+    let vision_support = match model_registry.get_model(&config.provider, &config.model) {
+        Some(m) if m.supports_vision => llm_call::VisionSupport::Supported,
+        Some(_) => llm_call::VisionSupport::Unsupported,
+        None => llm_call::VisionSupport::Unknown,
+    };
 
     // ── 4. 进入调度循环（一个 turn，零或多个 step）──
     // workspace_root：自动化模式地域性信任门的信任根。命令层装配时从
@@ -399,7 +409,7 @@ pub async fn process_with_log(
         steer_queue,
         &workspace_root,
         &system_prompt,
-        supports_vision,
+        vision_support,
     )
     .await;
     // ── M3-B 责任表⑦：Aborted 出口（dispatch 不写 turn/end，此处补）──
@@ -410,9 +420,14 @@ pub async fn process_with_log(
     let outcome = match outcome {
         Ok(TurnOutcome::Aborted(stat)) => {
             approvals.clear_session(session_id);
+            let reason = if abort.is_app_shutdown() {
+                TurnEndReason::AppShutdown
+            } else {
+                TurnEndReason::Aborted
+            };
             sink.emit(SessionEvent::turn_end_with_usage(
                 session_id,
-                TurnEndReason::Aborted,
+                reason,
                 Some(stat),
             ));
             Ok(TurnOutcome::Completed)
@@ -502,7 +517,7 @@ async fn dispatch_turn(
         steer_queue,
         workspace_root,
         &context::assemble_system_prompt_with_memory("", ""), // 无目录 / 无记忆
-        false, // supports_vision（薄包装：无模型注册表，不物化）
+        llm_call::VisionSupport::Unknown,                     // 薄包装：无模型注册表，不声明能力
     )
     .await
 }
@@ -535,7 +550,7 @@ fn switch_phase(
 #[cfg(test)]
 mod tests {
     use super::llm_call::{
-        call_llm_with_retry, handle_stream_event, prepare_request_images, NO_VISION_NOTICE,
+        call_llm_with_retry, handle_stream_event, prepare_request_images, VisionSupport,
     };
     use super::*;
     use std::collections::VecDeque;
@@ -552,13 +567,24 @@ mod tests {
             provider_blocks: None,
             image_paths: Some(vec!["C:/x/shot.png".into()]),
             images: None,
+            tool_ok: None,
+            image_event_seq: None,
+            image_tool_call_id: None,
         }];
-        prepare_request_images(&mut messages, false);
-        assert!(messages[0].content.contains(NO_VISION_NOTICE));
+        prepare_request_images(&mut messages, VisionSupport::Unsupported);
+        assert!(messages[0]
+            .content
+            .contains(SessionLog::IMAGE_OMITTED_NOTICE));
         assert!(messages[0].image_paths.is_none());
         // 每次请求前都会进这里：补过就不再补，免得逐轮堆积。
-        prepare_request_images(&mut messages, false);
-        assert_eq!(messages[0].content.matches(NO_VISION_NOTICE).count(), 1);
+        prepare_request_images(&mut messages, VisionSupport::Unsupported);
+        assert_eq!(
+            messages[0]
+                .content
+                .matches(SessionLog::IMAGE_OMITTED_NOTICE)
+                .count(),
+            1
+        );
     }
     use std::future::Future;
     use std::pin::Pin;
@@ -606,7 +632,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut store = SessionStore::new(&dir);
         store
-            .ensure_conversation("c1", Some("测试"), Some(1), None, None)
+            .ensure_conversation("c1", Some("测试"), Some(1), None, None, None, None, None)
             .unwrap();
 
         let mock = Arc::new(MockLlmClient::simple_reply("答"));
@@ -652,6 +678,9 @@ mod tests {
             created_at: None,
             model_name: None,
             context_length: None,
+            provider: None,
+            model: None,
+            thinking_level: None,
             context_tokens: None,
             last_notice_seq: None,
             usage_deltas: None,
@@ -976,23 +1005,87 @@ mod tests {
             ChatMessage::assistant("看过了"),
             ChatMessage::user_with_image_paths("当前图", vec![path.clone()]),
         ];
-        prepare_request_images(&mut messages, true);
+        messages[2].image_event_seq = Some(2);
+        let facts = prepare_request_images(&mut messages, VisionSupport::Supported);
         assert!(messages[0].images.is_none(), "历史图不物化");
         assert!(messages[0].image_paths.is_none(), "历史图路径已清");
         assert!(
             messages[2].images.as_ref().is_some_and(|v| !v.is_empty()),
             "当前图物化为像素"
         );
+        assert_eq!(facts.len(), 1, "只有当前图产生投递事实");
+        assert!(facts[0].included, "像素已进入请求体");
+        assert_eq!(facts[0].user_event_offset, Some(2));
 
         // 不支持视觉：谁都不物化
         let mut messages = vec![
             ChatMessage::assistant("看过了"),
             ChatMessage::user_with_image_paths("当前图", vec![path]),
         ];
-        prepare_request_images(&mut messages, false);
+        messages[1].image_event_seq = Some(1);
+        let facts = prepare_request_images(&mut messages, VisionSupport::Unsupported);
         assert!(messages[1].images.is_none(), "无视觉能力不物化");
+        assert!(!facts[0].included);
+        assert_eq!(
+            facts[0].reason,
+            Some(crate::session::ImageOmitReason::UnsupportedVision)
+        );
+        assert!(messages[1]
+            .content
+            .contains(crate::session::SessionLog::IMAGE_OMITTED_NOTICE));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tool_call_without_reasoning_gets_empty_carrier_under_require_tool_call() {
+        // 回归：模型在开启思考的工具轮没有返回 reasoning 时，in-turn 的
+        // assistant 消息也必须带空 carrier。否则下一步请求会被本地 replay
+        // guard 拦下，用户看到的是“工具调用到一半系统报错”。
+        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("测试")];
+        let tools = {
+            let mut reg = ToolRegistry::new();
+            reg.register(Box::new(crate::tools::EchoTool)).unwrap();
+            reg
+        };
+        let ctx = ToolContext::new();
+        let (sink, _events, _log) = test_sink();
+        let result = StreamResult {
+            text: String::new(),
+            tool_calls: vec![crate::llm::ToolCall {
+                id: "call_1".into(),
+                call_type: "function".into(),
+                function: crate::llm::ToolCallFunction {
+                    name: "echo".into(),
+                    arguments: r#"{"message":"hello"}"#.into(),
+                },
+            }],
+            reasoning: None,
+            usage: None,
+            finish_reason: None,
+        };
+        let mut state = TurnState::new();
+        let abort = AbortSignal::new();
+
+        execute_tools_and_append_with_blocks(
+            "s1",
+            &mut messages,
+            &result,
+            ReasoningPolicy::RequireToolCall,
+            &tools,
+            &ctx,
+            &sink,
+            &mut state,
+            None,
+            &abort,
+            &[],
+        );
+
+        let assistant = messages
+            .iter()
+            .find(|m| m.role == crate::llm::MessageRole::Assistant)
+            .expect("应写入 assistant 工具消息");
+        assert_eq!(assistant.reasoning_content.as_deref(), Some(""));
     }
 
     #[test]
@@ -1234,246 +1327,6 @@ mod tests {
         );
     }
 
-    // ── Reference 变更标记 / 缓存工具 / 静态注入测试 —— 已注释（2026-08：
-    //     动态层移除、缓存工具取消注册，对应测试停用；未来复用时可恢复）──
-    /*
-
-    /// 测试用缓存工具：execute 返回携带 ReferenceLoad 指令的 ToolOutput
-    /// （模拟模块 C 缓存工具的标记形态，本任务不实现缓存工具本身）。
-    struct CacheStoreTestTool;
-
-    impl crate::tools::Tool for CacheStoreTestTool {
-        fn name(&self) -> &str {
-            "cache_store_test"
-        }
-
-        fn description(&self) -> &str {
-            "测试用：返回 Reference 载入指令"
-        }
-
-        fn parameters(&self) -> serde_json::Value {
-            serde_json::json!({ "type": "object" })
-        }
-
-        fn execute(
-            &self,
-            _ctx: &ToolContext,
-            _params: &str,
-        ) -> Result<crate::tools::ToolOutput, ToolError> {
-            let mut output = crate::tools::ToolOutput::text("已载入缓存条目");
-            output.context_ops = vec![crate::tools::ContextOp::ReferenceLoad {
-                key: "enemy.unit_1001".into(),
-                content: "源石虫".into(),
-            }];
-            Ok(output)
-        }
-    }
-
-    #[test]
-    fn context_ops_applied_to_active_context_by_orchestrator() {
-        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("载入缓存")];
-        let tools = {
-            let mut reg = ToolRegistry::new();
-            reg.register(Box::new(CacheStoreTestTool)).unwrap();
-            reg
-        };
-        let ctx = ToolContext::new();
-        let (sink, _, _) = test_sink();
-        let mut active = ActiveContext::new();
-
-        let tool_calls = vec![crate::llm::ToolCall {
-            id: "call_cache".into(),
-            call_type: "function".into(),
-            function: crate::llm::ToolCallFunction {
-                name: "cache_store_test".into(),
-                arguments: "{}".into(),
-            },
-        }];
-        let result = StreamResult {
-            text: String::new(),
-            tool_calls,
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        };
-
-        let mut state = TurnState::new();
-        execute_tools_and_append(
-            "s1",
-            &mut messages,
-            &mut active,
-            &result,
-            &tools,
-            &ctx,
-            &sink,
-            &mut state,
-        );
-
-        // 工具返回的标记由中枢统一应用：ActiveContext 已含缓存条目
-        assert_eq!(active.reference_len(), 1);
-        let entries: Vec<_> = active.reference_entries().collect();
-        assert_eq!(entries, vec![("enemy.unit_1001", "源石虫")]);
-    }
-
-    // ── 缓存工具：效果侧 + 落账侧（模块 C）──
-
-    #[test]
-    fn cache_tool_events_land_in_session_log() {
-        use crate::cache::CacheStores;
-        use crate::tools::CacheStoreTool;
-
-        let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("写入缓存")];
-        let tools = {
-            let mut reg = ToolRegistry::new();
-            reg.register(Box::new(CacheStoreTool)).unwrap();
-            reg
-        };
-        // 真实缓存工具需要通道：注入缓存分区 + 对话标识
-        let cache_stores = Arc::new(Mutex::new(CacheStores::new()));
-        let ctx = ToolContext::with_cache(Arc::clone(&cache_stores), "conv-1".into());
-        let (sink, events, log) = test_sink();
-        let mut active = ActiveContext::new();
-
-        let tool_calls = vec![crate::llm::ToolCall {
-            id: "call_cache_store".into(),
-            call_type: "function".into(),
-            function: crate::llm::ToolCallFunction {
-                name: "cache_store".into(),
-                arguments:
-                    r#"{"key":"buff.总结","content":"同类取最高","bucket":"static","source_entry":"Buff机制基础"}"#
-                        .into(),
-            },
-        }];
-        let result = StreamResult {
-            text: String::new(),
-            tool_calls,
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        };
-
-        let mut state = TurnState::new();
-        execute_tools_and_append(
-            "s1",
-            &mut messages,
-            &mut active,
-            &result,
-            &tools,
-            &ctx,
-            &sink,
-            &mut state,
-        );
-
-        // 落账侧：log 含 cache/store（工具不改 log，标记由中枢统一写）
-        let log = log.lock().unwrap();
-        let cache_events: Vec<&SessionEvent> = log
-            .events()
-            .iter()
-            .filter(|e| matches!(e, SessionEvent::CacheStore { .. }))
-            .collect();
-        assert_eq!(cache_events.len(), 1);
-        match cache_events[0] {
-            SessionEvent::CacheStore { session_id, key, bucket, source_entry } => {
-                assert_eq!(session_id, "s1");
-                assert_eq!(key, "buff.总结");
-                assert_eq!(*bucket, crate::session::CacheBucket::Static);
-                assert_eq!(source_entry.as_deref(), Some("Buff机制基础"));
-            }
-            _ => unreachable!(),
-        }
-        // log 顺序：tool/call → tool/result → cache/store（与消息顺序一致）
-        let types: Vec<&str> = log.events().iter().map(event_type).collect();
-        assert_eq!(types, vec!["tool/call", "tool/result", "cache/store"]);
-
-        // 效果侧：桶内容写入 + Reference 层当轮载入
-        let stores = cache_stores.lock().unwrap();
-        assert!(stores.get("conv-1").unwrap().load_static("buff.总结").is_some());
-        assert_eq!(active.reference_len(), 1);
-        let _ = events;
-    }
-
-    #[tokio::test]
-    async fn process_injects_static_entries_only_for_own_conversation() {
-        use crate::cache::{CacheEntry, CacheStores};
-        use crate::llm::{ApiType, LlmConfig, ModelRegistry};
-        use std::collections::VecDeque;
-
-        // ScriptedClient（见 reference 测试）：快照每次 LLM 调用收到的 messages，
-        // 队列只放一次最终回答（无工具调用）
-        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: "答".into(),
-            tool_calls: vec![],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
-        let mut client_registry = ClientRegistry::new();
-        client_registry.register(ApiType::OpenAiCompletions, scripted);
-        let model_registry = Arc::new(
-            ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap(),
-        );
-
-        // 预写两个对话的静态分区：conv-a 应有、conv-b 不应泄漏
-        let cache_stores = Arc::new(Mutex::new(CacheStores::new()));
-        {
-            let mut stores = cache_stores.lock().unwrap();
-            stores.partition("conv-a").store_static(CacheEntry {
-                key: "buff.总结".into(),
-                content: "同类取最高".into(),
-                source_entry: Some("Buff机制基础".into()),
-            });
-            stores.partition("conv-b").store_static(CacheEntry {
-                key: "敌人.秘密".into(),
-                content: "绝密内容".into(),
-                source_entry: None,
-            });
-        }
-
-        let tools = ToolRegistry::new(); // 无工具调用，空注册表即可
-        let history = vec![FrontendMessage {
-            role: "user".into(),
-            content: "你好".into(),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-            attachments: Vec::new(),
-        }];
-
-        process(
-            "s1",
-            history,
-            &tools,
-            &client_registry,
-            &LlmConfig::default(),
-            &model_registry,
-            None,
-            "conv-a",
-            Arc::clone(&cache_stores),
-            Arc::new(Mutex::new(std::collections::HashMap::new())),
-            |_| {}, // 本测试从 messages 快照断言，不消费 IPC
-        )
-        .await
-        .unwrap();
-
-        // 快照 = LLM 实际收到的 messages（重组后的 system prompt 在 [0]）
-        let snapshots = snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 1, "应恰好一次 LLM 调用");
-        assert_eq!(snapshots[0][0].role, crate::llm::MessageRole::System);
-        assert!(
-            snapshots[0][0].content.contains("同类取最高"),
-            "本对话静态条目应注入 system prompt"
-        );
-        assert!(
-            !snapshots[0][0].content.contains("绝密内容"),
-            "另一对话的静态条目不应泄漏"
-        );
-    }
-    */
-
     // ── TurnState ──
 
     #[test]
@@ -1658,16 +1511,13 @@ mod tests {
             SessionEvent::AssistantProviderBlocks { .. } => "assistant/provider-blocks",
             SessionEvent::ToolCall { .. } => "tool/call",
             SessionEvent::ToolResult { .. } => "tool/result",
+            SessionEvent::ImageDelivery { .. } => "image/delivery",
             SessionEvent::RequestHeader { .. } => "request/header",
             SessionEvent::Error { .. } => "error",
-            SessionEvent::CacheStore { .. } => "cache/store",
-            SessionEvent::CacheLoad { .. } => "cache/load",
-            SessionEvent::CacheRemove { .. } => "cache/remove",
             SessionEvent::SkillActivate { .. } => "skill/activate",
             SessionEvent::ToolApprovalRequest { .. } => "tool/approval-request",
             SessionEvent::ToolApprovalResult { .. } => "tool/approval-result",
             SessionEvent::Unknown => "unknown",
-            // 卸载事件已移除（2026-08：卸载机制取消）
         }
     }
 
@@ -2203,361 +2053,6 @@ mod tests {
             })
         }
     }
-
-    // ── Reference 重组 / Skill 激活 / 卸载测试 —— 已注释（2026-08：动态层移除、
-    //     skill 改为消息注入、卸载机制取消；对应测试停用，未来复用时可恢复）──
-    /*
-    #[tokio::test]
-    async fn reference_ops_reinject_prompt_and_push_header_on_change() {
-        use crate::llm::{ApiType, ToolCall, ToolCallFunction};
-        use std::collections::VecDeque;
-
-        // 脚本：第一轮返回缓存工具调用；第二轮返回空 tool_calls + 最终文本
-        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
-                id: "call_cache".into(),
-                call_type: "function".into(),
-                function: ToolCallFunction {
-                    name: "cache_store_test".into(),
-                    arguments: "{}".into(),
-                },
-            }],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: "已载入缓存".into(),
-            tool_calls: vec![],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-
-        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
-        let mut client_registry = ClientRegistry::new();
-        client_registry.register(ApiType::OpenAiCompletions, scripted);
-
-        let mut tool_registry = ToolRegistry::new();
-        tool_registry.register(Box::new(CacheStoreTestTool)).unwrap();
-        let tool_defs = tool_registry.list_defs();
-        let mut active = ActiveContext::new();
-
-        let log = Arc::new(Mutex::new(SessionLog::new()));
-        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let events_clone = events.clone();
-        let sink = EventSink::new(log.clone(), move |e: IpcEvent| {
-            events_clone.lock().unwrap().push(e);
-        });
-
-        // 直接调 dispatch_turn：构造含 system 首条的 messages
-        // （等价 process 的 build_context 产物；首条内容会被循环起点重组覆盖）
-        let mut messages = vec![ChatMessage::system("初始 system（将被重组覆盖）")];
-
-        let llm = &**client_registry.select(&ApiType::OpenAiCompletions).unwrap();
-        let outcome = dispatch_turn(
-            "s1",
-            &sink,
-            &mut messages,
-            &mut active,
-            &Arc::new(crate::skills_index::SkillIndex::empty()),
-            &tool_registry,
-            &tool_defs,
-            llm,
-            &LlmConfig::default(),
-            None,
-            "conv-test",
-            Arc::new(Mutex::new(crate::cache::CacheStores::new())),
-            ReasoningPolicy::Preserve,
-        )
-        .await
-        .unwrap();
-        assert_eq!(outcome, TurnOutcome::Completed);
-
-        // 第二轮快照的 messages[0] 已注入缓存条目（重组挂钩生效）
-        let snapshots = snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 2, "应恰好两次 LLM 调用（第一轮工具 + 第二轮回答）");
-        assert_eq!(snapshots[1][0].role, crate::llm::MessageRole::System);
-        assert!(snapshots[1][0].content.contains("## 缓存条目：enemy.unit_1001"));
-        assert!(snapshots[1][0].content.contains("源石虫"));
-        // 第一轮快照不含注入内容（空 ActiveContext 等价形态）
-        assert!(!snapshots[0][0].content.contains("缓存条目"));
-
-        // session log 中 request/header 恰好两条：初始 + 变化后
-        // （push_header 自带去重：第二轮 prompt 因缓存条目注入而变化才追加）
-        let log = log.lock().unwrap();
-        let headers = log
-            .events()
-            .iter()
-            .filter(|e| matches!(e, SessionEvent::RequestHeader { .. }))
-            .count();
-        assert_eq!(headers, 2, "缓存条目注入后 system prompt 变化 → 追加第二条 request/header");
-    }
-
-    // ── Skill 激活集成测试（模块 B：ScriptedClient 驱动）──
-
-    /// 创建唯一临时目录（不引入 tempfile crate，模式照 skills_index.rs）。
-    fn skill_temp_dir(tag: &str) -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "prts-orch-skill-{tag}-{}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[tokio::test]
-    async fn skill_activation_injects_active_layer_and_logs_event() {
-        use crate::llm::{ApiType, ToolCall, ToolCallFunction};
-        use std::collections::VecDeque;
-
-        // fixture 临时目录：一个有效 Skill（正文剥 frontmatter 后为 "## 推演正文"）
-        let root = skill_temp_dir("activate");
-        std::fs::write(
-            root.join("tuiyan.md"),
-            "---\nname: 推演分析\ndescription: 推演时的行为规则\n---\n\n## 推演正文",
-        )
-        .unwrap();
-        let skill_index = Arc::new(crate::skills_index::SkillIndex::load(&root).unwrap());
-
-        // 脚本：第一轮返回 activate_skill 工具调用；第二轮空 tool_calls 直接答
-        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
-                id: "call_skill".into(),
-                call_type: "function".into(),
-                function: ToolCallFunction {
-                    name: "activate_skill".into(),
-                    arguments: r#"{"name":"推演分析"}"#.into(),
-                },
-            }],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: "已激活，开始推演".into(),
-            tool_calls: vec![],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-
-        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
-        let mut client_registry = ClientRegistry::new();
-        client_registry.register(ApiType::OpenAiCompletions, scripted);
-
-        let mut tool_registry = ToolRegistry::new();
-        tool_registry
-            .register(Box::new(crate::tools::ActivateSkillTool))
-            .unwrap();
-        let tool_defs = tool_registry.list_defs();
-        let mut active = ActiveContext::new();
-
-        let log = Arc::new(Mutex::new(SessionLog::new()));
-        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let events_clone = events.clone();
-        let sink = EventSink::new(log.clone(), move |e: IpcEvent| {
-            events_clone.lock().unwrap().push(e);
-        });
-
-        // 直接调 dispatch_turn：构造含 system 首条的 messages
-        // （等价 process 的 build_context 产物；首条内容会被循环起点重组覆盖）
-        let mut messages = vec![ChatMessage::system("初始 system（将被重组覆盖）")];
-
-        let llm = &**client_registry.select(&ApiType::OpenAiCompletions).unwrap();
-        let outcome = dispatch_turn(
-            "s1",
-            &sink,
-            &mut messages,
-            &mut active,
-            &skill_index,
-            &tool_registry,
-            &tool_defs,
-            llm,
-            &LlmConfig::default(),
-            None,
-            "conv-test",
-            Arc::new(Mutex::new(crate::cache::CacheStores::new())),
-            ReasoningPolicy::Preserve,
-        )
-        .await
-        .unwrap();
-        assert_eq!(outcome, TurnOutcome::Completed);
-
-        // 第二轮快照：system prompt 已注入 Active 层（激活正文随重组挂钩生效）
-        let snapshots = snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 2, "应恰好两次 LLM 调用（第一轮激活 + 第二轮回答）");
-        assert_eq!(snapshots[1][0].role, crate::llm::MessageRole::System);
-        assert!(snapshots[1][0].content.contains("## 已激活 Skill：推演分析"));
-        assert!(snapshots[1][0].content.contains("## 推演正文"));
-        // 第一轮快照不含激活注入（激活发生在第一轮工具执行之后）
-        assert!(!snapshots[0][0].content.contains("已激活 Skill"));
-        drop(snapshots);
-
-        // session log 含 skill/activate 事件（激活动作可回放）
-        let log = log.lock().unwrap();
-        assert!(
-            log.events().iter().any(|e| matches!(
-                e,
-                SessionEvent::SkillActivate { name, .. } if name == "推演分析"
-            )),
-            "log 应记录 skill/activate 事件"
-        );
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn skill_state_unloaded_next_turn() {
-        use crate::llm::{ApiType, LlmConfig, ModelRegistry, ToolCall, ToolCallFunction};
-        use std::collections::VecDeque;
-
-        // 两轮 process 共享脚本队列与快照：第一轮 = [激活「数值计算」, 空 tool_calls]；
-        // 第二轮（新 turn）= [空 tool_calls 直接答]。真实 skills 目录含「数值计算」
-        // （dev 路径随源码分发，见 skills_index.rs 的 skills_dir 测试前提）。
-        let queue: Arc<Mutex<VecDeque<Result<StreamResult, LlmError>>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: String::new(),
-            tool_calls: vec![ToolCall {
-                id: "call_skill".into(),
-                call_type: "function".into(),
-                function: ToolCallFunction {
-                    name: "activate_skill".into(),
-                    arguments: r#"{"name":"数值计算"}"#.into(),
-                },
-            }],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: "已激活".into(),
-            tool_calls: vec![],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-        // 第二轮（新 turn）：单次直接答（不重新激活）
-        queue.lock().unwrap().push_back(Ok(StreamResult {
-            text: "第二轮回答".into(),
-            tool_calls: vec![],
-            reasoning: None,
-            usage: None,
-            finish_reason: None,
-        }));
-
-        let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
-        let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
-        let mut client_registry = ClientRegistry::new();
-        client_registry.register(ApiType::OpenAiCompletions, scripted);
-        let model_registry = Arc::new(
-            ModelRegistry::from_json(include_str!("../../resources/models.json")).unwrap(),
-        );
-
-        let mut tool_registry = ToolRegistry::new();
-        tool_registry
-            .register(Box::new(crate::tools::ActivateSkillTool))
-            .unwrap();
-        let cache_stores = Arc::new(Mutex::new(crate::cache::CacheStores::new()));
-        let last_unloads = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-        // 第一轮：激活 + 回答（激活正文应进入第一轮第二次调用的 system prompt）
-        process(
-            "s1",
-            vec![FrontendMessage {
-                role: "user".into(),
-                content: "计算伤害".into(),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                attachments: Vec::new(),
-            }],
-            &tool_registry,
-            &client_registry,
-            &LlmConfig::default(),
-            &model_registry,
-            None,
-            "conv-a",
-            Arc::clone(&cache_stores),
-            Arc::clone(&last_unloads),
-            |_| {},
-        )
-        .await
-        .unwrap();
-
-        // 第二轮：全新 process（ActiveContext 每 turn 重建）——同一对话标识、
-        // 不重新激活，验证 Skill 激活状态随 turn 自动卸载
-        process(
-            "s2",
-            vec![FrontendMessage {
-                role: "user".into(),
-                content: "继续".into(),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-                attachments: Vec::new(),
-            }],
-            &tool_registry,
-            &client_registry,
-            &LlmConfig::default(),
-            &model_registry,
-            None,
-            "conv-a",
-            Arc::clone(&cache_stores),
-            Arc::clone(&last_unloads),
-            |_| {},
-        )
-        .await
-        .unwrap();
-
-        // 快照断言：第一轮第二次调用含 Skill 正文（激活生效）；
-        // 第二轮（新 turn）system prompt 不再含正文（每轮重建自动卸载）；
-        // Catalog 目录仍每轮注入；上轮卸载说明作为 system 消息注入第二轮
-        // 历史（LLM 从时序理解“上轮激活已失效”），且消费后清空（无残留）
-        let snapshots = snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 3, "第一轮两次调用 + 第二轮一次调用");
-        assert!(snapshots[1][0].content.contains("## 已激活 Skill：数值计算"));
-        assert!(
-            snapshots[1][0].content.contains("## 工作流程"),
-            "激活的正文应注入当轮 system prompt"
-        );
-        assert!(
-            !snapshots[2][0].content.contains("## 工作流程"),
-            "新 turn 的 ActiveContext 重建，上一轮激活的 Skill 应已卸载"
-        );
-        assert!(
-            snapshots[2][0].content.contains("## Skill 目录"),
-            "Catalog 层每轮照常注入"
-        );
-        assert_eq!(
-            snapshots[2].len(),
-            3,
-            "system prompt + 卸载说明 + 本轮 user 消息"
-        );
-        assert_eq!(snapshots[2][1].role, crate::llm::MessageRole::System);
-        assert!(
-            snapshots[2][1].content.contains("已自动卸载：Skill「数值计算」"),
-            "第二轮历史应含上轮卸载说明，got: {}",
-            snapshots[2][1].content
-        );
-        drop(snapshots);
-        // 摘要一次性消费：第二轮结束后共享状态应已清空
-        assert!(last_unloads.lock().unwrap().is_empty(), "第二轮无激活，摘要应清空且不再写入");
-    }
-    */
 
     // ── 通用重试（缺陷 3；模块 5 P1 重试挂靠点）──
 

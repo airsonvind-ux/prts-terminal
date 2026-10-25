@@ -88,9 +88,12 @@ function hydrateTurn(line: string): SessionEvent[] | null {
   // 前端私有轮尾标记在 primary 日志里不存在；按 turn/end reason 重建，
   // legacy 日志已有标记时不重复。
   if (
-    end.reason === "aborted" &&
+    (end.reason === "aborted" ||
+      end.reason === "interrupted" ||
+      end.reason === "app-shutdown") &&
     !turn.some((e) => e.type === "turn/aborted")
   ) {
+    // interrupted 也复用中止条展示；模型状态由 turn/end(reason) 精确区分。
     return [...turn, { type: "turn/aborted", sessionId: end.sessionId }];
   }
   if (
@@ -202,6 +205,9 @@ async function runRestore(): Promise<void> {
         // null → undefined 适配（后端可缺省字段以 null 表达）
         modelName: r.meta.modelName ?? undefined,
         contextLength: r.meta.contextLength ?? undefined,
+        provider: r.meta.provider ?? undefined,
+        model: r.meta.model ?? undefined,
+        thinkingLevel: r.meta.thinkingLevel ?? null,
         contextTokens: r.meta.contextTokens ?? undefined,
         lastNoticeSeq: r.meta.lastNoticeSeq ?? undefined,
         compaction: r.meta.compaction ?? undefined,

@@ -8,15 +8,12 @@
 //! ## 组装机制（架构升级 · 模块 2 · 2026-08 上下文管理修正）
 //!
 //! system prompt 只保留静态两层（Base 人格 + Catalog Skill 目录）：
-//! system 是请求前缀的最开头，任何动态注入（skill 正文、缓存条目）都会逐字节
+//! system 是请求前缀的最开头，任何动态注入（skill 正文）都会逐字节
 //! 改变前缀，破坏 DeepSeek 前缀缓存的命中。动态内容一律以消息形态进历史
 //! （激活 skill = 工具结果消息，正文保留在对话中持续生效，不设卸载）。
 //!
 //! - **静态前缀**：`PromptSection` 注册制，`order` 区间映射，Base 0 / Catalog 100
 //! - **历史**：由 session log 派生（`session.rs::derive_messages`），不进 system prompt
-//!
-//! 已注释（未来记忆系统可能复用）：Active/Reference 动态注入层
-//! （ActiveContext / PromptContext / ContextOp 协议、缓存工具通道）。
 //!
 //! ## request/header 快照
 //!
@@ -30,7 +27,6 @@
 //! DeepSeek 使用 LlamaTokenizerFast（BPE），不同模型的换算比例不同，
 //! 这里的估算仅作近似参考，精确 token 数以 API 返回的 usage 为准。
 
-// use std::collections::HashMap; // 已注释（2026-08：ActiveContext 移除）
 #[cfg(test)]
 use super::prompt::{SYSTEM_PROMPT, UI_PROMPT};
 use super::prompt_registry::builtin_registry;
@@ -40,118 +36,6 @@ pub use super::prompt_registry::{
     PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_UI,
 };
 pub use super::token_estimate::{estimate_messages, estimate_tokens};
-
-// ═══════════════════════════════════════════════════════
-// ActiveContext —— 已注释（2026-08 上下文管理修正：动态层移除，
-// 无生产者后整段注释；未来记忆系统复用时可恢复）。
-// ═══════════════════════════════════════════════════════
-/*
-
-/// Active/Reference 两层状态容器：五层上下文模型中 Skill 激活与缓存条目的
-/// **在场层**。
-///
-/// - **Active 层**：Skill 激活状态（name → 正文）。生命周期与 Reference 层
-///   相同——每 turn 随本容器重建（轮内激活、轮末自动卸载，不设停用工具）
-/// - **Reference 层**：缓存条目载入状态（key → content）
-///
-/// 设计决策 A.4：工具不直接修改本容器——执行后通过 `ToolOutput.context_ops`
-/// 返回上下文变更指令，由调度中枢统一调用 [`Self::apply_ops`] 应用。
-/// 每个 step 起点重组 system prompt 时消费本容器内容（`assemble_system_prompt`）。
-///
-/// 缓存语义（接口兼容模块 C，本模块不实现）：静态缓存始终载入、
-/// 动态缓存载入状态每轮卸载而桶内容跨轮保留——本容器仅承载
-/// "载入状态"（在场性），持久化桶由模块 C 的 cache 工具负责。
-#[derive(Debug, Default)]
-pub struct ActiveContext {
-    /// key → content 的缓存条目映射。HashMap 迭代顺序不确定，
-    /// 输出必须经 `reference_entries` 排序，保证组装结果逐字节可复现
-    /// （request/header 去重以文本比较为准，乱序会误判为变化）。
-    reference: HashMap<String, String>,
-    /// name → body 的 Skill 激活映射（Active 层）。排序理由同 reference。
-    skills: HashMap<String, String>,
-}
-
-impl ActiveContext {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// 载入/更新 Reference 条目：同名覆盖（缓存条目以最新内容为准）。
-    pub fn reference_load(&mut self, key: impl Into<String>, content: impl Into<String>) {
-        self.reference.insert(key.into(), content.into());
-    }
-
-    /// 移除单条。返回是否存在该条目。
-    pub fn reference_remove(&mut self, key: &str) -> bool {
-        self.reference.remove(key).is_some()
-    }
-
-    /// 清空 Reference 层载入状态（桶内容跨轮保留由模块 C 缓存工具负责）。
-    pub fn reference_clear(&mut self) {
-        self.reference.clear();
-    }
-
-    /// 当前在场条目数。
-    #[allow(dead_code)] // 模块 C 缓存工具 / 压缩决策消费（当前仅测试使用）
-    pub fn reference_len(&self) -> usize {
-        self.reference.len()
-    }
-
-    /// 按 key 排序输出全部条目（key, content）。
-    ///
-    /// 排序是组装可复现性的前提：同一份 `ActiveContext` 每次组装
-    /// 输出逐字节一致，request/header 去重机制（文本比较）不误判。
-    pub fn reference_entries(&self) -> impl Iterator<Item = (&str, &str)> {
-        let mut keys: Vec<&String> = self.reference.keys().collect();
-        keys.sort();
-        keys.into_iter()
-            .map(|k| (k.as_str(), self.reference[k].as_str()))
-    }
-
-    /// 载入/更新 Skill 激活条目：同名覆盖（最新正文为准）。
-    ///
-    /// Active 层生命周期与 Reference 层相同（每 turn 随容器重建），
-    /// 覆盖语义对齐 reference_load——同名 Skill 重复激活以最新正文生效。
-    pub fn skill_load(&mut self, name: impl Into<String>, body: impl Into<String>) {
-        self.skills.insert(name.into(), body.into());
-    }
-
-    /// 按 name 排序输出全部已激活 Skill（name, body）。
-    ///
-    /// 排序是组装可复现性的前提：与 `reference_entries` 同理——
-    /// 同一份 `ActiveContext` 每次组装输出逐字节一致，
-    /// request/header 去重机制（文本比较）不误判。
-    pub fn skill_entries(&self) -> impl Iterator<Item = (&str, &str)> {
-        let mut names: Vec<&String> = self.skills.keys().collect();
-        names.sort();
-        names.into_iter()
-            .map(|n| (n.as_str(), self.skills[n].as_str()))
-    }
-
-    /// 应用工具返回的上下文变更指令（四种指令分别映射到
-    /// reference load/remove/clear 与 active load）。
-    ///
-    /// 标记按调用顺序应用——与消息/事件顺序保持一致，保证确定性。
-    pub fn apply_ops(&mut self, ops: &[crate::tools::ContextOp]) {
-        for op in ops {
-            match op {
-                crate::tools::ContextOp::ReferenceLoad { key, content } => {
-                    self.reference_load(key, content);
-                }
-                crate::tools::ContextOp::ReferenceRemove { key } => {
-                    self.reference_remove(key);
-                }
-                crate::tools::ContextOp::ReferenceClear => {
-                    self.reference_clear();
-                }
-                crate::tools::ContextOp::ActiveLoad { name, content } => {
-                    self.skill_load(name, content);
-                }
-            }
-        }
-    }
-}
-*/
 
 // ═══════════════════════════════════════════════════════
 // 公开接口
@@ -169,7 +53,7 @@ impl ActiveContext {
 /// （`prts.skill-catalog`，渐进披露——只给 name + description）。
 ///
 /// 静态两层，逐字节可复现：system 是请求前缀的最开头，任何动态注入（skill
-/// 正文、缓存条目）都会逐字节改变前缀、破坏 DeepSeek 前缀缓存命中；
+/// 正文）都会逐字节改变前缀、破坏 DeepSeek 前缀缓存命中；
 /// 动态内容一律以消息形态进历史（激活 skill = 工具结果消息）。
 #[allow(dead_code)] // 仅测试与文档引用：生产走 assemble_system_prompt_with_memory
 pub fn assemble_system_prompt(skill_catalog: &str) -> String {
@@ -376,9 +260,6 @@ mod tests {
         assert_eq!(reg.sections.len(), 1);
     }
 
-    // ── 动态层注入测试已注释（2026-08 上下文管理修正：Active/Reference
-    //    动态层移除，对应测试随之停用；未来记忆系统复用时可恢复）──
-
     #[test]
     fn empty_registry_assembles_empty() {
         assert_eq!(PromptRegistry::default().assemble(), "");
@@ -446,8 +327,6 @@ mod tests {
         assert!(prompt.starts_with(SYSTEM_PROMPT));
     }
 
-    // ── Reference 注入测试已注释（2026-08：动态层移除）──
-
     // ── Skill 目录（Catalog 层）注入 ──
 
     /// 假 skills 目录：两个有效条目（文件名字母序与 name 序相反，
@@ -502,8 +381,6 @@ mod tests {
         let prompt = assemble_system_prompt("");
         assert!(prompt.contains("## Skill 目录\n\n（无）"));
     }
-
-    // ── Active/Reference 动态层测试已注释（2026-08：动态层移除）──
 
     // ── estimate_messages（模块 8 双锚的 estimate 兜底锚）──
 

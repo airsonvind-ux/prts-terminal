@@ -8,6 +8,9 @@
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -AllowDirty # 工作树不干净也继续；仍跑质量门禁，产物不作为发布候选
 #   powershell -ExecutionPolicy Bypass -File .\build.ps1 -Config src-tauri\tauri.updater-test.conf.json
 #                                                                    # 合并测试配置（本地更新源）
+#   powershell -ExecutionPolicy Bypass -File .\build.ps1 -NoSign       # 未签名构建；只用于本地冒烟，不能作为更新包
+#   powershell -ExecutionPolicy Bypass -File .\build.ps1 -GiteeRepo airsonvind0/prts-terminal-release -GitHubRepo airsonvind-ux/prts-terminal-release
+#                                                                    # 签名构建后生成 release-staging/<version>/latest.json
 #
 # 屏幕上看得到：
 #   1) 前置检查（工具是否就绪、版本一致性、构建盘剩余空间）
@@ -21,7 +24,11 @@ param(
     [int]$Jobs = 0,
     [switch]$DryRun,
     [switch]$AllowDirty,
-    [string]$Config = ""
+    [string]$Config = "",
+    [switch]$NoSign,
+    [string]$GiteeRepo = "",
+    [string]$GitHubRepo = "",
+    [string]$ReleaseNotes = ""
 )
 
 $ErrorActionPreference = 'Continue'
@@ -113,6 +120,45 @@ function Get-SigVersion([string]$path) {
     return $null
 }
 
+# 发布门的最后一道：用 tauri.conf 的公钥真正验证安装包 .sig，
+# 而不是只看文件名里的版本。脚本和 prepare-release 共用同一套 minisign 解析。
+function Invoke-ReleaseSignatureCheck([string]$installer, [string]$signature) {
+    $configPath = Join-Path $root 'src-tauri\tauri.conf.json'
+    $nodeArgs = @(
+        'scripts/verify-update-signature.mjs',
+        '--installer', $installer,
+        '--signature', $signature,
+        '--config', $configPath,
+        '--version', $tauriVersion,
+        '--file', (Split-Path -Leaf $installer)
+    )
+    & node @nodeArgs 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Say '      发布签名校验失败，本次构建不能作为更新包发布。'
+        exit 1
+    }
+    Say '      发布签名校验通过'
+}
+
+# 签名通过后生成 latest.json / SHA256SUMS。未提供发布仓时只做签名校验，
+# 避免把某个 GitHub 账号硬编码进构建脚本。
+function Invoke-ReleaseStaging([string]$installer, [string]$signature) {
+    $nodeArgs = @(
+        'scripts/prepare-release.mjs',
+        '--installer', $installer,
+        '--signature', $signature,
+        '--version', $tauriVersion
+    )
+    if ($GiteeRepo) { $nodeArgs += @('--gitee-repo', $GiteeRepo) }
+    if ($GitHubRepo) { $nodeArgs += @('--github-repo', $GitHubRepo) }
+    if ($ReleaseNotes) { $nodeArgs += @('--notes-file', $ReleaseNotes) }
+    & node @nodeArgs 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Say '      发布暂存生成失败，本次构建不能作为更新包发布。'
+        exit 1
+    }
+}
+
 Write-Host ''
 Say '========================================'
 Say 'PRTS Terminal 发布构建'
@@ -184,36 +230,41 @@ if ($DryRun) {
 }
 
 # 签名链：缺少私钥或密码时直接中止，避免产出没有 .sig 的安装包。
+# -NoSign 是显式的本地冒烟模式：跳过签名，同时关闭 updater artifact。
 # 只检查存在性，不输出私钥内容或密码。
 Say ''
 Say '      更新签名'
-$keyPath = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
-$keyInline = $env:TAURI_SIGNING_PRIVATE_KEY
-if (-not $keyPath -and -not $keyInline) {
-    Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PATH 或 TAURI_SIGNING_PRIVATE_KEY，已中止。'
-    exit 1
-}
-if ($keyPath -and -not (Test-Path -LiteralPath $keyPath)) {
-    Say ('      私钥文件不存在：{0}' -f $keyPath)
-    exit 1
-}
-# Tauri CLI 2.11.x 的构建签名只读 TAURI_SIGNING_PRIVATE_KEY 的内容；
-# TAURI_SIGNING_PRIVATE_KEY_PATH 不参与构建签名。这里把路径转成内容，
-# 仍然不回显私钥，也不把内容写进日志。
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and $keyPath) {
-    try {
-        $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content -Raw -LiteralPath $keyPath).Trim()
-        Say '      已从私钥路径加载签名内容（不输出内容）'
-    } catch {
-        Say ('      读取私钥文件失败：{0}' -f $_.Exception.Message)
+if ($NoSign) {
+    Say '      -NoSign：跳过更新签名；本次产物只能用于本地安装/冒烟，不能作为更新包。'
+} else {
+    $keyPath = $env:TAURI_SIGNING_PRIVATE_KEY_PATH
+    $keyInline = $env:TAURI_SIGNING_PRIVATE_KEY
+    if (-not $keyPath -and -not $keyInline) {
+        Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PATH 或 TAURI_SIGNING_PRIVATE_KEY，已中止。'
         exit 1
     }
+    if ($keyPath -and -not (Test-Path -LiteralPath $keyPath)) {
+        Say ('      私钥文件不存在：{0}' -f $keyPath)
+        exit 1
+    }
+    # Tauri CLI 2.11.x 的构建签名只读 TAURI_SIGNING_PRIVATE_KEY 的内容；
+    # TAURI_SIGNING_PRIVATE_KEY_PATH 不参与构建签名。这里把路径转成内容，
+    # 仍然不回显私钥，也不把内容写进日志。
+    if (-not $env:TAURI_SIGNING_PRIVATE_KEY -and $keyPath) {
+        try {
+            $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content -Raw -LiteralPath $keyPath).Trim()
+            Say '      已从私钥路径加载签名内容（不输出内容）'
+        } catch {
+            Say ('      读取私钥文件失败：{0}' -f $_.Exception.Message)
+            exit 1
+        }
+    }
+    if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+        Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD，已中止。'
+        exit 1
+    }
+    Say '      私钥与密码已就位（不输出内容）'
 }
-if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
-    Say '      缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD，已中止。'
-    exit 1
-}
-Say '      私钥与密码已就位（不输出内容）'
 
 if ($Clean) {
     Say '      -Clean：清空构建目录'
@@ -221,17 +272,39 @@ if ($Clean) {
     Push-Location (Join-Path $root 'bridge'); cargo clean | Out-Null; Pop-Location
 }
 if ($Jobs -gt 0) { $env:CARGO_BUILD_JOBS = "$Jobs"; Say ('      并行编译数限制为 {0}' -f $Jobs) }
+$tauriArgs = @()
 if ($Config) {
     if (-not (Test-Path -LiteralPath $Config)) {
         Say ('      附加配置不存在：{0}' -f $Config)
         exit 1
     }
     Say ('      附加配置：{0}' -f $Config)
+    $tauriArgs += @('--config', $Config)
+}
+if ($ReleaseNotes -and -not (Test-Path -LiteralPath $ReleaseNotes)) {
+    Say ('      Release notes 不存在：{0}' -f $ReleaseNotes)
+    exit 1
+}
+if ($NoSign) {
+    $noSignDir = Join-Path $root '.tmp'
+    New-Item -ItemType Directory -Force -Path $noSignDir | Out-Null
+    $noSignConfig = Join-Path $noSignDir ('tauri.nosign.' + $stamp + '.json')
+    [System.IO.File]::WriteAllText(
+        $noSignConfig,
+        '{"bundle":{"createUpdaterArtifacts":false}}',
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    Say ('      未签名配置：{0}' -f $noSignConfig)
+    $tauriArgs += @('--config', $noSignConfig)
+    $tauriArgs += @('--no-sign')
 }
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $npmArgs = @('run', 'tauri', 'build')
-if ($Config) { $npmArgs += @('--', '--config', $Config) }
+if ($tauriArgs.Count -gt 0) {
+    $npmArgs += @('--')
+    $npmArgs += $tauriArgs
+}
 & npm @npmArgs 2>&1 | ForEach-Object { Write-Host $_; WriteLog $_ }
 $code = $LASTEXITCODE
 $sw.Stop()
@@ -256,33 +329,45 @@ if ($code -eq 0) {
         Say '      旧版本安装包（保留在目录中，不参与本次校验）：'
         $stalePkgs | ForEach-Object { Say ('        {0}  ({1:N2} MB)' -f $_.Name, ($_.Length / 1MB)) }
     }
-    Say '      更新签名：'
-    $sigs = Get-ChildItem $nsis -Filter '*.sig' -ErrorAction SilentlyContinue
-    $currentSigs = @($sigs | Where-Object { $_.Name -match $versionToken })
-    $staleSigs = @($sigs | Where-Object { $_.Name -notmatch $versionToken })
-    if ($currentSigs.Count -gt 0) {
-        foreach ($sig in $currentSigs) {
-            $sigVersion = Get-SigVersion $sig.FullName
-            if (-not $sigVersion) {
-                Say ('        {0}  ({1} B)  缺少 version 字段（构建 CLI 可能低于 2.11.5）' -f $sig.Name, $sig.Length)
-                $script:sigInvalid = $true
-            } elseif ($sigVersion -ne $tauriVersion) {
-                Say ('        {0}  ({1} B)  签名版本 {2} 与配置版本 {3} 不一致' -f $sig.Name, $sig.Length, $sigVersion, $tauriVersion)
-                $script:sigInvalid = $true
-            } else {
-                Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigVersion)
+    if ($NoSign) {
+        if ($currentPkgs.Count -gt 0) {
+            $staleCurrentSigs = @(Get-ChildItem $nsis -Filter '*.sig' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match $versionToken })
+            foreach ($oldSig in $staleCurrentSigs) {
+                Remove-Item -LiteralPath $oldSig.FullName -Force
+                Say ('      已移除未签名构建前的旧签名：{0}' -f $oldSig.Name)
             }
         }
+        Say '      未签名构建：跳过 .sig 校验、latest.json 生成与发布暂存。'
     } else {
-        Say '        错误：未找到当前版本的 .sig 更新签名。'
-        $script:sigMissing = $true
-    }
-    if ($staleSigs.Count -gt 0) {
-        Say '      旧版本签名（保留在目录中，不参与本次校验）：'
-        foreach ($sig in $staleSigs) {
-            $sigVersion = Get-SigVersion $sig.FullName
-            $sigLabel = if ($sigVersion) { $sigVersion } else { '未标注' }
-            Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigLabel)
+        Say '      更新签名：'
+        $sigs = Get-ChildItem $nsis -Filter '*.sig' -ErrorAction SilentlyContinue
+        $currentSigs = @($sigs | Where-Object { $_.Name -match $versionToken })
+        $staleSigs = @($sigs | Where-Object { $_.Name -notmatch $versionToken })
+        if ($currentSigs.Count -gt 0) {
+            foreach ($sig in $currentSigs) {
+                $sigVersion = Get-SigVersion $sig.FullName
+                if (-not $sigVersion) {
+                    Say ('        {0}  ({1} B)  缺少 version 字段（构建 CLI 可能低于 2.11.5）' -f $sig.Name, $sig.Length)
+                    $script:sigInvalid = $true
+                } elseif ($sigVersion -ne $tauriVersion) {
+                    Say ('        {0}  ({1} B)  签名版本 {2} 与配置版本 {3} 不一致' -f $sig.Name, $sig.Length, $sigVersion, $tauriVersion)
+                    $script:sigInvalid = $true
+                } else {
+                    Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigVersion)
+                }
+            }
+        } else {
+            Say '        错误：未找到当前版本的 .sig 更新签名。'
+            $script:sigMissing = $true
+        }
+        if ($staleSigs.Count -gt 0) {
+            Say '      旧版本签名（保留在目录中，不参与本次校验）：'
+            foreach ($sig in $staleSigs) {
+                $sigVersion = Get-SigVersion $sig.FullName
+                $sigLabel = if ($sigVersion) { $sigVersion } else { '未标注' }
+                Say ('        {0}  ({1} B, version {2})' -f $sig.Name, $sig.Length, $sigLabel)
+            }
         }
     }
     $targetGB = SizeGB (Join-Path $root 'src-tauri\target')
@@ -294,11 +379,35 @@ if ($code -eq 0) {
         Say '        cd src-tauri; cargo sweep --maxsize 8GB .'
     }
     Say ''
-    if ($script:sigMissing -or $script:sigInvalid) {
+    if ($NoSign) {
+        if ($currentPkgs.Count -eq 0) {
+            Say '未找到当前版本的安装包，本次未签名构建失败。'
+            exit 1
+        }
+        Say '未签名构建完成：产物只能用于本地安装/冒烟，不能作为更新包。'
+        Say '完成。'
+    } elseif ($script:sigMissing -or $script:sigInvalid) {
         Say '签名产物缺失或版本校验失败，本次构建不能作为更新包发布。'
         exit 1
+    } else {
+        if ($currentPkgs.Count -gt 1) {
+            Say '      注意：发现多个同版本安装包，发布门使用第一个。'
+        }
+        $installer = $currentPkgs[0]
+        $sig = $currentSigs | Where-Object { $_.Name -eq ($installer.Name + '.sig') } | Select-Object -First 1
+        if (-not $sig) {
+            Say ('      错误：找不到与安装包配对的签名：{0}.sig' -f $installer.Name)
+            exit 1
+        }
+        Invoke-ReleaseSignatureCheck -installer $installer.FullName -signature $sig.FullName
+        if ($GiteeRepo -or $GitHubRepo) {
+            Invoke-ReleaseStaging -installer $installer.FullName -signature $sig.FullName
+            Say '发布暂存已生成。'
+        } else {
+            Say '未提供 -GiteeRepo/-GitHubRepo，跳过 latest.json 生成；只完成签名校验。'
+        }
+        Say '完成。'
     }
-    Say '完成。'
 } else {
     Say ('[4/4] 构建失败（退出码 {0}），耗时 {1}' -f $code, $sw.Elapsed.ToString('hh\:mm\:ss'))
     Say '      日志末尾 40 行：'

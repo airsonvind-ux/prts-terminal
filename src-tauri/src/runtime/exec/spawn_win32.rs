@@ -118,7 +118,7 @@ fn token_access_rights() -> TOKEN_ACCESS_MASK {
     )
 }
 
-/// PS 探测缓存：exe 全路径 → 是否可用。
+/// PS 探测缓存：exe 全路径 + 工作区 → 是否可用。
 fn probe_cache() -> &'static Mutex<HashMap<String, bool>> {
     static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -629,17 +629,17 @@ fn append_env(block: &mut Vec<u16>, k: &std::ffi::OsStr, v: &std::ffi::OsStr) {
     block.push(0);
 }
 
-/// 当前环境原样（full 通道：无 TEMP 覆盖、无缓存重定向、不建受限目录）。
+/// 清理后的当前环境（full 通道：无 TEMP 覆盖、无缓存重定向、不建受限目录）。
 fn current_env_block() -> Vec<u16> {
     let mut block: Vec<u16> = Vec::new();
-    for (k, v) in std::env::vars_os() {
+    for (k, v) in super::env::scrubbed_env() {
         append_env(&mut block, &k, &v);
     }
     block.push(0);
     block
 }
 
-/// 环境块：当前环境 + 覆盖（UTF-16 双空串结尾）。
+/// 环境块：清理后的当前环境 + 覆盖（UTF-16 双空串结尾）。
 fn build_env_block(workspace_root: &Path, overrides: &[(String, String)]) -> Vec<u16> {
     let temp = workspace_root.join(EXEC_TEMP_DIR);
     let cache = workspace_root.join(EXEC_CACHE_DIR);
@@ -659,7 +659,7 @@ fn build_env_block(workspace_root: &Path, overrides: &[(String, String)]) -> Vec
     );
 
     let mut block: Vec<u16> = Vec::new();
-    for (k, v) in std::env::vars_os() {
+    for (k, v) in super::env::scrubbed_env() {
         let key = k.to_string_lossy();
         if eff.iter().any(|(ok, _)| ok == key.as_ref()) {
             continue;
@@ -1281,10 +1281,23 @@ fn open_own_token() -> Result<HANDLE, String> {
     }
 }
 
-/// PS 探针（幂等缓存）：受限启动 `[Console]::Out.Write('ok')`。
+/// 探针缓存键：PowerShell 路径 + 规范化工作区。临时目录按工作区重定向，
+/// 换工作区必须重新验证，不能复用上一工作区的结果。
+fn probe_cache_key(exe: &Path, workspace_root: &Path) -> String {
+    let ws = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
+    format!(
+        "{}|{}",
+        exe.to_string_lossy().to_lowercase(),
+        ws.to_string_lossy().to_lowercase()
+    )
+}
+
+/// PS 探针（幂等缓存）：在受限 PowerShell 里真实创建、写入并删除临时文件。
 /// 探针在调用方 GrantSession 放行区内运行（不重复 acquire）。
 fn probe_ok(exe: &Path, workspace_root: &Path, env_block: &[u16]) -> bool {
-    let key = exe.to_string_lossy().to_lowercase();
+    let key = probe_cache_key(exe, workspace_root);
     if let Some(cached) = probe_cache().lock().unwrap().get(&key).copied() {
         return cached;
     }
@@ -1310,7 +1323,7 @@ fn run_probe(exe: &Path, workspace_root: &Path, env_block: &[u16]) -> bool {
         "-NoProfile".to_string(),
         "-NonInteractive".to_string(),
         "-Command".to_string(),
-        "[Console]::Out.Write('ok')".to_string(),
+        "try { $p = [IO.Path]::GetTempFileName(); [IO.File]::WriteAllText($p, 'ok'); Remove-Item -LiteralPath $p -Force; [Console]::Out.Write('ok') } catch { exit 1 }".to_string(),
     ];
     let launched = match launch_restricted(token, exe, &probe_args, workspace_root, env_block) {
         Ok(l) => l,
@@ -1390,6 +1403,17 @@ mod tests {
                 std::mem::size_of::<TestTokenGroups>(),
             )
         }
+    }
+
+    #[test]
+    fn probe_cache_key_includes_workspace() {
+        let a = unique_ws("probe-key-a");
+        let b = unique_ws("probe-key-b");
+        let exe = Path::new("powershell.exe");
+        assert_ne!(probe_cache_key(exe, &a), probe_cache_key(exe, &b));
+        assert_eq!(probe_cache_key(exe, &a), probe_cache_key(exe, &a));
+        let _ = std::fs::remove_dir_all(&a);
+        let _ = std::fs::remove_dir_all(&b);
     }
 
     #[test]

@@ -58,8 +58,8 @@ CI 覆盖前端测试/构建、Rust 默认单元测试与两种 feature 的测�
 ## 当前实际分层（2026-10-21）
 
 - 默认 `cargo test --lib` 不依赖 `src-tauri/resources/arknights.db`；依赖真实库的用例通过 `cfg_attr(not(feature = "data-contract"), ignore = ...)` 跳过。
-- 默认套件当前为 1039 passed / 235 ignored。
-- 专用 `scripts/data-contract.ps1` 会先检查数据库、打印大小与 SHA-256，再以 `data-contract` feature 运行；当前为 1247 passed / 21 ignored。
+- 默认套件当前为 1161 passed / 253 ignored。
+- 专用 `scripts/data-contract.ps1` 会先检查数据库、打印大小与 SHA-256，再以 `data-contract` feature 运行；当前为 1375 passed / 39 ignored。
 - 数据契约测试仍断言具体游戏数据（例如关卡名、干员形态、敌人字段），数据更新后变红是预期行为；不应通过改软断言来“修绿”。
 - 没有采用固定夹具是刻意的：固定夹具会把“真实数据更新”这个信号一起冻住。夹具更适合未来给查询逻辑做小样本测试，不替代数据契约。
 - 数据库文件被 `.gitignore` 排除；缺少数据库时，默认套件照常运行，专用脚本会明确报错并给出路径。
@@ -75,6 +75,18 @@ CI 覆盖前端测试/构建、Rust 默认单元测试与两种 feature 的测�
 - 失败时能区分“数据库快照变了”和“查询逻辑坏了”
 
 手工查询和真机探针放在 `scripts/manual/`，不冒充自动化测试。
+
+## 接地评测（录制会话）
+
+`evals/grounding/` 提供一套离线评测框架：用 PRTS 已落盘的会话 JSONL，检查工具调用、工具结果、最终回答和压缩摘要之间的对应关系。它不调用模型、不联网、不需要 API Key。
+
+```powershell
+python evals/grounding/run.py --check
+python evals/grounding/run.py --session <会话文件.jsonl>
+.\scripts\grounding-eval.ps1 -Session <会话文件.jsonl>
+```
+
+用例格式、失败分类和录制方式见 `evals/grounding/README.md`。当前 3 条合成样例用于验证脚本本身，不代表真实模型评测。
 
 ## 前端
 
@@ -101,6 +113,6 @@ CI 覆盖前端测试/构建、Rust 默认单元测试与两种 feature 的测�
 - primary 闭环：后端 log 播种 → 处理 → 写官方 jsonl → 重新读出派生
 - 前端 primary 路径：`history` 为空、`userContent` 携带本轮正文
 - 迁移/崩溃：旧日志可读；首轮原子建文件；追加前修复末尾半行
-- shadow：影子事件与 legacy 派生消息对比；差异写 `sessions/.shadow/shadow-diff.log`
+- primary：后端官方 jsonl 的轮事件与 `derive_messages` 投影一致性；重启恢复
 - R-27：Anthropic thinking/signature 解析与请求回传
 - R-08：前缀内容指纹变化检测

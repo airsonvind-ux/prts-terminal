@@ -172,7 +172,10 @@ fn strip_reminder(content: &str) -> String {
     format!("{}{}", &content[..a], rest.trim_start_matches(['\r', '\n']))
 }
 
-/// 把 jsonl 轮行渲染为可读增量文本（只取 user/assistant 可见文本）。
+/// 把 jsonl 轮行渲染为可读增量文本。
+///
+/// 除 user/assistant 可见文本外，工具调用与结果也作为事实材料进入记忆提炼：
+/// 只取工具名、参数和结果摘要，长内容截断，不搬运原始输出。
 pub(super) fn render_delta(lines: &[String]) -> String {
     let mut out: Vec<String> = Vec::new();
     for line in lines {
@@ -181,26 +184,59 @@ pub(super) fn render_delta(lines: &[String]) -> String {
         };
         for ev in &events {
             let ty = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if ty != "user/message" && ty != "assistant/message" {
-                continue;
+            match ty {
+                "user/message" => {
+                    let content = ev.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    let text = strip_reminder(content);
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        out.push(format!("用户：{text}"));
+                    }
+                }
+                "assistant/message" => {
+                    let content = ev.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    let text = content.trim();
+                    if !text.is_empty() {
+                        out.push(format!("助手：{text}"));
+                    }
+                }
+                "tool/call" => {
+                    let name = ev
+                        .get("toolName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("工具");
+                    let params = ev.get("params").and_then(|v| v.as_str()).unwrap_or("");
+                    out.push(format!("工具调用：{name} {}", compact_inline(params, 200)));
+                }
+                "tool/result" => {
+                    let summary = ev.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                    if summary.trim().is_empty() {
+                        continue;
+                    }
+                    let name = ev
+                        .get("toolName")
+                        .and_then(|v| v.as_str())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or("工具");
+                    out.push(format!("{name}结果：{}", compact_inline(summary, 240)));
+                }
+                _ => {}
             }
-            let content = ev.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            let text = if ty == "user/message" {
-                strip_reminder(content)
-            } else {
-                content.to_string()
-            };
-            let text = text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            let who = if ty == "user/message" {
-                "用户"
-            } else {
-                "助手"
-            };
-            out.push(format!("{who}：{text}"));
         }
     }
     out.join("\n\n")
+}
+
+/// 把多行文本压成单行，并截断到 max_chars（中文安全）。
+fn compact_inline(text: &str, max_chars: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "（空）".into();
+    }
+    if flat.chars().count() > max_chars {
+        let s: String = flat.chars().take(max_chars).collect();
+        format!("{s}…")
+    } else {
+        flat
+    }
 }

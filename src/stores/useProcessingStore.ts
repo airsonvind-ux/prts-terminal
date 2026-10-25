@@ -46,6 +46,11 @@ export interface ProcessingState {
   /** 反向映射：该 session 属于哪个 Conversation。用于归档时找到正确的对话 */
   conversationId: string;
   /**
+   * 本轮提醒块（[prts_reminder]）应推进到的游标。
+   * 仅在 turn/end 正常完成时提交；失败/中止不提交，下一轮重发同一份提醒。
+   */
+  noticeAdvanceTo?: number;
+  /**
    * 本轮全部事件的时序列表（投影缓存进行态）。
    * 第一条由 sendMessage 合成 user/message，其后为后端推送的持久事实。
    * turn/end 到达时整轮归档到 Conversation.turns。
@@ -89,7 +94,7 @@ export interface ProcessingStore {
    * 以及后端回传事件的路由 key。不是 conversationId——后者标识对话，
    * 但一个对话可以有多轮 sendMessage，每轮需要独立的处理快照。
    */
-  sendMessage: (input: string, attachments?: Attachment[]) => Promise<void>;
+  sendMessage: (input: string, attachments?: Attachment[]) => Promise<boolean>;
 
   /**
    * 追加事件到 processing[event.sessionId].currentEvents。

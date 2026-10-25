@@ -256,6 +256,46 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(invokeCalls("memory_delete")).toHaveLength(0);
   });
 
+  it("确认框：初始焦点在取消，Escape 只关内层并还原到触发按钮", async () => {
+    render();
+    await flush();
+    clickText("关于博士");
+    await flush();
+    const trigger = findButton("复位")!;
+    trigger.focus();
+    clickText("复位");
+    await flush();
+
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy();
+    const cancel = findButton("取消")!;
+    const confirm = findButton("确认复位")!;
+    expect(document.activeElement).toBe(cancel);
+
+    const keydown = (target: Element, key: string, shiftKey = false) => {
+      act(() => {
+        target.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key,
+            shiftKey,
+            bubbles: true,
+            cancelable: true,
+          })
+        );
+      });
+    };
+    keydown(cancel, "Tab");
+    expect(document.activeElement).toBe(confirm);
+    keydown(confirm, "Tab");
+    expect(document.activeElement).toBe(cancel);
+    keydown(cancel, "Tab", true);
+    expect(document.activeElement).toBe(confirm);
+    keydown(confirm, "Escape");
+    await flush();
+
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(findButton("复位"));
+  });
+
   it("新建专题 → 空白表单 → 保存走 memory_create 并返回列表", async () => {
     render();
     await flush();

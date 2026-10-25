@@ -237,6 +237,9 @@ export function deriveMessages(turns: SessionEvent[][]): ChatMessage[] {
           assistantStart ??= out.length;
           flushAssistant();
           out.push({ role: "tool", content: e.summary, toolCallId: e.callId });
+          // 这个工具事务已经闭合。后续 step 失败时只能回滚它自己的草稿，
+          // 不能把已完成的 tool_call/tool_result 一起删掉。
+          assistantStart = null;
           break;
         case "error":
           // 不可恢复错误：本轮已经产生的半截 assistant / tool 输出不进入
@@ -414,6 +417,16 @@ export function deriveActiveHistory(
 ): ChatMessage[] {
   if (!compaction || compaction.retainedFrom <= 0) {
     return deriveMessages(stripLeadingErrorTurns(turns));
+  }
+  // retainedFrom 与磁盘 turns 失配（边界超出当前长度）：压缩记录不能按原
+  // 切点应用，否则 slice 为空、模型只看得到摘要。保留全部现存轮并附摘要，
+  // 不丢最近对话；retainedFrom === turns.length 是合法的“全部折叠”
+  //（极端压缩/F-15），仍只发摘要。
+  if (compaction.retainedFrom > turns.length) {
+    return [
+      buildSummaryUserMessage(compaction),
+      ...deriveMessages(stripLeadingErrorTurns(turns)),
+    ];
   }
   const kept = turns.slice(compaction.retainedFrom);
   return [

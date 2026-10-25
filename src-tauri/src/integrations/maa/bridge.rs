@@ -176,6 +176,20 @@ pub fn read_frame(stream: &TcpStream) -> Result<Value, BridgeError> {
     serde_json::from_slice(&buf).map_err(|e| BridgeError::Io(format!("帧不是合法 JSON：{e}")))
 }
 
+/// 确认桥子进程仍存活；端口抢占时真桥会因 bind 失败退出，
+/// 父进程不能把抢占者的 ready 当成自己的桥。
+fn ensure_child_running(child: &mut Child, stage: &str) -> Result<(), BridgeError> {
+    match child.try_wait() {
+        Ok(Some(status)) => Err(BridgeError::Start(format!(
+            "桥进程在{stage}已退出（{status}），拒绝该连接"
+        ))),
+        Ok(None) => Ok(()),
+        Err(e) => Err(BridgeError::Start(format!(
+            "检查桥进程状态失败（{stage}）：{e}"
+        ))),
+    }
+}
+
 /// 待回答表：命令 id → （命令名，应答回执）。
 type Pending = Arc<Mutex<HashMap<u64, (String, Sender<Result<Value, BridgeError>>)>>>;
 
@@ -310,6 +324,10 @@ impl Bridge {
         };
         let _ = stream.set_nodelay(true);
 
+        // 端口可能在 free_port 释放后被别人抢走：真桥 bind 失败会退出，
+        // 而父进程仍可能连到抢占者的监听。先确认真桥还活着，再读 ready。
+        ensure_child_running(&mut child, "连接后")?;
+
         // 握手：这次读要限时（避免桥卡在加载 MaaCore 时无限等）。
         let remaining = deadline
             .saturating_duration_since(Instant::now())
@@ -322,6 +340,8 @@ impl Bridge {
             let _ = child.wait();
             return Err(BridgeError::Start(format!("桥没有先发 ready：{ready}")));
         }
+        // 抢占者可能伪造 ready；真桥若已因 bind 失败退出，这个 ready 不可信。
+        ensure_child_running(&mut child, "握手后")?;
         // 读线程要长期阻塞等待，清掉握手用的读超时（socket 选项在克隆间共享）。
         let _ = stream.set_read_timeout(None);
 

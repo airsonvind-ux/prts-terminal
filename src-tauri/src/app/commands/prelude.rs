@@ -22,7 +22,7 @@ pub(crate) use crate::orchestrator;
 pub(crate) use crate::prefix_snapshot::PrefixSnapshotStore;
 pub(crate) use crate::session_store::{
     AppendTurnOutcome, AppendTurnReq, CompactionMeta, ConversationMeta, ConversationRecord,
-    MetaPatch, SessionStore, TitleWriteOutcome, UsageCategory, UsageDelta,
+    InflightMeta, MetaPatch, SessionStore, TitleWriteOutcome, UsageCategory, UsageDelta,
 };
 pub(crate) use crate::settings::{SettingsPatch, SettingsStore};
 pub(crate) use crate::skills_snapshot::SkillSnapshotStore;

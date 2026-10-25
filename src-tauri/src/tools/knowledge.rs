@@ -6,7 +6,7 @@
 //! list_knowledge 返回的节名可直接用于本工具的 sections 参数。
 //!
 //! 条目要点（frontmatter key_points）随内容返回：作为 PRTS 阅读后整理
-//! 静态缓存（再学习总结）时的纠偏锚点，不在导航层提前给出。
+//! 记忆（再学习总结）时的纠偏锚点，不在导航层提前给出。
 //!
 //! 未命中条目时给出模糊候选提示。
 
@@ -129,8 +129,8 @@ impl Tool for ReadKnowledgeTool {
             .to_string_lossy()
             .to_string();
 
-        // 条目要点（frontmatter key_points）：LLM 再学习整理静态缓存时的
-        // 纠偏锚点（静态缓存以标注点为纲，见 cache.rs 角色说明）。
+        // 条目要点（frontmatter key_points）：LLM 再学习整理记忆时的
+        // 纠偏锚点（记忆提炼以标注点为纲）。
         // 大纲响应随附下发；节选分支不携带。无 frontmatter / 无要点 → 空。
         let key_points = crate::knowledge::parse_frontmatter(&content)
             .map(|meta| meta.key_points)
@@ -334,7 +334,7 @@ mod tests {
 
         // 有分节条目：省略 sections 返回正文全文（大纲已由 list_knowledge
         // 承担），并随附 frontmatter 的 key_points（阅读后辅助理解、整理
-        // 静态缓存时的纠偏锚点，不在导航层提前给出）
+        // 记忆时的纠偏锚点，不在导航层提前给出）
         let out = tool
             .execute(&ToolContext::new(), r#"{"entry":"Buff机制基础"}"#)
             .unwrap();

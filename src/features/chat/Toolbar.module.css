@@ -25,14 +25,25 @@
 .title {
   position: relative;
   z-index: 12; /* 上缘缩放热区（z-11）让位：标题顶部不被缩放带切掉 */
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
   color: var(--text-2);
   font-size: calc(var(--face-size) * 0.0458);    /* 11 / 240 */
   font-family: var(--font-ui);
+  line-height: 1.4;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
   transition: color 180ms ease;
+}
+
+.title:disabled {
+  cursor: default;
 }
 
 .title:hover {

@@ -154,24 +154,29 @@ export function sanitizeMarkdownHtml(html: string): string {
 }
 
 /**
- * R-38 最小硬化：远程图片保留直连，但不带 Referer、屏幕外不预取、
- * 解码不阻塞渲染。只改远程 http/https（含协议相对 //）图片；本地 asset、
- * 相对路径与 data: 不动。
+ * 外部图片不直连（R-62 / D-019）：远程 http/https（含协议相对 //）图片
+ * 替换为中性占位文本，避免自动 GET 与盲 SSRF。本地相对路径与 Tauri
+ * asset.localhost 图片保留原样（附件仍要正常内联）。
  *
- * 这是风险接受下的缓解，不是代理：盲 SSRF 面仍存在，见 decisions.md D-012。
+ * 这里只做 HTML 结构替换；视觉样式由 Markdown.module.css 的
+ * `[data-remote-image]` 选择器提供。
  */
 const REMOTE_IMAGE_SRC = /^(?:https?:)?\/\//i;
+const LOCAL_ASSET_SRC = /^(?:https?:)?\/\/asset\.localhost(?:[/:]|$)/i;
 
 export function hardenRemoteImages(html: string): string {
   const temp = document.createElement("div");
   temp.innerHTML = html;
-  for (const img of temp.querySelectorAll("img")) {
+  for (const img of Array.from(temp.querySelectorAll("img"))) {
     const src = img.getAttribute("src")?.trim() ?? "";
-    if (!REMOTE_IMAGE_SRC.test(src)) continue;
-    img.setAttribute("loading", "lazy");
-    img.setAttribute("decoding", "async");
-    img.setAttribute("referrerpolicy", "no-referrer");
-    img.setAttribute("data-remote-image", "");
+    if (!REMOTE_IMAGE_SRC.test(src) || LOCAL_ASSET_SRC.test(src)) continue;
+
+    const alt = img.getAttribute("alt")?.trim() ?? "";
+    const placeholder = document.createElement("span");
+    placeholder.setAttribute("data-remote-image", "");
+    placeholder.setAttribute("title", src);
+    placeholder.textContent = alt ? `图片未加载 · ${alt}` : "图片未加载";
+    img.replaceWith(placeholder);
   }
   return temp.innerHTML;
 }

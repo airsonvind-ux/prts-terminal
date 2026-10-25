@@ -1,24 +1,67 @@
-// 发送前的请求准备：从对话投影派生 LLM 历史，并做上下文窗口预估。
+// 发送前的请求准备：上一轮状态与上下文窗口预估。
 // 这里只做纯计算，不读写 store。
 
-import type { Attachment, ChatMessage, Conversation } from "../types";
-import { deriveActiveHistory, willNextTurnOverflow } from "../projection";
+import type { Conversation, PreviousTurnStatus, SessionEvent } from "../types";
+import { willNextTurnOverflow } from "../projection";
 
 /**
- * 组装本次请求的完整历史（含本轮 user 消息）。
+ * 读取最近一轮的非正常结束状态。
  *
- * 已归档轮次从 SessionEvent 投影重建，error 事件天然被过滤；user 消息保留
- * [prts_reminder] 块——块随 history 发送并归档冻结，是 LLM 实际所见。
+ * 只取最近一轮，作为 `[prts_reminder]` 行随 user 消息发送，不修改
+ * 冻结的 system 前缀；轮成功完成后自然返回 undefined。具体错误详情
+ * 仍留在 UI/日志，模型只拿到安全的状态摘要。
  */
-export function buildSendHistory(
-  conv: Conversation | undefined,
-  displayContent: string,
-  attachments: Attachment[]
-): ChatMessage[] {
-  const prior = conv ? deriveActiveHistory(conv.turns, conv.compaction) : [];
-  const lastUser: ChatMessage = { role: "user", content: displayContent };
-  if (attachments.length > 0) lastUser.attachments = attachments;
-  return [...prior, lastUser];
+type TurnStatus = PreviousTurnStatus | "completed";
+
+/** 单轮终止状态；无法判断 → undefined。 */
+function deriveTurnStatus(turn: SessionEvent[]): TurnStatus | undefined {
+  // 先读后端 turn/end(reason)：primary 归档可能没有前端私有标记；
+  // interrupted 也只能从这里区分，不能先被 turn/aborted 标记截走。
+  const terminal = turn.find((e) => e.type === "turn/end");
+  if (terminal?.type === "turn/end") {
+    if (terminal.reason === "interrupted") return "interrupted";
+    if (terminal.reason === "app-shutdown") return "app-shutdown";
+    if (terminal.reason === "error") return "error";
+    if (terminal.reason === "aborted") return "aborted";
+    if (terminal.reason === "stagnation") return "stagnation";
+    if (terminal.reason === "max-tokens") return "max-tokens";
+    return "completed";
+  }
+  if (turn.some((e) => e.type === "turn/aborted")) return "aborted";
+  if (turn.some((e) => e.type === "turn/truncated")) return "max-tokens";
+  if (turn.some((e) => e.type === "turn/stagnated")) return "stagnation";
+  if (turn.some((e) => e.type === "error" && !e.recoverable)) return "error";
+  if (turn.some((e) => e.type === "assistant/message")) return "completed";
+  // 归档轮没有终止标记，但有可见输出：只可能是关闭/强杀留下的半截轮。
+  if (
+    turn.some(
+      (e) =>
+        e.type === "assistant/chunk" ||
+        e.type === "tool/call" ||
+        e.type === "tool/result"
+    )
+  ) {
+    return "interrupted";
+  }
+  return undefined;
+}
+
+export function derivePreviousTurnStatus(
+  conv: Conversation | undefined
+): PreviousTurnStatus | undefined {
+  const turns = conv?.turns;
+  if (!turns || turns.length === 0) return undefined;
+  // 从尾向前找最近一个非空轮：恢复路径可能留下空占位轮，不能让
+  // 它把真正的中止轮遮住。遇到正常完成轮就停止，不把更早的状态带进来。
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn.length === 0) continue;
+    const status = deriveTurnStatus(turn);
+    if (status === "completed") return undefined;
+    if (status) return status;
+    return undefined;
+  }
+  return undefined;
 }
 
 /**
