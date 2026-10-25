@@ -448,9 +448,20 @@ fn provider_capability_matrix_matches_baseline() {
 
 #[test]
 fn provider_capability_matrix_doc_matches_baseline() {
+    let path = fixture_path(MATRIX_DOC);
+    // The public source snapshot does not ship internal docs; keep the local
+    // check when the generated doc is present, but do not fail a clean public
+    // checkout for an optional documentation artifact.
+    if !path.exists() && std::env::var_os(UPDATE_ENV).is_none() {
+        eprintln!(
+            "skip capability matrix doc: {} is not present in this checkout",
+            path.display()
+        );
+        return;
+    }
     let registry = registry();
     let actual = capability_matrix_markdown(&registry);
-    check_or_update(&fixture_path(MATRIX_DOC), &actual, "capability matrix doc");
+    check_or_update(&path, &actual, "capability matrix doc");
 }
 
 #[test]
