@@ -107,7 +107,6 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 `
 - [架构](docs/architecture.md)：模块边界、turn 生命周期、事件契约
 - [测试](docs/testing.md)：测试分层、手工探针、真实数据契约
 - [数据管线](docs/data-pipeline.md)：数据源、产物与更新流程
-- [版本规则](docs/release-versioning.md)：应用版本与数据版本
 
 ## 技术构成
 

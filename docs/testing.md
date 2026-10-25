@@ -58,8 +58,8 @@ CI 覆盖前端测试/构建、Rust 默认单元测试与两种 feature 的测�
 ## 当前实际分层
 
 - 默认 `cargo test --lib` 不依赖 `src-tauri/resources/arknights.db`；依赖真实库的用例通过 `cfg_attr(not(feature = "data-contract"), ignore = ...)` 跳过。
-- 默认套件当前为 1181 passed / 253 ignored。
-- 专用 `scripts/data-contract.ps1` 会先检查数据库、打印大小与 SHA-256，再以 `data-contract` feature 运行；当前为 1326 passed / 39 ignored。
+- 默认套件不依赖真实数据库；具体通过/忽略数量以本地测试输出为准。
+- 专用 `scripts/data-contract.ps1` 会先检查数据库、打印大小与 SHA-256，再以 `data-contract` feature 运行；通过/忽略数量随测试和数据快照变化，不在文档里固定。
 - 数据契约测试仍断言具体游戏数据（例如关卡名、干员形态、敌人字段），数据更新后变红是预期行为；不应通过改软断言来“修绿”。
 - 没有采用固定夹具是刻意的：固定夹具会把“真实数据更新”这个信号一起冻住。夹具更适合未来给查询逻辑做小样本测试，不替代数据契约。
 - 数据库文件被 `.gitignore` 排除；缺少数据库时，默认套件照常运行，专用脚本会明确报错并给出路径。
