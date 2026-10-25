@@ -209,7 +209,9 @@ if ($DryRun) {
     Invoke-Check 'npm test' { npm test }
     Invoke-Check 'cargo fmt --check' { cargo fmt --manifest-path src-tauri/Cargo.toml -- --check }
     Invoke-Check 'cargo clippy' { cargo clippy --tests --lib --manifest-path src-tauri/Cargo.toml -- -D warnings }
-    Invoke-Check 'cargo test --lib' { cargo test --lib --manifest-path src-tauri/Cargo.toml }
+    # 从仓库根目录带 --manifest-path 运行时，Cargo 不会自动读取
+    # src-tauri/.cargo/config.toml；显式传入，保证 crt-static 生效。
+    Invoke-Check 'cargo test --lib' { cargo test --lib --manifest-path src-tauri/Cargo.toml --config src-tauri/.cargo/config.toml }
 }
 
 # ── 3/4 构建 ──
