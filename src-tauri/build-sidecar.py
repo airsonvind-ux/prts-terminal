@@ -20,6 +20,10 @@ import shutil
 import subprocess
 import sys
 
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def newest_bridge_input(bridge_dir: Path, script: Path) -> float:
     """桥源码的最新修改时间；目标比它新时说明不必重编。"""

@@ -42,8 +42,10 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 # 应用内更新：清单解析、签名校验与 NSIS 安装由插件承担；
+# Windows 发布物是 NSIS .exe，不依赖 zip 解包；关闭默认 zip feature，
+# 避免引入 zip 4.x 的 RUSTSEC-2026-0367/0368/0369。
 # 源切换、重试与安装前保护由 Rust 层负责（4.4）。
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 更新源版本比较（多源时选出最高版本）
