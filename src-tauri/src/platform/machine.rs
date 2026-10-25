@@ -479,8 +479,10 @@ mod registry {
         }
         // UTF-16LE → String（去掉尾部 NUL）
         let units: Vec<u16> = buf[..len as usize]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect();
         let s: String = String::from_utf16_lossy(&units)
             .trim_end_matches('\0')
