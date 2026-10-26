@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments)] // Tauri 命令参数面与前端 invoke 契约固定，拆 struct 会改变 IPC 形状
 
 use super::prelude::*;
+use crate::session::SessionEvent;
 
 // ═══════════════════════════════════════════════════════
 // 上下文压缩（模块 D · 上下文衰减）
@@ -17,8 +18,15 @@ pub struct CompactRequest {
     pub conversation_id: String,
     /// 压缩注册/取消用 session 标识（约定 ctxdecay-{conversationId}）
     pub session_id: String,
-    /// 折叠区历史（前端派生；链式压缩时含旧摘要消息）
+    /// 折叠区历史（前端派生；链式压缩时含旧摘要消息）。
+    /// 仅作为旧客户端/测试兼容路径；生产优先使用后端官方 log 的轮边界。
     pub folded_history: Vec<FrontendMessage>,
+    /// 折叠区在会话 turns 中的起始下标（上一次压缩边界）。
+    #[serde(default)]
+    pub folded_from: Option<usize>,
+    /// 本次压缩后保留段第一轮的下标（本次折叠区结束边界）。
+    #[serde(default)]
+    pub retained_from: Option<usize>,
     /// 会话级请求身份；缺省时回退全局配置。思考档由后台任务策略决定。
     #[serde(default)]
     pub provider: Option<String>,
@@ -65,6 +73,7 @@ pub async fn compact_conversation(
     credentials: State<'_, Arc<Mutex<crate::credentials::CredentialsStore>>>,
     model_registry: State<'_, Arc<ModelRegistry>>,
     turn_registry: State<'_, Arc<TurnRegistry>>,
+    session_store: State<'_, Arc<Mutex<SessionStore>>>,
     memory_store: State<'_, Arc<Mutex<MemoryStore>>>,
     snapshot_store: State<'_, Arc<Mutex<SnapshotStore>>>,
     skills_snapshot_store: State<'_, Arc<Mutex<SkillSnapshotStore>>>,
@@ -166,18 +175,44 @@ pub async fn compact_conversation(
         .map(|m| m.context)
         .unwrap_or(orchestrator::compaction::DEFAULT_CONTEXT_WINDOW);
     let replay = model_registry.get_resolved_compat(&cfg.provider, &cfg.model, cfg.api_type);
+    // C-lite primary：生产压缩优先消费后端官方 log 的完整事件，
+    // 这样 assistant/provider-blocks 不会被前端投影丢掉。
+    let official_input = load_compaction_events(
+        &session_store,
+        &request.conversation_id,
+        request.folded_from,
+        request.retained_from,
+    );
     let abort = turn_registry.register(&request.session_id, &request.conversation_id);
-    let result = orchestrator::compaction::run_summary_with_replay(
-        &**client,
-        &cfg,
-        request.folded_history,
-        window,
-        &replay,
-        &system_prompt,
-        &tool_defs,
-        &abort,
-    )
-    .await;
+    let result = match official_input {
+        Some((turns, prior_summary)) => {
+            orchestrator::compaction::run_summary_with_events(
+                &**client,
+                &cfg,
+                turns,
+                prior_summary,
+                window,
+                &replay,
+                &system_prompt,
+                &tool_defs,
+                &abort,
+            )
+            .await
+        }
+        None => {
+            orchestrator::compaction::run_summary_with_replay(
+                &**client,
+                &cfg,
+                request.folded_history,
+                window,
+                &replay,
+                &system_prompt,
+                &tool_defs,
+                &abort,
+            )
+            .await
+        }
+    };
     turn_registry.unregister_if(&request.session_id, &abort);
     result.map(|o| {
         // 批 4 · 压缩并更新：摘要成功（含降级规则产出——上下文同样被替换）→
@@ -203,6 +238,54 @@ pub async fn compact_conversation(
             usage: o.usage.map(|u| usage_stat(&u, cfg.api_type)),
         }
     })
+}
+
+/// 从后端官方会话 log 读取压缩折叠区。
+///
+/// 前端传来的 `foldedFrom` / `retainedFrom` 是 turns 下标；两者缺失时返回
+/// `None`，保留旧客户端兼容路径。边界与磁盘不一致时也不猜，回退到
+/// frontend 路径，由 `ensure_provider_blocks` 对缺口 fail closed。
+fn load_compaction_events(
+    session_store: &Arc<Mutex<SessionStore>>,
+    conversation_id: &str,
+    folded_from: Option<usize>,
+    retained_from: Option<usize>,
+) -> Option<(Vec<Vec<SessionEvent>>, Option<String>)> {
+    let (Some(from), Some(to)) = (folded_from, retained_from) else {
+        return None;
+    };
+    if conversation_id.is_empty() || from > to {
+        return None;
+    }
+    let mut store = match session_store.lock() {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("[compaction] 会话存储锁失败，回退前端历史：{e}");
+            return None;
+        }
+    };
+    let meta = match store.meta(conversation_id) {
+        Ok(meta) => meta,
+        Err(e) => {
+            eprintln!("[compaction] 会话元数据读取失败，回退前端历史：{e}");
+            return None;
+        }
+    };
+    let turns = match store.load_turns(conversation_id) {
+        Ok(turns) => turns,
+        Err(e) => {
+            eprintln!("[compaction] 会话轮读取失败，回退前端历史：{e}");
+            return None;
+        }
+    };
+    if to > turns.len() {
+        eprintln!(
+            "[compaction] 压缩边界越界（retainedFrom={to}, turns={}），回退前端历史",
+            turns.len()
+        );
+        return None;
+    }
+    Some((turns[from..to].to_vec(), meta.compaction.map(|c| c.summary)))
 }
 
 /// 压缩成功后刷新三份冻结快照（批 4 / 批 5 · 压缩并更新）。

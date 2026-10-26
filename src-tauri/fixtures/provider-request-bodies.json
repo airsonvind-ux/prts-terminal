@@ -10849,6 +10849,7 @@
         },
         {
           "content": "",
+          "reasoning_content": "I should call lookup.",
           "role": "assistant",
           "tool_calls": [
             {
@@ -10906,6 +10907,7 @@
         },
         {
           "content": "",
+          "reasoning_content": "I should call lookup.",
           "role": "assistant",
           "tool_calls": [
             {
@@ -10963,6 +10965,7 @@
         },
         {
           "content": "",
+          "reasoning_content": "I should call lookup.",
           "role": "assistant",
           "tool_calls": [
             {

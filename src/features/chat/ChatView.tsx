@@ -380,7 +380,7 @@ export function ChatView({ onDragHandle }: Props) {
             role="status"
             title={persistenceError}
           >
-            本轮记录未保存；重启后这一轮不会恢复
+            会话信息未保存；重启后标题和用量可能回退
           </div>
         )}
         {/* 恢复中且尚无内容：对话区留白（启动演出覆盖其上）；恢复后内容先挂载、

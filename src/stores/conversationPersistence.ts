@@ -116,7 +116,7 @@ export function appendTurnImpl(
           c.id === conversationId ? { ...c, persistenceError: message } : c
         ),
       }));
-      showToast(`本轮记录未保存：${message}`, {
+      showToast(`会话信息未保存：${message}`, {
         kind: "warning",
         ttlMs: 8000,
         dedupeKey: `append-turn-failed-${conversationId}`,

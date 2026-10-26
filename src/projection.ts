@@ -405,7 +405,7 @@ export function firstUserContent(turns: SessionEvent[][]): string | null {
 
 /**
  * 派生「发给 LLM 的历史」：压缩后 = 摘要消息（首条）+ 保留段派生；未压缩 =
- * 全量派生（与既有 deriveMessages 输出一致）。sendMessage 的唯一历史来源。
+ * 全量派生（与既有 deriveMessages 输出一致）。前端投影/展示用途；生产 LLM 历史由后端官方 log 派生。
  *
  * 首部错误轮先剥离：错误轮本身不进 LLM 上下文（error 事件已过滤），但其
  * user 消息会残留成悬空历史；首轮 401 后重新配置再对话时，模型不应看到那段

@@ -359,6 +359,8 @@ pub struct ResolvedCompat {
     pub stream_usage: compat::StreamUsage,
     /// 多轮回传策略
     pub policy: ReasoningPolicy,
+    /// 输出预算字段声明（来自新声明层；None = 未声明）
+    pub output_budget: Option<compat::OutputBudget>,
     /// 认证方式（直通自 Compat.auth）
     pub auth: Option<AuthMode>,
     /// 流式响应是否发送 `stream_options.include_usage`（默认 true，保持旧行为）
@@ -375,6 +377,7 @@ impl Default for ResolvedCompat {
             assistant_reasoning: compat::AssistantReasoning::Optional,
             stream_usage: compat::StreamUsage::Unknown,
             policy: ReasoningPolicy::Preserve,
+            output_budget: None,
             auth: None,
             supports_usage_in_streaming: true,
         }
@@ -1757,6 +1760,9 @@ impl ModelRegistry {
         api_type: ApiType,
     ) -> ResolvedCompat {
         let compat = self.get_compat(provider, model);
+        // Phase 1 的新声明层是 carrier / output_budget 的真实来源；
+        // 旧 Compat 只保留兼容字段，不能再覆盖新声明。
+        let declared = self.get_declared_compat(provider, model);
         let has_reasoning = self
             .providers
             .get(provider)
@@ -1790,6 +1796,43 @@ impl ModelRegistry {
         if let Some(supports) = compat.supports_usage_in_streaming {
             resolved.supports_usage_in_streaming = supports;
         }
+        // 新声明层覆盖旧投影：carrier / profile / clearable / policy / budget
+        // 都以声明为准；旧字段只在未声明时保留家族默认。
+        if let Some(profile) = declared.thinking_profile {
+            resolved.thinking_profile = Some(profile);
+        }
+        if let Some(replay) = declared.reasoning_replay.as_ref() {
+            if let Some(carrier) = replay.carrier {
+                resolved.carrier = Some(
+                    match carrier {
+                        compat::Carrier::ReasoningContent => "reasoning_content",
+                        compat::Carrier::ThinkingBlocks => "thinking_blocks",
+                        compat::Carrier::ReasoningItems => "reasoning_items",
+                        compat::Carrier::ReasoningDetails => "reasoning_details",
+                        compat::Carrier::ThoughtSignature => "thought_signature",
+                    }
+                    .to_string(),
+                );
+            }
+            if let Some(clearable) = replay.clearable {
+                resolved.clearable = clearable;
+            }
+            if let Some(assistant) = replay.assistant_reasoning {
+                resolved.assistant_reasoning = assistant;
+            }
+            if let Some(policy) = replay.policy {
+                resolved.policy = match policy {
+                    compat::ReplayPolicy::Preserve => ReasoningPolicy::Preserve,
+                    compat::ReplayPolicy::RequireToolCall => ReasoningPolicy::RequireToolCall,
+                    // 旧效果层没有“无推理”变体；carrier=None 让传输层剥离。
+                    compat::ReplayPolicy::None => {
+                        resolved.carrier = None;
+                        ReasoningPolicy::Preserve
+                    }
+                };
+            }
+        }
+        resolved.output_budget = declared.output_budget;
         // auth 不参与 resolve_compat 计算——从声明层直通效果层
         resolved.auth = compat.auth;
         resolved
@@ -2401,6 +2444,64 @@ mod tests {
         let r = reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions);
         assert_eq!(r.carrier.as_deref(), Some("reasoning_content"));
         assert_eq!(r.policy, ReasoningPolicy::Preserve);
+    }
+
+    #[test]
+    fn declared_carrier_and_output_budget_drive_effective_compat() {
+        let json = r#"{
+            "p": {
+                "defaults": {
+                    "api_type": "openai-completions",
+                    "base_url": "https://x",
+                    "compat": {
+                        "thinking_format": "deepseek",
+                        "reasoning_replay": {
+                            "policy": "preserve",
+                            "carrier": "thinking_blocks"
+                        },
+                        "output_budget": {
+                            "field": "max_completion_tokens",
+                            "required": true
+                        }
+                    }
+                },
+                "models": { "m": { "name": "M", "context": 1000, "reasoning": true } }
+            }
+        }"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+        let resolved = reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions);
+        assert_eq!(resolved.carrier.as_deref(), Some("thinking_blocks"));
+        assert_eq!(
+            resolved.output_budget.as_ref().and_then(|b| b.field),
+            Some(compat::OutputField::MaxCompletionTokens)
+        );
+    }
+
+    #[test]
+    fn model_only_thinking_profile_survives_declared_projection() {
+        let json = r#"{
+            "p": {
+                "defaults": {
+                    "api_type": "openai-completions",
+                    "base_url": "https://x",
+                    "compat": { "thinking_format": "zhipu" }
+                },
+                "models": {
+                    "m": {
+                        "name": "M",
+                        "context": 1000,
+                        "reasoning": true,
+                        "compat": { "thinking_profile": "zhipu-glm-5.3" }
+                    }
+                }
+            }
+        }"#;
+        let reg = ModelRegistry::from_json(json).unwrap();
+        let resolved = reg.get_resolved_compat("p", "m", ApiType::OpenAiCompletions);
+        assert_eq!(
+            resolved.thinking_profile,
+            Some(compat::ThinkingProfile::ZhipuGlm53)
+        );
     }
 
     #[test]

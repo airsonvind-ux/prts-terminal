@@ -116,6 +116,8 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
           conversationId,
           sessionId,
           foldedHistory: payload,
+          foldedFrom: foldFrom,
+          retainedFrom,
           provider: conv.provider ?? null,
           model: conv.model ?? null,
         },

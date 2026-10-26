@@ -240,7 +240,7 @@ describe("F8 写盘失败可见", () => {
       toasts.some(
         (t) =>
           t.kind === "warning" &&
-          t.message.includes("本轮记录未保存") &&
+          t.message.includes("会话信息未保存") &&
           t.message.includes("磁盘已满")
       )
     ).toBe(true);

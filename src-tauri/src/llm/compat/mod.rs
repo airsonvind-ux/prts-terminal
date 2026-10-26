@@ -1,12 +1,13 @@
 //! Provider compatibility declarations.
 //!
-//! This is the Phase 1 declaration layer: parse the old flat compat fields and
-//! the new nested fields into one typed model, merge provider defaults with
-//! model overrides, and validate the result against the wire protocol.
+//! Declaration layer: parse the old flat compat fields and the new nested
+//! fields into one typed model, merge provider defaults with model overrides,
+//! and validate the result against the wire protocol.
 //!
-//! Production adapters still read `crate::llm::ResolvedCompat`; this module is
-//! parallel until the consumers for the new fields land. Keeping it separate is
-//! what makes the 195-model request-body baseline meaningful.
+//! Production adapters read `crate::llm::ResolvedCompat`; the effective value
+//! now consumes declared carrier, thinking profile, replay policy and output
+//! budget. Keeping declaration and wire logic separate is what makes the
+//! 195-model request-body baseline meaningful.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};

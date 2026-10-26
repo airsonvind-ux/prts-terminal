@@ -59,9 +59,10 @@ impl AnthropicMessagesClient {
         }
         // 标准化：去除尾部 /v1 避免路径重复
         let base = base.strip_suffix("/v1").unwrap_or(base);
-        // DeepSeek 的 Anthropic 端点路径为 /messages（base 已含 /anthropic），
-        // 其他供应商（Anthropic 官方、MiniMax 等）使用 /v1/messages
-        if base.contains("api.deepseek.com") {
+        // 路径由 base URL 形状决定，不认供应商域名。
+        // Anthropic-compatible 代理通常把端点挂在 /anthropic 下，此时
+        // 该层直接接 /messages；官方类 base 则使用 /v1/messages。
+        if base.ends_with("/anthropic") {
             format!("{base}/messages")
         } else {
             format!("{base}/v1/messages")
@@ -305,6 +306,18 @@ impl AnthropicMessagesClient {
         let thinking_compat =
             self.registry
                 .get_resolved_compat(&config.provider, &config.model, config.api_type);
+        // output_budget 声明必须与协议 wire 键匹配；Anthropic 只接受 max_tokens。
+        if let Some(field) = thinking_compat
+            .output_budget
+            .as_ref()
+            .and_then(|budget| budget.field)
+        {
+            if field != crate::llm::compat::OutputField::MaxTokens {
+                return Err(LlmError::Config(format!(
+                    "Anthropic 协议不支持 output_budget.field={field:?}"
+                )));
+            }
+        }
         let _ = crate::llm::thinking::inject(
             &mut body,
             config.api_type,
@@ -1613,6 +1626,19 @@ mod tests {
         assert_eq!(
             AnthropicMessagesClient::build_url(&config),
             "https://api.deepseek.com/anthropic/messages"
+        );
+    }
+
+    #[test]
+    fn build_url_uses_path_not_provider_domain() {
+        let config = LlmConfig {
+            provider: "custom-anthropic".into(),
+            base_url: Some("https://proxy.example/anthropic".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            AnthropicMessagesClient::build_url(&config),
+            "https://proxy.example/anthropic/messages"
         );
     }
 }

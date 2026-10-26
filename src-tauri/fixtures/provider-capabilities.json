@@ -6654,7 +6654,7 @@
       "effective": {
         "assistantReasoning": "optional",
         "auth": null,
-        "carrier": null,
+        "carrier": "reasoning_content",
         "clearable": true,
         "policy": "require_tool_call",
         "requestParam": null,
@@ -6697,7 +6697,7 @@
       "effective": {
         "assistantReasoning": "optional",
         "auth": null,
-        "carrier": null,
+        "carrier": "reasoning_content",
         "clearable": true,
         "policy": "require_tool_call",
         "requestParam": null,
@@ -6740,7 +6740,7 @@
       "effective": {
         "assistantReasoning": "optional",
         "auth": null,
-        "carrier": null,
+        "carrier": "reasoning_content",
         "clearable": true,
         "policy": "require_tool_call",
         "requestParam": null,

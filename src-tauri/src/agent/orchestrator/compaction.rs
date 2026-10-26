@@ -36,7 +36,7 @@ use crate::llm::{
     ChatMessage, LlmClient, LlmConfig, MessageRole, ReasoningPolicy, ResolvedCompat, StreamEvent,
     TokenUsage, ToolDef,
 };
-use crate::session::SessionLog;
+use crate::session::{SessionEvent, SessionLog};
 use crate::turn_registry::AbortSignal;
 
 use super::context::estimate_messages;
@@ -101,11 +101,76 @@ pub async fn run_summary_with_replay(
     tool_defs: &[ToolDef],
     abort: &AbortSignal,
 ) -> Result<SummaryOutcome, String> {
-    // ── 1. 播种 + 派生（与主对话同一个 replay policy）──
-    // 复用既有纯函数链：折叠区前端已过滤 error 与结构事件，此处为形态规范化
-    // 与防御（未知 role 兜底），与 agent_process 的播种路径同构。
+    // 兼容入口：前端消息没有 provider_blocks，不能被当作 Anthropic
+    // 工具轮的完整历史；think-block 校验会在真正请求前 fail closed。
     let mut log = SessionLog::new();
     log.seed_from_history(SUMMARY_SESSION_ID, folded_history);
+    summarize_log(
+        llm,
+        config,
+        log,
+        context_window,
+        replay,
+        system_prompt,
+        tool_defs,
+        abort,
+    )
+    .await
+}
+
+/// 从后端官方 log 的折叠轮事件做摘要。
+///
+/// C-lite primary 下这是生产入口：事件里保留 `assistant/provider-blocks`，
+/// 因而 Anthropic 的签名 thinking block 不会在压缩输入处丢失。
+#[allow(clippy::too_many_arguments)]
+pub async fn run_summary_with_events(
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    folded_turns: Vec<Vec<SessionEvent>>,
+    prior_summary: Option<String>,
+    context_window: u32,
+    replay: &ResolvedCompat,
+    system_prompt: &str,
+    tool_defs: &[ToolDef],
+    abort: &AbortSignal,
+) -> Result<SummaryOutcome, String> {
+    let mut log = SessionLog::new();
+    // 链式压缩：上一次摘要必须作为折叠区首条 user 消息参与新摘要。
+    if let Some(summary) = prior_summary {
+        log.append(SessionEvent::user_message(
+            SUMMARY_SESSION_ID,
+            &SessionLog::compaction_summary_message(&summary),
+        ));
+    }
+    for turn in folded_turns {
+        log.seed_events(turn);
+    }
+    summarize_log(
+        llm,
+        config,
+        log,
+        context_window,
+        replay,
+        system_prompt,
+        tool_defs,
+        abort,
+    )
+    .await
+}
+
+/// 公共摘要执行体：输入已经是带完整事件的 SessionLog。
+#[allow(clippy::too_many_arguments)]
+async fn summarize_log(
+    llm: &dyn LlmClient,
+    config: &LlmConfig,
+    log: SessionLog,
+    context_window: u32,
+    replay: &ResolvedCompat,
+    system_prompt: &str,
+    tool_defs: &[ToolDef],
+    abort: &AbortSignal,
+) -> Result<SummaryOutcome, String> {
+    // ── 1. 派生（与主对话同一个 replay policy）──
     let folded_messages = log.derive_messages(replay.policy);
     if folded_messages.is_empty() {
         return Err("没有可压缩的内容".into());
@@ -134,6 +199,9 @@ pub async fn run_summary_with_replay(
     let degraded = estimate_messages(&messages) > budget;
 
     // ── 4. 产出 ──
+    if !degraded {
+        ensure_provider_blocks(&messages, replay, config)?;
+    }
     let (summary, usage) = if degraded {
         (build_fallback_summary(&messages), None)
     } else {
@@ -146,6 +214,39 @@ pub async fn run_summary_with_replay(
         tokens_before: Some(tokens_before),
         usage,
     })
+}
+
+/// Anthropic 工具轮必须带签名 thinking block；缺块时拒绝发请求。
+///
+/// 这条闸门保护两类输入：旧前端消息投影（没有 provider_blocks）和
+/// 旧日志中确实缺失 block 的轮次。让用户看到明确错误，而不是供应商 400。
+fn ensure_provider_blocks(
+    messages: &[ChatMessage],
+    replay: &ResolvedCompat,
+    config: &LlmConfig,
+) -> Result<(), String> {
+    let thinking_enabled = !matches!(config.thinking_level.as_deref(), Some("off") | Some("none"));
+    if !thinking_enabled || replay.carrier.as_deref() != Some("thinking_blocks") {
+        return Ok(());
+    }
+    for m in messages {
+        let has_tool_call = m.role == MessageRole::Assistant
+            && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+        if !has_tool_call {
+            continue;
+        }
+        let has_blocks = m
+            .provider_blocks
+            .as_ref()
+            .is_some_and(|blocks| !blocks.is_empty());
+        if !has_blocks {
+            return Err(
+                "压缩历史包含 Anthropic 工具轮，但缺少签名的 thinking block；请新建会话后再压缩。"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// 测试兼容入口：使用默认 replay 合同。生产命令必须显式传当前模型合同。
@@ -464,7 +565,8 @@ mod tests {
     use super::*;
     use crate::events::FrontendMessage;
     use crate::llm::mock::{MockLlmClient, MockResponse};
-    use crate::llm::{LlmError, StreamResult, ToolCall, ToolCallFunction};
+    use crate::llm::{LlmError, ProviderBlock, StreamResult, ToolCall, ToolCallFunction};
+    use crate::session::{ChunkKind, SessionEvent};
     use std::sync::Mutex;
 
     // ── 测试基建 ──
@@ -616,6 +718,96 @@ mod tests {
         );
         // 折叠区原始消息不得被改写
         assert_eq!(out.summary, "## Goal\n测试摘要");
+    }
+
+    #[tokio::test]
+    async fn backend_events_preserve_anthropic_provider_blocks_for_compaction() {
+        let client = CaptureClient::new();
+        let events = vec![
+            SessionEvent::user_message("s1", "查一下敌人"),
+            SessionEvent::assistant_chunk("s1", ChunkKind::Text, "先查数据"),
+            SessionEvent::assistant_provider_blocks(
+                "s1",
+                vec![ProviderBlock::AnthropicThinking {
+                    thinking: "需要工具".into(),
+                    signature: "sig-1".into(),
+                }],
+            ),
+            SessionEvent::tool_call("s1", "c1", "query_enemy", "{}"),
+            SessionEvent::tool_result("s1", "c1", Some("query_enemy"), "结果", true),
+        ];
+        let replay = ResolvedCompat {
+            carrier: Some("thinking_blocks".into()),
+            policy: ReasoningPolicy::Preserve,
+            clearable: false,
+            ..Default::default()
+        };
+        let config = LlmConfig {
+            thinking_level: Some("medium".into()),
+            ..Default::default()
+        };
+        let out = run_summary_with_events(
+            &client,
+            &config,
+            vec![events],
+            None,
+            65_536,
+            &replay,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
+        assert!(!out.degraded);
+        let captured = client.last_messages.lock().unwrap().clone();
+        let assistant = captured
+            .iter()
+            .find(|m| m.role == MessageRole::Assistant && m.tool_calls.is_some())
+            .expect("应保留工具轮 assistant 消息");
+        let blocks = assistant
+            .provider_blocks
+            .as_ref()
+            .expect("provider blocks 应随事件进入摘要请求");
+        assert!(matches!(
+            blocks.first(),
+            Some(ProviderBlock::AnthropicThinking { signature, .. }) if signature == "sig-1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn anthropic_tool_turn_without_provider_blocks_fails_closed() {
+        let client = CaptureClient::new();
+        let events = vec![
+            SessionEvent::user_message("s1", "查一下敌人"),
+            SessionEvent::tool_call("s1", "c1", "query_enemy", "{}"),
+            SessionEvent::tool_result("s1", "c1", Some("query_enemy"), "结果", true),
+        ];
+        let replay = ResolvedCompat {
+            carrier: Some("thinking_blocks".into()),
+            policy: ReasoningPolicy::Preserve,
+            clearable: false,
+            ..Default::default()
+        };
+        let config = LlmConfig {
+            thinking_level: Some("medium".into()),
+            ..Default::default()
+        };
+        let err = run_summary_with_events(
+            &client,
+            &config,
+            vec![events],
+            None,
+            65_536,
+            &replay,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("thinking block"), "got: {err}");
+        assert!(client.last_messages.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

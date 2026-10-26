@@ -10,7 +10,6 @@
 //! - 响应结构：output 数组（type: message / function_call）
 //! - SSE：event: response.output_text.delta / function_call_arguments.delta
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -235,6 +234,18 @@ impl OpenAIResponsesClient {
         let thinking_compat =
             self.registry
                 .get_resolved_compat(&config.provider, &config.model, config.api_type);
+        // Responses 的 wire 键固定为 max_output_tokens。
+        if let Some(field) = thinking_compat
+            .output_budget
+            .as_ref()
+            .and_then(|budget| budget.field)
+        {
+            if field != crate::llm::compat::OutputField::MaxOutputTokens {
+                return Err(LlmError::Config(format!(
+                    "Responses 协议不支持 output_budget.field={field:?}"
+                )));
+            }
+        }
         let _ = crate::llm::thinking::inject(
             &mut body,
             config.api_type,
@@ -540,8 +551,9 @@ where
         item_id: Option<String>,
     }
 
-    // 按 call_id 累积 tool_call 的 arguments、name 与 item id
-    let mut pending_calls: HashMap<String, PendingCall> = HashMap::new();
+    // 按 call_id 累积 tool_call 的 arguments、name 与 item id。
+    // 用 Vec 保留事件到达顺序；HashMap 的迭代顺序会让多个工具的副作用随机。
+    let mut pending_calls: Vec<(String, PendingCall)> = Vec::new();
 
     // 帧读取收口（2026-10-09）：字节缓冲、跨 chunk 无损，见 crate::llm::sse。
     if let Err(e) = crate::llm::sse::read_frames(stream, |frame| {
@@ -569,7 +581,13 @@ where
                 item_id,
                 name,
             } => {
-                let entry = pending_calls.entry(call_id).or_default();
+                let entry =
+                    if let Some(pos) = pending_calls.iter().position(|(id, _)| id == &call_id) {
+                        &mut pending_calls[pos].1
+                    } else {
+                        pending_calls.push((call_id, PendingCall::default()));
+                        &mut pending_calls.last_mut().expect("刚 push 的条目必须存在").1
+                    };
                 entry.item_id = Some(item_id);
                 if name.is_some() {
                     entry.name = name;
@@ -581,7 +599,13 @@ where
                 name,
                 arguments_delta,
             } => {
-                let entry = pending_calls.entry(call_id).or_default();
+                let entry =
+                    if let Some(pos) = pending_calls.iter().position(|(id, _)| id == &call_id) {
+                        &mut pending_calls[pos].1
+                    } else {
+                        pending_calls.push((call_id, PendingCall::default()));
+                        &mut pending_calls.last_mut().expect("刚 push 的条目必须存在").1
+                    };
                 if let Some(n) = name {
                     entry.name = Some(n);
                 }
@@ -1073,6 +1097,39 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, LlmError::Transport(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn multiple_function_calls_keep_event_order() {
+        let frames = &[
+            (
+                "response.output_item.added",
+                r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"first","arguments":""}}"#,
+            ),
+            (
+                "response.output_item.added",
+                r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_2","call_id":"call_2","name":"second","arguments":""}}"#,
+            ),
+            (
+                "response.function_call_arguments.delta",
+                r#"{"type":"response.function_call_arguments.delta","call_id":"call_1","item_id":"fc_1","delta":"{}"}"#,
+            ),
+            (
+                "response.function_call_arguments.delta",
+                r#"{"type":"response.function_call_arguments.delta","call_id":"call_2","item_id":"fc_2","delta":"{}"}"#,
+            ),
+            (
+                "response.completed",
+                r#"{"type":"response.completed","response":{"status":"completed"}}"#,
+            ),
+        ];
+        let (_, result) = collect_events(frames).await;
+        let names: Vec<_> = result
+            .tool_calls
+            .iter()
+            .map(|call| call.function.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["first", "second"]);
     }
 
     #[tokio::test]
