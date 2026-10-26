@@ -199,13 +199,19 @@ async fn summarize_log(
     let degraded = estimate_messages(&messages) > budget;
 
     // ── 4. 产出 ──
-    if !degraded {
-        ensure_provider_blocks(&messages, replay, config)?;
-    }
+    // 历史里可能有 thinking 关闭时产生的工具轮（本来就没有签名 block）。
+    // 这类轮次不能按“缺块”拒绝；摘要请求改用 thinking off，避免把合法历史判死。
+    let summary_config = if should_disable_thinking_for_missing_blocks(&messages, replay, config) {
+        let mut cfg = config.clone();
+        cfg.thinking_level = Some("off".into());
+        cfg
+    } else {
+        config.clone()
+    };
     let (summary, usage) = if degraded {
         (build_fallback_summary(&messages), None)
     } else {
-        call_summary_llm(llm, config, &messages, tool_defs, abort).await?
+        call_summary_llm(llm, &summary_config, &messages, tool_defs, abort).await?
     };
 
     Ok(SummaryOutcome {
@@ -216,37 +222,27 @@ async fn summarize_log(
     })
 }
 
-/// Anthropic 工具轮必须带签名 thinking block；缺块时拒绝发请求。
+/// 历史里存在无 provider block 的 Anthropic 工具轮时，摘要请求改用 thinking off。
 ///
-/// 这条闸门保护两类输入：旧前端消息投影（没有 provider_blocks）和
-/// 旧日志中确实缺失 block 的轮次。让用户看到明确错误，而不是供应商 400。
-fn ensure_provider_blocks(
+/// 无法从旧日志判断该轮当时是否真的开启了 thinking：关闭 thinking 产生的
+/// 工具轮本来就没有签名 block。把这类合法历史直接判死会把用户卡在“只能新建会话”。
+fn should_disable_thinking_for_missing_blocks(
     messages: &[ChatMessage],
     replay: &ResolvedCompat,
     config: &LlmConfig,
-) -> Result<(), String> {
+) -> bool {
     let thinking_enabled = !matches!(config.thinking_level.as_deref(), Some("off") | Some("none"));
     if !thinking_enabled || replay.carrier.as_deref() != Some("thinking_blocks") {
-        return Ok(());
+        return false;
     }
-    for m in messages {
+    messages.iter().any(|m| {
         let has_tool_call = m.role == MessageRole::Assistant
             && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
-        if !has_tool_call {
-            continue;
-        }
-        let has_blocks = m
-            .provider_blocks
-            .as_ref()
-            .is_some_and(|blocks| !blocks.is_empty());
-        if !has_blocks {
-            return Err(
-                "压缩历史包含 Anthropic 工具轮，但缺少签名的 thinking block；请新建会话后再压缩。"
-                    .into(),
-            );
-        }
-    }
-    Ok(())
+        has_tool_call
+            && m.provider_blocks
+                .as_ref()
+                .is_none_or(|blocks| blocks.is_empty())
+    })
 }
 
 /// 测试兼容入口：使用默认 replay 合同。生产命令必须显式传当前模型合同。
@@ -575,6 +571,7 @@ mod tests {
     struct CaptureClient {
         last_messages: Mutex<Vec<ChatMessage>>,
         last_tools: Mutex<Vec<ToolDef>>,
+        last_config: Mutex<Option<LlmConfig>>,
     }
 
     impl LlmClient for CaptureClient {
@@ -601,7 +598,7 @@ mod tests {
 
         fn chat_stream<'a>(
             &'a self,
-            _config: &'a LlmConfig,
+            config: &'a LlmConfig,
             messages: &'a [ChatMessage],
             tools: &'a [crate::llm::ToolDef],
             on_event: Box<dyn Fn(StreamEvent) + Send + Sync>,
@@ -610,9 +607,11 @@ mod tests {
         > {
             let captured = messages.to_vec();
             let captured_tools = tools.to_vec();
+            let captured_config = config.clone();
             Box::pin(async move {
                 *self.last_messages.lock().unwrap() = captured;
                 *self.last_tools.lock().unwrap() = captured_tools;
+                *self.last_config.lock().unwrap() = Some(captured_config);
                 on_event(StreamEvent::TextDelta {
                     content: "## Goal\n测试摘要".into(),
                 });
@@ -632,6 +631,7 @@ mod tests {
             Self {
                 last_messages: Mutex::new(Vec::new()),
                 last_tools: Mutex::new(Vec::new()),
+                last_config: Mutex::new(None),
             }
         }
     }
@@ -776,7 +776,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anthropic_tool_turn_without_provider_blocks_fails_closed() {
+    async fn anthropic_tool_turn_without_provider_blocks_downgrades_to_thinking_off() {
         let client = CaptureClient::new();
         let events = vec![
             SessionEvent::user_message("s1", "查一下敌人"),
@@ -793,7 +793,7 @@ mod tests {
             thinking_level: Some("medium".into()),
             ..Default::default()
         };
-        let err = run_summary_with_events(
+        let out = run_summary_with_events(
             &client,
             &config,
             vec![events],
@@ -805,9 +805,14 @@ mod tests {
             &fresh_abort(),
         )
         .await
-        .unwrap_err();
-        assert!(err.contains("thinking block"), "got: {err}");
-        assert!(client.last_messages.lock().unwrap().is_empty());
+        .unwrap();
+        assert!(!out.degraded);
+        assert!(
+            !client.last_messages.lock().unwrap().is_empty(),
+            "缺块历史不应直接拒绝；摘要请求应降级为 thinking off"
+        );
+        let captured_config = client.last_config.lock().unwrap().clone().unwrap();
+        assert_eq!(captured_config.thinking_level.as_deref(), Some("off"));
     }
 
     #[tokio::test]

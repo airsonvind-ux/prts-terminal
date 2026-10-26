@@ -161,6 +161,32 @@ impl OpenAiCompatibleClient {
             "stream": stream,
         });
 
+        // 只有模型显式声明 output_budget 时才写输出字段；未声明模型保持
+        // 既有“不发送 max_tokens”行为，避免改变全部请求体。
+        if let Some(field) = compat
+            .output_budget
+            .as_ref()
+            .and_then(|budget| budget.field)
+        {
+            let key = match field {
+                crate::llm::compat::OutputField::MaxTokens => "max_tokens",
+                crate::llm::compat::OutputField::MaxCompletionTokens => "max_completion_tokens",
+                crate::llm::compat::OutputField::MaxOutputTokens => {
+                    return Err(LlmError::Config(
+                        "OpenAI-compatible 协议不支持 output_budget.field=max_output_tokens".into(),
+                    ));
+                }
+            };
+            let model_limit = self
+                .registry
+                .get_model(&config.provider, &config.model)
+                .and_then(|entry| entry.max_output);
+            body[key] = serde_json::json!(crate::llm::chat_output_budget(
+                config.max_tokens,
+                model_limit
+            ));
+        }
+
         if !tools.is_empty() {
             body["tools"] = serde_json::to_value(tools)
                 .map_err(|e| LlmError::Parse(format!("工具列表序列化失败: {e}")))?;
@@ -1397,5 +1423,20 @@ mod tests {
     fn stream_options_omitted_when_unknown() {
         let body = stream_body("{}");
         assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn output_budget_uses_declared_openai_field() {
+        let body =
+            stream_body(r#"{"output_budget":{"field":"max_completion_tokens","required":true}}"#);
+        assert_eq!(body["max_completion_tokens"], 100);
+        assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn output_budget_absent_keeps_existing_body_shape() {
+        let body = stream_body("{}");
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("max_completion_tokens").is_none());
     }
 }

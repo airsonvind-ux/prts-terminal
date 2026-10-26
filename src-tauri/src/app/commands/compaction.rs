@@ -27,6 +27,9 @@ pub struct CompactRequest {
     /// 本次压缩后保留段第一轮的下标（本次折叠区结束边界）。
     #[serde(default)]
     pub retained_from: Option<usize>,
+    /// 前端当前看到的 turns 总数；用于校验后端 log 没有少读/多读轮次。
+    #[serde(default)]
+    pub total_turns: Option<usize>,
     /// 会话级请求身份；缺省时回退全局配置。思考档由后台任务策略决定。
     #[serde(default)]
     pub provider: Option<String>,
@@ -182,7 +185,12 @@ pub async fn compact_conversation(
         &request.conversation_id,
         request.folded_from,
         request.retained_from,
+        request.total_turns,
     );
+    let official_input = match official_input {
+        Ok(input) => input,
+        Err(e) => return Err(e),
+    };
     let abort = turn_registry.register(&request.session_id, &request.conversation_id);
     let result = match official_input {
         Some((turns, prior_summary)) => {
@@ -245,47 +253,61 @@ pub async fn compact_conversation(
 /// 前端传来的 `foldedFrom` / `retainedFrom` 是 turns 下标；两者缺失时返回
 /// `None`，保留旧客户端兼容路径。边界与磁盘不一致时也不猜，回退到
 /// frontend 路径，由 `ensure_provider_blocks` 对缺口 fail closed。
+type CompactionEventInput = Option<(Vec<Vec<SessionEvent>>, Option<String>)>;
+
 fn load_compaction_events(
     session_store: &Arc<Mutex<SessionStore>>,
     conversation_id: &str,
     folded_from: Option<usize>,
     retained_from: Option<usize>,
-) -> Option<(Vec<Vec<SessionEvent>>, Option<String>)> {
+    total_turns: Option<usize>,
+) -> Result<CompactionEventInput, String> {
     let (Some(from), Some(to)) = (folded_from, retained_from) else {
-        return None;
+        return Ok(None);
     };
-    if conversation_id.is_empty() || from > to {
-        return None;
+    if conversation_id.is_empty() {
+        return Ok(None);
     }
-    let mut store = match session_store.lock() {
-        Ok(store) => store,
-        Err(e) => {
-            eprintln!("[compaction] 会话存储锁失败，回退前端历史：{e}");
-            return None;
+    if from > to {
+        return Err("压缩边界无效：起始轮晚于保留段。".into());
+    }
+    let mut store = session_store
+        .lock()
+        .map_err(|e| format!("会话存储锁获取失败：{e}"))?;
+    let meta = store
+        .meta(conversation_id)
+        .map_err(|e| format!("会话元数据读取失败：{e}"))?;
+    let turns = store
+        .load_turns(conversation_id)
+        .map_err(|e| format!("会话轮读取失败：{e}"))?;
+    if let Some(total) = total_turns {
+        if turns.len() != total {
+            return Err(format!(
+                "会话历史与磁盘不一致（前端 {total} 轮，磁盘 {} 轮），请重启或修复会话后再压缩。",
+                turns.len()
+            ));
         }
-    };
-    let meta = match store.meta(conversation_id) {
-        Ok(meta) => meta,
-        Err(e) => {
-            eprintln!("[compaction] 会话元数据读取失败，回退前端历史：{e}");
-            return None;
+    }
+    if let Some(compaction) = meta.compaction.as_ref() {
+        if compaction.retained_from as usize != from {
+            return Err(format!(
+                "压缩边界与上次压缩记录不一致（记录 {}，请求 {from}），请重启后再压缩。",
+                compaction.retained_from
+            ));
         }
-    };
-    let turns = match store.load_turns(conversation_id) {
-        Ok(turns) => turns,
-        Err(e) => {
-            eprintln!("[compaction] 会话轮读取失败，回退前端历史：{e}");
-            return None;
-        }
-    };
+    } else if from != 0 {
+        return Err("压缩边界指向不存在的上次压缩记录，请重启后再压缩。".into());
+    }
     if to > turns.len() {
-        eprintln!(
-            "[compaction] 压缩边界越界（retainedFrom={to}, turns={}），回退前端历史",
+        return Err(format!(
+            "压缩边界越界（retainedFrom={to}，磁盘 {} 轮），请重启后再压缩。",
             turns.len()
-        );
-        return None;
+        ));
     }
-    Some((turns[from..to].to_vec(), meta.compaction.map(|c| c.summary)))
+    Ok(Some((
+        turns[from..to].to_vec(),
+        meta.compaction.map(|c| c.summary),
+    )))
 }
 
 /// 压缩成功后刷新三份冻结快照（批 4 / 批 5 · 压缩并更新）。
@@ -337,5 +359,51 @@ pub(super) fn refresh_frozen_snapshots(
             snaps.refresh(conversation_id, &live_system, live_tools);
         }
         Err(e) => eprintln!("[commands] 前缀快照刷新跳过（锁失败）：{e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_store::AppendTurnReq;
+
+    #[test]
+    fn compaction_rejects_frontend_backend_turn_mismatch() {
+        let dir =
+            std::env::temp_dir().join(format!("prts-compaction-boundary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = SessionStore::new(&dir);
+        store
+            .ensure_conversation(
+                "c1",
+                Some("压缩边界"),
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .append_turn(&AppendTurnReq {
+                conversation_id: "c1".into(),
+                events_json: r#"[{"type":"user/message","sessionId":"s1","content":"x"}]"#.into(),
+                title: None,
+                created_at: None,
+                model_name: None,
+                context_length: None,
+                provider: None,
+                model: None,
+                thinking_level: None,
+                context_tokens: None,
+                last_notice_seq: None,
+                usage_deltas: None,
+            })
+            .unwrap();
+        let store = Arc::new(Mutex::new(store));
+        let err = load_compaction_events(&store, "c1", Some(0), Some(1), Some(2)).unwrap_err();
+        assert!(err.contains("不一致"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -118,6 +118,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
           foldedHistory: payload,
           foldedFrom: foldFrom,
           retainedFrom,
+          totalTurns: conv.turns.length,
           provider: conv.provider ?? null,
           model: conv.model ?? null,
         },
