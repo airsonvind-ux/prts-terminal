@@ -251,8 +251,8 @@ pub async fn compact_conversation(
 /// 从后端官方会话 log 读取压缩折叠区。
 ///
 /// 前端传来的 `foldedFrom` / `retainedFrom` 是 turns 下标；两者缺失时返回
-/// `None`，保留旧客户端兼容路径。边界与磁盘不一致时也不猜，回退到
-/// frontend 路径，由 `ensure_provider_blocks` 对缺口 fail closed。
+/// `None`，保留旧客户端兼容路径。边界与磁盘不一致时返回 `Err`，直接拒绝
+/// 压缩，不猜测、不回退到 frontend 路径。
 type CompactionEventInput = Option<(Vec<Vec<SessionEvent>>, Option<String>)>;
 
 fn load_compaction_events(

@@ -78,7 +78,17 @@ impl AnthropicMessagesClient {
     /// - messages_array：仅 user/assistant/tool 角色。
     ///   tool role 转为 user role 的 tool_result content block。
     ///   assistant 含 tool_calls 时转为多个 content block（text + tool_use）。
+    #[cfg(test)]
     fn convert_messages(messages: &[ChatMessage]) -> (Option<String>, Vec<Value>) {
+        Self::convert_messages_with_provider_blocks(messages, true)
+    }
+
+    /// `include_provider_blocks=false` 用于 thinking 已关闭的请求：历史签名块
+    /// 不能和 `thinking:disabled` 同时出现（F-11）。
+    fn convert_messages_with_provider_blocks(
+        messages: &[ChatMessage],
+        include_provider_blocks: bool,
+    ) -> (Option<String>, Vec<Value>) {
         let mut system_parts: Vec<String> = Vec::new();
         let mut anthropic_msgs: Vec<Value> = Vec::new();
         // 同一轮多个工具结果必须放进同一条 user 消息。Anthropic 的
@@ -160,10 +170,11 @@ impl AnthropicMessagesClient {
                         .provider_blocks
                         .as_ref()
                         .is_some_and(|blocks| !blocks.is_empty());
-                    if has_provider_blocks || msg.tool_calls.is_some() {
+                    let replay_provider_blocks = include_provider_blocks && has_provider_blocks;
+                    if replay_provider_blocks || msg.tool_calls.is_some() {
                         let mut blocks: Vec<Value> = Vec::new();
-                        if let Some(provider_blocks) = &msg.provider_blocks {
-                            for block in provider_blocks {
+                        if replay_provider_blocks {
+                            for block in msg.provider_blocks.iter().flatten() {
                                 match block {
                                     ProviderBlock::AnthropicThinking {
                                         thinking,
@@ -271,7 +282,12 @@ impl AnthropicMessagesClient {
         };
 
         let normalized = super::normalize_tool_pairs(messages, config.api_type);
-        let (system, anthropic_msgs) = Self::convert_messages(&normalized);
+        // thinking 明确关闭时不回放历史 thinking / redacted_thinking。摘要降级
+        // 已经会清块（F-11），这里再按 wire 语义兜底，防止其它调用方漏清。
+        let include_provider_blocks =
+            !matches!(config.thinking_level.as_deref(), Some("off") | Some("none"));
+        let (system, anthropic_msgs) =
+            Self::convert_messages_with_provider_blocks(&normalized, include_provider_blocks);
 
         // Anthropic 要求 messages 非空
         let anthropic_msgs = if anthropic_msgs.is_empty() {
@@ -1525,6 +1541,57 @@ mod tests {
         assert_eq!(blocks[0]["type"], "thinking");
         assert_eq!(blocks[0]["signature"], "sig-abc");
         assert_eq!(blocks[1]["type"], "text");
+    }
+
+    #[test]
+    fn thinking_off_omits_provider_blocks_from_request_body() {
+        let json = r#"{
+            "p": {
+                "defaults": {
+                    "api_type": "anthropic-messages",
+                    "base_url": "https://api.anthropic.com"
+                },
+                "models": {
+                    "m": {
+                        "name": "M",
+                        "context": 100000,
+                        "reasoning": true,
+                        "thinking_levels": ["off", "medium"],
+                        "default_thinking_level": "medium"
+                    }
+                }
+            }
+        }"#;
+        let client = AnthropicMessagesClient::new(Arc::new(
+            ModelRegistry::from_json(json).expect("fixture 应可解析"),
+        ));
+        let mut msg = ChatMessage::assistant("继续");
+        msg.provider_blocks = Some(vec![ProviderBlock::AnthropicThinking {
+            thinking: "想".into(),
+            signature: "sig-abc".into(),
+        }]);
+        let config = LlmConfig {
+            provider: "p".into(),
+            api_type: crate::llm::ApiType::AnthropicMessages,
+            model: "m".into(),
+            thinking_level: Some("off".into()),
+            ..Default::default()
+        };
+        let body = client.build_body(&config, &[msg], &[], false).unwrap();
+        assert_eq!(body["thinking"]["type"], "disabled");
+        let content = &body["messages"][0]["content"];
+        let has_thinking_block = content.as_array().is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                matches!(
+                    block["type"].as_str(),
+                    Some("thinking") | Some("redacted_thinking")
+                )
+            })
+        });
+        assert!(
+            !has_thinking_block,
+            "thinking=off 的请求体不应携带历史 thinking block"
+        );
     }
 
     // ── 响应解析 ──

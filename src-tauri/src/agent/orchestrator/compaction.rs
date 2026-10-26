@@ -202,6 +202,11 @@ async fn summarize_log(
     // 历史里可能有 thinking 关闭时产生的工具轮（本来就没有签名 block）。
     // 这类轮次不能按“缺块”拒绝；摘要请求改用 thinking off，避免把合法历史判死。
     let summary_config = if should_disable_thinking_for_missing_blocks(&messages, replay, config) {
+        // 摘要不需要回放历史签名；若仍携带部分 thinking block，而请求又声明
+        // thinking=off，混合请求可能被 Anthropic 拒绝（F-11）。降级时一并清块。
+        for message in &mut messages {
+            message.provider_blocks = None;
+        }
         let mut cfg = config.clone();
         cfg.thinking_level = Some("off".into());
         cfg
@@ -810,6 +815,61 @@ mod tests {
         assert!(
             !client.last_messages.lock().unwrap().is_empty(),
             "缺块历史不应直接拒绝；摘要请求应降级为 thinking off"
+        );
+        let captured_config = client.last_config.lock().unwrap().clone().unwrap();
+        assert_eq!(captured_config.thinking_level.as_deref(), Some("off"));
+    }
+
+    #[tokio::test]
+    async fn mixed_history_thinking_off_summary_drops_all_provider_blocks() {
+        let client = CaptureClient::new();
+        let events = vec![
+            SessionEvent::user_message("s1", "先查敌人"),
+            SessionEvent::assistant_chunk("s1", ChunkKind::Text, "先查数据"),
+            SessionEvent::assistant_provider_blocks(
+                "s1",
+                vec![ProviderBlock::AnthropicThinking {
+                    thinking: "需要工具".into(),
+                    signature: "sig-1".into(),
+                }],
+            ),
+            SessionEvent::tool_call("s1", "c1", "query_enemy", "{}"),
+            SessionEvent::tool_result("s1", "c1", Some("query_enemy"), "结果", true),
+            // 第二轮来自 thinking 关闭的旧历史，本来就没有 provider block。
+            SessionEvent::assistant_chunk("s1", ChunkKind::Text, "再查一次"),
+            SessionEvent::tool_call("s1", "c2", "query_enemy", "{}"),
+            SessionEvent::tool_result("s1", "c2", Some("query_enemy"), "结果", true),
+        ];
+        let replay = ResolvedCompat {
+            carrier: Some("thinking_blocks".into()),
+            policy: ReasoningPolicy::Preserve,
+            clearable: false,
+            ..Default::default()
+        };
+        let config = LlmConfig {
+            thinking_level: Some("medium".into()),
+            ..Default::default()
+        };
+        run_summary_with_events(
+            &client,
+            &config,
+            vec![events],
+            None,
+            65_536,
+            &replay,
+            &sys(),
+            &[],
+            &fresh_abort(),
+        )
+        .await
+        .unwrap();
+
+        let captured = client.last_messages.lock().unwrap().clone();
+        assert!(
+            captured
+                .iter()
+                .all(|message| message.provider_blocks.is_none()),
+            "混合历史降级时必须清掉全部 provider block"
         );
         let captured_config = client.last_config.lock().unwrap().clone().unwrap();
         assert_eq!(captured_config.thinking_level.as_deref(), Some("off"));
