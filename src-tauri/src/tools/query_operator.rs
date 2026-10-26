@@ -26,7 +26,7 @@
 //! | 信赖   | 满信赖 100%               | `信赖=50`, `信赖=零`     |
 //! | 潜能   | 0潜                       | `潜能=五潜`              |
 //! | 模组   | 首个模组满级（3级，不支持指定等级） | `模组=X模`, `模组=无模组` |
-//! | 技能   | 不随默认返回，点单制       | `一技能`, `3级火山`, `专2黄昏` |
+//! | 技能   | 不随默认返回，点单制       | `一技能`, `3级火山`, `专2黄昏`, `专三二技能` |
 //! | 天赋   | 当前练度最优备选           | （不提供点单）           |
 //!
 //! ## extra 语法
@@ -118,7 +118,7 @@ impl Tool for QueryOperator {
                 "extra": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 等级/潜能/信赖/模组）：等级=精二40级、精一满级、精二（省略即满级）；潜能=满潜、五潜、0潜；信赖=50（50%）、满、零；模组=无模组、X模、Y模、D模、特限模组。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准。附加列：技能点单（如 一技能、7级2技能、专2二技能；或技能名：火山、3级火山、专2黄昏；默认专三，可一次多个，每项独立输出），或常用列（稀有度、部署位置、代号、标签、关联token）。完整列名见知识库《干员表结构》条目"
+                    "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 等级/潜能/信赖/模组）：等级=精二40级、精一满级、精二（省略即满级）；潜能=满潜、五潜、0潜；信赖=50（50%）、满、零；模组=无模组、X模、Y模、D模、特限模组。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准。附加列：技能点单（如 一技能、7级2技能、专2二技能、专三二技能；或技能名：火山、3级火山、专2黄昏；默认专三，可一次多个，每项独立输出），或常用列（稀有度、部署位置、代号、标签、关联token）。完整列名见知识库《干员表结构》条目"
                 }
             }
         })
@@ -352,7 +352,7 @@ fn format_one_operator(row: &HashMap<String, String>, extra: &ExtraConfig, out: 
                         ));
                     } else {
                         out.push_str(&format!(
-                            "✗ 无法识别的 extra 项 '{name}'：状态请用 键=值 形式（等级/潜能/信赖/模组）；完整列名见知识库《干员表结构》条目；技能请用序号（如 二技能）或技能名\n"
+                            "✗ 无法识别的 extra 项 '{name}'：状态请用 键=值 形式（等级/潜能/信赖/模组）；完整列名见知识库《干员表结构》条目；技能序号支持 专3二技能、专三二技能、专3 二技能，或直接写技能名\n"
                         ));
                     }
                 }
@@ -587,38 +587,55 @@ fn parse_extra(extra_val: &serde_json::Value) -> ExtraConfig {
     cfg
 }
 
-/// 解析技能序号制："一技能" → (0, None)、"7级2技能" → (1, Some(7))、"专2二技能" → (1, Some(9))。
+/// 解析技能序号制："一技能" → (0, None)、"7级2技能" → (1, Some(7))、
+/// "专2二技能" → (1, Some(9))、"专三 二技能" → (1, Some(10))。
 /// 无序号（如"1级技能"）或非序号制返回 None。
 fn parse_skill_index(s: &str) -> Option<(usize, Option<u32>)> {
     if !s.ends_with("技能") {
         return None;
     }
     let core = &s[..s.len() - "技能".len()];
-    // 分离等级前缀："专N" → 7+N 、"N级" → N 、"" → None
-    let (lvl, rest) = if let Some(r) = core.strip_prefix("专") {
-        let digit_count = r.chars().take_while(|c| c.is_ascii_digit()).count();
-        let num_str: String = r.chars().take(digit_count).collect();
-        if let Ok(n) = num_str.parse::<u32>() {
-            (Some(7 + n), &r[digit_count..])
-        } else {
-            (None, core)
-        }
-    } else if let Some(pos) = core.find("级") {
-        let num_str = &core[..pos];
-        if let Ok(n) = num_str.parse::<u32>() {
-            (Some(n), &core[pos + "级".len()..])
-        } else {
-            (None, core)
-        }
-    } else {
-        (None, core)
-    };
-    let idx = parse_chinese_or_digit(rest)?;
+    let (lvl, rest) = strip_level_prefix(core);
+    let idx = parse_chinese_or_digit(rest.trim())?;
     if idx >= 1 {
         Some((idx as usize - 1, lvl))
     } else {
         None
     }
+}
+
+/// 读取开头的数字：支持 ASCII 连续数字与单个中文数字。
+/// 返回数字和剩余部分，剩余部分保留原样，由调用方决定是否 trim。
+fn parse_leading_number(s: &str) -> Option<(u32, &str)> {
+    let s = s.trim_start();
+    let first = s.chars().next()?;
+    if first.is_ascii_digit() {
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        let n = s[..end].parse::<u32>().ok()?;
+        return Some((n, &s[end..]));
+    }
+    let n = parse_chinese_digit(first)?;
+    Some((n, &s[first.len_utf8()..]))
+}
+
+/// 剥离技能等级前缀，统一处理中文数字、ASCII 数字和前缀后的空白。
+/// "专三二技能" → (Some(10), "二技能")
+/// "专3 二技能" → (Some(10), "二技能")
+/// "三级二技能" → (Some(3), "二技能")
+fn strip_level_prefix(s: &str) -> (Option<u32>, &str) {
+    let s = s.trim();
+    if let Some(r) = s.strip_prefix("专") {
+        if let Some((n, rest)) = parse_leading_number(r) {
+            return (Some(7 + n), rest.trim_start());
+        }
+    }
+    if let Some(pos) = s.find('级') {
+        let num = s[..pos].trim();
+        if let Some(n) = parse_chinese_or_digit(num) {
+            return (Some(n), s[pos + '级'.len_utf8()..].trim_start());
+        }
+    }
+    (None, s)
 }
 
 /// 状态指定 · 等级：等级=精二40级 / 等级=精一满级 / 等级=精二（省略等级=该阶段满级）。
@@ -762,20 +779,7 @@ fn is_talent_point_syntax(s: &str) -> bool {
 /// 剥离技能等级前缀："3级火山" → (Some(3), "火山")，"专2黄昏" → (Some(9), "黄昏")，"火山" → (None, "火山")。
 /// 剥离失败时原样返回，不会误伤以"专"开头的技能名（如"专业喷绘技巧"）。
 fn split_level_prefix(s: &str) -> (Option<u32>, &str) {
-    if let Some(r) = s.strip_prefix("专") {
-        let digit_count = r.chars().take_while(|c| c.is_ascii_digit()).count();
-        let num_str: String = r.chars().take(digit_count).collect();
-        if let Ok(n) = num_str.parse::<u32>() {
-            return (Some(7 + n), &r[digit_count..]);
-        }
-    }
-    if let Some(pos) = s.find('级') {
-        let num_str = &s[..pos];
-        if let Ok(n) = num_str.parse::<u32>() {
-            return (Some(n), &s[pos + "级".len()..]);
-        }
-    }
-    (None, s)
+    strip_level_prefix(s)
 }
 
 /// "精一20级" → ("一", "20级"), "精二满级" → ("二", "满级"), "精二" → ("二", "")
@@ -788,15 +792,35 @@ fn split_digits(s: &str) -> (&str, &str) {
     (s, "")
 }
 
+fn parse_chinese_digit(c: char) -> Option<u32> {
+    match c {
+        '零' => Some(0),
+        '一' => Some(1),
+        '两' => Some(2),
+        '二' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
 fn parse_chinese_or_digit(s: &str) -> Option<u32> {
     match s {
         "零" | "0" => Some(0),
         "一" => Some(1),
-        "二" => Some(2),
+        "两" | "二" => Some(2),
         "三" => Some(3),
         "四" => Some(4),
         "五" => Some(5),
         "六" => Some(6),
+        "七" => Some(7),
+        "八" => Some(8),
+        "九" => Some(9),
         _ => s.parse::<u32>().ok(),
     }
 }
@@ -1786,6 +1810,29 @@ mod tests {
         ignore = "需要本地 arknights.db；用 --features data-contract 运行"
     )]
     #[test]
+    fn extra_skill_mastery_accepts_chinese_and_spaced_index() {
+        let ctx = make_ctx();
+        let tool = QueryOperator;
+        for extra in ["专三二技能", "专3 二技能", "专三 二技能"] {
+            let params = serde_json::json!({"names": ["缇缇"], "extra": [extra]});
+            let result = tool.execute(&ctx, &params.to_string()).unwrap().summary;
+            assert!(result.contains("专3"), "{extra} 应显示专3\n结果: {result}");
+            assert!(
+                result.contains("[封护]"),
+                "{extra} 应命中第二技能\n结果: {result}"
+            );
+            assert!(
+                !result.contains("[缓蚀]") && !result.contains("[旧日绽放]"),
+                "{extra} 不应输出其他技能\n结果: {result}"
+            );
+        }
+    }
+
+    #[cfg_attr(
+        not(feature = "data-contract"),
+        ignore = "需要本地 arknights.db；用 --features data-contract 运行"
+    )]
+    #[test]
     fn extra_skill_out_of_range() {
         // 指定超出实际技能数的编号
         let ctx = make_ctx();
@@ -2261,8 +2308,22 @@ mod tests {
         assert_eq!(parse_skill_index("一技能"), Some((0, None)));
         assert_eq!(parse_skill_index("7级2技能"), Some((1, Some(7))));
         assert_eq!(parse_skill_index("专2二技能"), Some((1, Some(9))));
+        assert_eq!(parse_skill_index("专三二技能"), Some((1, Some(10))));
+        assert_eq!(parse_skill_index("专3 二技能"), Some((1, Some(10))));
+        assert_eq!(parse_skill_index("专三 二技能"), Some((1, Some(10))));
+        assert_eq!(parse_skill_index("三级二技能"), Some((1, Some(3))));
+        assert_eq!(parse_skill_index("3级 二技能"), Some((1, Some(3))));
         assert_eq!(parse_skill_index("1级技能"), None);
         assert_eq!(parse_skill_index("火山"), None);
+    }
+
+    #[test]
+    fn split_level_prefix_accepts_chinese_and_space() {
+        assert_eq!(split_level_prefix("专三黄昏"), (Some(10), "黄昏"));
+        assert_eq!(split_level_prefix("专3 黄昏"), (Some(10), "黄昏"));
+        assert_eq!(split_level_prefix("三级火山"), (Some(3), "火山"));
+        assert_eq!(split_level_prefix("3级 火山"), (Some(3), "火山"));
+        assert_eq!(split_level_prefix("专业喷绘技巧"), (None, "专业喷绘技巧"));
     }
 
     #[test]
