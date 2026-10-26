@@ -35,6 +35,12 @@ $ErrorActionPreference = 'Continue'
 $root = $PSScriptRoot
 Set-Location $root
 
+# Windows PowerShell 5.1 默认按本地代码页（常见 936/GBK）解码子进程输出，
+# 而 npm / vite / python 输出 UTF-8；不统一会在进入日志前把中文和 ✓/│ 解成乱码。
+# 日志文件本身始终按 UTF-8 写，这里修的是控制台与管道解码。
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:logFile = Join-Path $root "build-log-$stamp.txt"
 # 单一写入通道：控制台与日志文件各写一次，且日志只由本流写。
