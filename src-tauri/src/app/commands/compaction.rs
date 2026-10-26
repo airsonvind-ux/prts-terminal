@@ -280,13 +280,13 @@ fn load_compaction_events(
     let turns = store
         .load_turns(conversation_id)
         .map_err(|e| format!("会话轮读取失败：{e}"))?;
-    if let Some(total) = total_turns {
-        if turns.len() != total {
-            return Err(format!(
-                "会话历史与磁盘不一致（前端 {total} 轮，磁盘 {} 轮），请重启或修复会话后再压缩。",
-                turns.len()
-            ));
-        }
+    let total = total_turns
+        .ok_or_else(|| "压缩请求缺少总轮数（totalTurns），请重启应用后再压缩。".to_string())?;
+    if turns.len() != total {
+        return Err(format!(
+            "会话历史与磁盘不一致（前端 {total} 轮，磁盘 {} 轮），请重启或修复会话后再压缩。",
+            turns.len()
+        ));
     }
     if let Some(compaction) = meta.compaction.as_ref() {
         if compaction.retained_from as usize != from {
