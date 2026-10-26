@@ -52,6 +52,8 @@ def utc_now():
 
 
 def app_version():
+    # 记录数据生成时的应用版本快照，不是应用发布版本；
+    # 数据生成早于版本号提升时，允许与当前 package.json 不同。
     try:
         with open(PROJECT_ROOT / "package.json", encoding="utf-8") as f:
             return str(json.load(f).get("version") or "").strip()
