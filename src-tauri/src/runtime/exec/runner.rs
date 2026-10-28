@@ -637,11 +637,13 @@ mod tests {
         // outcome = Killed（非 TimedOut）——中止语义区分。
         let dir = unique_temp_dir("cancel");
         let cancel = AbortSignal::new();
-        cancel.abort(); // 前置置位：轮询首轮即命中（≈100ms 内返回）
+        cancel.abort(); // 前置置位：spawn 后轮询首轮即命中
         let out = run_command(
-            &spec("Start-Sleep -Seconds 3", &dir),
+            // 用 30s 睡眠把“取消是否生效”拉出足够距离；3s 与受限启动开销
+            // 太接近，全量并行回归时 spawn 本身可能超过 3s，断言会误伤。
+            &spec("Start-Sleep -Seconds 30", &dir),
             &RunOptions {
-                timeout: Some(Duration::from_secs(30)),
+                timeout: Some(Duration::from_secs(60)),
                 output_dir: None,
                 log_stem: None,
                 cancel: Some(cancel),
@@ -653,7 +655,10 @@ mod tests {
             "cancel 命中应为 Killed: {:?}",
             out.outcome
         );
-        assert!(out.elapsed_ms < 3000, "应提前返回（cancel 而非等满 3s）");
+        assert!(
+            out.elapsed_ms < 8000,
+            "应远早于 30s 睡眠返回（cancel 生效；含受限启动开销）"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
