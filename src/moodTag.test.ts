@@ -172,6 +172,15 @@ describe("跨 chunk 切断（pending 扣留）", () => {
     expect(r.text).toBe("【moodx 不是标签。");
   });
 
+  it("真实流式逐字切开中文括号标签也能闭合", () => {
+    const parts = ["【", "m", "ood", ":", "困惑", "】\n\n"];
+    let closed = null;
+    for (const part of parts) closed = scanTextChunk("s1", part);
+    expect(closed?.mood).toBe("困惑");
+    expect(closed?.text).toBe("\n\n");
+    expect(segmentConsumed("s1")).toBe(true);
+  });
+
   it("半标签跨多个 chunk 也不可见", () => {
     expect(scanTextChunk("s1", "【mo").text).toBe("");
     expect(scanTextChunk("s1", "od:沮").text).toBe("");
@@ -256,6 +265,12 @@ describe("stripTagFromText 一次性剥离", () => {
     const r = stripTagFromText("没有标签的文本");
     expect(r.mood).toBeNull();
     expect(r.text).toBe("没有标签的文本");
+  });
+
+  it("流式闭合后的归档文本仍可一次性剥离", () => {
+    const r = stripTagFromText("【mood:困惑】\n\n正文");
+    expect(r.mood).toBe("困惑");
+    expect(r.text).toBe("\n\n正文");
   });
 
   it("非法值只剥离", () => {

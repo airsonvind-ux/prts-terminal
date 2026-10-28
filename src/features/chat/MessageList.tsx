@@ -72,7 +72,13 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
 
   return (
     <div className={styles.listArea}>
-      <div className={styles.list} ref={listRef} onScroll={handleScroll} data-message-list>
+      <div
+        className={styles.list}
+        ref={listRef}
+        onScroll={handleScroll}
+        data-message-list
+        data-at-bottom={moreBelow ? undefined : "true"}
+      >
         {items.map((item, i) => (
           // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
           // 不会因为 ChatView 里 handleCancelSteer 换引用而整段重渲染

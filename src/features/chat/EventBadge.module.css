@@ -38,7 +38,9 @@
   z-index: 1;
   width: 100%;
   display: flex;
-  align-items: center;
+  /* 标题文字与状态统一按基线对齐；居中会让更小字号的状态文字
+   * 在每次重排时按自身盒高重新取整，出现只有状态文字上下跳。 */
+  align-items: baseline;
   gap: 4px;
   border: none;
   background: var(--depth-2);
@@ -53,10 +55,18 @@
   color: var(--text-1);
 }
 
+/* 列表在底部时关闭 sticky：底部流式增高期间，sticky 卡头会与
+ * 卡片主体走不同的滚动/光栅化路径，标题文字单独上下抖。
+ * 用户上滑离开底部后恢复 sticky，保留长卡片的折叠入口。 */
+:global([data-at-bottom]) .toggle {
+  position: static;
+}
+
 /* ── 折叠三角 ── */
 
 .arrow {
   display: inline-block;
+  align-self: center;
   font-size: 8px;
   transition: transform 0.15s ease;
   line-height: 1;
@@ -69,13 +79,23 @@
 /* ── 状态标签 ── */
 
 /*
- * 活跃态：脉冲蓝，表示正在进行中。
- * opacity 脉冲而非 color 变化——浏览器对 opacity 的合成
- * 比 color 过渡更省 GPU 资源，在流式场景下不抢渲染预算。
+ * 状态文字与标题共用字号、行高和基线。曾单独用 10px，和标题 11px
+ * 分属两套字体度量，父层逐帧变换时会被分别取整，只有状态文字上下跳。
  */
+.statusActive,
+.statusDone {
+  font-size: inherit;
+  line-height: inherit;
+  display: inline;
+  align-self: baseline;
+  white-space: nowrap;
+}
+
+/* 活跃态：脉冲蓝，表示正在进行中。
+ * opacity 脉冲而非 color 变化——浏览器对 opacity 的合成
+ * 比 color 过渡更省 GPU 资源，在流式场景下不抢渲染预算。 */
 .statusActive {
   color: var(--accent);
-  font-size: 10px;
   animation: statusPulse 1.8s ease-in-out infinite;
 }
 
@@ -87,7 +107,6 @@
 /* 完成态：静态灰绿，表示已结束 */
 .statusDone {
   color: #5a8a6a;
-  font-size: 10px;
 }
 
 /* ── 展开区（推理文本 / 工具列表共用） ── */

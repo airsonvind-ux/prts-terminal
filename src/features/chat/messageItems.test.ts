@@ -19,6 +19,16 @@ function error(message: string): SessionEvent {
   };
 }
 
+function assistantMessage(content: string): SessionEvent {
+  return {
+    type: "assistant/message",
+    sessionId: "s1",
+    content,
+    reasoningContent: null,
+    usage: null,
+  };
+}
+
 describe("buildArchivedItems · 压缩卡", () => {
   it("全部折叠时在列表末尾补卡，点击分界有落点", () => {
     const items = buildArchivedItems(
@@ -61,6 +71,35 @@ describe("buildArchivedItems · 压缩卡", () => {
       "compaction",
       "message",
     ]);
+  });
+});
+
+describe("buildArchivedItems · 归档展示清洗", () => {
+  it("归档 assistant/message 仍带 mood 标签时，展示副本剥离、原文不改", () => {
+    const turn = [user("测试"), assistantMessage("【mood:困惑】\n\n正文")];
+    const items = buildArchivedItems([turn], false, undefined);
+    const assistant = items.find(
+      (item) => item.type === "message" && item.role === "assistant"
+    );
+
+    expect(assistant).toMatchObject({
+      type: "message",
+      role: "assistant",
+      segments: [{ content: "\n\n正文", transition: false }],
+    });
+    expect((turn[1] as { content: string }).content).toBe("【mood:困惑】\n\n正文");
+
+    const events = items.find((item) => item.type === "events");
+    expect(events).toMatchObject({
+      type: "events",
+      events: [
+        {
+          type: "mood/event",
+          mood: "困惑",
+          intensity: 0,
+        },
+      ],
+    });
   });
 });
 

@@ -7,6 +7,7 @@ import {
   stripReminderBlock,
 } from "../../projection";
 import type { TextSegment } from "../../projection";
+import { stripTagFromText } from "../../moodTag";
 
 // ── 展示项类型 ──
 
@@ -93,19 +94,43 @@ function appendTurnItems(
     const visibleEvents = err ? seg.events.slice(0, errIndex) : seg.events;
 
     const meta = visibleEvents.filter(isMetaEvent);
-    if (meta.length > 0) {
+
+    const segIsStreaming = isStreaming && i === lastAssistantIdx && !err;
+    // 展示层兜底：归档轮/恢复历史里的 assistant/message 是模型原文，
+    // 可能仍带 mood 标签（流式扫描器已在 live 路径剥离）。这里只清洗
+    // 展示副本，不改事件/历史原文；如果原始事件里没有 mood/event，
+    // 再从标签补一条展示用情绪事件，避免只藏标签、不落情绪卡。
+    let sourcedMood: Extract<SessionEvent, { type: "mood/event" }> | null = null;
+    const textSegments = deriveTextSegments(visibleEvents)
+      ?.map((seg) => {
+        const parsed = stripTagFromText(seg.content);
+        if (parsed.mood && !sourcedMood) {
+          sourcedMood = {
+            type: "mood/event",
+            sessionId: visibleEvents[0]?.sessionId ?? "",
+            mood: parsed.mood,
+            intensity: parsed.intensity,
+          };
+        }
+        return { ...seg, content: parsed.text };
+      })
+      .filter((seg) => seg.content.length > 0);
+
+    const displayMeta =
+      sourcedMood && !meta.some((e) => e.type === "mood/event")
+        ? [...meta, sourcedMood]
+        : meta;
+    if (displayMeta.length > 0) {
       // interactive = 进行中轮（currentEvents）才允许审批按钮渲染；
       // 归档重放（turns）不渲染交互。仅末段可能在流。
       items.push({
         type: "events",
-        events: meta,
+        events: displayMeta,
         interactive: isStreaming && i === lastAssistantIdx,
       });
     }
 
-    const segIsStreaming = isStreaming && i === lastAssistantIdx && !err;
-    const textSegments = deriveTextSegments(visibleEvents);
-    if (textSegments) {
+    if (textSegments && textSegments.length > 0) {
       items.push({
         type: "message",
         role: "assistant",

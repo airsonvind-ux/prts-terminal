@@ -132,6 +132,33 @@ describe("场景 1：跨 flush 边界标签", () => {
 
     useProcessingStore.getState().finishProcessing(sid);
   });
+
+  it("逐 token 切开的中文括号标签仍产 mood/event", async () => {
+    const sid = await startTurn("测试");
+    const store = useProcessingStore.getState();
+
+    for (const part of ["【", "m", "ood", ":", "困惑", "】\n\n", "正文"]) {
+      store.appendCurrentEvent(textChunk(sid, part));
+    }
+    flushPending(sid);
+
+    const events = currentEventsOf(sid);
+    expect(events.map((e) => e.type)).toEqual([
+      "user/message",
+      "mood/event",
+      "assistant/chunk",
+      "assistant/chunk",
+    ]);
+    expect(events[1]).toEqual({
+      type: "mood/event",
+      sessionId: sid,
+      mood: "困惑",
+      intensity: 0,
+    });
+    expect(moodOf(sid)).toBe("困惑");
+
+    useProcessingStore.getState().finishProcessing(sid);
+  });
 });
 
 // ═══════════════════════════════════════════════
