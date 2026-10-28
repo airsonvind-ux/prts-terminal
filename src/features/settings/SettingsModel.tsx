@@ -47,8 +47,10 @@ const ICON_COPY = (
 export interface SettingsModelProps {
   /** active 供应商视角配置（provider = active 名；thinking_level = 段顶层） */
   llm: LlmConfig;
-  /** busy（对话处理中）：控件禁用 + 漏斗拒 patch */
+  /** busy（对话处理中 / 启动恢复中）：控件禁用 + 漏斗拒 patch */
   busy: boolean;
+  /** busy 时的提示文案；缺省沿用“对话处理中” */
+  busyText?: string;
   /** v2 llm 段 patch（供应商连接配置；Panel 漏斗：即时保存 + 失败回滚） */
   onPatch: (patch: LlmPatch, label?: string) => void;
   /** 当前对话 / 新对话草稿的模型身份 patch（provider/model/thinking） */
@@ -58,6 +60,7 @@ export interface SettingsModelProps {
 export function SettingsModel({
   llm,
   busy,
+  busyText,
   onPatch,
   onConfigPatch,
 }: SettingsModelProps) {
@@ -105,7 +108,11 @@ export function SettingsModel({
 
   return (
     <div className={styles.container}>
-      {busy && <SectionWarning>对话处理中，模型与供应商暂不可改</SectionWarning>}
+      {busy && (
+        <SectionWarning>
+          {busyText ?? "对话处理中，模型与供应商暂不可改"}
+        </SectionWarning>
+      )}
       {/* ── 供应商 ── */}
       <div className={styles.field}>
         <span className={styles.label}>供应商</span>

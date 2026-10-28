@@ -41,6 +41,16 @@
   overflow: hidden;
 }
 
+/* Toolbar 之下、覆盖层背后的可交互内容区。覆盖层打开时只冻结这一层，
+ * Toolbar 保持可点、可拖拽。 */
+.content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 /* ── 底部区：附件条（可选）在上、输入行在下（纵向堆叠）── */
 
 .bottomArea {

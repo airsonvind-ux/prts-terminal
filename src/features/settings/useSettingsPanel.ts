@@ -62,6 +62,9 @@ export function useSettingsPanel() {
   );
   // busy 订阅（M3-B 全局锁口径）：驱动漏斗守卫 + 模型页控件禁用
   const settingsBusy = useProcessingStore(isProcessingBusy);
+  // 启动恢复期间 activeId 还没落定：此时改供应商只会写进 draftConfig，
+  // 恢复完成后又被 activeConv 覆盖。模型页在恢复结束前锁住，避免静默丢失。
+  const restoring = useUIStore((s) => s.restoring);
   // 当前对话 / 新对话草稿：设置页模型配置的唯一归属
   const activeConv = useConversationStore((s) =>
     s.activeId ? s.conversations.find((c) => c.id === s.activeId) : undefined
@@ -83,14 +86,18 @@ export function useSettingsPanel() {
   // 供应商凭据/BaseURL 仍从全局 providers 取；模型身份不读全局 active。
   const effectiveModelConfig = useMemo<ConversationModelConfig | null>(() => {
     if (!settings) return null;
-    if (activeConv?.provider && activeConv.model) {
+    // 供应商已切换、模型还没选：仍以会话/草稿身份为准，不能回退到全局
+    // active_provider。否则会出现「图标已换、设置页仍显示旧供应商」的错位。
+    if (activeConv && (activeConv.provider || activeConv.model)) {
       return {
-        provider: activeConv.provider,
-        model: activeConv.model,
+        provider: activeConv.provider ?? "",
+        model: activeConv.model ?? "",
         thinkingLevel: activeConv.thinkingLevel ?? null,
       };
     }
-    if (draftConfig?.provider && draftConfig.model) return draftConfig;
+    if (draftConfig && (draftConfig.provider || draftConfig.model)) {
+      return draftConfig;
+    }
     const seedProvider = settings.llm.active_provider;
     const seedPc = settings.llm.providers[seedProvider];
     if (seedProvider && seedPc?.model) {
@@ -531,6 +538,7 @@ export function useSettingsPanel() {
     skills,
     activeTab,
     settingsBusy,
+    restoring,
     activeLlmConfig,
     updateConversationConfig,
     updateSettings,

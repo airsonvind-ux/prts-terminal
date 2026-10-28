@@ -41,6 +41,9 @@ const EMPTY_ATTACHMENTS: Attachment[] = [];
 
 export function ChatView({ onDragHandle }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // 覆盖层打开时只让聊天内容 inert；Toolbar 必须留在可交互树里，
+  // 否则设置页打开后顶部标题、设置按钮和窗口拖拽全部失效。
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // ── 活跃对话数据（投影缓存） ──
   const activeId = useConversationStore((s) => s.activeId);
@@ -85,7 +88,7 @@ export function ChatView({ onDragHandle }: Props) {
   // 覆盖层打开期间把聊天区从交互和可访问树中移除。覆盖层本身与遮罩
   // 是 sibling，不受影响，所以点击遮罩关闭仍然有效。
   useEffect(() => {
-    const el = containerRef.current;
+    const el = contentRef.current;
     if (!el) return;
     if (overlay !== null) el.setAttribute("inert", "");
     else el.removeAttribute("inert");
@@ -373,6 +376,7 @@ export function ChatView({ onDragHandle }: Props) {
     <div ref={containerRef} className={styles.container}>
       <Toolbar onDragHandle={onDragHandle} showTitle={chromeVisible} />
       <DragOverlay active={dragActive} />
+      <div ref={contentRef} className={styles.content}>
       <div className={styles.messageArea}>
         {persistenceError && (
           <div
@@ -425,6 +429,7 @@ export function ChatView({ onDragHandle }: Props) {
             onPasteImage={uploadBlob}
           />
         </div>
+      </div>
       </div>
     </div>
   );

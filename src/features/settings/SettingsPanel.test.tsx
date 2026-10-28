@@ -1039,6 +1039,58 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
   });
 });
 
+describe("SettingsPanel · 会话身份优先", () => {
+  it("会话已切到新供应商但模型为空：设置页仍显示新供应商，不回退全局 DeepSeek", async () => {
+    const settings = mergeSettings(defaultSettings(), {
+      llm: {
+        active_provider: "deepseek",
+        providers: {
+          deepseek: { model: "deepseek-chat" },
+          openai: { model: "" },
+        },
+      },
+    });
+    const fallback = (
+      globalThis as {
+        __defaultInvokeImpl?: (cmd: string) => Promise<unknown>;
+      }
+    ).__defaultInvokeImpl!;
+    __invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_settings") return Promise.resolve(settings);
+      if (cmd === "list_providers") {
+        return Promise.resolve([
+          { id: "deepseek", displayName: "DeepSeek" },
+          { id: "openai", displayName: "OpenAI" },
+        ]);
+      }
+      return fallback(cmd);
+    });
+    useConversationStore.setState({
+      activeId: "conv-1",
+      conversations: [
+        {
+          id: "conv-1",
+          title: "测试对话",
+          turns: [],
+          createdAt: 0,
+          provider: "openai",
+          model: "",
+        },
+      ] as never,
+    });
+    useUIStore.setState({ settingsInitialTab: "model" });
+
+    renderPanel();
+    await flush();
+
+    const trigger = container!.querySelector<HTMLButtonElement>(
+      '[aria-label="供应商"]'
+    );
+    expect(trigger?.textContent).toContain("OpenAI");
+    expect(trigger?.textContent).not.toContain("DeepSeek");
+  });
+});
+
 describe("mergeSettings · 纯函数", () => {
   const base = defaultSettings();
 

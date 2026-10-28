@@ -32,6 +32,7 @@ export function SettingsPanel() {
     skills,
     activeTab,
     settingsBusy,
+    restoring,
     activeLlmConfig,
     updateConversationConfig,
     updateSettings,
@@ -162,7 +163,10 @@ export function SettingsPanel() {
           {activeTab === "model" && (
             <SettingsModel
               llm={activeLlmConfig!}
-              busy={settingsBusy}
+              busy={settingsBusy || restoring}
+              busyText={
+                restoring ? "正在恢复会话，模型与供应商暂不可改" : undefined
+              }
               onPatch={(patch, label) => updateSettings({ llm: patch }, label)}
               onConfigPatch={updateConversationConfig}
             />
