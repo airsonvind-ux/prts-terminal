@@ -153,7 +153,8 @@ function Invoke-ReleaseStaging([string]$installer, [string]$signature) {
         'scripts/prepare-release.mjs',
         '--installer', $installer,
         '--signature', $signature,
-        '--version', $tauriVersion
+        '--version', $tauriVersion,
+        '--force'
     )
     if ($GiteeRepo) { $nodeArgs += @('--gitee-repo', $GiteeRepo) }
     if ($GitHubRepo) { $nodeArgs += @('--github-repo', $GitHubRepo) }
