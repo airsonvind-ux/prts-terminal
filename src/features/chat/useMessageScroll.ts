@@ -3,7 +3,7 @@
 // 写入点只有四类：items 变化钉底、容器尺寸变化重钉、窗口缩放保护、输入框
 // 测量接管。新增任何自动滚动前，先确认它属于哪一类。
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SessionEvent } from "../../types";
 import type { DisplayItem } from "./messageItems";
@@ -273,8 +273,12 @@ export function useMessageScroll({
    * 刻意不做“一次性”：切换对话/恢复时，输入区、上下文环、大段文本的布局会在
    * 随后几帧才落定，只钉一次会差一截。这里在 items 变化后跟一段收敛窗口，
    * 期间逐帧把滚动位置压到底（用户一上滑即停）。
+   *
+   * 必须用 useLayoutEffect：流式输出时 React 提交后浏览器会先按旧 scrollTop
+   * 画一帧；若等到 useEffect 再钉底，画面会“先被新内容推下去、再被拉回来”，
+   * 高频 chunk 下就是可见的上下抖动。布局阶段先写 scrollTop，用户看不到中间帧。
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (userScrolledUpRef.current) return;
     let raf = 0;
     const deadline = performance.now() + PIN_SETTLE_MS;
