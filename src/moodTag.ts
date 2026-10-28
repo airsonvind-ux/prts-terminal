@@ -1,18 +1,20 @@
 // src/moodTag.ts
 // 情绪标签解析器（批 2-D 动画映射 · 情绪通道）
 //
-// 标签格式：【mood:高兴】（全角冒号容错）。显式枚举：高兴 / 困惑 / 沮丧；省略 = 平静。
+// 标签格式：`[mood:高兴]` / `【mood:高兴】`（方括号与全角括号、全角冒号、
+// `mood` 大小写与冒号两侧空格均容错）。显式枚举：高兴 / 困惑 / 沮丧；省略 = 平静。
 // 解析位置：useProcessingStore.appendCurrentEvent 内、33ms 节流缓冲之前——
 // assistant/chunk(kind=text) 进缓冲前过扫描器；reasoning chunk 不进扫描器；
 // assistant/message 用 stripTagFromText 一次性剥离后再入列（防止归档瞬间标签复活）。
 //
 // 扫描器语义（跨 chunk 前缀累积，模块级 Map 瞬态，与 chunkBuffers 并列，不进 Zustand）：
-// - 匹配 【mood: 前缀后：pending 扣留（整段不进缓冲，用户不可见半标签），
-//   直到 】 闭合 → matched（剥离 + 更新 mood）或非法值 → 全量放行
-// - 非标签开头 → 立即放行；段中标签（非段首）不剥离，原样渲染（既定行为）
-// - pending 上界 24 字符，超界未闭合 → 放行
-// - 段边界 re-arm（tool/call、轮内注入）：重置段首与消费位，后续段可再尝试匹配
-// - 每段最多消费一个标签（段边界重置；段内首次成功匹配后关闭本段的匹配机会）
+// - 只在每段开头 WINDOW_CHARS 个字符内寻找标签；不要求标签在第一个字符。
+// - 识别方括号/中文方括号、大小写、全半角冒号与空格变体。
+// - 标签在段中也可以出现；但代码块、行内代码和明显的“举例/格式说明”不作为控制标签。
+// - 合法值更新情绪；非法值只剥离、不更新（绝不把控制标签漏进正文）。
+// - pending 上界 40 字符，超界、换行未闭合 → 全量放行。
+// - 段边界 re-arm（tool/call、轮内注入）：重置段首与消费位，后续段可再尝试匹配。
+// - 每段最多消费一个标签（段边界重置；段内首次命中后关闭本段匹配机会）。
 //
 // 展示/历史双字段：assistant/chunk 的 `content` 是展示文本（情绪标签已剥离），
 // `rawContent` 是模型原始输出（含标签）。展示层只读 content；历史派生优先
@@ -26,16 +28,23 @@ import type { Mood, MoodIntensity } from "./types";
 /** 标签值枚举（显式 3 值；平静仅作省略默认，显式写视为非法） */
 const MOOD_VALUES = ["高兴", "困惑", "沮丧"] as const;
 
-/** 半角冒号前缀 */
-const TAG_PREFIX_HALF = "【mood:";
-/** 全角冒号前缀（容错） */
-const TAG_PREFIX_FULL = "【mood：";
+/** 每段只在前多少个字符内寻找标签（覆盖短开场白，避免整段误伤） */
+const WINDOW_CHARS = 120;
 
-/** pending 上界（字符）。超界未闭合 → 全量放行 */
-const MAX_PENDING = 24;
+/** 标签最大长度（字符）；超界未闭合 → 放行 */
+const MAX_TAG_CHARS = 40;
 
-/** 完整标签正则：以段首标签开头（含闭合），值不限（合法性由 parseMoodTag 判定） */
-const TAG_RE = /^【mood[:：]([^】]*)】/;
+/** 非行首标签允许的最大前置文本长度（字符）；更长的前置文本更可能是正文 */
+const MAX_INLINE_PREFIX = 24;
+
+/** 明显在“讲解/举例”的词语：命中时不把标签当控制语法 */
+const META_WORDS = /(?:比如|例如|示例|例子|格式|写法|标签|输出|开头|写成|像这样|如下)/;
+
+/** 标签开头（不要求闭合）：方括号/中文方括号 + mood + 冒号 */
+const TAG_OPEN_RE = /(?:\[|【)\s*mood\s*[:：]/gi;
+
+/** 完整标签：括号内只允许一行，值合法性由 parseMoodTag 判定 */
+const TAG_RE = /^(?:\[|【)\s*mood\s*[:：]\s*([^\]】\n]*?)\s*(?:\]|】)$/i;
 
 // ── 类型 ──
 
@@ -58,12 +67,14 @@ interface ParsedTag {
 
 /** 单个 session 的扫描器瞬态（每轮一个 sessionId；状态生命＝本轮，段边界重置段内状态） */
 interface TagScannerState {
-  /** 已累积的未闭合标签前缀（扣留中，未进缓冲） */
+  /** 已累积的未闭合候选标签（扣留中，未进缓冲） */
   pending: string | null;
   /** 本段是否已消费一个标签（段边界重置；消费后本段关闭匹配机会） */
   segmentConsumed: boolean;
-  /** 当前段是否已放行过文本（段中标签不剥离） */
-  segmentStarted: boolean;
+  /** 本段已见过的原始字符数（用于窗口判定） */
+  rawCount: number;
+  /** 本段已放行的原始前缀（用于判断行首/代码/举例上下文） */
+  prefix: string;
 }
 
 /** sessionId → 扫描器状态（模块级瞬态，与 chunkBuffers 并列，不进 Zustand） */
@@ -95,69 +106,185 @@ export function parseMoodTag(tag: string): ParsedTag {
   return { mood: value as Exclude<Mood, "平静">, intensity };
 }
 
-/**
- * 一次性剥离（assistant/message 路径）：剥离开头的完整有效标签。
- * 非法值不剥离（与扫描器「非法值全量放行」一致——归档与流式视图保持一致）。
- * 无标签 → 原样返回。
- */
-export function stripTagFromText(text: string): ScanResult {
-  const m = TAG_RE.exec(text);
-  if (!m) return { text, rawText: text, mood: null, intensity: 0 };
-  const parsed = parseMoodTag(m[0]);
-  if (parsed.mood === null)
-    return { text, rawText: text, mood: null, intensity: 0 };
-  return {
-    text: text.slice(m[0].length),
-    rawText: text,
-    mood: parsed.mood,
-    intensity: parsed.intensity,
-  };
+/** 查找下一个标签开头（不要求闭合） */
+function findTagOpen(
+  text: string,
+  from: number,
+): { start: number; end: number } | null {
+  TAG_OPEN_RE.lastIndex = from;
+  const m = TAG_OPEN_RE.exec(text);
+  if (!m) return null;
+  return { start: m.index, end: m.index + m[0].length };
 }
 
-/** content 是否为 mood 标签前缀的（部分）匹配（含前缀自身） */
-function matchTagPrefix(content: string): boolean {
-  if (content.length === 0 || content[0] !== "【") return false;
-  const maxLen = Math.min(content.length, TAG_PREFIX_HALF.length);
-  for (let i = 1; i <= maxLen; i++) {
-    const slice = content.slice(0, i);
-    if (!TAG_PREFIX_HALF.startsWith(slice) && !TAG_PREFIX_FULL.startsWith(slice)) {
-      return false;
+/**
+ * 从指定位置读出一个完整标签。
+ * 不完整、跨行或超过 MAX_TAG_CHARS 仍未闭合 → null。
+ */
+function readTagAt(
+  text: string,
+  start: number,
+): { end: number; parsed: ParsedTag } | null {
+  const open = findTagOpen(text, start);
+  if (!open || open.start !== start) return null;
+
+  const limit = Math.min(text.length, start + MAX_TAG_CHARS);
+  for (let i = open.end; i < limit; i++) {
+    const ch = text[i];
+    if (ch === "\n") return null;
+    if (ch === "]" || ch === "】") {
+      const parsed = parseMoodTag(text.slice(start, i + 1));
+      return { end: i + 1, parsed };
     }
   }
+  return null;
+}
+
+/** 是否是 mood 标签开头的一个“尚未完整”的前缀（用于跨 chunk 扣留） */
+function isPotentialTagPrefix(text: string): boolean {
+  if (!text.startsWith("[") && !text.startsWith("【")) return false;
+  const rest = text.slice(1);
+  const end = rest.search(/[\]】\n]/);
+  if (end !== -1) return false; // 已经闭合/跨行 → 不是半标签
+
+  let i = 0;
+  while (i < rest.length && (rest[i] === " " || rest[i] === "\t")) i++;
+
+  const word = "mood";
+  for (let j = 0; j < word.length; j++) {
+    if (i >= rest.length) return true;
+    if (rest[i].toLowerCase() !== word[j]) return false;
+    i++;
+  }
+
+  while (i < rest.length && (rest[i] === " " || rest[i] === "\t")) i++;
+  if (i >= rest.length) return true;
+  return rest[i] === ":" || rest[i] === "：";
+}
+
+/** 找到文本末尾一个仍在累积中的半标签起点（无 → null） */
+function findPartialPrefix(text: string): number | null {
+  for (let i = text.length - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch !== "[" && ch !== "【") continue;
+    if (isPotentialTagPrefix(text.slice(i))) return i;
+  }
+  return null;
+}
+
+/** 是否位于未闭合的代码块或行内代码中 */
+function isInsideCode(prefix: string): boolean {
+  const fences = (prefix.match(/```/g) ?? []).length;
+  if (fences % 2 === 1) return true;
+  const ticks = (prefix.match(/`/g) ?? []).length;
+  return ticks % 2 === 1;
+}
+
+/** 标签前的“说明性引导语”是否像在举例 */
+function isMetaLeadIn(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (!META_WORDS.test(trimmed)) return false;
+  return /[：:]$/.test(trimmed) || /(?:比如|例如|如下|像这样)$/.test(trimmed);
+}
+
+/**
+ * 判断一个候选标签是否像控制标签，而不是正文里的示例。
+ *
+ * 规则保持宽松：
+ * - 标签在行首（允许缩进）→ 接受；上一行若是“格式如下：/比如：”这类引导语 → 拒绝。
+ * - 标签不在行首 → 只接受前置文本很短的场景（如“好的，”），且不含讲解词。
+ * - 代码块/行内代码中的标签 → 拒绝。
+ */
+function isControlCandidate(prefix: string): boolean {
+  if (isInsideCode(prefix)) return false;
+
+  const lineStart = prefix.lastIndexOf("\n") + 1;
+  const beforeOnLine = prefix.slice(lineStart);
+
+  if (/^[ \t]*$/.test(beforeOnLine)) {
+    const beforeLines = prefix.slice(0, lineStart).trimEnd();
+    const prevLine = beforeLines.slice(beforeLines.lastIndexOf("\n") + 1);
+    if (prevLine && isMetaLeadIn(prevLine)) return false;
+    return true;
+  }
+
+  const trimmed = prefix.trim();
+  if (trimmed.length > MAX_INLINE_PREFIX) return false;
+  if (META_WORDS.test(trimmed)) return false;
   return true;
 }
 
-/** 求值累积中的 pending：闭合 → matched / 非法值全量放行；超界 → 全量放行；否则继续扣留 */
+/** 在一次性文本中定位第一个控制标签 */
+function locateControlTag(
+  text: string,
+): { start: number; end: number; parsed: ParsedTag } | null {
+  const limit = Math.min(text.length, WINDOW_CHARS);
+  let from = 0;
+
+  while (from < limit) {
+    const open = findTagOpen(text, from);
+    if (!open || open.start >= limit) return null;
+
+    if (isControlCandidate(text.slice(0, open.start))) {
+      const tag = readTagAt(text, open.start);
+      if (tag) return { start: open.start, end: tag.end, parsed: tag.parsed };
+    }
+
+    from = open.start + 1;
+  }
+
+  return null;
+}
+
+/**
+ * 一次性剥离（assistant/message 路径）：在段首识别区内找到第一个控制标签并剥离。
+ * 合法值返回情绪；非法值只剥离，不更新情绪。
+ * 无标签 → 原样返回。
+ */
+export function stripTagFromText(text: string): ScanResult {
+  const hit = locateControlTag(text);
+  if (!hit) return { text, rawText: text, mood: null, intensity: 0 };
+  return {
+    text: text.slice(0, hit.start) + text.slice(hit.end),
+    rawText: text,
+    mood: hit.parsed.mood,
+    intensity: hit.parsed.intensity,
+  };
+}
+
+/** 追加前缀并保留窗口所需长度 */
+function appendPrefix(state: TagScannerState, text: string): void {
+  state.prefix = (state.prefix + text).slice(-WINDOW_CHARS);
+}
+
+/** 求值累积中的 pending：闭合 → 剥离；超界/换行 → 放行；否则继续扣留 */
 function evaluatePending(state: TagScannerState): ScanResult {
   const pending = state.pending!;
+  const tag = readTagAt(pending, 0);
 
-  // 超上界未闭合 → 全量放行
-  if (pending.length > MAX_PENDING) {
+  if (tag) {
     state.pending = null;
-    state.segmentStarted = true;
+    state.segmentConsumed = true;
+    return {
+      text: pending.slice(tag.end),
+      rawText: pending,
+      mood: tag.parsed.mood,
+      intensity: tag.parsed.intensity,
+    };
+  }
+
+  // 超界、跨行或已经不可能长成标签 → 放行；本段不再尝试。
+  if (
+    pending.length > MAX_TAG_CHARS ||
+    pending.includes("\n") ||
+    !isPotentialTagPrefix(pending)
+  ) {
+    state.pending = null;
+    state.segmentConsumed = true;
     return { text: pending, rawText: pending, mood: null, intensity: 0 };
   }
 
-  const tagEnd = pending.indexOf("】");
-  if (tagEnd !== -1) {
-    state.pending = null;
-    state.segmentStarted = true;
-    const tag = pending.slice(0, tagEnd + 1);
-    const parsed = parseMoodTag(tag);
-    if (parsed.mood !== null) {
-      state.segmentConsumed = true;
-      return {
-        text: pending.slice(tagEnd + 1),
-        rawText: pending,
-        mood: parsed.mood,
-        intensity: parsed.intensity,
-      };
-    }
-    // 非法值 → 全量放行（标签原样渲染）
-    return { text: pending, rawText: pending, mood: null, intensity: 0 };
-  }
-
-  // 未闭合 → 继续扣留（用户不可见半标签）
   return { text: "", rawText: pending, mood: null, intensity: 0 };
 }
 
@@ -170,7 +297,12 @@ function evaluatePending(state: TagScannerState): ScanResult {
 export function scanTextChunk(sessionId: string, content: string): ScanResult {
   let state = scannerStates.get(sessionId);
   if (!state) {
-    state = { pending: null, segmentConsumed: false, segmentStarted: false };
+    state = {
+      pending: null,
+      segmentConsumed: false,
+      rawCount: 0,
+      prefix: "",
+    };
     scannerStates.set(sessionId, state);
   }
 
@@ -181,40 +313,81 @@ export function scanTextChunk(sessionId: string, content: string): ScanResult {
   // pending 未闭合：累积后求值
   if (state.pending !== null) {
     state.pending += content;
+    state.rawCount += content.length;
     return evaluatePending(state);
   }
 
-  // 段中已放行文本 → 原样放行（段中标签不剥离）
-  if (state.segmentStarted)
-    return { text: content, rawText: content, mood: null, intensity: 0 };
+  const base = state.rawCount;
+  state.rawCount += content.length;
 
-  // 段首：mood 标签前缀？
-  if (matchTagPrefix(content)) {
-    const tagEnd = content.indexOf("】");
-    if (tagEnd !== -1) {
-      // 单 chunk 完整标签
-      state.segmentStarted = true;
-      const tag = content.slice(0, tagEnd + 1);
-      const parsed = parseMoodTag(tag);
-      if (parsed.mood !== null) {
-        state.segmentConsumed = true;
-        return {
-          text: content.slice(tagEnd + 1),
-          rawText: content,
-          mood: parsed.mood,
-          intensity: parsed.intensity,
-        };
-      }
-      // 非法值 → 全量放行
-      return { text: content, rawText: content, mood: null, intensity: 0 };
-    }
-    // 未闭合前缀 → pending 扣留
-    state.pending = content;
-    return { text: "", rawText: content, mood: null, intensity: 0 };
+  // 窗口已过：后面不再找标签（保持正文原样，避免误伤示例）
+  if (base >= WINDOW_CHARS) {
+    appendPrefix(state, content);
+    return { text: content, rawText: content, mood: null, intensity: 0 };
   }
 
-  // 非标签开头 → 立即放行（空 chunk 不标记段已开始，段首匹配机会保留）
-  if (content.length > 0) state.segmentStarted = true;
+  let cursor = 0;
+  while (true) {
+    const open = findTagOpen(content, cursor);
+    if (!open) break;
+
+    const absoluteStart = base + open.start;
+    if (absoluteStart >= WINDOW_CHARS) break;
+
+    const before = state.prefix + content.slice(0, open.start);
+    if (isControlCandidate(before)) {
+      const tag = readTagAt(content, open.start);
+
+      if (tag) {
+        state.segmentConsumed = true;
+        return {
+          text: content.slice(0, open.start) + content.slice(tag.end),
+          rawText: content,
+          mood: tag.parsed.mood,
+          intensity: tag.parsed.intensity,
+        };
+      }
+
+      const candidateTail = content.slice(open.start);
+      // 明确不可能闭合 → 当普通文本；继续找后面的候选。
+      if (candidateTail.includes("\n") || candidateTail.length > MAX_TAG_CHARS) {
+        cursor = open.start + 1;
+        continue;
+      }
+
+      // 可能是跨 chunk 的半标签：先扣留标签之前已经放行的文本。
+      const textBefore = content.slice(0, open.start);
+      state.pending = candidateTail;
+      appendPrefix(state, textBefore);
+      return {
+        text: textBefore,
+        rawText: textBefore,
+        mood: null,
+        intensity: 0,
+      };
+    }
+
+    cursor = open.start + 1;
+  }
+
+  // 没有完整候选，但末尾可能是被切断的 `【mo` / `[moo`：先扣留，
+  // 避免半标签在下一个 chunk 到达前直接渲染出来。
+  const partialStart = findPartialPrefix(content);
+  if (partialStart !== null && base + partialStart < WINDOW_CHARS) {
+    const before = content.slice(0, partialStart);
+    if (isControlCandidate(state.prefix + before)) {
+      state.pending = content.slice(partialStart);
+      appendPrefix(state, before);
+      return {
+        text: before,
+        rawText: before,
+        mood: null,
+        intensity: 0,
+      };
+    }
+  }
+
+  appendPrefix(state, content);
   return { text: content, rawText: content, mood: null, intensity: 0 };
 }
 
@@ -235,8 +408,9 @@ export function rearmScanner(sessionId: string): string | null {
   if (!state) return null;
   const held = state.pending;
   state.pending = null;
-  state.segmentStarted = false;
   state.segmentConsumed = false;
+  state.rawCount = 0;
+  state.prefix = "";
   return held;
 }
 

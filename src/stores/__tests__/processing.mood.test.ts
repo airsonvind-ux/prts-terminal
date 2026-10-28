@@ -11,7 +11,7 @@
 //   6. turn/end 归档：chunk 与 assistant/message 均已剥离 + mood 置位
 //   7. finishProcessing 未闭合 pending 放行（半标签最终可见）
 //   8. failProcessing 清理：pending 随缓冲丢弃，错误轮只归档 [user, error]
-//   9. 非法枚举不破坏归档（标签原样进入，mood 保持平静）
+//   9. 非法枚举不破坏归档（标签剥离，mood 保持平静）
 //  10. 扫描器状态按 session 隔离（每轮一个 sessionId，互不串扰）
 // 新增覆盖（批 2-D 强度档位 + mood/event 事件）：
 //  11. 强度解析：intensity 档位置位；非法强度（:0、:4、:x）回退 0；省略 → 0
@@ -395,7 +395,7 @@ describe("场景 5：failProcessing 清理", () => {
 // ═══════════════════════════════════════════════
 
 describe("场景 6：非法枚举不破坏归档", () => {
-  it("非法标签原样进入归档，mood 保持平静", async () => {
+  it("非法标签剥离后归档，mood 保持平静", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
@@ -409,7 +409,7 @@ describe("场景 6：非法枚举不破坏归档", () => {
     const turn = conv.turns[0];
     const chunk = turn[1];
     expect(chunk.type).toBe("assistant/chunk");
-    expect((chunk as { content: string }).content).toBe("【mood:愤怒】提示"); // 全量放行
+    expect((chunk as { content: string }).content).toBe("提示"); // 只剥离，不更新
     expect(useProcessingStore.getState().processing).toEqual({});
   });
 });
