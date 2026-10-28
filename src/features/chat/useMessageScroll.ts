@@ -143,10 +143,18 @@ export function useMessageScroll({
     resizeGuardTimerRef.current = window.setTimeout(() => {
       windowResizingRef.current = false;
       anchorRef.current = null;
+      // 窗口/CSS 变量可能异步落定：用当前值收口，避免旧的视口快照一直
+      // 被当成“仍在缩放”，把后续流式钉底全部挡掉。
+      lastViewportRef.current = { w: window.innerWidth, h: window.innerHeight };
+      lastFaceSizeRef.current = readFaceSize();
       // 缩放结束、重排已定：把几何事实重判一次（缩放期间 refreshBelow 被挂起）
       refreshBelow();
+      if (!userScrolledUpRef.current) {
+        pinNow();
+        setMoreBelow(false);
+      }
     }, WINDOW_RESIZE_GUARD_MS);
-  }, [refreshBelow]);
+  }, [pinNow, refreshBelow]);
 
   useEffect(() => {
     window.addEventListener("resize", armResizeGuard);
@@ -273,10 +281,9 @@ export function useMessageScroll({
     const tick = () => {
       if (userScrolledUpRef.current) return;
       if (windowResizingRef.current) return;
-      const vp = lastViewportRef.current;
-      if (vp.w !== 0 && (vp.w !== window.innerWidth || vp.h !== window.innerHeight)) {
-        return;
-      }
+      // 这里不再用 lastViewportRef 与当前视口比较：ResizeObserver 记录的是
+      // 最后一帧观察值，窗口在 Tauri 里异步落定后可能永远差 1px，导致
+      // 每次流式更新都提前 return，用户回到底部也保持不住。
       pinNow();
       if (performance.now() < deadline) raf = requestAnimationFrame(tick);
     };

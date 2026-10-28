@@ -480,6 +480,32 @@ describe("MessageList · 窗口缩放保护", () => {
     expect(anchorDelta(-40, 0, 10)).toBe(-50);
   });
 
+  it("视口快照停留在缩放前尺寸时，流式更新仍钉底", async () => {
+    const originalW = window.innerWidth;
+    const originalH = window.innerHeight;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 900 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 700 });
+    try {
+      await renderList();
+      const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
+      const spy = spyOnScrollTopClamped(listEl, 900);
+      fakeMetrics(listEl, 1000, 100);
+      await wait(450);
+
+      // ResizeObserver 记下的是缩放中的 900；窗口随后异步落定到 901。
+      triggerSizeChange();
+      spy.mockClear();
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 901 });
+
+      rerenderList([chunk("新内容")]);
+      await flush();
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalW });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalH });
+    }
+  });
+
   it("缩放期间真正的上滑手势（滚轮向上）仍被尊重", async () => {
     await renderList();
     const listEl = container.querySelector<HTMLElement>("[data-message-list]")!;
