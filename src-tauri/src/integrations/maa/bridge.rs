@@ -22,6 +22,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -176,6 +178,44 @@ pub fn read_frame(stream: &TcpStream) -> Result<Value, BridgeError> {
     serde_json::from_slice(&buf).map_err(|e| BridgeError::Io(format!("帧不是合法 JSON：{e}")))
 }
 
+/// 把桥进程放进 kill-on-close Job：父进程崩溃、被强杀或卸载器直接结束时，
+/// Windows 在最后一个 Job 句柄关闭时一并结束桥及其子进程。
+#[cfg(windows)]
+fn attach_kill_on_close_job(child: &Child) -> Option<OwnedHandle> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    unsafe {
+        let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .is_err()
+        {
+            let _ = CloseHandle(job);
+            return None;
+        }
+
+        if AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())).is_err() {
+            let _ = CloseHandle(job);
+            return None;
+        }
+
+        Some(OwnedHandle::from_raw_handle(job.0))
+    }
+}
+
 /// 确认桥子进程仍存活；端口抢占时真桥会因 bind 失败退出，
 /// 父进程不能把抢占者的 ready 当成自己的桥。
 fn ensure_child_running(child: &mut Child, stage: &str) -> Result<(), BridgeError> {
@@ -241,6 +281,11 @@ impl EventBuffer {
 /// 桥**只接受一条连接**，断了只能重起；`Drop` 会杀掉子进程，不留孤儿。
 pub struct Bridge {
     child: Child,
+    /// Windows Job：父进程崩溃或被强杀时，随句柄关闭一起结束桥。
+    /// 字段本身只用于持有句柄，不需要读取。
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    job: Option<OwnedHandle>,
     stream: TcpStream,
     pending: Pending,
     events: Arc<Mutex<EventBuffer>>,
@@ -345,8 +390,13 @@ impl Bridge {
         // 读线程要长期阻塞等待，清掉握手用的读超时（socket 选项在克隆间共享）。
         let _ = stream.set_read_timeout(None);
 
+        #[cfg(windows)]
+        let job = attach_kill_on_close_job(&child);
+
         let bridge = Bridge {
             child,
+            #[cfg(windows)]
+            job,
             stream,
             pending: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(EventBuffer::default())),
@@ -468,6 +518,8 @@ impl Bridge {
 
         Self {
             child,
+            #[cfg(windows)]
+            job: None,
             stream,
             pending: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(EventBuffer::default())),

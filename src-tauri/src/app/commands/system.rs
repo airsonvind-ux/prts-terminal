@@ -57,6 +57,16 @@ async fn wait_and_exit(app_handle: AppHandle, registry: Arc<crate::turn_registry
     }
     // 给前端 append_turn / 后端最终 flush 留一个短暂落盘窗口。
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // 连接测试/对话都可能把 MAA 桥留在后台。退出前先请求它关闭；
+    // 若连接测试正占着管理器锁，最多等 1.6s，随后交给 Job Object 兜底，
+    // 不能让“关应用”被一个进行中的连接测试拖住。
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(1600),
+        tauri::async_runtime::spawn_blocking(crate::maa::manager::shutdown),
+    )
+    .await;
+
     app_handle.exit(0);
 }
 
