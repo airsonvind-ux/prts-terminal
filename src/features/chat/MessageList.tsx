@@ -91,7 +91,13 @@ export function MessageList({
   });
 
   return (
-    <div className={styles.listArea}>
+    <div
+      className={
+        suppressScrollFab
+          ? `${styles.listArea} ${styles.bootHidden}`
+          : styles.listArea
+      }
+    >
       <div
         className={styles.list}
         ref={listRef}
