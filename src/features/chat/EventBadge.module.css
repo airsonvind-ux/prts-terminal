@@ -24,11 +24,12 @@
 
 /* ── 折叠行 ── */
 
-/* 折叠行留在卡片自己的文档流里，不参与滚动吸附。
- * sticky 与流式钉底会争夺滚动所有权；在钉底实现重做之前，
- * 卡头不能安全地使用 position: sticky。 */
+/* 折叠行是卡片头。用户离开底部、滚进卡片内容后允许吸顶；
+ * 跟底期间由 [data-following] 改回普通流，避免和逐帧钉底抢滚动。 */
 .toggle {
-  position: relative;
+  position: sticky;
+  top: 0;
+  z-index: 1;
   width: 100%;
   display: flex;
   /* 标题文字与状态统一按基线对齐；居中会让更小字号的状态文字
@@ -55,6 +56,12 @@
   min-width: 0;
   line-height: inherit;
   white-space: nowrap;
+}
+
+/* 跟底期间没有吸顶语义：列表钉底会持续改 scrollTop，sticky 卡头
+ * 会被同一段滚动反复定位。用户一上滑，following 变 false，吸顶恢复。 */
+:global([data-following]) .toggle {
+  position: static;
 }
 
 /* ── 折叠三角 ── */

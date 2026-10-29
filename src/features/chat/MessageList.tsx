@@ -63,7 +63,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
     [archivedItems, liveItems, showWelcome]
   );
 
-  const { listRef, moreBelow, scrollToBottomNow, handleScroll } = useMessageScroll({
+  const { listRef, moreBelow, following, scrollToBottomNow, handleScroll } = useMessageScroll({
     items,
     turns,
     currentEvents,
@@ -77,6 +77,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
         ref={listRef}
         onScroll={handleScroll}
         data-message-list
+        data-following={following ? "true" : undefined}
       >
         {items.map((item, i) => (
           // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，

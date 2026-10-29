@@ -62,9 +62,14 @@ export function useMessageScroll({
   /* 下方还有内容（几何事实）：按钮的唯一判据。 */
   const [moreBelow, setMoreBelow] = useState(false);
 
-  /** 跟底意图的唯一写入口（ref，热路径读；不触发重渲染） */
+  /* 跟底意图的可渲染镜像：卡头只在用户离开底部、进入卡片内容时
+   * 才允许 sticky；跟底期间保持普通流，避免和逐帧钉底抢滚动。 */
+  const [following, setFollowing] = useState(true);
+
+  /** 跟底意图的唯一写入口（ref 热路径读；镜像供布局选择） */
   const setStick = useCallback((stick: boolean) => {
     userScrolledUpRef.current = !stick;
+    setFollowing((prev) => (prev === stick ? prev : stick));
   }, []);
 
   /* 观测记录：事件到达时 scrollHeight 已变 ⇒ 这次滚动是内容尺寸变化引起的
@@ -352,5 +357,5 @@ export function useMessageScroll({
     return () => mo.disconnect();
   }, [refreshBelow]);
 
-  return { listRef, moreBelow, scrollToBottomNow, handleScroll };
+  return { listRef, moreBelow, following, scrollToBottomNow, handleScroll };
 }
