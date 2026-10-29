@@ -220,6 +220,7 @@ export function EventBadge({
             data-focus-inset
             data-event-toggle
             data-event-kind="reasoning"
+            aria-expanded={reasoningOpen}
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !reasoningOpen;
@@ -262,6 +263,7 @@ export function EventBadge({
             data-focus-inset
             data-event-toggle
             data-event-kind="tools"
+            aria-expanded={toolsOpenEffective}
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !toolsOpen;
@@ -470,6 +472,7 @@ export function EventBadge({
             className={styles.toggle}
             data-event-toggle
             data-event-kind="mood"
+            aria-expanded={moodOpen}
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !moodOpen;
