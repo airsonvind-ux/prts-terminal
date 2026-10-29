@@ -72,16 +72,21 @@
 .arrow {
   position: absolute;
   left: 0;
-  top: 50%;
-  display: inline-block;
+  /* 固定到标题行内容顶部，不参与卡头高度的百分比计算；
+   * 卡头因状态文字行盒变化而增高时，三角不会跟着重新居中。 */
+  top: 5px;
+  width: 8px;
+  height: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 8px;
   transition: transform 0.15s ease;
   line-height: 1;
-  transform: translateY(-50%);
 }
 
 .arrowOpen {
-  transform: translateY(-50%) rotate(90deg);
+  transform: rotate(90deg);
 }
 
 /* ── 状态标签 ── */
