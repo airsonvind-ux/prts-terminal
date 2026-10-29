@@ -200,7 +200,10 @@ export function EventBadge({ events, interactive = false, className, showApprova
   if (!reasoningText && !hasTools && moodEvents.length === 0) return null;
 
   return (
-    <div className={className ? `${styles.badge} ${className}` : styles.badge}>
+    <div
+      className={className ? `${styles.badge} ${className}` : styles.badge}
+      data-live={interactive ? "true" : undefined}
+    >
       {/* ── 思考阶段 ── */}
       {reasoningText && (
         <div className={styles.section}>

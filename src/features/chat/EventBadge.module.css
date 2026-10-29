@@ -62,6 +62,12 @@
   position: static;
 }
 
+/* 进行中轮不钉卡头：它对应的列表通常已经有前置历史、可滚动，
+ * 钉住的卡头会随流式内容反复参与滚动定位；归档卡保留 sticky。 */
+:global([data-live]) .toggle {
+  position: static;
+}
+
 /* 标题、状态、三角收进同一个行盒，不再作为三个 flex 项各自计算位置。 */
 .titleGroup {
   display: block;
@@ -102,11 +108,17 @@
   white-space: nowrap;
 }
 
-/* 活跃态：静态 accent 色。进行中轮会持续重渲染，
- * opacity 脉冲会把状态文字推成独立合成层；先去掉动画，
- * 只保留颜色语义。 */
+/* 活跃态：脉冲蓝，表示正在进行中。
+ * opacity 脉冲而非 color 变化——浏览器对 opacity 的合成
+ * 比 color 过渡更省 GPU 资源，在流式场景下不抢渲染预算。 */
 .statusActive {
   color: var(--accent);
+  animation: statusPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
 }
 
 /* 完成态：静态灰绿，表示已结束 */
@@ -154,8 +166,14 @@
 /* 运行中：脉冲边框 */
 .toolRunning {
   background: var(--depth-1);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--depth-0);
   color: var(--text-1);
+  animation: toolPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes toolPulse {
+  0%, 100% { border-color: var(--depth-0); }
+  50%      { border-color: var(--accent); }
 }
 
 /* ── 失败态：静态红系（与 toolDone 灰绿对应，不引新 CSS 变量） ── */
