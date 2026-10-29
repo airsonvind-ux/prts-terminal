@@ -133,6 +133,14 @@ public/              静态资源
 
 Tauri 2 + React 19 + Rust + SQLite。MAA bridge 是独立进程；数据管线用 Python 维护。
 
+## 仓库与下载
+
+- 源码仓库：<https://github.com/airsonvind-ux/prts-terminal>
+- GitHub 发布页：<https://github.com/airsonvind-ux/prts-terminal-release/releases>
+- Gitee 发布页：<https://gitee.com/airsonvind0/prts-terminal-release/releases>
+
+源码在 GitHub 维护；Gitee 只保留发布版与更新清单，作为国内下载源。
+
 ## 参与
 
 - 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
