@@ -37,12 +37,11 @@
   top: 0;
   z-index: 1;
   width: 100%;
-  /* 整行用一段 inline 行盒：三角、标题、状态共享同一条基线。
-   * 不再拆成多个 flex 项，避免某个子项被单独重新居中。 */
-  display: block;
-  line-height: 1.36;
-  white-space: nowrap;
-  text-align: left;
+  display: flex;
+  /* 标题文字与状态统一按基线对齐；居中会让更小字号的状态文字
+   * 在每次重排时按自身盒高重新取整，出现只有状态文字上下跳。 */
+  align-items: baseline;
+  gap: 4px;
   border: none;
   background: var(--depth-2);
   color: var(--text-2);
@@ -60,24 +59,17 @@
  * 卡片主体走不同的滚动/光栅化路径，标题文字单独上下抖。
  * 用户上滑离开底部后恢复 sticky，保留长卡片的折叠入口。 */
 :global([data-at-bottom]) .toggle {
-  /* 必须保持 positioned：三角是 absolute，靠它做包含块。
-   * 用 static 会让三角改挂到 .listArea 上，飞到消息区固定位置。 */
-  position: relative;
-  top: auto;
+  position: static;
 }
 
 /* ── 折叠三角 ── */
 
 .arrow {
   display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 4px;
+  align-self: center;
   font-size: 8px;
-  line-height: 8px;
-  text-align: center;
-  vertical-align: middle;
   transition: transform 0.15s ease;
+  line-height: 1;
 }
 
 .arrowOpen {
@@ -95,7 +87,7 @@
   font-size: inherit;
   line-height: inherit;
   display: inline;
-  margin-left: 4px;
+  align-self: baseline;
   white-space: nowrap;
 }
 
