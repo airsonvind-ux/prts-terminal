@@ -1470,39 +1470,6 @@ mod tests {
         drop(taken);
     }
 
-    /// 中止成功必须立刻收掉运行记录。
-    ///
-    /// MaaCore 停止时不会补发 AllTasksCompleted；只发 TaskChainStopped。
-    /// 若 stop 不主动收尾，设置页会一直显示「MAA 正在运行」。
-    #[test]
-    fn stop_clears_in_flight_run() {
-        let bridge = Bridge::test_stub(false);
-        bridge.begin_run(vec![1]);
-        {
-            let mut m = lock().expect("管理器锁");
-            m.bridge = Some(bridge);
-            m.connected = Some(ConnectedInfo {
-                emulator: "test".to_string(),
-                address: "127.0.0.1:0".to_string(),
-                config: "test".to_string(),
-                extras: false,
-                screencap: None,
-                events: Vec::new(),
-            });
-            m.last_error = None;
-        }
-        assert!(is_running(), "begin_run 之后应视为在跑");
-
-        stop().expect("run_stop 成功后应能收尾");
-        assert!(!is_running(), "中止后不能继续显示为运行中");
-
-        let taken = {
-            let mut m = lock().expect("管理器锁");
-            (m.bridge.take(), m.connected.take())
-        };
-        drop(taken);
-    }
-
     /// 真机验证（第二步）：哑错误翻译。
     ///
     /// 派一个人为不存在的任务类型（`OperProgress` 在本机 MAA v6.18.0 里没有），

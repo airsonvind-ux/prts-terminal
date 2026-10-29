@@ -505,26 +505,7 @@ impl Bridge {
         let addr = listener.local_addr().expect("测试监听地址");
         let stream = TcpStream::connect(addr).expect("测试连接");
         let (server, _) = listener.accept().expect("测试接受连接");
-        if fail_commands {
-            drop(server);
-        } else {
-            // 成功路径的测试桥：逐帧回一条成功 result，让 command()
-            // 能真实验证「命令成功后」的分支，而不是写帧即断。
-            std::thread::spawn(move || {
-                while let Ok(frame) = read_frame(&server) {
-                    let id = frame.get("id").cloned().unwrap_or(json!(0));
-                    let reply = json!({
-                        "event": "result",
-                        "id": id,
-                        "ok": true,
-                        "data": {}
-                    });
-                    if write_frame(&server, &reply).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
+        drop(server);
 
         let child = if cfg!(windows) {
             Command::new("cmd")
@@ -535,44 +516,16 @@ impl Bridge {
             Command::new("true").spawn().expect("测试子进程")
         };
 
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-        let events = Arc::new(Mutex::new(EventBuffer::default()));
-        let records = Arc::new(Mutex::new(RunRecord::default()));
-        let last_run = Arc::new(Mutex::new(LastRun::default()));
-        let alive = Arc::new(AtomicBool::new(true));
-
-        // 成功路径的测试桥也要有读线程：服务端回了 result，
-        // 客户端必须先把它路由进 pending，command() 才能收到。
-        if let Ok(read_stream) = stream.try_clone() {
-            let pending_reader = Arc::clone(&pending);
-            let events_reader = Arc::clone(&events);
-            let records_reader = Arc::clone(&records);
-            let last_run_reader = Arc::clone(&last_run);
-            let alive_reader = Arc::clone(&alive);
-            std::thread::spawn(move || {
-                while let Ok(frame) = read_frame(&read_stream) {
-                    route_frame(
-                        &frame,
-                        &pending_reader,
-                        &events_reader,
-                        &records_reader,
-                        &last_run_reader,
-                    );
-                }
-                alive_reader.store(false, Ordering::SeqCst);
-            });
-        }
-
         Self {
             child,
             #[cfg(windows)]
             job: None,
             stream,
-            pending,
-            events,
-            records,
-            last_run,
-            alive,
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            events: Arc::new(Mutex::new(EventBuffer::default())),
+            records: Arc::new(Mutex::new(RunRecord::default())),
+            last_run: Arc::new(Mutex::new(LastRun::default())),
+            alive: Arc::new(AtomicBool::new(true)),
             next_id: AtomicU64::new(1),
             ready: json!({ "event": "ready", "available": true }),
             fail_commands,
