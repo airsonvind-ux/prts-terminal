@@ -37,20 +37,19 @@
   top: 0;
   z-index: 1;
   width: 100%;
-  display: flex;
-  /* 标题文字与状态统一按基线对齐；居中会让更小字号的状态文字
-   * 在每次重排时按自身盒高重新取整，出现只有状态文字上下跳。 */
-  align-items: baseline;
-  gap: 4px;
+  /* 整行用一段 inline 行盒：三角、标题、状态共享同一条基线。
+   * 不再拆成多个 flex 项，避免某个子项被单独重新居中。 */
+  display: block;
+  line-height: 1.36;
+  white-space: nowrap;
+  text-align: left;
   border: none;
   background: var(--depth-2);
   color: var(--text-2);
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   cursor: pointer;
-  /* 三角绝对定位，不再参与 flex 行盒计算；标题按基线排，
-   * 三角按卡头自身高度居中，两者互不牵动。 */
-  padding: 2px 0 2px 12px;
+  padding: 2px 0;
 }
 
 .toggle:hover {
@@ -70,19 +69,15 @@
 /* ── 折叠三角 ── */
 
 .arrow {
-  position: absolute;
-  left: 0;
-  /* 固定到标题行内容顶部，不参与卡头高度的百分比计算；
-   * 卡头因状态文字行盒变化而增高时，三角不会跟着重新居中。 */
-  top: 5px;
+  display: inline-block;
   width: 8px;
   height: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin-right: 4px;
   font-size: 8px;
+  line-height: 8px;
+  text-align: center;
+  vertical-align: middle;
   transition: transform 0.15s ease;
-  line-height: 1;
 }
 
 .arrowOpen {
@@ -100,7 +95,7 @@
   font-size: inherit;
   line-height: inherit;
   display: inline;
-  align-self: baseline;
+  margin-left: 4px;
   white-space: nowrap;
 }
 
