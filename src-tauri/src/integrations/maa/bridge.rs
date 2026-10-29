@@ -505,7 +505,26 @@ impl Bridge {
         let addr = listener.local_addr().expect("测试监听地址");
         let stream = TcpStream::connect(addr).expect("测试连接");
         let (server, _) = listener.accept().expect("测试接受连接");
-        drop(server);
+        if fail_commands {
+            drop(server);
+        } else {
+            // 成功路径的测试桥：逐帧回一条成功 result，让 command()
+            // 能真实验证「命令成功后」的分支，而不是写帧即断。
+            std::thread::spawn(move || {
+                while let Ok(frame) = read_frame(&server) {
+                    let id = frame.get("id").cloned().unwrap_or(json!(0));
+                    let reply = json!({
+                        "event": "result",
+                        "id": id,
+                        "ok": true,
+                        "data": {}
+                    });
+                    if write_frame(&server, &reply).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
 
         let child = if cfg!(windows) {
             Command::new("cmd")
