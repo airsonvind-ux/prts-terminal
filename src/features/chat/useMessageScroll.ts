@@ -59,6 +59,10 @@ export function useMessageScroll({
    */
   const userScrolledUpRef = useRef(false);
 
+  /* 展开卡片后的阅读锁：即使用户当前在底部，也不再让 handleScroll
+   * 自动恢复跟底；否则一次 scroll 事件就会把 following 改回 true。 */
+  const readingHoldRef = useRef(false);
+
   /* 下方还有内容（几何事实）：按钮的唯一判据。 */
   const [moreBelow, setMoreBelow] = useState(false);
 
@@ -85,6 +89,7 @@ export function useMessageScroll({
 
   /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底。 */
   const scrollToBottomNow = useCallback(() => {
+    readingHoldRef.current = false;
     setStick(true);
     pinNow();
     setMoreBelow(false);
@@ -93,6 +98,7 @@ export function useMessageScroll({
   /** 用户展开卡片：停止自动跟底，把当前阅读位置固定住。
    *  需要回到最新时仍可用“回到底部”按钮恢复。 */
   const stopFollowing = useCallback(() => {
+    readingHoldRef.current = true;
     setStick(false);
   }, [setStick]);
 
@@ -206,6 +212,7 @@ export function useMessageScroll({
     const turnsGrew = turns.length > prevTurnCountRef.current;
     const last = currentEvents[currentEvents.length - 1];
     if (turnsGrew || last?.type === "user/message") {
+      readingHoldRef.current = false;
       setStick(true);
     }
     prevTurnCountRef.current = turns.length;
@@ -224,7 +231,7 @@ export function useMessageScroll({
     refreshBelow();
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     if (distance <= STICK_PX) {
-      setStick(true);
+      if (!readingHoldRef.current) setStick(true);
       return;
     }
     if (windowResizingRef.current) return;
@@ -258,6 +265,12 @@ export function useMessageScroll({
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY >= 0) {
         refreshBelow();
+        // 下滚是明确的“回到最新”手势，解除阅读锁。
+        if (readingHoldRef.current) {
+          readingHoldRef.current = false;
+          const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+          if (distance <= STICK_PX) setStick(true);
+        }
         return;
       }
       if (el.scrollHeight - el.clientHeight <= STICK_PX) return;
@@ -275,6 +288,7 @@ export function useMessageScroll({
    * 尚未重置的标志位而直接跳过。
    */
   useEffect(() => {
+    readingHoldRef.current = false;
     setStick(true);
   }, [conversationId, setStick]);
 
