@@ -535,16 +535,44 @@ impl Bridge {
             Command::new("true").spawn().expect("测试子进程")
         };
 
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let events = Arc::new(Mutex::new(EventBuffer::default()));
+        let records = Arc::new(Mutex::new(RunRecord::default()));
+        let last_run = Arc::new(Mutex::new(LastRun::default()));
+        let alive = Arc::new(AtomicBool::new(true));
+
+        // 成功路径的测试桥也要有读线程：服务端回了 result，
+        // 客户端必须先把它路由进 pending，command() 才能收到。
+        if let Ok(read_stream) = stream.try_clone() {
+            let pending_reader = Arc::clone(&pending);
+            let events_reader = Arc::clone(&events);
+            let records_reader = Arc::clone(&records);
+            let last_run_reader = Arc::clone(&last_run);
+            let alive_reader = Arc::clone(&alive);
+            std::thread::spawn(move || {
+                while let Ok(frame) = read_frame(&read_stream) {
+                    route_frame(
+                        &frame,
+                        &pending_reader,
+                        &events_reader,
+                        &records_reader,
+                        &last_run_reader,
+                    );
+                }
+                alive_reader.store(false, Ordering::SeqCst);
+            });
+        }
+
         Self {
             child,
             #[cfg(windows)]
             job: None,
             stream,
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            events: Arc::new(Mutex::new(EventBuffer::default())),
-            records: Arc::new(Mutex::new(RunRecord::default())),
-            last_run: Arc::new(Mutex::new(LastRun::default())),
-            alive: Arc::new(AtomicBool::new(true)),
+            pending,
+            events,
+            records,
+            last_run,
+            alive,
             next_id: AtomicU64::new(1),
             ready: json!({ "event": "ready", "available": true }),
             fail_commands,
