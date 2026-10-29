@@ -399,6 +399,7 @@ export function ChatView({ onDragHandle }: Props) {
             pending={pending}
             onCancelPending={handleCancelSteer}
             conversationId={activeId}
+            suppressScrollFab={bootVisible || restoring}
           />
         )}
         {bootVisible && (

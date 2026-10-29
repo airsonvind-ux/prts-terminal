@@ -36,9 +36,21 @@ interface Props {
   onCancelPending?: (entryId: string) => void;
   /** 当前对话 id：变化即视为切换对话（重置滑底标志，保证新对话能自动沉底） */
   conversationId?: string | null;
+  /** 启动演出/会话恢复期间隐藏回到最新按钮，避免按钮先于对话出现 */
+  suppressScrollFab?: boolean;
 }
 
-export function MessageList({ turns, currentEvents, showWelcome, compaction, pending, onCancelPending, conversationId, aborting = false }: Props) {
+export function MessageList({
+  turns,
+  currentEvents,
+  showWelcome,
+  compaction,
+  pending,
+  onCancelPending,
+  conversationId,
+  aborting = false,
+  suppressScrollFab = false,
+}: Props) {
   // ── 展示项派生 ──
   //
   // 归档部分只在 turns / compaction / showWelcome 变化时重算（内部再按轮缓存
@@ -101,7 +113,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
       {/* 回到底部（圆形、水平居中、浮在输入区上方）。
           判据是几何事实 moreBelow（视口下方还有内容）：按钮只在点得出结果时
           出现；欢迎页（showWelcome）无对话，即便被压出溢出（极小窗口）也不出现。 */}
-      {!showWelcome && initialized && moreBelow && (
+      {!showWelcome && !suppressScrollFab && initialized && moreBelow && (
         <button
           type="button"
           className={styles.scrollFab}
