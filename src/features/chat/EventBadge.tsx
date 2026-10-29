@@ -221,16 +221,9 @@ export function EventBadge({
             data-event-toggle
             data-event-kind="reasoning"
             aria-expanded={reasoningOpen}
-            onClick={(event) => {
-              const header = event.currentTarget;
-              const opening = !reasoningOpen;
-              setReasoningOpen(opening);
+            onClick={() => {
+              setReasoningOpen(!reasoningOpen);
               onToggle?.();
-              if (opening) {
-                requestAnimationFrame(() =>
-                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
-                );
-              }
             }}
           >
             <span className={styles.titleGroup}>
@@ -264,16 +257,9 @@ export function EventBadge({
             data-event-toggle
             data-event-kind="tools"
             aria-expanded={toolsOpenEffective}
-            onClick={(event) => {
-              const header = event.currentTarget;
-              const opening = !toolsOpen;
-              setToolsOpen(opening);
+            onClick={() => {
+              setToolsOpen(!toolsOpen);
               onToggle?.();
-              if (opening) {
-                requestAnimationFrame(() =>
-                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
-                );
-              }
             }}
           >
             <span className={styles.titleGroup}>
@@ -473,16 +459,9 @@ export function EventBadge({
             data-event-toggle
             data-event-kind="mood"
             aria-expanded={moodOpen}
-            onClick={(event) => {
-              const header = event.currentTarget;
-              const opening = !moodOpen;
-              setMoodOpen(opening);
+            onClick={() => {
+              setMoodOpen(!moodOpen);
               onToggle?.();
-              if (opening) {
-                requestAnimationFrame(() =>
-                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
-                );
-              }
             }}
           >
             <span className={styles.titleGroup}>

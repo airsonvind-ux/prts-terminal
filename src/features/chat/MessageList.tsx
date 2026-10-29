@@ -68,7 +68,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
     moreBelow,
     following,
     scrollToBottomNow,
-    stopFollowing,
+    pinAfterToggle,
     handleScroll,
   } = useMessageScroll({
     items,
@@ -93,7 +93,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
             key={i}
             item={item}
             onCancelPending={item.type === "pending" ? onCancelPending : undefined}
-            onCardToggle={item.type === "events" ? stopFollowing : undefined}
+            onCardToggle={item.type === "events" ? pinAfterToggle : undefined}
           />
         ))}
       </div>
