@@ -64,6 +64,12 @@
   position: static;
 }
 
+/* 收起后卡头下面没有内容，sticky 没有可吸附的行程；
+ * 留在滚动容器里会被钉底反复推动，表现为标题行抖动。 */
+.toggle[aria-expanded="false"] {
+  position: static;
+}
+
 /* ── 折叠三角 ── */
 
 .arrow {
