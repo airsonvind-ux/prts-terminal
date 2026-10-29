@@ -62,14 +62,25 @@
   position: static;
 }
 
+/* 标题、状态、三角收进同一个行盒，不再作为三个 flex 项各自计算位置。 */
+.titleGroup {
+  display: block;
+  min-width: 0;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
 /* ── 折叠三角 ── */
 
 .arrow {
   display: inline-block;
-  align-self: center;
+  width: 8px;
+  margin-right: 4px;
   font-size: 8px;
-  transition: transform 0.15s ease;
   line-height: 1;
+  text-align: center;
+  vertical-align: middle;
+  transition: transform 0.15s ease;
 }
 
 .arrowOpen {
@@ -87,7 +98,7 @@
   font-size: inherit;
   line-height: inherit;
   display: inline;
-  align-self: baseline;
+  margin-left: 4px;
   white-space: nowrap;
 }
 

@@ -209,18 +209,20 @@ export function EventBadge({ events, interactive = false, className, showApprova
             data-focus-inset
             onClick={() => setReasoningOpen(!reasoningOpen)}
           >
-            <span
-              className={`${styles.arrow} ${reasoningOpen ? styles.arrowOpen : ""}`}
-            >
-              ▸
-            </span>
-            思考过程
-            <span className={reasoningActive ? styles.statusActive : styles.statusDone}>
-              {reasoningActive
-                ? "· 正在思考..."
-                : reasoningIncomplete
-                  ? "· 思考未完成"
-                  : "· ✓ 思考完成"}
+            <span className={styles.titleGroup}>
+              <span
+                className={`${styles.arrow} ${reasoningOpen ? styles.arrowOpen : ""}`}
+              >
+                ▸
+              </span>
+              思考过程
+              <span className={reasoningActive ? styles.statusActive : styles.statusDone}>
+                {reasoningActive
+                  ? "· 正在思考..."
+                  : reasoningIncomplete
+                    ? "· 思考未完成"
+                    : "· ✓ 思考完成"}
+              </span>
             </span>
           </button>
           {reasoningOpen && (
@@ -237,20 +239,22 @@ export function EventBadge({ events, interactive = false, className, showApprova
             data-focus-inset
             onClick={() => setToolsOpen(!toolsOpen)}
           >
-            <span
-              className={`${styles.arrow} ${toolsOpenEffective ? styles.arrowOpen : ""}`}
-            >
-              ▸
-            </span>
-            工具调用
-            <span className={toolsActive ? styles.statusActive : styles.statusDone}>
-              {toolsActive
-                ? "· 正在调用工具..."
-                : toolsIncomplete
-                  ? `· 工具调用未完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`
-                  : hasToolFailure
-                    ? "· ⚠ 工具调用完成（含失败）"
-                    : `· ✓ 工具调用完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`}
+            <span className={styles.titleGroup}>
+              <span
+                className={`${styles.arrow} ${toolsOpenEffective ? styles.arrowOpen : ""}`}
+              >
+                ▸
+              </span>
+              工具调用
+              <span className={toolsActive ? styles.statusActive : styles.statusDone}>
+                {toolsActive
+                  ? "· 正在调用工具..."
+                  : toolsIncomplete
+                    ? `· 工具调用未完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`
+                    : hasToolFailure
+                      ? "· ⚠ 工具调用完成（含失败）"
+                      : `· ✓ 工具调用完成${toolSlots.length > 1 ? `（${toolSlots.length}项）` : ""}`}
+              </span>
             </span>
           </button>
           {toolsOpenEffective && (
@@ -431,16 +435,18 @@ export function EventBadge({ events, interactive = false, className, showApprova
             className={styles.toggle}
             onClick={() => setMoodOpen(!moodOpen)}
           >
-            <span
-              className={`${styles.arrow} ${moodOpen ? styles.arrowOpen : ""}`}
-            >
-              ▸
-            </span>
-            情绪
-            <span className={styles.statusDone}>
-              {moodEvents.length === 1
-                ? `· ${describeMood(moodEvents[0] as MoodEvent)}`
-                : `· 心情变化了 ${moodEvents.length} 次`}
+            <span className={styles.titleGroup}>
+              <span
+                className={`${styles.arrow} ${moodOpen ? styles.arrowOpen : ""}`}
+              >
+                ▸
+              </span>
+              情绪
+              <span className={styles.statusDone}>
+                {moodEvents.length === 1
+                  ? `· ${describeMood(moodEvents[0] as MoodEvent)}`
+                  : `· 心情变化了 ${moodEvents.length} 次`}
+              </span>
             </span>
           </button>
           {moodOpen && (
