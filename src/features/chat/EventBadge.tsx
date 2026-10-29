@@ -215,9 +215,16 @@ export function EventBadge({
           <button
             className={styles.toggle}
             data-focus-inset
-            onClick={() => {
-              setReasoningOpen(!reasoningOpen);
+            onClick={(event) => {
+              const header = event.currentTarget;
+              const opening = !reasoningOpen;
+              setReasoningOpen(opening);
               onToggle?.();
+              if (opening) {
+                requestAnimationFrame(() =>
+                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
+                );
+              }
             }}
           >
             <span className={styles.titleGroup}>
@@ -248,9 +255,16 @@ export function EventBadge({
           <button
             className={styles.toggle}
             data-focus-inset
-            onClick={() => {
-              setToolsOpen(!toolsOpen);
+            onClick={(event) => {
+              const header = event.currentTarget;
+              const opening = !toolsOpen;
+              setToolsOpen(opening);
               onToggle?.();
+              if (opening) {
+                requestAnimationFrame(() =>
+                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
+                );
+              }
             }}
           >
             <span className={styles.titleGroup}>
@@ -447,9 +461,16 @@ export function EventBadge({
         <div className={styles.section}>
           <button
             className={styles.toggle}
-            onClick={() => {
-              setMoodOpen(!moodOpen);
+            onClick={(event) => {
+              const header = event.currentTarget;
+              const opening = !moodOpen;
+              setMoodOpen(opening);
               onToggle?.();
+              if (opening) {
+                requestAnimationFrame(() =>
+                  header.scrollIntoView?.({ block: "start", behavior: "auto" })
+                );
+              }
             }}
           >
             <span className={styles.titleGroup}>
