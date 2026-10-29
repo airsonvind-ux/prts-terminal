@@ -354,6 +354,10 @@ pub fn stop() -> Result<(), String> {
     bridge
         .command(json!({ "cmd": "run_stop" }), QUICK_TIMEOUT)
         .map_err(|e| e.to_string())?;
+    // AsstStop 成功不等于会再收到 AllTasksCompleted：MaaCore 停止时
+    // 只发 TaskChainStopped。运行记录必须在这里收尾，否则设置页会一直
+    // 把这次已中止的任务当成仍在运行。
+    bridge.abort_run();
     Ok(())
 }
 
@@ -1459,6 +1463,39 @@ mod tests {
         assert_ne!(second, DISPATCH_BUSY_MSG, "第二次不能撞上一次的残留");
 
         // 清掉全局单例状态，别把测试桥留给后续测试。
+        let taken = {
+            let mut m = lock().expect("管理器锁");
+            (m.bridge.take(), m.connected.take())
+        };
+        drop(taken);
+    }
+
+    /// 中止成功必须立刻收掉运行记录。
+    ///
+    /// MaaCore 停止时不会补发 AllTasksCompleted；只发 TaskChainStopped。
+    /// 若 stop 不主动收尾，设置页会一直显示「MAA 正在运行」。
+    #[test]
+    fn stop_clears_in_flight_run() {
+        let bridge = Bridge::test_stub(false);
+        bridge.begin_run(vec![1]);
+        {
+            let mut m = lock().expect("管理器锁");
+            m.bridge = Some(bridge);
+            m.connected = Some(ConnectedInfo {
+                emulator: "test".to_string(),
+                address: "127.0.0.1:0".to_string(),
+                config: "test".to_string(),
+                extras: false,
+                screencap: None,
+                events: Vec::new(),
+            });
+            m.last_error = None;
+        }
+        assert!(is_running(), "begin_run 之后应视为在跑");
+
+        stop().expect("run_stop 成功后应能收尾");
+        assert!(!is_running(), "中止后不能继续显示为运行中");
+
         let taken = {
             let mut m = lock().expect("管理器锁");
             (m.bridge.take(), m.connected.take())
