@@ -66,6 +66,10 @@ export function useMessageScroll({
    * 才允许 sticky；跟底期间保持普通流，避免和逐帧钉底抢滚动。 */
   const [following, setFollowing] = useState(true);
 
+  /* 首轮钉底完成前不显示“回到底部”：恢复会话时列表还没落到底，
+   * moreBelow 会被初始几何短暂置 true，按钮会先于对话内容出现。 */
+  const [initialized, setInitialized] = useState(false);
+
   /** 跟底意图的唯一写入口（ref 热路径读；镜像供布局选择） */
   const setStick = useCallback((stick: boolean) => {
     userScrolledUpRef.current = !stick;
@@ -282,6 +286,11 @@ export function useMessageScroll({
     setStick(true);
   }, [conversationId, setStick]);
 
+  /* 切换对话时先收起按钮，等新列表完成首轮钉底再允许出现。 */
+  useLayoutEffect(() => {
+    setInitialized(false);
+  }, [conversationId]);
+
   /*
    * 自动滚底（钉底）。
    *
@@ -309,6 +318,7 @@ export function useMessageScroll({
     tick();
     // 首次钉底后：下方必然无内容——直接写死，不必读几何
     setMoreBelow(false);
+    setInitialized(true);
     return () => cancelAnimationFrame(raf);
   }, [items, conversationId, pinNow]);
 
@@ -367,5 +377,13 @@ export function useMessageScroll({
     return () => mo.disconnect();
   }, [refreshBelow]);
 
-  return { listRef, moreBelow, following, scrollToBottomNow, pinAfterToggle, handleScroll };
+  return {
+    listRef,
+    moreBelow,
+    following,
+    initialized,
+    scrollToBottomNow,
+    pinAfterToggle,
+    handleScroll,
+  };
 }

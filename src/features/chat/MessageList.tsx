@@ -67,6 +67,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
     listRef,
     moreBelow,
     following,
+    initialized,
     scrollToBottomNow,
     pinAfterToggle,
     handleScroll,
@@ -100,7 +101,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
       {/* 回到底部（圆形、水平居中、浮在输入区上方）。
           判据是几何事实 moreBelow（视口下方还有内容）：按钮只在点得出结果时
           出现；欢迎页（showWelcome）无对话，即便被压出溢出（极小窗口）也不出现。 */}
-      {!showWelcome && moreBelow && (
+      {!showWelcome && initialized && moreBelow && (
         <button
           type="button"
           className={styles.scrollFab}
