@@ -265,12 +265,9 @@ export function useMessageScroll({
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY >= 0) {
         refreshBelow();
-        // 下滚是明确的“回到最新”手势，解除阅读锁。
-        if (readingHoldRef.current) {
-          readingHoldRef.current = false;
-          const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-          if (distance <= STICK_PX) setStick(true);
-        }
+        // 下滚不等于“恢复跟底”：用户可能只是向下看展开后的内容。
+        // 阅读锁只在“回到底部”按钮/新一轮消息时解除，否则一次下滚
+        // 就会把 following 改回 true，重新触发钉底位移。
         return;
       }
       if (el.scrollHeight - el.clientHeight <= STICK_PX) return;
