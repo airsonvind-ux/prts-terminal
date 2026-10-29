@@ -90,6 +90,12 @@ export function useMessageScroll({
     setMoreBelow(false);
   }, [pinNow, setStick]);
 
+  /** 用户展开卡片：停止自动跟底，把当前阅读位置固定住。
+   *  需要回到最新时仍可用“回到底部”按钮恢复。 */
+  const stopFollowing = useCallback(() => {
+    setStick(false);
+  }, [setStick]);
+
   /* 窗口缩放保护窗。 */
   const windowResizingRef = useRef(false);
   const resizeGuardTimerRef = useRef(0);
@@ -357,5 +363,5 @@ export function useMessageScroll({
     return () => mo.disconnect();
   }, [refreshBelow]);
 
-  return { listRef, moreBelow, following, scrollToBottomNow, handleScroll };
+  return { listRef, moreBelow, following, scrollToBottomNow, stopFollowing, handleScroll };
 }

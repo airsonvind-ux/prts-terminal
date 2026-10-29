@@ -82,6 +82,8 @@ interface Props {
   interactive?: boolean;
   /** 外层附加类（消息列表传入的行级样式：屏幕外跳过布局等） */
   className?: string;
+  /** 展开/收起任一阶段卡；消息列表用来停止自动跟底 */
+  onToggle?: () => void;
   /**
    * 是否在事件卡内渲染审批按钮（默认 true，兼容既有测试/独立用法）。
    * 产品界面传 false：交互按钮只在 Action Dock，消息流保留只读记录。
@@ -89,7 +91,13 @@ interface Props {
   showApprovalControls?: boolean;
 }
 
-export function EventBadge({ events, interactive = false, className, showApprovalControls = true }: Props) {
+export function EventBadge({
+  events,
+  interactive = false,
+  className,
+  showApprovalControls = true,
+  onToggle,
+}: Props) {
   // ── 推理内容提取：assistant/chunk(Reasoning) 累积 ──
   const reasoningText = useMemo(() => {
     let text = "";
@@ -207,7 +215,10 @@ export function EventBadge({ events, interactive = false, className, showApprova
           <button
             className={styles.toggle}
             data-focus-inset
-            onClick={() => setReasoningOpen(!reasoningOpen)}
+            onClick={() => {
+              setReasoningOpen(!reasoningOpen);
+              onToggle?.();
+            }}
           >
             <span className={styles.titleGroup}>
               <span
@@ -237,7 +248,10 @@ export function EventBadge({ events, interactive = false, className, showApprova
           <button
             className={styles.toggle}
             data-focus-inset
-            onClick={() => setToolsOpen(!toolsOpen)}
+            onClick={() => {
+              setToolsOpen(!toolsOpen);
+              onToggle?.();
+            }}
           >
             <span className={styles.titleGroup}>
               <span
@@ -433,7 +447,10 @@ export function EventBadge({ events, interactive = false, className, showApprova
         <div className={styles.section}>
           <button
             className={styles.toggle}
-            onClick={() => setMoodOpen(!moodOpen)}
+            onClick={() => {
+              setMoodOpen(!moodOpen);
+              onToggle?.();
+            }}
           >
             <span className={styles.titleGroup}>
               <span

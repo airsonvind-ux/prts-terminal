@@ -63,7 +63,14 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
     [archivedItems, liveItems, showWelcome]
   );
 
-  const { listRef, moreBelow, following, scrollToBottomNow, handleScroll } = useMessageScroll({
+  const {
+    listRef,
+    moreBelow,
+    following,
+    scrollToBottomNow,
+    stopFollowing,
+    handleScroll,
+  } = useMessageScroll({
     items,
     turns,
     currentEvents,
@@ -86,6 +93,7 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
             key={i}
             item={item}
             onCancelPending={item.type === "pending" ? onCancelPending : undefined}
+            onCardToggle={item.type === "events" ? stopFollowing : undefined}
           />
         ))}
       </div>

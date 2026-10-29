@@ -89,9 +89,12 @@ function PreflightNotice({
 export const MessageRow = memo(function MessageRow({
   item,
   onCancelPending,
+  onCardToggle,
 }: {
   item: DisplayItem;
   onCancelPending?: (entryId: string) => void;
+  /** 展开/收起事件卡：列表据此停止自动跟底，固定阅读位置 */
+  onCardToggle?: () => void;
 }) {
   switch (item.type) {
     case "welcome":
@@ -107,6 +110,7 @@ export const MessageRow = memo(function MessageRow({
           interactive={item.interactive}
           showApprovalControls={false}
           className={styles.row}
+          onToggle={onCardToggle}
         />
       );
     case "message":
