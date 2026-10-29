@@ -102,17 +102,11 @@
   white-space: nowrap;
 }
 
-/* 活跃态：脉冲蓝，表示正在进行中。
- * opacity 脉冲而非 color 变化——浏览器对 opacity 的合成
- * 比 color 过渡更省 GPU 资源，在流式场景下不抢渲染预算。 */
+/* 活跃态：静态 accent 色。进行中轮会持续重渲染，
+ * opacity 脉冲会把状态文字推成独立合成层；先去掉动画，
+ * 只保留颜色语义。 */
 .statusActive {
   color: var(--accent);
-  animation: statusPulse 1.8s ease-in-out infinite;
-}
-
-@keyframes statusPulse {
-  0%, 100% { opacity: 0.6; }
-  50%      { opacity: 1; }
 }
 
 /* 完成态：静态灰绿，表示已结束 */
@@ -160,14 +154,8 @@
 /* 运行中：脉冲边框 */
 .toolRunning {
   background: var(--depth-1);
-  border: 1px solid var(--depth-0);
+  border: 1px solid var(--accent);
   color: var(--text-1);
-  animation: toolPulse 1.5s ease-in-out infinite;
-}
-
-@keyframes toolPulse {
-  0%, 100% { border-color: var(--depth-0); }
-  50%      { border-color: var(--accent); }
 }
 
 /* ── 失败态：静态红系（与 toolDone 灰绿对应，不引新 CSS 变量） ── */
