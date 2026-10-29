@@ -18,12 +18,6 @@
   flex-direction: column;
 }
 
-/* 启动演出/恢复期间整块消息区先不可见：按钮、列表和滚动条都不能
- * 抢在初始化信息前面出现；visibility 保留布局，不影响演出后的首帧。 */
-.bootHidden {
-  visibility: hidden;
-}
-
 .list {
   flex: 1;
   min-height: 0;
