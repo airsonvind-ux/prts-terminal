@@ -61,7 +61,10 @@
  * 卡片主体走不同的滚动/光栅化路径，标题文字单独上下抖。
  * 用户上滑离开底部后恢复 sticky，保留长卡片的折叠入口。 */
 :global([data-at-bottom]) .toggle {
-  position: static;
+  /* 必须保持 positioned：三角是 absolute，靠它做包含块。
+   * 用 static 会让三角改挂到 .listArea 上，飞到消息区固定位置。 */
+  position: relative;
+  top: auto;
 }
 
 /* ── 折叠三角 ── */
