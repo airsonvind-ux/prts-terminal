@@ -35,9 +35,8 @@
   margin-right: 8px;
   /*
    * 顶部内边距不放在滚动容器上（改由首个条目承担，见下方 .list > :first-child）：
-   * 滚动容器的 padding-top 会把粘性卡头（EventBadge .toggle）的吸附点一并顶下去
-   * ——实测头钉在 padding-top 处、其上方那 8px 缝隙会露出滑过的内容（2026-10-05）。
-   * 挪到首个子元素的上外边距：视觉等价，且粘性卡头钉在滚动区最上沿。
+   * 滚动容器的 padding-top 会让首条目的视觉起点随滚动容器内边距浮动。
+   * 挪到首个子元素的上外边距，视觉等价，且首条目仍从滚动区最上沿开始。
    */
   padding: 0 8px 8px 12px;
   display: flex;

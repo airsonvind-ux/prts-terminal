@@ -77,7 +77,6 @@ export function MessageList({ turns, currentEvents, showWelcome, compaction, pen
         ref={listRef}
         onScroll={handleScroll}
         data-message-list
-        data-at-bottom={moreBelow ? undefined : "true"}
       >
         {items.map((item, i) => (
           // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
