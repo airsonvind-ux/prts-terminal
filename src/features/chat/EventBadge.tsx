@@ -208,13 +208,18 @@ export function EventBadge({
   if (!reasoningText && !hasTools && moodEvents.length === 0) return null;
 
   return (
-    <div className={className ? `${styles.badge} ${className}` : styles.badge}>
+    <div
+      className={className ? `${styles.badge} ${className}` : styles.badge}
+      data-event-badge={interactive ? "live" : "archived"}
+    >
       {/* ── 思考阶段 ── */}
       {reasoningText && (
         <div className={styles.section}>
           <button
             className={styles.toggle}
             data-focus-inset
+            data-event-toggle
+            data-event-kind="reasoning"
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !reasoningOpen;
@@ -255,6 +260,8 @@ export function EventBadge({
           <button
             className={styles.toggle}
             data-focus-inset
+            data-event-toggle
+            data-event-kind="tools"
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !toolsOpen;
@@ -461,6 +468,8 @@ export function EventBadge({
         <div className={styles.section}>
           <button
             className={styles.toggle}
+            data-event-toggle
+            data-event-kind="mood"
             onClick={(event) => {
               const header = event.currentTarget;
               const opening = !moodOpen;
