@@ -48,7 +48,9 @@
   font-size: var(--text-sm);
   font-family: var(--font-ui);
   cursor: pointer;
-  padding: 2px 0;
+  /* 三角绝对定位，不再参与 flex 行盒计算；标题按基线排，
+   * 三角按卡头自身高度居中，两者互不牵动。 */
+  padding: 2px 0 2px 12px;
 }
 
 .toggle:hover {
@@ -65,15 +67,18 @@
 /* ── 折叠三角 ── */
 
 .arrow {
+  position: absolute;
+  left: 0;
+  top: 50%;
   display: inline-block;
-  align-self: center;
   font-size: 8px;
   transition: transform 0.15s ease;
   line-height: 1;
+  transform: translateY(-50%);
 }
 
 .arrowOpen {
-  transform: rotate(90deg);
+  transform: translateY(-50%) rotate(90deg);
 }
 
 /* ── 状态标签 ── */
