@@ -1,0 +1,175 @@
+{
+  "表": "levels",
+  "模式": "全量重建",
+  "运行时间": "2026-11-01 10:46:54",
+  "数据源": {
+    "提交": "08ba2ae",
+    "提交标题": "[CN UPDATE] Client:2.7.91 Data:26-10-29-15-36-11-33649006",
+    "游戏版本": "2.7.91",
+    "数据时间": "26-10-29-15-36-11-33649006"
+  },
+  "脚本": {
+    "文件": "rebuild.py",
+    "版本": 1
+  },
+  "计数": {
+    "原": 4007,
+    "新": 4022
+  },
+  "新增": [
+    "level_act55side_01",
+    "level_act55side_02",
+    "level_act55side_03",
+    "level_act55side_04",
+    "level_act55side_05",
+    "level_act55side_06",
+    "level_act55side_07",
+    "level_act55side_08",
+    "level_act55side_09",
+    "level_act55side_10",
+    "level_act55side_tr01",
+    "level_memory_halo2_1",
+    "level_memory_jcinta_1",
+    "level_memory_snhunt_1",
+    "level_memory_talr_1"
+  ],
+  "消失": [],
+  "变化": [
+    "level_lt20_04",
+    "level_lt20_04_ex",
+    "level_main_01-05",
+    "level_main_01-12",
+    "level_main_02-05",
+    "level_main_02-07",
+    "level_main_02-09",
+    "level_main_03-03",
+    "level_main_03-07",
+    "level_rogue5_fs-5b"
+  ],
+  "复核": {
+    "行数": 4022,
+    "非空计数": {
+      "有额外路线": 1200,
+      "有分支": 1226,
+      "有预置单位": 3823,
+      "有关卡符文": 2219
+    },
+    "体积KB": {
+      "地图数据": 2420.3,
+      "路线": 11728.7,
+      "额外路线": 800.9,
+      "波次": 9893.1,
+      "分支": 926.2,
+      "预置单位": 1651.6,
+      "关卡符文": 1731.2
+    },
+    "visitEveryCheckPoint=true": 4471,
+    "源文件": {
+      "总数": 4022,
+      "obt": 2098,
+      "activities": 1924
+    },
+    "撞车": 3,
+    "撞车明细": [
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-01",
+        "保留": "levels\\obt\\rune\\level_rune_01-01.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-01.json"
+      },
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-02",
+        "保留": "levels\\obt\\rune\\level_rune_01-02.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-02.json"
+      },
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-03",
+        "保留": "levels\\obt\\rune\\level_rune_01-03.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-03.json"
+      }
+    ],
+    "内部levelId 与文件名不一致": {
+      "数量": 15,
+      "明细": [
+        {
+          "键": "level_sandbox1_19",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_19.json"
+        },
+        {
+          "键": "level_sandbox1_24",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_24.json"
+        },
+        {
+          "键": "level_sandbox1_25",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_25.json"
+        },
+        {
+          "键": "level_sandbox1_26",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_26.json"
+        },
+        {
+          "键": "level_sandbox1_33",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_33.json"
+        },
+        {
+          "键": "level_sandbox1_58",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_58.json"
+        },
+        {
+          "键": "level_sandbox1_66",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_66.json"
+        },
+        {
+          "键": "level_sandbox1_67",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_67.json"
+        },
+        {
+          "键": "level_sandbox1_68",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_68.json"
+        },
+        {
+          "键": "level_sandbox_26",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_26.json"
+        },
+        {
+          "键": "level_sandbox_34",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_34.json"
+        },
+        {
+          "键": "level_sandbox_35",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_35.json"
+        },
+        {
+          "键": "level_sandbox_36",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_36.json"
+        },
+        {
+          "键": "level_sandbox_46",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_46.json"
+        },
+        {
+          "键": "level_sandbox_47",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_47.json"
+        }
+      ]
+    }
+  },
+  "结果": "成功"
+}

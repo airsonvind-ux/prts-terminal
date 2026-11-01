@@ -336,6 +336,8 @@ def crawl(keys, rows):
 # ─── 备注合并（recheck 页面赢）────────────────────────────────
 
 def merge_skill_notes(have, notes):
+    if not isinstance(notes, dict):
+        return have if have is not None else ""
     obj = _parse(have)
     if not isinstance(obj, list):
         return have if have is not None else ""
@@ -355,6 +357,8 @@ def merge_skill_notes(have, notes):
 
 
 def merge_talent_notes(have, notes):
+    if not isinstance(notes, dict):
+        return have if have is not None else ""
     obj = _parse(have)
     if not isinstance(obj, list):
         return have if have is not None else ""
@@ -373,10 +377,48 @@ def merge_talent_notes(have, notes):
     return json.dumps(obj, ensure_ascii=False)
 
 
+def carry_notes(new_value, old_value, id_key, name_key=None):
+    """以新算的列表为骶架，把库内已有的「备注」搬回来（按 id_key，缺失时按名称）。
+
+    base 校对阶段 want 是数据源重算出的 JSON 文本；结构与数值以数据源为准，
+    只有「备注」是爬取产物，需要保留。
+    """
+    new = _parse(new_value)
+    if not isinstance(new, list):
+        return new_value
+    old = _parse(old_value)
+    if not isinstance(old, list):
+        old = []
+    by_id, by_name = {}, {}
+    for item in old:
+        if not isinstance(item, dict):
+            continue
+        note = item.get("备注")
+        if not note:
+            continue
+        if item.get(id_key):
+            by_id[item.get(id_key)] = note
+        if name_key and item.get(name_key):
+            by_name[item.get(name_key)] = note
+    for item in new:
+        if not isinstance(item, dict):
+            continue
+        note = by_id.get(item.get(id_key))
+        if not note and name_key:
+            note = by_name.get(item.get(name_key))
+        if note:
+            item["备注"] = note
+    return json.dumps(new, ensure_ascii=False)
+
+
 def on_diff(key, col, want, have):
     if col == "技能列表":
+        if isinstance(want, str):
+            return carry_notes(want, have, "技能ID", "技能名")
         return merge_skill_notes(have, want or {})
     if col == "天赋列表":
+        if isinstance(want, str):
+            return carry_notes(want, have, "序号")
         return merge_talent_notes(have, want or {})
     # 备注列：页面赢；页面没有备注就清空（空串与 NULL 等价）
     return want if want is not None else ""

@@ -15,9 +15,9 @@ PRTS 侧（新增首次爬取；recheck 时按页重爬）
     {{天赋列表3}}   · 备注     → 天赋列表[].备注（按出现顺序）
 
 列分类
-    数据源列（18）见 COLUMNS.source
+    数据源列（19）见 COLUMNS.source（模组列表只补新增，库内已有模组不动）
     爬取列（1）   备注
-    人工列（2）   描述、模组列表（整列手工调整过，永不比对、永不写入）
+    人工列（1）   描述（整列手工调整过，永不比对、永不写入）
     子键          技能列表.备注、天赋列表.备注（比对时剔除，写库时按身份键搬回）
 
 完整性判据
@@ -74,10 +74,10 @@ COLUMNS = tb.Columns(
     source=[
         "干员ID", "名称", "代号", "部署位置", "标签", "获取方式", "是否不可获取",
         "是否为异格", "稀有度", "职业", "职业分支", "最大潜能", "信赖加成",
-        "精英化阶段", "技能列表", "关联token", "天赋列表", "潜能提升",
+        "精英化阶段", "技能列表", "关联token", "天赋列表", "潜能提升", "模组列表",
     ],
     crawl=["备注"],
-    manual=["描述", "模组列表"],
+    manual=["描述"],
     subkeys=[("技能列表", "备注"), ("天赋列表", "备注")],
     json=["标签", "信赖加成", "精英化阶段", "技能列表", "关联token", "天赋列表",
           "潜能提升", "模组列表"],
@@ -516,6 +516,8 @@ def _parse(value):
 
 def merge_skill_notes(have, notes):
     """把 {技能名: 备注} 合进库内 技能列表 JSON，其余字段保留。"""
+    if not isinstance(notes, dict):
+        return have
     obj = _parse(have)
     if not isinstance(obj, list):
         return have
@@ -533,6 +535,8 @@ def merge_skill_notes(have, notes):
 
 def merge_talent_notes(have, notes):
     """按出现顺序把备注合进库内 天赋列表 JSON。"""
+    if not isinstance(notes, list):
+        return have
     obj = _parse(have)
     if not isinstance(obj, list):
         return have
@@ -548,6 +552,64 @@ def merge_talent_notes(have, notes):
     return json.dumps(obj, ensure_ascii=False)
 
 
+def carry_notes(new_value, old_value, id_key, name_key=None):
+    """以新算的列表为骶架，把库内已有的「备注」搬回来（按 id_key，缺失时按名称）。
+
+    base 校对阶段的语义：其余字段以数据源为准（官方改描述/改数值要进来），
+    只有「备注」是爬取产物，不能丢。与 merge_* 的方向相反：那边保留库内结构。
+    """
+    new = _parse(new_value)
+    if not isinstance(new, list):
+        return new_value
+    old = _parse(old_value)
+    if not isinstance(old, list):
+        old = []
+    by_id, by_name = {}, {}
+    for item in old:
+        if not isinstance(item, dict):
+            continue
+        note = item.get("备注")
+        if not note:
+            continue
+        if item.get(id_key):
+            by_id[item.get(id_key)] = note
+        if name_key and item.get(name_key):
+            by_name[item.get(name_key)] = note
+    for item in new:
+        if not isinstance(item, dict):
+            continue
+        note = by_id.get(item.get(id_key))
+        if not note and name_key:
+            note = by_name.get(item.get(name_key))
+        if note:
+            item["备注"] = note
+    return json.dumps(new, ensure_ascii=False)
+
+
+def merge_modules(have, want):
+    """模组列表：只补库里没有的模组，已有模组一律以库内为准。
+
+    这一列逐干员做过人工修正（特性文本按干员实际情况改写），数据源重算出的
+    是同分支的通用文本，直接覆盖会把人工修正冲掉。所以增量并：按模组ID 判重。
+    """
+    old = _parse(have)
+    if not isinstance(old, list):
+        old = []
+    new = _parse(want)
+    if not isinstance(new, list):
+        return have if have is not None else "[]"
+    out = copy.deepcopy([m for m in old if isinstance(m, dict)])
+    seen = {m.get("模组ID") for m in out}
+    for m in new:
+        if not isinstance(m, dict):
+            continue
+        if m.get("模组ID") in seen:
+            continue
+        out.append(copy.deepcopy(m))
+        seen.add(m.get("模组ID"))
+    return json.dumps(out, ensure_ascii=False)
+
+
 def on_diff(key, col, want, have):
     """写库前的仲裁。返回 None 表示只记录、不写库。"""
     if col == "备注":
@@ -558,9 +620,17 @@ def on_diff(key, col, want, have):
             return old                  # 爬取内容仍在（后面可能追加了人工内容）
         return None                     # 页面变了 → 交人工核对
     if col == "技能列表":
+        # base 校对阶段 want 是重新算出的 JSON 字符串（以数据源为准）；
+        # crawl 阶段 want 才是 {技能名: 备注}。两种形状分开处理。
+        if isinstance(want, str):
+            return carry_notes(want, have, "技能ID", "技能名")
         return merge_skill_notes(have, want or {})
     if col == "天赋列表":
+        if isinstance(want, str):
+            return carry_notes(want, have, "序号")
         return merge_talent_notes(have, want or [])
+    if col == "模组列表":
+        return merge_modules(have, want)
     return want
 
 

@@ -60,3 +60,7 @@ build-log-*.txt
 
 # 安装器图片的预览副本（仅用于查看，2026-10-11）
 src-tauri/windows/nsis-images/_preview/
+
+# 范围表预览（本地生成物，不入库，2026-11-01）
+data-pipeline/maintenance/sources/范围表-预览.md
+data-pipeline/scripts/render_ranges.py
