@@ -85,6 +85,15 @@ function encodeAssetName(name) {
 }
 
 /**
+ * GitHub 在上传时会把资产名里的空白字符规范化成点（`PRTS Terminal_x.exe` →
+ * `PRTS.Terminal_x.exe`），下载 URL 必须用规范化后的名字，否则 404。
+ * 0.1.0 与 0.1.1 都因为这一项手动改过清单，固化为代码。
+ */
+function normalizeGithubAssetName(name) {
+  return String(name ?? "").replace(/\s+/g, ".");
+}
+
+/**
  * @param {{
  *   provider: "gitee"|"github",
  *   repo?: string|null,
@@ -102,7 +111,8 @@ export function buildReleaseAssetUrl({ provider, repo, url, version, filename })
   }
   const host = provider === "gitee" ? "https://gitee.com" : "https://github.com";
   const tag = `v${normalizeVersion(version)}`;
-  return `${host}/${repo.replace(/^\/+|\/+$/g, "")}/releases/download/${tag}/${encodeAssetName(filename)}`;
+  const assetName = provider === "github" ? normalizeGithubAssetName(filename) : filename;
+  return `${host}/${repo.replace(/^\/+|\/+$/g, "")}/releases/download/${tag}/${encodeAssetName(assetName)}`;
 }
 
 /**
