@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe("release asset URLs", () => {
-  it("encodes spaces and uses the v-prefixed release tag", () => {
+  it("gitee 保留空格编码，github 用规范化后的点号资产名", () => {
     expect(
       buildReleaseAssetUrl({
         provider: "gitee",
@@ -64,6 +64,7 @@ describe("release asset URLs", () => {
     ).toBe(
       "https://gitee.com/owner/prts-terminal-release/releases/download/v0.1.0/PRTS%20Terminal_0.1.0_x64-setup.exe",
     );
+    // GitHub 上传时把资产名里的空白规范化成点，下载 URL 必须跟着用点号，否则 404
     expect(
       buildReleaseAssetUrl({
         provider: "github",
@@ -72,7 +73,7 @@ describe("release asset URLs", () => {
         filename: "PRTS Terminal_0.1.0_x64-setup.exe",
       }),
     ).toBe(
-      "https://github.com/owner/prts-terminal-release/releases/download/v0.1.0/PRTS%20Terminal_0.1.0_x64-setup.exe",
+      "https://github.com/owner/prts-terminal-release/releases/download/v0.1.0/PRTS.Terminal_0.1.0_x64-setup.exe",
     );
   });
 
