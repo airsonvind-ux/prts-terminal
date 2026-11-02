@@ -355,7 +355,7 @@ pub fn run() {
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
     // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
     // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
-    let (tool_registry, plugin_registry, plugins_config) = {
+    let (tool_registry, plugin_registry, plugins_config, plugin_installer) = {
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
         // 插件装配与宿主用同一份策略（M2 的 process 通道要它），先留句柄再交出
@@ -383,7 +383,9 @@ pub fn run() {
         query_service
             .bind_tools(Arc::clone(&registry))
             .expect("query.call 的工具注册表只能绑定一次");
-        (registry, plugin_registry, plugins_config)
+        // 安装管道的暂存区在构造时就清空：上次没确认的安装不该留到这次（M3 §五）。
+        let installer = plugins::install::Installer::new(&roots.data);
+        (registry, plugin_registry, plugins_config, installer)
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
@@ -614,6 +616,7 @@ pub fn run() {
         .manage(tool_registry)
         .manage(plugin_registry)
         .manage(plugins_config)
+        .manage(plugin_installer)
         .manage(client_registry)
         .manage(llm_config)
         .manage(model_registry)

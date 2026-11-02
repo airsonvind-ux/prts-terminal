@@ -17,6 +17,8 @@ mod registry;
 mod rpc;
 mod transport;
 
+pub mod install;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -395,7 +397,12 @@ fn load_one(
     };
 
     let id = manifest.id.clone();
-    if let Err(error) = manifest::validate(&manifest, dir_name, &mut scan.seen_ids) {
+    if let Err(error) = manifest::validate_with(
+        &manifest,
+        dir_name,
+        &mut scan.seen_ids,
+        &services.keys(),
+    ) {
         match &error {
             // 同 id 的外部插件不写台账、不覆盖内置记录（N3），只报清两个路径。
             PluginError::DuplicateId(duplicated) => {
@@ -519,7 +526,7 @@ fn record_of(ledger: &Arc<Mutex<PluginRegistry>>, id: &str) -> Result<PluginReco
 ///
 /// 与加载期唯一的区别是不写台账：调用方拿到结果后自己决定写 `Loaded` 还是
 /// `Failed`，因为它的前置状态不同（停用 vs 进程退出）。
-fn install_record(
+pub(super) fn install_record(
     manifest: &PluginManifest,
     plugin_dir: &Path,
     reg: &ToolRegistry,
