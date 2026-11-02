@@ -840,7 +840,7 @@ mod tests {
         // 解析展示切片并随 tool/call IPC 一并下发。
         let (sink, events, _log) = test_sink();
         let phase = std::sync::Mutex::new(AgentPhase::Reasoning);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(DisplayProbeTool)).unwrap();
 
         handle_stream_event(
@@ -942,7 +942,7 @@ mod tests {
     fn tool_images_ride_along_as_a_user_message() {
         let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("看看画面")];
         let tools = {
-            let mut reg = ToolRegistry::new();
+            let reg = ToolRegistry::new();
             reg.register(Box::new(ImageEchoTool)).unwrap();
             reg
         };
@@ -1044,7 +1044,7 @@ mod tests {
         // guard 拦下，用户看到的是“工具调用到一半系统报错”。
         let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("测试")];
         let tools = {
-            let mut reg = ToolRegistry::new();
+            let reg = ToolRegistry::new();
             reg.register(Box::new(crate::tools::EchoTool)).unwrap();
             reg
         };
@@ -1092,7 +1092,7 @@ mod tests {
     fn appends_assistant_and_tool_messages() {
         let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("测试")];
         let tools = {
-            let mut reg = ToolRegistry::new();
+            let reg = ToolRegistry::new();
             reg.register(Box::new(crate::tools::EchoTool)).unwrap();
             reg
         };
@@ -1177,7 +1177,7 @@ mod tests {
     fn tool_failure_logs_ok_false() {
         let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("测试")];
         let tools = {
-            let mut reg = ToolRegistry::new();
+            let reg = ToolRegistry::new();
             reg.register(Box::new(crate::tools::EchoTool)).unwrap();
             reg
         };
@@ -1243,7 +1243,7 @@ mod tests {
         // 结果与事件顺序按调用顺序确定（与线程调度无关）
         let mut messages: Vec<ChatMessage> = vec![ChatMessage::user("批量查询")];
         let tools = {
-            let mut reg = ToolRegistry::new();
+            let reg = ToolRegistry::new();
             reg.register(Box::new(crate::tools::EchoTool)).unwrap();
             reg
         };
@@ -1583,7 +1583,7 @@ mod tests {
         let mut client_registry = ClientRegistry::new();
         client_registry.register(ApiType::OpenAiCompletions, mock);
 
-        let mut tool_registry = ToolRegistry::new();
+        let tool_registry = ToolRegistry::new();
         tool_registry
             .register(Box::new(crate::tools::EchoTool))
             .unwrap();
@@ -1811,7 +1811,7 @@ mod tests {
         let snapshots: Arc<Mutex<Vec<Vec<ChatMessage>>>> = Arc::new(Mutex::new(Vec::new()));
         let scripted = Arc::new(ScriptedClient::new(queue, snapshots.clone()));
 
-        let mut tool_registry = ToolRegistry::new();
+        let tool_registry = ToolRegistry::new();
         tool_registry
             .register(Box::new(crate::tools::EchoTool))
             .unwrap();
@@ -1897,7 +1897,7 @@ mod tests {
         let mut client_registry = ClientRegistry::new();
         client_registry.register(ApiType::OpenAiCompletions, mock);
 
-        let mut tool_registry = ToolRegistry::new();
+        let tool_registry = ToolRegistry::new();
         tool_registry
             .register(Box::new(crate::tools::EchoTool))
             .unwrap();
@@ -2690,7 +2690,7 @@ mod tests {
                 finish_reason: Some(crate::llm::FinishReason::MaxTokens),
             },
         }]));
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools.register(Box::new(crate::tools::EchoTool)).unwrap();
         let tools = Arc::new(tools);
         let (sink, _events, log, mut messages, tool_defs, client_registry, _tools) =
@@ -2938,7 +2938,7 @@ mod tests {
         use crate::session::ApprovalRejectReason;
 
         let ws = unique_ws_dir("approval");
-        let mut tool_registry = ToolRegistry::new();
+        let tool_registry = ToolRegistry::new();
         tool_registry
             .register(Box::new(crate::tools::RunCommandTool::new(ws.clone())))
             .unwrap();
@@ -3089,7 +3089,7 @@ mod tests {
         use crate::session::ApprovalDecision;
 
         let ws = unique_ws_dir("tool-kill");
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools
             .register(Box::new(crate::tools::RunCommandTool::new(ws.clone())))
             .unwrap();
@@ -3260,7 +3260,7 @@ mod tests {
             },
         }]));
 
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools.register(Box::new(SerialWaitAbortTool)).unwrap();
         let tools = Arc::new(tools);
         let (sink, events, log, mut messages, tool_defs, client_registry, _tools) =
@@ -3369,7 +3369,7 @@ mod tests {
             },
         }]));
         let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools
             .register(Box::new(WaitOrReleaseTool {
                 release: Arc::clone(&release),
@@ -3459,7 +3459,7 @@ mod tests {
             },
         }]));
         let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools
             .register(Box::new(WaitOrReleaseTool {
                 release: Arc::clone(&release),
@@ -3634,7 +3634,7 @@ mod tests {
         use crate::llm::mock::{MockLlmClient, MockResponse};
         use crate::llm::{ApiType, ToolCall, ToolCallFunction};
         let ws = unique_ws_dir("m4-full");
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools
             .register(Box::new(crate::tools::RunCommandTool::new(ws.clone())))
             .unwrap();
@@ -4240,7 +4240,7 @@ mod tests {
             snapshots.clone(),
             hook,
         ));
-        let mut tools = ToolRegistry::new();
+        let tools = ToolRegistry::new();
         tools.register(Box::new(crate::tools::EchoTool)).unwrap();
         let tools = Arc::new(tools);
         let (sink, _events, log, mut messages, tool_defs, client_registry, _tools2) =

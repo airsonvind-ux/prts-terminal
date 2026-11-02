@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["required"][0], "command");
         // 注册校验应通过（含 schema::validate_tool_schema）
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(t)).unwrap();
         assert!(reg.get("run_command").is_some());
     }

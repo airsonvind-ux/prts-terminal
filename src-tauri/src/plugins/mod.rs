@@ -357,7 +357,7 @@ fn load_one(
             }
             _ => {
                 eprintln!("[plugins] {dir_name}（id={id}）校验失败：{error}");
-                insert(&ledger, PluginRecord {
+                insert(ledger, PluginRecord {
                     manifest,
                     state: PluginState::Failed(error.to_string()),
                     tools: Vec::new(),
@@ -372,7 +372,7 @@ fn load_one(
     // 启用状态在加载期的最后一刻生效：校验失败与停用是两回事，前者报错、后者安静跳过。
     if !enabled.get(&id).copied().unwrap_or(true) {
         eprintln!("[plugins] {id} 已在 {ENABLED_FILE_NAME} 里停用，跳过加载");
-        insert(&ledger, PluginRecord {
+        insert(ledger, PluginRecord {
             manifest,
             state: PluginState::Disabled,
             tools: Vec::new(),
@@ -393,7 +393,7 @@ fn load_one(
         Err(error) => {
             let reason = error.to_string();
             eprintln!("[plugins] {id} 能力裁剪失败：{reason}");
-            insert(&ledger, PluginRecord {
+            insert(ledger, PluginRecord {
                 manifest,
                 state: PluginState::Failed(reason),
                 tools: Vec::new(),
@@ -410,7 +410,7 @@ fn load_one(
     // process 插件的握手是同步的，但台账先落一条 Starting：装配期间若有别的
     // 读侧（M3 的扩展页），看到的是「正在启动」而不是「不存在」。
     if manifest.kind == PluginKind::Process {
-        insert(&ledger, PluginRecord {
+        insert(ledger, PluginRecord {
             manifest: manifest.clone(),
             state: PluginState::Starting,
             tools: Vec::new(),
@@ -432,7 +432,7 @@ fn load_one(
 
     match outcome {
         Ok((tools, reported_capabilities)) => {
-            insert(&ledger, PluginRecord {
+            insert(ledger, PluginRecord {
                 manifest,
                 state: PluginState::Loaded,
                 tools,
@@ -443,7 +443,7 @@ fn load_one(
             eprintln!("[plugins] {id} 安装失败：{error}");
             // 安装失败时 register_plugin_tools 与 process::install 都已把本次
             // 注册摘干净、把进程收掉。
-            insert(&ledger, PluginRecord {
+            insert(ledger, PluginRecord {
                 manifest,
                 state: PluginState::Failed(error.to_string()),
                 tools: Vec::new(),
