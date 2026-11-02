@@ -16,7 +16,10 @@ import { useUIStore } from "../../stores/useUIStore";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
-import { isPluginDropArmed } from "../settings/pluginDropArbiter";
+import {
+  finishPluginDrop,
+  pluginDropTakesPrecedence,
+} from "../settings/pluginDropArbiter";
 import { useGuideStore } from "../../stores/useGuideStore";
 import {
   draftKeyFor,
@@ -224,8 +227,10 @@ export function ChatView({ onDragHandle }: Props) {
           } else if (type === "drop") {
             setDragActive(false);
             // 设置页的「安装插件」拖拽区优先：两边都会收到同一个 webview 级事件，
-            // 它按坐标判断过落点在安装区上方就会先武装自己（见 pluginDropArbiter）。
-            if (isPluginDropArmed()) return;
+            // 以最后一次 dragover 的命中结果为准（见 pluginDropArbiter）。
+            const toPlugin = pluginDropTakesPrecedence();
+            queueMicrotask(finishPluginDrop);
+            if (toPlugin) return;
             uploadPaths(event.payload.paths);
           }
         });

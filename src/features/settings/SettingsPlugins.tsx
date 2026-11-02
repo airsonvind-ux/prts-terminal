@@ -10,7 +10,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { PluginList, PluginPreview, PluginView } from "../../types";
-import { armPluginDrop, disarmPluginDrop } from "./pluginDropArbiter";
+import { finishPluginDrop, notePluginDragOver } from "./pluginDropArbiter";
 import styles from "./SettingsPlugins.module.css";
 
 /** 能力名的「人话」；没登记的原样显示——宁可难看，也不替插件美化。 */
@@ -76,7 +76,8 @@ export function SettingsPlugins({
   const zoneRef = useRef<HTMLDivElement>(null);
 
   // 拖放：Tauri 的 webview 级事件没有 DOM 命中测试，只能自己按坐标判断。
-  // 指针在虚线区上方时武装仲裁（见 pluginDropArbiter），让对话区放弃这次投放。
+  // 每次 enter / over 都把命中结果记给仲裁器（见 pluginDropArbiter）：drop 时
+  // 对话区以「最后一次 dragover 是否落在虚线区」为准决定让不让路。
   useEffect(() => {
     let off: (() => void) | undefined;
     let disposed = false;
@@ -87,7 +88,7 @@ export function SettingsPlugins({
           const payload = event.payload;
           if (payload.type === "leave") {
             setOver(false);
-            disarmPluginDrop();
+            notePluginDragOver(false);
             return;
           }
           const rect = zoneRef.current?.getBoundingClientRect();
@@ -101,13 +102,13 @@ export function SettingsPlugins({
             position.y / scale <= rect.bottom;
           if (payload.type === "enter" || payload.type === "over") {
             setOver(inside);
-            if (inside) armPluginDrop();
+            notePluginDragOver(inside);
             return;
           }
-          // drop
+          // drop：命中判定已经在最后的 over 里记过了，这里直接沿用。
           setOver(false);
+          queueMicrotask(finishPluginDrop);
           if (inside && payload.paths.length > 0) {
-            armPluginDrop();
             onDropFolder(payload.paths[0]);
           }
         });
@@ -120,7 +121,7 @@ export function SettingsPlugins({
     return () => {
       disposed = true;
       off?.();
-      disarmPluginDrop();
+      finishPluginDrop();
     };
   }, [onDropFolder]);
 
