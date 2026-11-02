@@ -25,7 +25,7 @@ use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
 
-use self::manifest::PluginKind;
+use self::manifest::{PluginKind, PluginManifest};
 
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
 
@@ -99,7 +99,7 @@ impl std::fmt::Display for PluginError {
 /// 相反：插件不得覆盖任何已存在的工具——跨插件覆盖是最难排查的一类故障，
 /// 因此先查重，失败即把本次已注册的名字逆序摘除，注册表回到调用前的状态。
 pub fn register_plugin_tools(
-    reg: &mut ToolRegistry,
+    reg: &ToolRegistry,
     plugin_id: &str,
     tools: Vec<Box<dyn Tool>>,
 ) -> Result<Vec<String>, PluginError> {
@@ -126,7 +126,7 @@ pub fn register_plugin_tools(
 }
 
 /// 逆序摘除本次已注册的工具（后注册的先摘，与注册顺序对称）。
-fn rollback_registered(reg: &mut ToolRegistry, registered: &[String]) {
+fn rollback_registered(reg: &ToolRegistry, registered: &[String]) {
     for name in registered.iter().rev() {
         reg.remove(name);
     }
@@ -315,7 +315,7 @@ impl PluginsConfig {
 ///
 /// `_policy` 是 M2b 的 process 通道要用的宿主策略，M2a 只保留签名位置。
 pub fn load_all(
-    reg: &mut ToolRegistry,
+    reg: &ToolRegistry,
     roots: &PluginRoots,
     config: &PluginsConfig,
     services: &Arc<HostServices>,
@@ -377,7 +377,7 @@ struct Scan {
 /// 装配单个插件目录；任何一步失败都只影响这个插件。
 #[allow(clippy::too_many_arguments)]
 fn load_one(
-    reg: &mut ToolRegistry,
+    reg: &ToolRegistry,
     services: &Arc<HostServices>,
     plugin_dir: &Path,
     dir_name: &str,
@@ -416,6 +416,7 @@ fn load_one(
                     state: PluginState::Failed(error.to_string()),
                     tools: Vec::new(),
                     reported_capabilities: Vec::new(),
+                    dir: plugin_dir.to_path_buf(),
                 });
             }
         }
@@ -431,35 +432,10 @@ fn load_one(
             state: PluginState::Disabled,
             tools: Vec::new(),
             reported_capabilities: Vec::new(),
+            dir: plugin_dir.to_path_buf(),
         });
         return;
     }
-
-    // 能力裁剪：声明 ∩ 已登记；未登记、需审批、协议不够都在这里整体失败（D25）。
-    let protocol = manifest
-        .requires
-        .as_ref()
-        .and_then(|requires| requires.protocol)
-        .unwrap_or(manifest::SUPPORTED_PROTOCOL);
-    let granted = match crate::host::resolve_granted(services.as_ref(), &manifest.capabilities, protocol)
-    {
-        Ok(granted) => granted,
-        Err(error) => {
-            let reason = error.to_string();
-            eprintln!("[plugins] {id} 能力裁剪失败：{reason}");
-            insert(ledger, PluginRecord {
-                manifest,
-                state: PluginState::Failed(reason),
-                tools: Vec::new(),
-                reported_capabilities: Vec::new(),
-            });
-            return;
-        }
-    };
-
-    let owned: Arc<HostServices> = Arc::clone(services);
-    let api: Arc<dyn crate::host::HostApi> = owned;
-    let ctx = crate::host::PluginCtx::new(id.clone(), api, granted);
 
     // process 插件的握手是同步的，但台账先落一条 Starting：装配期间若有别的
     // 读侧（M3 的扩展页），看到的是「正在启动」而不是「不存在」。
@@ -469,20 +445,13 @@ fn load_one(
             state: PluginState::Starting,
             tools: Vec::new(),
             reported_capabilities: Vec::new(),
+            dir: plugin_dir.to_path_buf(),
         });
     }
 
-    let outcome = match manifest.kind {
-        PluginKind::Builtin => builtin::install(&id, ctx, reg).map(|tools| (tools, Vec::new())),
-        PluginKind::Process => {
-            // 校验已保证 process 一定有 entry。
-            let entry = manifest
-                .entry
-                .clone()
-                .expect("process 插件必须有 entry（校验规则 5）");
-            process::install(&id, plugin_dir, &entry, ctx, Arc::clone(ledger), reg)
-        }
-    };
+    // 能力裁剪（声明 ∩ 已登记）与按 kind 分发都在 install_record 里：
+    // 启用、重试走的是同一条路径，差别只在调用方怎么记状态。
+    let outcome = install_record(&manifest, plugin_dir, reg, services, ledger);
 
     match outcome {
         Ok((tools, reported_capabilities)) => {
@@ -491,6 +460,7 @@ fn load_one(
                 state: PluginState::Loaded,
                 tools,
                 reported_capabilities,
+                dir: plugin_dir.to_path_buf(),
             });
         }
         Err(error) => {
@@ -502,6 +472,7 @@ fn load_one(
                 state: PluginState::Failed(error.to_string()),
                 tools: Vec::new(),
                 reported_capabilities: Vec::new(),
+                dir: plugin_dir.to_path_buf(),
             });
         }
     }
@@ -529,12 +500,218 @@ pub fn shutdown() {
     }
 }
 
+// ═══════════════════════════════════════════════════════
+// 启停 / 重试 / 卸载（M3 §四、§六）
+// ═══════════════════════════════════════════════════════
+
+/// 取一份台账记录；不在台账里的 id 一律报错（命令层先列出来再操作）。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+fn record_of(ledger: &Arc<Mutex<PluginRegistry>>, id: &str) -> Result<PluginRecord, String> {
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("插件 {id} 不在台账里"))
+}
+
+/// 按 manifest 装一次（启用与重试共用同一条路径）。
+///
+/// 与加载期唯一的区别是不写台账：调用方拿到结果后自己决定写 `Loaded` 还是
+/// `Failed`，因为它的前置状态不同（停用 vs 进程退出）。
+fn install_record(
+    manifest: &PluginManifest,
+    plugin_dir: &Path,
+    reg: &ToolRegistry,
+    services: &Arc<HostServices>,
+    ledger: &Arc<Mutex<PluginRegistry>>,
+) -> Result<(Vec<String>, Vec<String>), PluginError> {
+    let protocol = manifest
+        .requires
+        .as_ref()
+        .and_then(|requires| requires.protocol)
+        .unwrap_or(manifest::SUPPORTED_PROTOCOL);
+    let granted =
+        crate::host::resolve_granted(services.as_ref(), &manifest.capabilities, protocol).map_err(
+            |error| PluginError::Invalid {
+                field: "capabilities",
+                value: error.to_string(),
+            },
+        )?;
+    let owned: Arc<HostServices> = Arc::clone(services);
+    let api: Arc<dyn crate::host::HostApi> = owned;
+    let ctx = crate::host::PluginCtx::new(manifest.id.clone(), api, granted);
+
+    match manifest.kind {
+        PluginKind::Builtin => {
+            builtin::install(&manifest.id, ctx, reg).map(|tools| (tools, Vec::new()))
+        }
+        PluginKind::Process => {
+            let entry = manifest
+                .entry
+                .clone()
+                .expect("process 插件必须有 entry（校验规则 5）");
+            process::install(&manifest.id, plugin_dir, &entry, ctx, Arc::clone(ledger), reg)
+        }
+    }
+}
+
+/// 停用一个插件：摘工具、留墓碑、收进程，最后才落配置。
+///
+/// 顺序是有意的：配置写成功但工具还挂着，会出现「界面显示已停用、模型还能调」
+/// 的分裂状态；反过来最坏只是重复停用一次。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn disable_plugin(
+    id: &str,
+    reg: &ToolRegistry,
+    config: &PluginsConfig,
+    services: &Arc<HostServices>,
+    ledger: &Arc<Mutex<PluginRegistry>>,
+) -> Result<(), String> {
+    let record = record_of(ledger, id)?;
+    match record.state {
+        PluginState::Disabled => {
+            config.set_enabled(id, false)?;
+            return Ok(());
+        }
+        PluginState::Loaded => {}
+        other => return Err(format!("插件 {id} 当前是 {other:?}，不能停用")),
+    }
+
+    for name in &record.tools {
+        reg.remove(name);
+    }
+    // 冻结快照的对话里工具面还是旧的：墓碑让那些调用能得到一句人话，而不是 NotFound。
+    reg.bury(&record.tools, &record.manifest.name, "已停用");
+
+    if record.manifest.kind == PluginKind::Process {
+        process::shutdown_plugin(id);
+    }
+    // 内置 MAA 的桥是宿主托管的独立进程：插件停了，它也该收场（§四）。
+    if record
+        .manifest
+        .capabilities
+        .iter()
+        .any(|key| key == "maa.bridge")
+    {
+        let _ = crate::host::HostApi::call(
+            services.as_ref(),
+            "plugins",
+            "maa.bridge",
+            serde_json::json!({ "op": "shutdown" }),
+        );
+    }
+
+    config.set_enabled(id, false)?;
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .mark_disabled(id);
+    Ok(())
+}
+
+/// 重新启用一个插件：重走安装路径，成功后才清墓碑、写配置。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn enable_plugin(
+    id: &str,
+    reg: &ToolRegistry,
+    config: &PluginsConfig,
+    services: &Arc<HostServices>,
+    ledger: &Arc<Mutex<PluginRegistry>>,
+) -> Result<(), String> {
+    let record = record_of(ledger, id)?;
+    if record.state == PluginState::Loaded {
+        config.set_enabled(id, true)?;
+        return Ok(());
+    }
+
+    // 先清掉旧墓碑：接下来要么装成功（不需要墓碑），要么装失败（该报 Failed 原因，
+    // 而不是继续声称「已停用」）。
+    reg.unbury(&record.tools);
+
+    let (tools, reported) = install_record(&record.manifest, &record.dir, reg, services, ledger)
+        .map_err(|error| {
+            eprintln!("[plugins] {id} 重新启用失败：{error}");
+            let reason = error.to_string();
+            if let Ok(mut ledger) = ledger.lock() {
+                ledger.mark_failed(id, reason.clone());
+            }
+            reason
+        })?;
+
+    config.set_enabled(id, true)?;
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .mark_enabled(id, tools, reported);
+    Ok(())
+}
+
+/// 重试一个「进程退出」的插件（只对 `Faulted` 有效，§三）。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn retry_plugin(id: &str, ledger: &Arc<Mutex<PluginRegistry>>) -> Result<(), String> {
+    let record = record_of(ledger, id)?;
+    if !matches!(record.state, PluginState::Faulted(_)) {
+        return Err(format!("插件 {id} 当前不是进程退出状态，不能重试"));
+    }
+    process::retry(id).map_err(|error| format!("重试 {id} 失败：{error}"))?;
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .mark_loaded(id);
+    Ok(())
+}
+
+/// 卸载一个外部插件：摘工具、杀进程、删目录、清配置（§六）。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn uninstall_plugin(
+    id: &str,
+    delete_data: bool,
+    roots: &PluginRoots,
+    config: &PluginsConfig,
+    reg: &ToolRegistry,
+    ledger: &Arc<Mutex<PluginRegistry>>,
+) -> Result<(), String> {
+    let record = record_of(ledger, id)?;
+    if record.manifest.kind == PluginKind::Builtin {
+        return Err(format!("内置插件 {id} 不能卸载"));
+    }
+
+    for name in &record.tools {
+        reg.remove(name);
+    }
+    reg.bury(&record.tools, &record.manifest.name, "已卸载");
+    process::shutdown_plugin(id);
+
+    remove_dir_all(&record.dir)?;
+    remove_dir_all(&roots.data.join("plugin-temp").join(id))?;
+    if delete_data {
+        remove_dir_all(&roots.data.join("plugin-data").join(id))?;
+    }
+
+    config.forget(id)?;
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(id);
+    Ok(())
+}
+
+/// 删一个目录；不存在不算错（卸载要可重复调用）。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+fn remove_dir_all(path: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("删除 {} 失败：{error}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tools::{Tool, ToolContext, ToolError, ToolOutput};
     use serde_json::{json, Value};
-
     /// 插件工具测试桩：只关心名字与 schema 合法性。
     struct StubTool {
         name: &'static str,
@@ -570,9 +747,9 @@ mod tests {
 
     #[test]
     fn register_plugin_tools_registers_in_order() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let names = register_plugin_tools(
-            &mut reg,
+            &reg,
             "maa",
             vec![StubTool::ok("plugin_a"), StubTool::ok("plugin_b")],
         )
@@ -585,11 +762,11 @@ mod tests {
 
     #[test]
     fn duplicate_tool_name_fails_and_rolls_back() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(StubTool::ok("taken")).unwrap();
 
         let err = register_plugin_tools(
-            &mut reg,
+            &reg,
             "probe",
             vec![
                 StubTool::ok("fresh_a"),
@@ -608,12 +785,12 @@ mod tests {
 
     #[test]
     fn invalid_plugin_tool_schema_fails_and_rolls_back() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let bad = Box::new(StubTool {
             name: "bad_schema",
             schema: json!({ "type": "string" }),
         });
-        let err = register_plugin_tools(&mut reg, "probe", vec![StubTool::ok("fresh_a"), bad])
+        let err = register_plugin_tools(&reg, "probe", vec![StubTool::ok("fresh_a"), bad])
             .unwrap_err();
         match err {
             PluginError::Invalid {
@@ -628,8 +805,8 @@ mod tests {
 
     #[test]
     fn empty_tool_list_is_ok() {
-        let mut reg = ToolRegistry::new();
-        let names = register_plugin_tools(&mut reg, "probe", vec![]).unwrap();
+        let reg = ToolRegistry::new();
+        let names = register_plugin_tools(&reg, "probe", vec![]).unwrap();
         assert!(names.is_empty());
         assert_eq!(reg.list_defs().len(), 0);
     }
@@ -728,9 +905,9 @@ mod tests {
             data: data.clone(),
         };
         let (services, _query) = default_services(&roots, None);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
+        let ledger = load_all(&reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         let record = ledger.get("maa").expect("停用的插件也要留一条记录");
@@ -761,10 +938,10 @@ mod tests {
             data: data.clone(),
         };
         let (services, _query) = default_services(&roots, None);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
         let config = PluginsConfig::load(&roots.data);
-        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
+        let ledger = load_all(&reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         let record = ledger.get("maa").expect("随包的 maa 仍应在台账里");
@@ -791,10 +968,10 @@ mod tests {
             data: data.clone(),
         };
         let (services, _query) = default_services(&roots, None);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
         let config = PluginsConfig::load(&roots.data);
-        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
+        let ledger = load_all(&reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         assert!(ledger.get("broken").is_none(), "读不出 manifest 的目录不记账");
@@ -805,6 +982,117 @@ mod tests {
         );
         drop(ledger);
         assert!(reg.get("run_maa_task").is_some());
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    // ── 第 3 步：启停 / 重试 / 卸载 ──────────────────────────
+
+    /// 一个装载了随包 maa 的测试装配。
+    fn loaded(tag: &str) -> (PluginRoots, Arc<HostServices>, ToolRegistry, PluginsConfig, Arc<Mutex<PluginRegistry>>) {
+        let data = scratch(tag);
+        let roots = PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user: data.join("plugins"),
+            data: data.clone(),
+        };
+        let (services, _query) = default_services(&roots, None);
+        let reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let config = PluginsConfig::load(&roots.data);
+        let ledger = load_all(&reg, &roots, &config, &services, &policy);
+        (roots, services, reg, config, ledger)
+    }
+
+    #[test]
+    fn disabling_removes_tools_and_writes_the_flag() {
+        let (roots, services, reg, config, ledger) = loaded("disable-maa");
+        assert!(reg.get("run_maa_task").is_some());
+
+        disable_plugin("maa", &reg, &config, &services, &ledger).expect("停用 maa");
+
+        assert!(reg.get("run_maa_task").is_none(), "停用后工具必须摘掉");
+        assert!(!config.is_enabled("maa"), "plugins.json 要写 false");
+        assert_eq!(
+            ledger.lock().expect("台账锁不该中毒").get("maa").map(|r| r.state.clone()),
+            Some(PluginState::Disabled)
+        );
+
+        // 旧对话的快照里还留着这个工具：调用要得到一句人话，而不是 NotFound。
+        let ctx = crate::tools::ToolContext::new();
+        match reg.execute("run_maa_task", &ctx, "{}") {
+            Err(crate::tools::ToolError::Disabled(message)) => {
+                assert!(message.contains("MAA 自动化"), "got: {message}");
+                assert!(message.contains("已停用"), "got: {message}");
+            }
+            other => panic!("停用后的调用应报 Disabled，got: {other:?}"),
+        }
+
+        // 再启用：工具回来、墓碑清掉、配置写回 true。
+        enable_plugin("maa", &reg, &config, &services, &ledger).expect("重新启用 maa");
+        assert!(reg.get("run_maa_task").is_some(), "启用后工具应重新注册");
+        assert!(config.is_enabled("maa"));
+        assert_eq!(
+            ledger.lock().expect("台账锁不该中毒").get("maa").map(|r| r.state.clone()),
+            Some(PluginState::Loaded)
+        );
+        assert!(
+            !matches!(
+                reg.execute("run_maa_task", &ctx, "{}"),
+                Err(crate::tools::ToolError::Disabled(_))
+            ),
+            "启用后不该再是 Disabled"
+        );
+
+        let _ = std::fs::remove_dir_all(&roots.data);
+    }
+
+    #[test]
+    fn builtin_plugins_cannot_be_uninstalled() {
+        let (roots, _services, reg, config, ledger) = loaded("uninstall-builtin");
+        let err = uninstall_plugin("maa", false, &roots, &config, &reg, &ledger).unwrap_err();
+        assert!(err.contains("不能卸载"), "got: {err}");
+        assert!(reg.get("run_maa_task").is_some(), "拒绝之后不该动工具面");
+        let _ = std::fs::remove_dir_all(&roots.data);
+    }
+
+    #[test]
+    fn uninstalling_an_external_plugin_removes_its_directories() {
+        let data = scratch("uninstall-external");
+        let user = data.join("plugins");
+        let dir = user.join("demo");
+        std::fs::create_dir_all(&dir).expect("建外部插件目录");
+        // 没有可执行文件 → 加载期记 Failed，但记录与目录都在，正是卸载要清的现场。
+        std::fs::write(
+            dir.join("plugin.json"),
+            r#"{"manifestVersion":1,"id":"demo","name":"演示","version":"0.1.1",
+                "kind":"process","entry":{"exe":"nope.exe"},"activation":[],
+                "capabilities":[],"contributes":{}}"#,
+        )
+        .expect("写 manifest");
+        let plugin_data = data.join("plugin-data").join("demo");
+        std::fs::create_dir_all(&plugin_data).expect("建插件数据目录");
+        std::fs::write(plugin_data.join("memo.txt"), "留着").expect("写数据");
+
+        let roots = PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user,
+            data: data.clone(),
+        };
+        let (services, _query) = default_services(&roots, None);
+        let reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let config = PluginsConfig::load(&roots.data);
+        config.set_enabled("demo", true).expect("写启用状态");
+        let ledger = load_all(&reg, &roots, &config, &services, &policy);
+        assert!(ledger.lock().expect("台账锁不该中毒").get("demo").is_some());
+
+        uninstall_plugin("demo", true, &roots, &config, &reg, &ledger).expect("卸载 demo");
+
+        assert!(!dir.exists(), "插件目录要删掉");
+        assert!(!plugin_data.exists(), "勾了删数据才删数据");
+        assert!(ledger.lock().expect("台账锁不该中毒").get("demo").is_none());
+        assert!(config.snapshot().is_empty(), "卸载要清掉开关记录");
 
         let _ = std::fs::remove_dir_all(&data);
     }

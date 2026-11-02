@@ -6,6 +6,7 @@
 //! 任何路径都不得在读线程里阻塞等待另一个请求——插件的 `host.call`
 //! （`maa.bridge.ensure` 最长 30s）与宿主的 `tool.call` 必须能同时在路上。
 
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -524,6 +525,28 @@ impl Launcher {
         }
     }
 
+    /// 停用/卸载时收掉进程，并清掉「重启失败」的记忆。
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    fn stop(&self) {
+        let plugin = self
+            .current
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take();
+        if let Some(plugin) = plugin {
+            plugin.shutdown();
+        }
+        self.clear_failure();
+    }
+
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    fn clear_failure(&self) {
+        *self
+            .restart_failed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
+    }
+
     /// 拉起并握手。重启时还会核对工具面（`declared` 非空时）。
     fn launch(&self) -> Result<(Arc<ProcessPlugin>, Handshake), String> {
         let plugin = ProcessPlugin::spawn(
@@ -668,7 +691,7 @@ pub fn install(
     entry: &PluginEntry,
     ctx: PluginCtx,
     ledger: Arc<Mutex<PluginRegistry>>,
-    reg: &mut ToolRegistry,
+    reg: &ToolRegistry,
 ) -> Result<(Vec<String>, Vec<String>), PluginError> {
     let launcher = Launcher::new(id, plugin_dir, entry, ctx, ledger);
     let (plugin, handshake) = launcher.launch().map_err(|detail| PluginError::Process {
@@ -698,6 +721,7 @@ pub fn install(
     match super::register_plugin_tools(reg, id, tools) {
         Ok(names) => {
             launcher.adopt(Arc::clone(&plugin), &declared);
+            remember_launcher(id, Arc::clone(&launcher));
             Ok((names, handshake.capabilities))
         }
         Err(error) => {
@@ -800,6 +824,62 @@ fn running() -> &'static Mutex<Vec<Arc<ProcessPlugin>>> {
     RUNNING.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+// ═══════════════════════════════════════════════════════
+// 按 id 管理句柄（M3 的启停 / 重试 / 卸载）
+// ═══════════════════════════════════════════════════════
+
+/// 已成功安装的 process 插件的句柄表。
+///
+/// 工具只持有自己的那个 `Arc<Launcher>`，宿主侧要在「停用」「卸载」时按 id
+/// 找到并收掉进程，所以这里另存一份索引（不增加引用环：Launcher 不反向持有这里）。
+static LAUNCHERS: OnceLock<Mutex<HashMap<String, Arc<Launcher>>>> = OnceLock::new();
+
+fn launchers() -> &'static Mutex<HashMap<String, Arc<Launcher>>> {
+    LAUNCHERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_launcher(id: &str, launcher: Arc<Launcher>) {
+    launchers()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(id.to_string(), launcher);
+}
+
+/// 停用一个 process 插件：收掉进程、清掉「重启已失败」的记忆，并摘掉句柄。
+///
+/// 返回是否真的找到并收掉了一个句柄。停用不是故障，所以这里顺手清
+/// `restart_failed`：下次启用是一次干净的重来。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn shutdown_plugin(id: &str) -> bool {
+    let launcher = launchers()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(id);
+    let Some(launcher) = launcher else {
+        forget(id);
+        return false;
+    };
+    launcher.stop();
+    forget(id);
+    true
+}
+
+/// 重试一个故障插件：清掉「拉起失败」的记忆，再按 D21 拉起一次。
+///
+/// 只给 `Faulted` 用（规格 §三「进程退出给重试」）；工具仍然注册在表里，
+/// 拉起成功后调用路径照旧工作。
+#[allow(dead_code)] // 提交 5 的 command 层接线后删除
+pub fn retry(id: &str) -> Result<(), String> {
+    let launcher = launchers()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("插件 {id} 没有可重试的进程句柄"))?;
+    launcher.clear_failure();
+    launcher.acquire().map(|_| ())
+}
+
 fn remember(plugin: Arc<ProcessPlugin>) {
     running()
         .lock()
@@ -825,6 +905,10 @@ pub fn shutdown_all() {
     for plugin in plugins {
         plugin.shutdown();
     }
+    launchers()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clear();
 }
 
 #[cfg(test)]
@@ -921,6 +1005,7 @@ mod tests {
             state: crate::plugins::registry::PluginState::Loaded,
             tools: Vec::new(),
             reported_capabilities: Vec::new(),
+            dir: std::path::PathBuf::from("."),
         });
         Arc::new(Mutex::new(registry))
     }
@@ -978,6 +1063,35 @@ mod tests {
         // 只收自己这一个：tests 并行跑，`shutdown_all` 会误杀别人的进程。
         plugin.shutdown();
         assert!(!plugin.is_alive());
+    }
+
+    /// 停用/卸载要能从「插件 id」收掉进程（§六 / S6），而不是只会全杀。
+    #[test]
+    fn shutting_down_by_id_kills_the_installed_process() {
+        let Some(dir) = probe_dir() else {
+            eprintln!("跳过：probe_plugin 还没构建");
+            return;
+        };
+        let entry = PluginEntry {
+            exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
+            transport: Some("stdio".to_string()),
+        };
+        let reg = ToolRegistry::new();
+        let ledger = ledger_with("probe_kill");
+        let (tools, _) = install(
+            "probe_kill",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe_kill"),
+            Arc::clone(&ledger),
+            &reg,
+        )
+        .expect("探针应当能装上");
+        assert_eq!(tools, vec!["probe_kill_echo".to_string()]);
+        assert!(reg.get("probe_kill_echo").is_some());
+
+        assert!(shutdown_plugin("probe_kill"), "第一次应找得到句柄");
+        assert!(!shutdown_plugin("probe_kill"), "收过之后就没有句柄了");
     }
 
     /// 故障一：握手超时（探针收到 `initialize` 不回话）。

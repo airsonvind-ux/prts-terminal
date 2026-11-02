@@ -21,7 +21,7 @@ pub mod maa;
 pub fn install(
     id: &str,
     ctx: PluginCtx,
-    reg: &mut ToolRegistry,
+    reg: &ToolRegistry,
 ) -> Result<Vec<String>, PluginError> {
     match id {
         "maa" => maa::install(ctx, reg),
@@ -43,8 +43,8 @@ mod tests {
 
     #[test]
     fn unknown_id_is_rejected() {
-        let mut reg = ToolRegistry::new();
-        let err = install("no-such-plugin", test_ctx(), &mut reg).unwrap_err();
+        let reg = ToolRegistry::new();
+        let err = install("no-such-plugin", test_ctx(), &reg).unwrap_err();
         assert!(
             matches!(&err, PluginError::UnknownBuiltin(id) if id == "no-such-plugin"),
             "got: {err}"
@@ -54,8 +54,8 @@ mod tests {
 
     #[test]
     fn maa_installs_run_maa_task() {
-        let mut reg = ToolRegistry::new();
-        let names = install("maa", test_ctx(), &mut reg).expect("内置插件 maa 应装配成功");
+        let reg = ToolRegistry::new();
+        let names = install("maa", test_ctx(), &reg).expect("内置插件 maa 应装配成功");
         assert_eq!(names, vec!["run_maa_task".to_string()]);
         assert!(reg.get("run_maa_task").is_some());
         assert_eq!(reg.list_defs().len(), 1);

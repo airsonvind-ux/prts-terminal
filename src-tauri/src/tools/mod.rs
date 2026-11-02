@@ -1257,7 +1257,7 @@ mod tests {
         .expect("所有内置工具 schema 应合法");
         // M2a：安装入口多一个能力句柄。这里给一个不登记任何服务的注册表——
         // 安装路径只把句柄存进插件单例，不该在安装期调用任何能力。
-        crate::plugins::builtin::install("maa", crate::host::test_plugin_ctx("maa"), &mut reg)
+        crate::plugins::builtin::install("maa", crate::host::test_plugin_ctx("maa"), &reg)
             .expect("内置插件 maa 应装配成功");
 
         let _ = std::fs::remove_dir_all(&workspace_root);
@@ -1318,10 +1318,10 @@ mod tests {
     fn load_all_installs_maa_from_the_bundled_manifest() {
         let roots = crate::plugins::PluginRoots::from_config();
         let (services, _query) = crate::plugins::default_services(&roots, None);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
         let config = crate::plugins::PluginsConfig::load(&roots.data);
-        let ledger = crate::plugins::load_all(&mut reg, &roots, &config, &services, &policy);
+        let ledger = crate::plugins::load_all(&reg, &roots, &config, &services, &policy);
 
         let record = ledger
             .lock()

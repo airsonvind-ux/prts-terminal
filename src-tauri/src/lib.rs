@@ -377,7 +377,7 @@ pub fn run() {
         let plugins_config = Arc::new(plugins::PluginsConfig::load(&roots.data));
         let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
         let plugin_registry =
-            plugins::load_all(&mut reg, &roots, &plugins_config, &host_services, &plugin_policy);
+            plugins::load_all(&reg, &roots, &plugins_config, &host_services, &plugin_policy);
         let registry = Arc::new(reg);
         // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
         query_service

@@ -8,6 +8,7 @@
 //! 文件级 allow，那会把将来真正的死代码一起藏掉。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::manifest::PluginManifest;
 
@@ -37,6 +38,9 @@ pub struct PluginRecord {
     /// process 插件在 `initialize` 里自报的能力。**只作诊断**，不参与授权
     /// （N8：插件不能自报能力），供 M3 的扩展页显示。
     pub reported_capabilities: Vec<String>,
+    /// 这个插件实际被读出来的目录。重新启用/重试要按原路径再装一次，
+    /// 而目录名允许与 id 不同（校验规则 2 只告警），所以不能拿 id 拼。
+    pub dir: PathBuf,
 }
 
 /// 插件台账（按 plugin id 索引）。
@@ -70,6 +74,40 @@ impl PluginRegistry {
         if let Some(record) = self.records.get_mut(id) {
             record.state = PluginState::Loaded;
         }
+    }
+
+    /// 重新启用成功后写回工具面（停用时这些名字被清空了）。
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    pub fn mark_enabled(&mut self, id: &str, tools: Vec<String>, reported: Vec<String>) {
+        if let Some(record) = self.records.get_mut(id) {
+            record.state = PluginState::Loaded;
+            record.tools = tools;
+            record.reported_capabilities = reported;
+        }
+    }
+
+    /// 重新启用失败：状态回落 `Failed`，工具面已被安装路径回滚清空。
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    pub fn mark_failed(&mut self, id: &str, reason: String) {
+        if let Some(record) = self.records.get_mut(id) {
+            record.state = PluginState::Failed(reason);
+            record.tools.clear();
+        }
+    }
+
+    /// 停用：状态记 `Disabled`，工具面清空（工具已经从注册表里摘掉了）。
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    pub fn mark_disabled(&mut self, id: &str) {
+        if let Some(record) = self.records.get_mut(id) {
+            record.state = PluginState::Disabled;
+            record.tools.clear();
+        }
+    }
+
+    /// 卸载：把这条记录整个摘掉。
+    #[allow(dead_code)] // 提交 5 的 command 层接线后删除
+    pub fn remove(&mut self, id: &str) -> Option<PluginRecord> {
+        self.records.remove(id)
     }
 
     #[allow(dead_code)] // M3 扩展页读取后删除
