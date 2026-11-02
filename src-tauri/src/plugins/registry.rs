@@ -10,14 +10,19 @@ use std::collections::HashMap;
 
 use super::manifest::PluginManifest;
 
-/// 插件的加载状态。
+/// 插件的加载状态（M2b 起五态）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginState {
+    /// process 插件已拉起、握手还没完成（builtin 插件不会停在态）。
+    Starting,
     /// manifest 校验通过，工具已注册（或本插件不贡献工具）。
     Loaded,
+    /// process 插件运行中故障（崩溃、协议错、超时杀进程），由调用路径写入。
+    #[allow(dead_code)] // 提交 4a 的故障路径写入后删除
+    Faulted(String),
     /// 加载失败，原因即 [`super::PluginError`] 的 Display 文本。
     Failed(String),
-    /// 被用户停用（M3 的启停写这里；M1 不会构造该值）。
+    /// 被用户停用（M3 的启停写这里；M2 不会构造该值）。
     #[allow(dead_code)] // M3 启停接入后删除
     Disabled,
 }
@@ -29,6 +34,9 @@ pub struct PluginRecord {
     pub state: PluginState,
     /// 本插件成功注册的工具名；失败记录恒为空（注册回滚保证）。
     pub tools: Vec<String>,
+    /// process 插件在 `initialize` 里自报的能力。**只作诊断**，不参与授权
+    /// （N8：插件不能自报能力），供 M3 的扩展页显示。
+    pub reported_capabilities: Vec<String>,
 }
 
 /// 插件台账（按 plugin id 索引）。

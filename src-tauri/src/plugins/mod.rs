@@ -1,24 +1,31 @@
-//! 插件系统（M1）：契约层与装配。
+//! 插件系统：契约层、能力装配与 process 通道。
 //!
-//! 设计依据：`50-插件系统/_插件系统-设计.md`（D1–D28）与 `_插件系统-M1规格.md`
-//! （草案 2）。M1 只做三件事：manifest 解析与十条校验（[`manifest`]）、内存插件
-//! 台账（[`registry`]）、内置插件的显式安装表与装配（[`builtin`] / [`load_all`]）。
+//! 设计依据：`50-插件系统/_插件系统-设计.md`（D1–D41）与 `_插件系统-M2规格.md`
+//! （草案 4）。分工：[`manifest`] 解析与十条校验、[`registry`] 内存台账、
+//! [`builtin`] 内置插件的显式安装表、[`transport`] 分帧、[`rpc`] 请求应答配对、
+//! [`process`] process 插件的生命周期，[`load_all`] 负责把两者装到一起。
 //!
-//! 诚实边界（D11）：M1 的 capability 只是声明，不做运行时门禁——builtin 插件
-//! 的代码本来就在宿主进程里，门禁无意义；真正的门禁在 M2 的 process 通道生效。
+//! 诚实边界（D11）：builtin 插件的 capability 只是声明，运行时门禁无意义；
+//! process 插件的能力由 `PluginCtx::call` 逐次校验（D25），工具调用走
+//! `tool.call`，插件反向调用宿主走 `host.call`。
 
 pub mod builtin;
 
 mod manifest;
+mod process;
 mod registry;
+mod rpc;
+mod transport;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::host::{HostServices, MaaBridgeService, QueryService, FsService};
+use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
+
+use self::manifest::PluginKind;
 
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
 
@@ -46,6 +53,8 @@ pub enum PluginError {
     UnknownBuiltin(String),
     /// 插件工具与已注册工具重名（插件一律失败，不覆盖）。
     ToolConflict(String),
+    /// process 插件的启动、握手或调用失败（`id` 是被装配的插件）。
+    Process { id: String, detail: String },
 }
 
 impl std::fmt::Display for PluginError {
@@ -79,6 +88,7 @@ impl std::fmt::Display for PluginError {
             }
             PluginError::UnknownBuiltin(id) => write!(f, "宿主没有内置插件 {id} 的安装实现"),
             PluginError::ToolConflict(name) => write!(f, "插件工具与已注册工具重名：{name}"),
+            PluginError::Process { id, detail } => write!(f, "插件 {id} 运行失败：{detail}"),
         }
     }
 }
@@ -258,6 +268,7 @@ fn load_one(
                 manifest,
                 state: PluginState::Failed(reason),
                 tools: Vec::new(),
+                reported_capabilities: Vec::new(),
             });
         }
         return;
@@ -279,6 +290,7 @@ fn load_one(
                 manifest,
                 state: PluginState::Failed(reason),
                 tools: Vec::new(),
+                reported_capabilities: Vec::new(),
             });
             return;
         }
@@ -288,21 +300,47 @@ fn load_one(
     let api: Arc<dyn crate::host::HostApi> = owned;
     let ctx = crate::host::PluginCtx::new(id.clone(), api, granted);
 
-    match builtin::install(&id, ctx, reg) {
-        Ok(tools) => {
+    // process 插件的握手是同步的，但台账先落一条 Starting：装配期间若有别的
+    // 读侧（M3 的扩展页），看到的是「正在启动」而不是「不存在」。
+    if manifest.kind == PluginKind::Process {
+        registry.insert(PluginRecord {
+            manifest: manifest.clone(),
+            state: PluginState::Starting,
+            tools: Vec::new(),
+            reported_capabilities: Vec::new(),
+        });
+    }
+
+    let outcome = match manifest.kind {
+        PluginKind::Builtin => builtin::install(&id, ctx, reg).map(|tools| (tools, Vec::new())),
+        PluginKind::Process => {
+            // 校验已保证 process 一定有 entry。
+            let entry = manifest
+                .entry
+                .clone()
+                .expect("process 插件必须有 entry（校验规则 5）");
+            process::install(&id, plugin_dir, &entry, ctx, reg)
+        }
+    };
+
+    match outcome {
+        Ok((tools, reported_capabilities)) => {
             registry.insert(PluginRecord {
                 manifest,
                 state: PluginState::Loaded,
                 tools,
+                reported_capabilities,
             });
         }
         Err(error) => {
             eprintln!("[plugins] {id} 安装失败：{error}");
-            // 安装失败时 register_plugin_tools 已把本次注册摘干净。
+            // 安装失败时 register_plugin_tools 与 process::install 都已把本次
+            // 注册摘干净、把进程收掉。
             registry.insert(PluginRecord {
                 manifest,
                 state: PluginState::Failed(error.to_string()),
                 tools: Vec::new(),
+                reported_capabilities: Vec::new(),
             });
         }
     }
