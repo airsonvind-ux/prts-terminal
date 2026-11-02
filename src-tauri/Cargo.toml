@@ -5,6 +5,9 @@ description = "PRTS Terminal：面向明日方舟的专用 Agent 终端助手（
 authors = ["AirsonVind"]
 license = "Apache-2.0"
 edition = "2021"
+# 多个 bin（含测试用的 probe_plugin）会让 `cargo run` 无法决定跑哪个，
+# 而 tauri dev 正是用 `cargo run` 启动；显式指定默认 bin。
+default-run = "prts-terminal"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
