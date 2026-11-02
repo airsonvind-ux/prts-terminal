@@ -355,7 +355,7 @@ pub fn run() {
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
     // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
     // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
-    let (tool_registry, plugin_registry) = {
+    let (tool_registry, plugin_registry, plugins_config) = {
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
         // 插件装配与宿主用同一份策略（M2 的 process 通道要它），先留句柄再交出
@@ -373,14 +373,17 @@ pub fn run() {
         // 插件（M2a）：先造能力服务，再读 content/plugins 下的 manifest 分发到
         // builtin::install。单个插件失败只在其台账里记 Failed，不拖垮宿主启动。
         let roots = plugins::PluginRoots::from_config();
+        // 启停配置只读一次、内存里留一份：启停/安装/卸载都经它串行落盘（M3 §八）。
+        let plugins_config = Arc::new(plugins::PluginsConfig::load(&roots.data));
         let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
-        let plugin_registry = plugins::load_all(&mut reg, &roots, &host_services, &plugin_policy);
+        let plugin_registry =
+            plugins::load_all(&mut reg, &roots, &plugins_config, &host_services, &plugin_policy);
         let registry = Arc::new(reg);
         // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
         query_service
             .bind_tools(Arc::clone(&registry))
             .expect("query.call 的工具注册表只能绑定一次");
-        (registry, plugin_registry)
+        (registry, plugin_registry, plugins_config)
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
@@ -610,6 +613,7 @@ pub fn run() {
         .manage(db)
         .manage(tool_registry)
         .manage(plugin_registry)
+        .manage(plugins_config)
         .manage(client_registry)
         .manage(llm_config)
         .manage(model_registry)

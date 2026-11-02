@@ -1320,7 +1320,8 @@ mod tests {
         let (services, _query) = crate::plugins::default_services(&roots, None);
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = crate::plugins::load_all(&mut reg, &roots, &services, &policy);
+        let config = crate::plugins::PluginsConfig::load(&roots.data);
+        let ledger = crate::plugins::load_all(&mut reg, &roots, &config, &services, &policy);
 
         let record = ledger
             .lock()

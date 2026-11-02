@@ -192,55 +192,109 @@ pub fn default_services(
 pub const ENABLED_FILE_NAME: &str = "plugins.json";
 
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
-struct EnabledFile {
+struct PluginsFile {
     #[serde(default)]
     enabled: HashMap<String, bool>,
 }
 
-/// 读启用状态。缺失与读不懂都按「全启用」处理——插件不该因为一个小文件
-/// 写坏就整体消失；损坏的文件先备份成 `plugins.json.bad` 再重建。
-fn load_enabled(data_dir: &Path) -> HashMap<String, bool> {
-    let path = data_dir.join(ENABLED_FILE_NAME);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
-        Err(error) => {
-            eprintln!(
-                "[plugins] 启用状态读不出来：{}（{error}），按全启用处理",
-                path.display()
-            );
-            return HashMap::new();
-        }
-    };
-
-    match serde_json::from_str::<EnabledFile>(&text) {
-        Ok(file) => file.enabled,
-        Err(error) => {
-            let backup = path.with_extension("json.bad");
-            let note = match std::fs::rename(&path, &backup) {
-                Ok(()) => format!("已备份到 {}", backup.display()),
-                Err(rename_error) => format!("备份失败（{rename_error}），原文件未动"),
-            };
-            eprintln!(
-                "[plugins] 启用状态损坏：{}（{error}），{note}；本次按全启用处理",
-                path.display()
-            );
-            HashMap::new()
-        }
-    }
+/// 启停配置的唯一读写入口（M3 §八）。
+///
+/// 启停、安装、卸载都会改这份配置，各自「读文件 → 改 → 写回」会互相覆盖；
+/// 所以内存里只留一份，所有写路径经它串行化并统一落盘。
+pub struct PluginsConfig {
+    path: PathBuf,
+    file: Mutex<PluginsFile>,
 }
 
-/// 写启用状态（M3 的扩展页调；M2b 只读，但落盘格式在这里定死）。
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn set_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
-    let path = data_dir.join(ENABLED_FILE_NAME);
-    // 先读回原内容：未知 id 要原样保留（规格 §6「保留不清洗」）。
-    let mut state = load_enabled(data_dir);
-    state.insert(id.to_string(), enabled);
-    let file = EnabledFile { enabled: state };
-    let text = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
-    std::fs::write(&path, text).map_err(|error| format!("写 {} 失败：{error}", path.display()))
+impl PluginsConfig {
+    /// 从 `data_dir` 读一次启停状态。缺失与读不懂都按「全启用」处理——插件
+    /// 不该因为一个小文件写坏就整体消失；损坏的文件先备份成
+    /// `plugins.json.bad` 再重建。
+    pub fn load(data_dir: &Path) -> Self {
+        let path = data_dir.join(ENABLED_FILE_NAME);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Self {
+                    path,
+                    file: Mutex::new(PluginsFile::default()),
+                };
+            }
+            Err(error) => {
+                eprintln!(
+                    "[plugins] 启用状态读不出来：{}（{error}），按全启用处理",
+                    path.display()
+                );
+                return Self {
+                    path,
+                    file: Mutex::new(PluginsFile::default()),
+                };
+            }
+        };
+
+        let file = match serde_json::from_str::<PluginsFile>(&text) {
+            Ok(file) => file,
+            Err(error) => {
+                let backup = path.with_extension("json.bad");
+                let note = match std::fs::rename(&path, &backup) {
+                    Ok(()) => format!("已备份到 {}", backup.display()),
+                    Err(rename_error) => format!("备份失败（{rename_error}），原文件未动"),
+                };
+                eprintln!(
+                    "[plugins] 启用状态损坏：{}（{error}），{note}；本次按全启用处理",
+                    path.display()
+                );
+                PluginsFile::default()
+            }
+        };
+
+        Self {
+            path,
+            file: Mutex::new(file),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, PluginsFile> {
+        self.file
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 没写过的插件默认启用（规格 §6：文件缺失 = 全启用）。
+    pub fn is_enabled(&self, id: &str) -> bool {
+        self.lock().enabled.get(id).copied().unwrap_or(true)
+    }
+
+    /// 当前全量状态（诊断 / 测试用）。
+    #[allow(dead_code)] // 提交 3 的启停路径落笔后删除
+    pub fn snapshot(&self) -> HashMap<String, bool> {
+        self.lock().enabled.clone()
+    }
+
+    /// 写一条启停状态并落盘。未知 id 原样保留，不清洗（规格 §6）。
+    #[allow(dead_code)] // 提交 3 的启停路径落笔后删除
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), String> {
+        let mut file = self.lock();
+        file.enabled.insert(id.to_string(), enabled);
+        self.persist(&file)
+    }
+
+    /// 删除一条状态（卸载时用：插件没了，旧开关不该继续留着）。
+    #[allow(dead_code)] // 提交 3 的卸载路径落笔后删除
+    pub fn forget(&self, id: &str) -> Result<(), String> {
+        let mut file = self.lock();
+        file.enabled.remove(id);
+        self.persist(&file)
+    }
+
+    fn persist(&self, file: &PluginsFile) -> Result<(), String> {
+        let text = serde_json::to_string_pretty(file).map_err(|error| error.to_string())?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&self.path, text)
+            .map_err(|error| format!("写 {} 失败：{error}", self.path.display()))
+    }
 }
 
 /// 扫描插件目录，逐个校验并安装，返回内存台账。
@@ -263,12 +317,12 @@ pub fn set_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), Strin
 pub fn load_all(
     reg: &mut ToolRegistry,
     roots: &PluginRoots,
+    config: &PluginsConfig,
     services: &Arc<HostServices>,
     _policy: &Arc<Policy>,
 ) -> Arc<Mutex<PluginRegistry>> {
     let ledger = Arc::new(Mutex::new(PluginRegistry::new()));
-    // 启用状态与「已占用 id 的路径」都跨两个目录共享。
-    let enabled = load_enabled(&roots.data);
+    // 「已占用 id 的路径」跨两个目录共享；启停状态由 config 统一持有。
     let mut scan = Scan::default();
 
     for dir in [&roots.bundled, &roots.user] {
@@ -304,7 +358,7 @@ pub fn load_all(
                 &plugin_dir,
                 dir_name,
                 &mut scan,
-                &enabled,
+                config,
                 &ledger,
             );
         }
@@ -328,7 +382,7 @@ fn load_one(
     plugin_dir: &Path,
     dir_name: &str,
     scan: &mut Scan,
-    enabled: &HashMap<String, bool>,
+    config: &PluginsConfig,
     ledger: &Arc<Mutex<PluginRegistry>>,
 ) {
     // manifest 读不出来就没有可记账的 id：报错并跳过，不建记录。
@@ -370,7 +424,7 @@ fn load_one(
     scan.paths.insert(id.clone(), plugin_dir.to_path_buf());
 
     // 启用状态在加载期的最后一刻生效：校验失败与停用是两回事，前者报错、后者安静跳过。
-    if !enabled.get(&id).copied().unwrap_or(true) {
+    if !config.is_enabled(&id) {
         eprintln!("[plugins] {id} 已在 {ENABLED_FILE_NAME} 里停用，跳过加载");
         insert(ledger, PluginRecord {
             manifest,
@@ -599,7 +653,9 @@ mod tests {
     #[test]
     fn missing_enabled_file_means_everything_is_enabled() {
         let dir = scratch("missing-enabled");
-        assert!(load_enabled(&dir).is_empty());
+        let config = PluginsConfig::load(&dir);
+        assert!(config.snapshot().is_empty());
+        assert!(config.is_enabled("maa"), "没写过就是启用");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -613,8 +669,11 @@ mod tests {
         )
         .expect("写初始文件");
 
-        set_enabled(&dir, "maa", false).expect("写启用状态");
-        let state = load_enabled(&dir);
+        let config = PluginsConfig::load(&dir);
+        config.set_enabled("maa", false).expect("写启用状态");
+
+        // 换一份实例从磁盘读回：证明落盘的是完整状态，不是内存里那份。
+        let state = PluginsConfig::load(&dir).snapshot();
         assert_eq!(state.get("maa"), Some(&false));
         assert_eq!(state.get("ghost"), Some(&true), "未知 id 不得被清洗");
 
@@ -626,7 +685,9 @@ mod tests {
         let dir = scratch("enabled-corrupt");
         std::fs::write(dir.join(ENABLED_FILE_NAME), "{ 不是 JSON").expect("写坏文件");
 
-        assert!(load_enabled(&dir).is_empty(), "损坏时按全启用处理");
+        let config = PluginsConfig::load(&dir);
+        assert!(config.snapshot().is_empty(), "损坏时按全启用处理");
+        assert!(config.is_enabled("maa"));
         assert!(
             dir.join(format!("{ENABLED_FILE_NAME}.bad")).is_file(),
             "损坏的文件要备份成 plugins.json.bad"
@@ -639,10 +700,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// 启停会从设置页、安装、卸载三处改同一份文件：内存副本 + 串行落盘，
+    /// 交替二十次后磁盘状态必须与内存一致（旧实现每次读-改-写会丢更新）。
+    #[test]
+    fn repeated_toggling_keeps_memory_and_disk_in_sync() {
+        let dir = scratch("enabled-toggle");
+        let config = PluginsConfig::load(&dir);
+        for round in 0..20 {
+            let enabled = round % 2 == 0;
+            config.set_enabled("maa", enabled).expect("写启用状态");
+            assert_eq!(config.is_enabled("maa"), enabled);
+        }
+        assert_eq!(PluginsConfig::load(&dir).snapshot().get("maa"), Some(&false));
+        assert!(!config.is_enabled("maa"), "最后一次是 false");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn disabled_plugin_is_recorded_but_not_installed() {
         let data = scratch("disabled-data");
-        set_enabled(&data, "maa", false).expect("停用 maa");
+        let config = PluginsConfig::load(&data);
+        config.set_enabled("maa", false).expect("停用 maa");
         let roots = PluginRoots {
             bundled: crate::config::bundled_plugins_dir(),
             user: data.join("plugins"),
@@ -651,7 +730,7 @@ mod tests {
         let (services, _query) = default_services(&roots, None);
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = load_all(&mut reg, &roots, &services, &policy);
+        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         let record = ledger.get("maa").expect("停用的插件也要留一条记录");
@@ -684,7 +763,8 @@ mod tests {
         let (services, _query) = default_services(&roots, None);
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = load_all(&mut reg, &roots, &services, &policy);
+        let config = PluginsConfig::load(&roots.data);
+        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         let record = ledger.get("maa").expect("随包的 maa 仍应在台账里");
@@ -713,7 +793,8 @@ mod tests {
         let (services, _query) = default_services(&roots, None);
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = load_all(&mut reg, &roots, &services, &policy);
+        let config = PluginsConfig::load(&roots.data);
+        let ledger = load_all(&mut reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
         assert!(ledger.get("broken").is_none(), "读不出 manifest 的目录不记账");
