@@ -6,6 +6,9 @@
 // 模块声明
 mod agent;
 mod app;
+// 能力层（M2a）：宿主原语对插件的统一出口。对外可见是刻意的——它是
+// 插件开发者要对照的契约（D30 三层里的中间层），不是内部实现细节。
+pub mod host;
 mod llm;
 mod platform;
 mod plugins;
@@ -150,7 +153,7 @@ fn precheck_install_surface() {
             config::data_notice_path().display()
         ));
     }
-    if crate::maa::bridge::resolve_exe().is_err() {
+    if !crate::host::maa_bridge_ready() {
         missing.push("MAA 桥可执行文件：prts-maa-bridge.exe".to_string());
     }
 
@@ -367,10 +370,17 @@ pub fn run() {
             Arc::clone(&ledger),
         )
         .expect("内置工具注册失败（schema 校验未通过）");
-        // 插件工具（M1）：读 content/plugins 下的 manifest，按 id 分发到
+        // 插件（M2a）：先造能力服务，再读 content/plugins 下的 manifest 分发到
         // builtin::install。单个插件失败只在其台账里记 Failed，不拖垮宿主启动。
-        let plugin_registry = plugins::load_all(&mut reg, &plugin_policy);
-        (Arc::new(reg), plugin_registry)
+        let roots = plugins::PluginRoots::from_config();
+        let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
+        let plugin_registry = plugins::load_all(&mut reg, &roots, &host_services, &plugin_policy);
+        let registry = Arc::new(reg);
+        // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
+        query_service
+            .bind_tools(Arc::clone(&registry))
+            .expect("query.call 的工具注册表只能绑定一次");
+        (registry, plugin_registry)
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
@@ -740,6 +750,13 @@ pub fn run() {
             commands::upload_attachment,
             commands::upload_attachment_blob,
         ])
-        .run(tauri::generate_context!())
-        .expect("启动 Tauri 应用失败");
+        .build(tauri::generate_context!())
+        .expect("构建 Tauri 应用失败")
+        .run(|_app, event| {
+            // 插件进程与临时目录只在这里收：process 插件是宿主的子进程，
+            // 不显式收尸就会变成孤儿（用户在任务管理器里能看到）。
+            if let tauri::RunEvent::Exit = event {
+                crate::plugins::shutdown();
+            }
+        });
 }

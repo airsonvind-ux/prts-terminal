@@ -13,8 +13,9 @@ src-tauri/
 │  ├─ tools/        工具注册表与领域工具
 │  ├─ storage/      会话、数据库、设置、凭据、附件、缓存
 │  ├─ runtime/      审批、沙箱、路径策略、取消、插话
+│  ├─ host/         能力层：插件可调用的宿主原语（服务实现放 host/internal/）
 │  ├─ plugins/      插件契约层与内置插件（MAA）
-│  └─ platform/     更新、通知、可观测性、机器信息
+│  └─ platform/     更新、通知、可观测性、机器信息、adb
 └─ content/         知识库、技能、提示词、随包文档
 ```
 
@@ -41,8 +42,9 @@ llm        模型适配器：OpenAI 兼容、Responses、Anthropic
 tools      工具注册表与领域工具
 storage    会话、数据库、设置、凭据、附件、记忆
 runtime    本地执行与安全：审批、沙箱、路径、取消
+host       能力层：插件经它调用宿主原语，实现藏在 host/internal/
 plugins    插件契约层与内置插件（MAA 等外部系统）
-platform   更新、通知、可观测性、机器信息
+platform   更新、通知、可观测性、机器信息、adb
 content    知识库、技能、提示词、随包文档
 bridge     MAA 桥：独立进程，只经本机 IPC 通信
 ```
@@ -50,10 +52,11 @@ bridge     MAA 桥：独立进程，只经本机 IPC 通信
 依赖方向：
 
 ```text
-app → agent / tools / llm / storage / runtime / platform / plugins
+app → agent / tools / llm / storage / runtime / platform / plugins / host
 agent → llm / tools / storage
-tools → storage
-plugins → tools / runtime
+tools → storage / platform
+plugins → tools / runtime / host
+host → platform / storage
 ```
 
 `agent` 不依赖 Tauri，`tools` 不依赖 UI；`content/prompts` 被 Rust 编译期嵌入，`knowledge/skills/docs` 不被代码反向依赖。

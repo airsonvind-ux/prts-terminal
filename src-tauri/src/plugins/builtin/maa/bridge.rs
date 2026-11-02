@@ -18,14 +18,16 @@
 //! 桥先 `bind` 再 `accept` 再加载 MaaCore，最后才发 `ready`；
 //! MaaCore 不可用时它**不退出**，而以 `available:false` 报告原因，
 //! 并继续响应 `status` / `shutdown`。
+//!
+//! **进程归宿主，连接归这里**（M2a）：宿主只负责把桥拉起来并把端口交出来
+//! （`crate::host::maa_bridge_ensure`），定位可执行文件、挑端口、spawn、Job
+//! Object 也随之搬去了 `host::internal::maa_bridge`。
+//! 桥只 `accept` 一次，所以**不能**有第二个人先连上去探活——那会把插件唯一的
+//! 连接机会用掉（D41）。
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -49,9 +51,7 @@ const MAX_BUFFERED_BYTES: usize = 32 * 1024 * 1024;
 /// 桥的失败。每条都带可展示的文案——错误要能被用户看见。
 #[derive(Debug, Clone)]
 pub enum BridgeError {
-    /// 找不到桥可执行文件（附找过的路径）。
-    ExeMissing(Vec<PathBuf>),
-    /// 启动桥、连接、握手阶段失败。
+    /// 启动桥、连接、握手阶段失败（含宿主报来的「组件缺失」「MAA 目录不存在」）。
     Start(String),
     /// 传输层出错（含对端断开）。
     Io(String),
@@ -64,15 +64,6 @@ pub enum BridgeError {
 impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BridgeError::ExeMissing(tried) => write!(
-                f,
-                "MAA 运行组件缺失，重新安装 PRTS 可恢复（找不到 prts-maa-bridge.exe）；找过：{}",
-                tried
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join("、")
-            ),
             BridgeError::Start(msg) => write!(f, "{msg}"),
             BridgeError::Io(msg) => write!(f, "与桥通信失败：{msg}"),
             BridgeError::Timeout { cmd, secs } => write!(f, "{cmd} 在 {secs}s 内没有应答"),
@@ -89,61 +80,6 @@ fn cmd_name(cmd: &Value) -> String {
         .and_then(Value::as_str)
         .unwrap_or("?")
         .to_string()
-}
-
-/// 定位桥可执行文件：**按构建类型给唯一路径**（开发构建读仓库构建产物，
-/// 发布构建读程序目录），不做跨环境探测。
-///
-/// 桥是 PRTS 的组件，不是用户配置项——这里**没有**「让用户填路径」的分支。
-pub fn resolve_exe() -> Result<PathBuf, BridgeError> {
-    let name = if cfg!(windows) {
-        "prts-maa-bridge.exe"
-    } else {
-        "prts-maa-bridge"
-    };
-    let mut tried: Vec<PathBuf> = Vec::new();
-
-    let candidates: Vec<PathBuf> = if crate::config::is_dev() {
-        // 开发构建：仓库内 bridge crate 的构建产物（debug 优先，再 release）。
-        ["debug", "release"]
-            .iter()
-            .map(|profile| {
-                crate::config::resource_root()
-                    .join("..")
-                    .join("bridge")
-                    .join("target")
-                    .join(profile)
-                    .join(name)
-            })
-            .collect()
-    } else {
-        // 发布构建：桥随 PRTS 分发，落程序目录（sidecar 形态）或其 resources 下。
-        let root = crate::config::resource_root();
-        vec![root.join(name), root.join("resources").join(name)]
-    };
-
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-        tried.push(candidate);
-    }
-
-    Err(BridgeError::ExeMissing(tried))
-}
-
-/// 取一个空闲端口：`bind(0)` 拿系统分配的端口再放开。
-///
-/// 桥随后绑同一端口——存在极小的竞争窗口，可接受（绑不上桥会以退出码 3 收场）。
-pub fn free_port() -> Result<u16, BridgeError> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|e| BridgeError::Start(format!("取空闲端口失败：{e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| BridgeError::Start(format!("读本地地址失败：{e}")))?
-        .port();
-    drop(listener);
-    Ok(port)
 }
 
 /// 写一帧。`&TcpStream` 即可写（std 对引用实现了 `Write`），无需独占。
@@ -178,56 +114,22 @@ pub fn read_frame(stream: &TcpStream) -> Result<Value, BridgeError> {
     serde_json::from_slice(&buf).map_err(|e| BridgeError::Io(format!("帧不是合法 JSON：{e}")))
 }
 
-/// 把桥进程放进 kill-on-close Job：父进程崩溃、被强杀或卸载器直接结束时，
-/// Windows 在最后一个 Job 句柄关闭时一并结束桥及其子进程。
-#[cfg(windows)]
-fn attach_kill_on_close_job(child: &Child) -> Option<OwnedHandle> {
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    };
-
-    unsafe {
-        let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
-        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
-        if SetInformationJobObject(
-            job,
-            JobObjectExtendedLimitInformation,
-            &info as *const _ as *const core::ffi::c_void,
-            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-        )
-        .is_err()
-        {
-            let _ = CloseHandle(job);
-            return None;
-        }
-
-        if AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())).is_err() {
-            let _ = CloseHandle(job);
-            return None;
-        }
-
-        Some(OwnedHandle::from_raw_handle(job.0))
+/// 确认宿主托管的桥进程仍存活。
+///
+/// 端口可能在宿主挑好之后被抢走：真桥 bind 失败会退出，而我们仍可能连到抢占者
+/// 的监听。进程生死只有宿主知道（宿主不探活），所以这个判断只能在这里做。
+fn ensure_host_running(stage: &str) -> Result<(), BridgeError> {
+    let status = super::manager::ctx()
+        .map_err(BridgeError::Start)?
+        .call("maa.bridge", serde_json::json!({ "op": "status" }))
+        .map_err(|error| BridgeError::Start(error.to_string()))?;
+    if status["state"] == serde_json::json!("running") {
+        return Ok(());
     }
-}
-
-/// 确认桥子进程仍存活；端口抢占时真桥会因 bind 失败退出，
-/// 父进程不能把抢占者的 ready 当成自己的桥。
-fn ensure_child_running(child: &mut Child, stage: &str) -> Result<(), BridgeError> {
-    match child.try_wait() {
-        Ok(Some(status)) => Err(BridgeError::Start(format!(
-            "桥进程在{stage}已退出（{status}），拒绝该连接"
-        ))),
-        Ok(None) => Ok(()),
-        Err(e) => Err(BridgeError::Start(format!(
-            "检查桥进程状态失败（{stage}）：{e}"
-        ))),
-    }
+    Err(BridgeError::Start(match status["error"].as_str() {
+        Some(error) => format!("桥进程在{stage}已退出（{error}），拒绝该连接"),
+        None => format!("桥进程在{stage}已退出，拒绝该连接"),
+    }))
 }
 
 /// 待回答表：命令 id → （命令名，应答回执）。
@@ -276,16 +178,11 @@ impl EventBuffer {
     }
 }
 
-/// 桥进程 + 连接 + 常驻读线程。
+/// 一条到桥的连接 + 常驻读线程。
 ///
-/// 桥**只接受一条连接**，断了只能重起；`Drop` 会杀掉子进程，不留孤儿。
+/// 桥**只接受一条连接**，断了只能重起；进程本身归宿主托管
+/// （`crate::host::maa_bridge_ensure`），`Drop` 会让宿主把它收掉，不留孤儿。
 pub struct Bridge {
-    child: Child,
-    /// Windows Job：父进程崩溃或被强杀时，随句柄关闭一起结束桥。
-    /// 字段本身只用于持有句柄，不需要读取。
-    #[cfg(windows)]
-    #[allow(dead_code)]
-    job: Option<OwnedHandle>,
     stream: TcpStream,
     pending: Pending,
     events: Arc<Mutex<EventBuffer>>,
@@ -303,64 +200,33 @@ pub struct Bridge {
 }
 
 impl Bridge {
-    /// 起桥并完成握手：spawn → 连 TCP → 读 `ready` → 起读线程。
+    /// 连上宿主已经起好的桥，并完成握手：connect → 读 `ready` → 起读线程。
+    ///
+    /// **进程不在这里起**（宿主托管），因此也不能探活——桥只 accept 一次，谁先
+    /// 连上谁就把它占走（D41）。就绪与否只能靠这次连接自己判断。
     ///
     /// `available:false`（未装 MAA、版本不兼容、依赖缺失）**不当作错误**——
     /// 那是有意义的运行态，由调用方决定怎么呈现。
-    pub fn spawn(
-        exe: &Path,
-        maa_dir: &Path,
-        user_dir: &Path,
-        port: u16,
-    ) -> Result<Self, BridgeError> {
-        // cwd 必须先存在：Windows 下给子进程一个不存在的 current_dir，spawn 直接报
-        // ERROR_DIRECTORY(267)，而错误文案指向「启动桥失败」，极易被误判成桥本身有问题
-        // （跟模拟器、跟 MaaCore 都无关）。这个目录平时只有写任务结果时才顺带建出来，
-        // 所以新装 / 清过数据根的用户会在「测试连接」这一步就被挡住（2026-10-11 实测）。
-        std::fs::create_dir_all(user_dir).map_err(|e| {
-            BridgeError::Start(format!("建桥工作目录失败（{}）：{e}", user_dir.display()))
-        })?;
-        let mut command = Command::new(exe);
-        // 工作目录定在 user_dir：MaaCore 有一部分调试产出是**按相对路径**写的
-        // （如战场识别存图 `debug/map/`，见 BattleHelper::save_map），不跟着它自己的
-        // UserDir 走。不给 cwd 就继承调用方（开发时 = src-tauri/，打包后 = 启动目录），
-        // 图会掉进项目目录或安装目录里。
-        command
-            .current_dir(user_dir)
-            .arg("--maa-dir")
-            .arg(maa_dir)
-            .arg("--port")
-            .arg(port.to_string())
-            .arg("--user-dir")
-            .arg(user_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        // 不给控制台窗口：桥是后台进程，弹窗属于事故。
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
+    pub fn connect(port: u16) -> Result<Self, BridgeError> {
+        // 桥只 accept 一次：这次连接失败，宿主托管的进程会在自己的等待上限内
+        // 收场（退出码 4），下次 `ensure` 会把它收尸重起——插件不需要、也不能
+        // 替宿主杀进程（M2a：进程只经 `maa.bridge` 能力管）。
+        Self::connect_inner(port)
+    }
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| BridgeError::Start(format!("启动桥失败（{}）：{e}", exe.display())))?;
-
+    fn connect_inner(port: u16) -> Result<Self, BridgeError> {
         let addr: SocketAddr = format!("127.0.0.1:{port}")
             .parse()
             .map_err(|e| BridgeError::Start(format!("端口解析失败：{e}")))?;
 
-        // 桥先 bind 再 accept：连接要重试到监听就绪。
+        // 桥先 bind 再 accept：连接要重试到监听就绪。宿主 spawn 后立即返回，
+        // 所以最初几百毫秒里连不上是正常的。
         let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
         let stream = loop {
             match TcpStream::connect_timeout(&addr, CONNECT_RETRY) {
-                Ok(s) => break s,
+                Ok(stream) => break stream,
                 Err(e) => {
                     if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
                         return Err(BridgeError::Start(format!("连接桥失败（{addr}）：{e}")));
                     }
                     std::thread::sleep(CONNECT_RETRY);
@@ -369,34 +235,26 @@ impl Bridge {
         };
         let _ = stream.set_nodelay(true);
 
-        // 端口可能在 free_port 释放后被别人抢走：真桥 bind 失败会退出，
-        // 而父进程仍可能连到抢占者的监听。先确认真桥还活着，再读 ready。
-        ensure_child_running(&mut child, "连接后")?;
+        // 端口可能在宿主挑好之后被抢走：真桥 bind 失败会退出，而这里仍可能连到
+        // 抢占者的监听。先确认真桥还活着，再读 ready。
+        ensure_host_running("连接后")?;
 
         // 握手：这次读要限时（避免桥卡在加载 MaaCore 时无限等）。
         let remaining = deadline
             .saturating_duration_since(Instant::now())
             .max(Duration::from_millis(1));
         let _ = stream.set_read_timeout(Some(remaining));
-        let ready =
-            read_frame(&stream).map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
+        let ready = read_frame(&stream)
+            .map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
         if ready.get("event").and_then(Value::as_str) != Some("ready") {
-            let _ = child.kill();
-            let _ = child.wait();
             return Err(BridgeError::Start(format!("桥没有先发 ready：{ready}")));
         }
         // 抢占者可能伪造 ready；真桥若已因 bind 失败退出，这个 ready 不可信。
-        ensure_child_running(&mut child, "握手后")?;
+        ensure_host_running("握手后")?;
         // 读线程要长期阻塞等待，清掉握手用的读超时（socket 选项在克隆间共享）。
         let _ = stream.set_read_timeout(None);
 
-        #[cfg(windows)]
-        let job = attach_kill_on_close_job(&child);
-
         let bridge = Bridge {
-            child,
-            #[cfg(windows)]
-            job,
             stream,
             pending: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(EventBuffer::default())),
@@ -501,25 +359,15 @@ impl Bridge {
     /// 测试用桥：不启动真实进程、不连接 MAA；命令按需立即失败。
     #[cfg(test)]
     pub(crate) fn test_stub(fail_commands: bool) -> Self {
+        use std::net::TcpListener;
+
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("测试监听端口");
         let addr = listener.local_addr().expect("测试监听地址");
         let stream = TcpStream::connect(addr).expect("测试连接");
         let (server, _) = listener.accept().expect("测试接受连接");
         drop(server);
 
-        let child = if cfg!(windows) {
-            Command::new("cmd")
-                .args(["/C", "exit", "0"])
-                .spawn()
-                .expect("测试子进程")
-        } else {
-            Command::new("true").spawn().expect("测试子进程")
-        };
-
         Self {
-            child,
-            #[cfg(windows)]
-            job: None,
             stream,
             pending: Arc::new(Mutex::new(HashMap::new())),
             events: Arc::new(Mutex::new(EventBuffer::default())),
@@ -607,24 +455,20 @@ impl Bridge {
         }
     }
 
-    /// 请求桥退出。不理会应答（也可能已经断了），最后兜底强杀。
-    pub fn shutdown(mut self) {
+    /// 请求桥退出：发一帧 `shutdown`（让它把结果文件写完），然后断开。
+    ///
+    /// 进程不归这里管，所以这里没有 `kill`——收尸逻辑在 `host::internal::maa_bridge`：
+    /// 桥收到 `shutdown` 会自己退，宿主在下次 `ensure`/`shutdown` 时收尾；
+    /// 应用退出则由 Job Object 兜底，不会留孤儿。
+    pub fn shutdown(self) {
         let _ = write_frame(&self.stream, &json!({ "cmd": "shutdown" }));
-        for _ in 0..20 {
-            if matches!(self.child.try_wait(), Ok(Some(_))) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        // 连接没了就是「这次不用了」：桥会在自己的等待上限内收场，
+        // 宿主负责收尸。这里不能直接杀进程（进程只经 `maa.bridge` 能力管）。
     }
 }
 
@@ -734,6 +578,8 @@ fn parse_reply(name: &str, frame: &Value) -> Result<Value, BridgeError> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
     use super::*;
 
     /// 一对互连的 socket（客户端 / 服务端）。
@@ -784,14 +630,6 @@ mod tests {
         let (mut client, server) = socket_pair();
         client.write_all(&u32::MAX.to_be_bytes()).unwrap();
         assert!(read_frame(&server).is_err(), "畸形长度必须被挡下");
-    }
-
-    #[test]
-    fn free_port_is_bindable() {
-        let port = free_port().unwrap();
-        assert!(port > 0);
-        let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
-        drop(listener);
     }
 
     #[test]

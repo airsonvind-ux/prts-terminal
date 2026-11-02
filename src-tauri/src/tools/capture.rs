@@ -20,9 +20,8 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::config;
-use crate::maa::connection;
-use crate::maa::settings::MaaSettings;
 use crate::machine::MachineInfo;
+use crate::platform::adb;
 
 use super::{DisplayLink, Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
@@ -273,7 +272,7 @@ fn prune(dir: &Path, keep: usize) {
 fn find_emulator() -> Result<(PathBuf, String), String> {
     let dir = config::data_dir();
     let info = MachineInfo::load(&dir).unwrap_or_else(|| MachineInfo::detect(None));
-    let resolved = connection::resolve_all(&info, &load_settings().overrides());
+    let resolved = adb::resolve_targets(&info, &load_overrides());
     if resolved.is_empty() {
         return Err("没有找到可用的 adb：模拟器未安装，或 adb 路径未配置。".to_string());
     }
@@ -284,7 +283,7 @@ fn find_emulator() -> Result<(PathBuf, String), String> {
     let deadline = Instant::now() + DISCOVERY_BUDGET;
     loop {
         for target in &resolved {
-            if let Some(serial) = pick_device(connection::adb_devices(&target.adb_path))? {
+            if let Some(serial) = pick_device(adb::devices(&target.adb_path))? {
                 return Ok((target.adb_path.clone(), serial));
             }
         }
@@ -305,7 +304,7 @@ fn find_emulator() -> Result<(PathBuf, String), String> {
         }
     }
     for target in &resolved {
-        if let Some(serial) = pick_device(connection::adb_devices(&target.adb_path))? {
+        if let Some(serial) = pick_device(adb::devices(&target.adb_path))? {
             return Ok((target.adb_path.clone(), serial));
         }
     }
@@ -323,20 +322,18 @@ fn pick_device(listed: Result<Vec<String>, String>) -> Result<Option<String>, St
     }
 }
 
-/// 读 `<data>/settings.json` 的 `maa` 段（与设置页落盘同一份）。
-fn load_settings() -> MaaSettings {
-    let path = config::data_dir().join("settings.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value.get("maa").cloned())
-        .and_then(|maa| serde_json::from_value::<MaaSettings>(maa).ok())
-        .unwrap_or_default()
+/// 读 `<data>/settings.json` 的 `maa` 段里的 adb 覆盖项（与设置页同一份）。
+///
+/// 只取 adb 相关字段：截图通道不需要认识 MAA，只要知道用户有没有把 adb 指到
+/// 别处（M2a 的解耦目标 —— 本文件不再 `use crate::maa::…`）。
+fn load_overrides() -> adb::Overrides {
+    let store = crate::storage::settings::SettingsStore::load(&config::data_dir());
+    store.settings.maa.overrides()
 }
 
 /// 有上限的 `adb connect`：超时就把子进程杀掉。
 ///
-/// 为什么要自己造一个：`connection::adb_connect` 没有超时，而它服务于 MAA 连接
+/// 为什么要自己造一个：`platform::adb::connect` 没有超时，而它服务于 MAA 连接
 /// （那里慢一点可以接受，也不该为一个截图去改它）。截图要立刻回话，所以给它预算。
 fn connect_with_timeout(adb: &Path, address: &str, timeout: Duration) -> Result<(), String> {
     let mut command = std::process::Command::new(adb);
