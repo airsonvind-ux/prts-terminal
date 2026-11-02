@@ -23,7 +23,6 @@ pub enum PluginState {
 }
 
 /// 一个插件的台账记录。
-#[allow(dead_code)] // M3 的扩展页读取接口时删除（字段由 get/list 暴露）
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginRecord {
     pub manifest: PluginManifest,
