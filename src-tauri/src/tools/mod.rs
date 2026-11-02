@@ -945,4 +945,108 @@ mod tests {
             "guard 应放行合法参数，got: {err}"
         );
     }
+
+    // ── 工具定义快照（插件系统 M1 的硬门禁）──
+    // MAA 迁为内置插件的前后，模型可见的工具面必须逐字节一致。
+    // 快照覆盖 name / description / parameters 三元组与排序，
+    // 任何一处变化都视为迁移改变了行为。
+
+    fn tool_defs_fixture_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("tool_defs.json")
+    }
+
+    /// 构建含全部内置工具的注册表（最小临时依赖，不碰真实工作区）。
+    fn build_full_registry() -> ToolRegistry {
+        use crate::knowledge::index::KnowledgeIndex;
+
+        let mut reg = ToolRegistry::new();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let workspace_root =
+            std::env::temp_dir().join(format!("prts-snap-ws-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        let kb_root =
+            std::env::temp_dir().join(format!("prts-snap-kb-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&kb_root).unwrap();
+        std::fs::write(
+            kb_root.join("test.md"),
+            "---\ntitle: 测试条目\nbrief: b\n---\n内容",
+        )
+        .unwrap();
+        let knowledge = Arc::new(KnowledgeIndex::load(&kb_root).unwrap());
+        let mem_root =
+            std::env::temp_dir().join(format!("prts-snap-mem-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&mem_root).unwrap();
+        let memory = Arc::new(Mutex::new(
+            crate::memory::MemoryStore::load(&mem_root).unwrap(),
+        ));
+        let ledger = Arc::new(Mutex::new(crate::notices::Notices::load(&mem_root)));
+
+        // M1 装配路径：内置工具走 register_builtin，
+        // 插件工具由 plugins::load_all 追加（迁移后本测试不应变化）。
+        register_builtin(
+            &mut reg,
+            Arc::new(Policy::new(workspace_root.clone())),
+            knowledge,
+            memory,
+            ledger,
+        )
+        .expect("所有内置工具 schema 应合法");
+
+        let _ = std::fs::remove_dir_all(&workspace_root);
+        let _ = std::fs::remove_dir_all(&kb_root);
+        let _ = std::fs::remove_dir_all(&mem_root);
+        reg
+    }
+
+    fn tool_defs_snapshot(reg: &ToolRegistry) -> serde_json::Value {
+        let mut rows: Vec<serde_json::Value> = reg
+            .list_defs()
+            .into_iter()
+            .map(|d| {
+                serde_json::json!({
+                    "name": d.function.name,
+                    "description": d.function.description,
+                    "parameters": d.function.parameters,
+                })
+            })
+            .collect();
+        rows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+        serde_json::Value::Array(rows)
+    }
+
+    /// 重生成夹具：`cargo test dump_tool_defs -- --ignored --nocapture`
+    /// 只在有意改变工具面时执行，且需在提交说明里写清理由。
+    #[test]
+    #[ignore = "夹具生成器，不参与常规测试"]
+    fn dump_tool_defs() {
+        let reg = build_full_registry();
+        let snapshot = tool_defs_snapshot(&reg);
+        let path = tool_defs_fixture_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&snapshot).unwrap()).unwrap();
+        println!(
+            "wrote {} tools -> {}",
+            snapshot.as_array().map(|a| a.len()).unwrap_or(0),
+            path.display()
+        );
+    }
+
+    #[test]
+    fn tool_defs_unchanged() {
+        let reg = build_full_registry();
+        let actual = tool_defs_snapshot(&reg);
+        let text = std::fs::read_to_string(tool_defs_fixture_path())
+            .expect("缺少夹具 src-tauri/tests/fixtures/tool_defs.json");
+        let expected: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            actual, expected,
+            "工具定义与快照不一致：迁移改变了模型可见的工具面"
+        );
+    }
 }

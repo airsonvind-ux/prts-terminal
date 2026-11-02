@@ -1,0 +1,798 @@
+[
+  {
+    "description": "从 Skill 目录激活指定 Skill。激活后其正文注入上下文。目录见系统提示词的 Skill 目录节；任务简单（纯查询/闲聊）时无需激活。工作落入某技能的范围时，先激活、再动手；技能正文是其领域内的专门指引，与一般行为条款冲突时以它为准，底线不因技能改变。",
+    "name": "activate_skill",
+    "parameters": {
+      "properties": {
+        "name": {
+          "description": "Skill 名",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "截取《明日方舟》当前的游戏画面，返回一张图片。\n\n模拟器与 PC 端均适用；PC 端要求游戏窗口未最小化。PC 端通常一秒内返回；模拟器端要经 adb 取设备帧，慢一些，设备还没挂到 adb 上时首次调用会再多花几秒。\n\n参数：\n  target：可选，\"emulator\" | \"pc\"；省略时自动选择，两端都在时需指定。",
+    "name": "capture_game_screen",
+    "parameters": {
+      "properties": {
+        "target": {
+          "description": "省略时自动选择。",
+          "enum": [
+            "emulator",
+            "pc"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "对工作区内既有文本文件做一处精确替换。old_string 必须与当前内容逐字符匹配且全文件唯一，未命中或匹配多处均报错（不确定内容先 read_file 再编辑）。一次只替换一处，多处修改多次调用。",
+    "name": "edit",
+    "parameters": {
+      "properties": {
+        "new_string": {
+          "description": "替换后文本，按原样写入。空串 = 删除 old_string 匹配内容",
+          "type": "string"
+        },
+        "old_string": {
+          "description": "待替换文本，须与当前内容精确匹配且全文件唯一；可跨行（换行写作 \n）",
+          "minLength": 1,
+          "type": "string"
+        },
+        "path": {
+          "description": "目标文件路径（绝对或相对工作目录）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "old_string",
+        "new_string"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "在目录树或单文件中检索文本，返回 相对路径:行号: 匹配行。pattern 默认按正则（literal=true 按字面）；默认排除隐藏项、node_modules 与 .gitignore 规则，二进制/非 UTF-8 自动跳过。默认上限 100 条（最大 500）。",
+    "name": "grep",
+    "parameters": {
+      "properties": {
+        "ignore_case": {
+          "description": "false（默认）= 区分大小写；true = 忽略大小写",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "命中条数上限（每文件每命中行计 1），默认 100，最大 500；达上限提前停止并在末尾注明",
+          "type": "number"
+        },
+        "literal": {
+          "description": "false（默认）= pattern 按正则；true = 纯字面文本",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "搜索起点：目录（递归）或单个文件。相对路径基于工作目录解析；省略 = 工作区根。只搜文本文件",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "搜索模式。默认按正则（Rust regex 语法：无回溯、无环视 lookaround、无条件分支）；纯字面搜索请设 literal=true",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "列出目录的直接子项（一层，不递归）。目录名带 / 后缀。path 省略时列出工作目录。",
+    "name": "list_dir",
+    "parameters": {
+      "properties": {
+        "path": {
+          "description": "目录路径（绝对路径，或相对工作目录的相对路径）；省略时列出工作目录",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "知识库导航。省略 dir 返回知识库整体框架（四大领域与各领域子目录简介），用于确定领域划分与定位领域目录；指定 dir 返回该目录下一级内容：子目录列表与该目录直属的条目清单（标题、简介、节数、大纲），大纲节名可直接用于 read_knowledge 按节阅读",
+    "name": "list_knowledge",
+    "parameters": {
+      "properties": {
+        "dir": {
+          "description": "相对知识库根目录的目录路径，例如 基础概念/移动与阻挡；省略=知识库整体框架",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "经历记忆（只读）：过去工作的记录——更早的部分用这里；近况与长期梗概随对话呈现，对话内的更新会随提醒带出。默认不查；三种时刻必查：涉及过去（\"上次\"\"之前\"）；说\"不记得\"之前——先查再开口；接手旧工作前——先看上次到哪。经历由后台写入、你改不了；发现记错，把更正写进成长页或提醒博士。",
+    "name": "memory_experience",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "search=检索经历；read=按 id 或 title 读取细节",
+          "enum": [
+            "search",
+            "read"
+          ],
+          "type": "string"
+        },
+        "from": {
+          "description": "search：起始时间（unix 毫秒，闭区间）",
+          "type": "integer"
+        },
+        "id": {
+          "description": "read：经历条目 id（来自 search 结果）",
+          "type": "string"
+        },
+        "limit": {
+          "description": "search：返回条数上限（默认 20，最大 50）",
+          "type": "integer"
+        },
+        "query": {
+          "description": "search：关键词（大小写不敏感子串）",
+          "type": "string"
+        },
+        "title": {
+          "description": "read：条目标题（id 缺省时的唯一匹配回退）",
+          "type": "string"
+        },
+        "to": {
+          "description": "search：结束时间（unix 毫秒，闭区间）",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "成长记忆（读写）：维护成长页。成长页＝「从工作里提炼出的、跨案例、面向未来的行为与判断准则」：写以后遇到什么、怎么想、怎么做；工作内容与知识不写进来——它们归经历记忆、工作区与知识库。「关于博士」是常驻页：写你对博士的认识——称呼、习惯、偏好、协作方式；认识变了就更新它。宁少勿滥——被纠正、\"记住\"、关键结论当刻写；零散认识收尾合并写；判据：会改变你未来的判断或做法吗？不会就是复述，不写；案例只是材料，细节压成一句、余下留指向。读—并—写：写前先在已有主题里找相关页，找得到就读取它、在它上面迭代（补充、深化、修正）；新的／被纠正的覆盖旧的、留博士用词、只动相关内容不整篇重写；重要改判留轨迹（\"原以为 X，现为 Y，因为 Z\"）；找不到能迭代的才新建；碎页并、杂页拆；存疑标\"待验证\"。篇幅从紧（约 150～250 字，超线会被拒绝）。格式：标题＋一句话简述＋正文；时间与来源由系统记录，不用你写；正文不必带日期（时间本身是判断的一部分时除外）。删除仅限：被取代／终结无参照／复核不成立；想不起用途不算——博士的要求除外。专题页的正文不随对话注入，平时能看到的是简介；简介是正文的概括，改了正文之后，简介若概括不住新内容就一并更新。",
+    "name": "memory_growth",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "read=读页；create=建页；update=改页；delete=删页",
+          "enum": [
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "type": "string"
+        },
+        "body": {
+          "description": "正文",
+          "type": "string"
+        },
+        "brief": {
+          "description": "一句话简述（进主题目录）",
+          "type": "string"
+        },
+        "name": {
+          "description": "页名。「关于博士」是常驻页（对博士的认识）；其余为专题页名",
+          "type": "string"
+        },
+        "tags": {
+          "description": "标签（可选）",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "name"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称或 ID 查询敌人属性，支持批量（ids 主键精确 / names 精确优先、未中模糊取最佳，二选一）。默认返回：名称、级别、描述、地位、种类、能力列表、攻击方式、伤害类型、行动方式、最大生命值、攻击力、防御力、法术抗性、移动速度、攻击间隔、重量、异常抗性、备注。默认级别 0，输出标注级别变体总数（如“共 2 级变体”），变体用 extra 切换。仅 enemies 表",
+    "name": "query_enemy",
+    "parameters": {
+      "properties": {
+        "extra": {
+          "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 级别）：级别=N（整数级别，默认 0）。附加列：常用列（天赋文本、技能文本、基础嘲讽等级、目标价值、损伤抗性、元素抗性）或任意完整表列；完整列名见知识库《敌人表结构》条目",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ids": {
+          "description": "敌人 ID 列表，如 [“enemy_1007_slime”]。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "敌人名称列表，如 [“源石虫”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "按 levelId 精确查询关卡信息，单次只查一个关卡。fields 必填选择：地图、路线、波次为常用输出。地图输出会额外给出不同地块的信息，无需额外查询，后两者数据量大，如无必要勿查询。levelId 需从 query_stage 获取",
+    "name": "query_level",
+    "parameters": {
+      "properties": {
+        "fields": {
+          "description": "必填，选择输出部分，可多选如 [\"地图\", \"波次\"]。常用输出：地图 = 地块坐标分组+ 地块属性表；路线 = 敌人移动路径与额外路线；波次 = 刷怪调度与分支。预置单位、关卡符文 = 原始 JSON 文本，仅作保底对照，通常不需要（关卡情报与描述已提供自然语言信息）。",
+          "items": {
+            "enum": [
+              "地图",
+              "预置单位",
+              "关卡符文",
+              "路线",
+              "波次"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "levelId": {
+          "description": "关卡 levelId，如 level_main_01-07。单次只查一个关卡",
+          "type": "string"
+        }
+      },
+      "required": [
+        "levelId",
+        "fields"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称或 ID 查询干员信息，支持批量（ids 主键精确 / names 精确优先、未中模糊取最佳，二选一）。默认返回：名称、备注、描述、职业、职业分支、默认练度属性、天赋（最优备选）、模组；默认练度 = 最高精英化满级、满信赖、0潜、首个模组满级，属性已计入信赖与模组加成并标注来源。技能默认不返回，用 extra 点单。仅 operators 表",
+    "name": "query_operator",
+    "parameters": {
+      "properties": {
+        "extra": {
+          "description": "增量声明，可选，每项独立生效。含 = 为状态指定，不含 = 为附加列。状态指定（键限 等级/潜能/信赖/模组）：等级=精二40级、精一满级、精二（省略即满级）；潜能=满潜、五潜、0潜；信赖=50（50%）、满、零；模组=无模组、X模、Y模、D模、特限模组。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准。附加列：技能点单（如 一技能、7级2技能、专2二技能、专三二技能；或技能名：火山、3级火山、专2黄昏；默认专三，可一次多个，每项独立输出），或常用列（稀有度、部署位置、代号、标签、关联token）。完整列名见知识库《干员表结构》条目",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ids": {
+          "description": "干员 ID 列表，如 [“char_002_amiya”]（阿米娅）。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "干员名称列表，如 [“阿米娅”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称或 ID 查询集成战略（肉鸽）条目，需指定主题。ids 主键精确 / names 精确优先、未中 LIKE 模糊取最佳（二选一）。精确命中多条同名记录全部返回；命中基础版本自动附带 -α/-β/-γ 变体。返回全部有值字段",
+    "name": "query_rogue",
+    "parameters": {
+      "properties": {
+        "ids": {
+          "description": "条目 ID 列表，如 [“rogue_1_relic_1”]。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "条目名称列表，如 [“热水壶”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "theme": {
+          "description": "肉鸽主题：简称（傀影/水月/萨米/萨卡兹/界园/黑流树海/黑流）、序号 1~6、rogue1~6 或完整主题名",
+          "type": "string"
+        }
+      },
+      "required": [
+        "theme"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称、编号或 ID 查询关卡信息，支持批量（ids 主键精确；names 三步级联：关卡名精确→编号精确→关卡名 LIKE 取最佳）。同名或编号可能返回多条（普通版/磨难险地版等难度），全部保留。默认返回 7 列：关卡ID、关卡名、关卡编号、关卡描述、关卡类型、情报、levelId；levelId 可续查 query_level。extra 仅附加列，无状态键。仅 stages 表",
+    "name": "query_stage",
+    "parameters": {
+      "properties": {
+        "extra": {
+          "description": "可选，仅附加列（关卡无状态键）。常用列：敌人列表、部署上限、初始费用、费用上限、目标点耐久、待处理目标数量；其余表列命中即返回全部信息。默认 7 列重复指定忽略。完整列名见知识库《关卡表结构》条目",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ids": {
+          "description": "关卡 ID 列表，如 [“main_01-07”]。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "关卡名称或编号列表，如 [“暴君”, “1-7”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "按表查询条目：table 指定表名，keys 为键列表，逐个返回结果。range=攻击范围表，按 rangeID 查范围形状（字符画：Ｏ=干员所在格、▣=范围格、・=空位标记）与别名；tile=地块表，按中文名查地块名称、描述、功能标记与机制备注（如有），重名地块批量返回；term=战斗术语表，按术语名查定义；abnormal=异常效果表，按异常中文名查效果、所属检查分类与可抵抗标记；slang=黑话表，按社区称呼/别名查其所指实体与类型（如 42→史尔特尔）。信息缺失标注待补充，未收录键明确提示。raw=true 时仅 range 表返回原始格点坐标",
+    "name": "query_table",
+    "parameters": {
+      "properties": {
+        "keys": {
+          "description": "要查询的键列表：range 表为 rangeID（如 \"2-3\"），tile 表为中文名（如 \"地穴\"），term 表为术语名（如 \"可充能\"），abnormal 表为异常中文名（如 \"晕眩\"），slang 表为社区称呼/别名（如 \"42\"）",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "raw": {
+          "description": "仅 range 表生效：true 时返回原始格点坐标而非范围图形，其他表忽略。默认 false",
+          "type": "boolean"
+        },
+        "table": {
+          "description": "要查询的表",
+          "enum": [
+            "range",
+            "tile",
+            "term",
+            "abnormal",
+            "slang"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "keys"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称或 ID 查询召唤物（token），支持批量（ids 主键精确 / names 精确优先、未中模糊取最佳，二选一）。默认返回：基本信息、属性、技能列表（全部最高级）、天赋（当前练度最优备选）。默认练度 = 所属干员最高精英化满级、0潜。extra 状态指定（等级/潜能/技能）见参数说明。仅 tokens 表",
+    "name": "query_token",
+    "parameters": {
+      "properties": {
+        "extra": {
+          "description": "状态指定，可选，每项独立生效，必须含 =（键限 等级/潜能/技能）：等级=精二40级、精一满级、精二（省略即满级），值语法同干员等级；潜能=满潜、五潜、0潜；技能=3级（1~7级）、专2（专1~专3），默认最高级，调低用。指定即替换对应默认值，属性与天赋随之重算；同一键重复指定时，以最后一项为准",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ids": {
+          "description": "召唤物 ID 列表，如 [“token_10014_bstalk_crab”]。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "召唤物名称列表，如 [“触手”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "按名称或 ID 查询关卡装置（trap），支持批量（ids 主键精确 / names 精确优先、未中模糊取最佳，二选一）。默认返回：基本信息、属性、技能列表、天赋。装置无精英化，默认按最高等级计算属性。extra 状态指定（等级）见参数说明。仅 traps 表",
+    "name": "query_trap",
+    "parameters": {
+      "properties": {
+        "extra": {
+          "description": "状态指定，可选，必须含 =（键限 等级）：等级=3 或 3级（纯数字，级 后缀可选）；装置无精英化，等级直接参与属性计算，超过阶段上限按最高等级计算。指定即替换默认等级，属性随之重算",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ids": {
+          "description": "装置 ID 列表，如 [“trap_001_crate”]。与 names 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "names": {
+          "description": "装置名称列表，如 [“障碍物”]。与 ids 二选一",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "读取 UTF-8 文本文件，返回带行号的内容窗口。大文件用 offset/limit 分页续读；结果含 totalLines 表示文件总行数。",
+    "name": "read_file",
+    "parameters": {
+      "properties": {
+        "limit": {
+          "description": "返回行数，默认 1000，上限 2000，超出报错",
+          "type": "number"
+        },
+        "offset": {
+          "description": "1-based 起始行，默认 1，须为正整数",
+          "type": "number"
+        },
+        "path": {
+          "description": "文件路径（绝对路径，或相对工作目录的相对路径）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "按条目名读取知识库条目内容。省略 sections 返回正文全文；sections=[节名列表] 只读取指定小节，节名见 list_knowledge 返回的大纲。未命中会返回候选提示；条目要点（如有）随内容附带",
+    "name": "read_knowledge",
+    "parameters": {
+      "properties": {
+        "entry": {
+          "description": "知识条目名",
+          "type": "string"
+        },
+        "sections": {
+          "description": "节名数组，可选。省略或空数组=返回正文全文；[\"节A\",\"节B\"]=只读取这些小节（节名见 list_knowledge 返回的大纲）",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entry"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "执行 shell 命令并返回输出：非零退出码按失败返回（含退出码与输出尾部），完整输出落盘工作区可 read_file 读取。命令以受限身份运行，仅可写工作目录内，区外写入被系统拒绝；确需访问区外时声明 permission=full 请求确认（完整语义见参数说明）。审批：询问模式（默认）每次执行前弹确认卡；自动化模式下只有网络访问、安装卸载、进程控制、系统配置、仓库破坏性操作、删除，以及声明 permission=full 的调用会弹确认卡，其余命令（含脚本与管道）直接执行；不可逆破坏类命令任何档位直接拒绝。仅限 Windows（powershell/cmd）；写文件请优先用 write_file/edit。",
+    "name": "run_command",
+    "parameters": {
+      "properties": {
+        "command": {
+          "description": "要执行的完整命令串（含参数），由系统 shell 解释；shell 参数可切换。",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "工作目录（须已存在；相对路径相对工作空间根）。省略时默认工作空间根。",
+          "type": "string"
+        },
+        "justification": {
+          "description": "permission=full 时必须填写的一句话理由，将展示在确认卡上供你判断。",
+          "type": "string"
+        },
+        "permission": {
+          "description": "执行身份（缺省 default）：default=受限执行（仅可写工作目录内；区外写入被拒）；full=完整权限（应用自身令牌，可读写用户级缓存/工作区外，仍需 justification 并等待你确认；full 不提供管理员权限）。",
+          "enum": [
+            "default",
+            "full"
+          ],
+          "type": "string"
+        },
+        "shell": {
+          "description": "shell 选择：auto=平台默认（Windows 为 powershell），可显式指定 cmd 处理批处理内建语法。",
+          "enum": [
+            "auto",
+            "powershell",
+            "cmd"
+          ],
+          "type": "string"
+        },
+        "timeout": {
+          "description": "超时秒数，覆盖工具默认 120s；超时后终止整个进程树。",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "在本机《明日方舟》中，通过 MAA 执行游戏操作：刷关、公招、基建、领奖、肉鸽、抄作业、识别等。仅支持模拟器。\n\n参数：\n  action：\"run\"（默认）| \"stop\" | \"status\"\n  tasks：action=\"run\" 时要执行的任务序列，按顺序依次执行；每项 { \"type\": 任务类型, \"params\": 参数对象 }，params 可省。\n  wait：最多等多少秒。0 = 派发：发出去就返回，任务在后台跑，不阻塞当前对话；大于 0 = 等待：等到结果再返回。\n    识别这类短任务可以等待；长任务（Fight / Infrast / Roguelike / Copilot 等）默认派发，派下去跟博士说一声即可。\n    想等一个可能很久的任务跑完时（估着超过三分钟，或估不出要多久），先向博士确认执行方式与等待时间。\n\n返回：派发即回一句确认；等就给该次的结论；失败给 MAA 的原话。\n\n示例：\n  · 识别持有的干员：{ \"action\": \"run\", \"tasks\": [ { \"type\": \"OperBox\" } ] }\n  · 启动游戏并把 1-7 刷到理智耗尽：{ \"action\": \"run\", \"tasks\": [ { \"type\": \"StartUp\" }, { \"type\": \"Fight\", \"params\": { \"stage\": \"1-7\", \"series\": 0 } } ] }\n  · 中止任务：{ \"action\": \"stop\" }\n  · 查看状态：{ \"action\": \"status\" }\n\n任务类型、常用参数、注意事项与官方文档，见 skill「MAA 任务」。",
+    "name": "run_maa_task",
+    "parameters": {
+      "properties": {
+        "action": {
+          "description": "省略时按 run。",
+          "enum": [
+            "run",
+            "stop",
+            "status"
+          ],
+          "type": "string"
+        },
+        "tasks": {
+          "description": "要执行的任务序列。",
+          "items": {
+            "properties": {
+              "params": {
+                "description": "该任务的参数。",
+                "type": "object"
+              },
+              "type": {
+                "description": "任务类型。",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "wait": {
+          "description": "0 = 派发，大于 0 = 等待。",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "按条件筛选数据库实体。list 模式返回名称+ID 列表，用于先找出“有哪些”及“有没有”，再按 ID 走 query_* 查属性；count 模式仅返回数量。覆盖 11 张表（enemies/operators/stages/levels/tokens/traps/rogue_1~5），多条件 AND 连接，支持比较与 LIKE 模糊匹配，不支持跨表/OR/排序",
+    "name": "search_entities",
+    "parameters": {
+      "properties": {
+        "filters": {
+          "description": "组 AND 过滤条件，可为空 []。每项含 field、op、value，如 [{“field”:“法术抗性”,“op”:“>”,“value”:“90”}]。常用列：技能、法术抗性、地位、级别、种类（enemies）；职业、职业分支、稀有度（operators）；关卡类型（stages）；类型、效果（rogue）。完整列名见知识库对应《表结构》条目",
+          "items": {
+            "properties": {
+              "field": {
+                "description": "筛选目标列名。不在此表或填错→报错",
+                "type": "string"
+              },
+              "op": {
+                "description": "比较操作符",
+                "enum": [
+                  "=",
+                  ">",
+                  "<",
+                  ">=",
+                  "<=",
+                  "!=",
+                  "LIKE"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "description": "比较值。LIKE 时无需加 %，自动模糊匹配",
+                "type": "string"
+              }
+            },
+            "required": [
+              "field",
+              "op",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "default": 20,
+          "description": "list 模式最大返回条数，默认 20，上限 200。count 模式忽略",
+          "maximum": 200,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "default": "list",
+          "description": "默认 list",
+          "enum": [
+            "list",
+            "count"
+          ],
+          "type": "string"
+        },
+        "table": {
+          "description": "目标表：enemies=敌人、operators=干员、stages=关卡、levels=地图、tokens=召唤物、traps=陷阱、rogue_1_entries~rogue_5_entries=对应肉鸽主题（傀影/水月/萨米/萨卡兹/界园）",
+          "enum": [
+            "enemies",
+            "operators",
+            "stages",
+            "levels",
+            "tokens",
+            "traps",
+            "rogue_1_entries",
+            "rogue_2_entries",
+            "rogue_3_entries",
+            "rogue_4_entries",
+            "rogue_5_entries"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "filters"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "逐帧寻路模拟：按关卡 ID 与路线序号模拟敌人沿路线移动（相对帧，f0=生成帧），输出格级事件流。基础用法：levelId + routeIndex + speed（speed 为敌人属性移速，先查波次确定该路线敌人再查其属性移速，工具自动按关卡倍率换算）。高级参数（k 避障相位、inject 行为注入、route 自定义路线、obstacle、timeAxis、log、maxFrames）语法见《行动推演》skill 正文。帧级 log 默认写入工作区 sim_logs/。仅地面行动（WALK）；FLY 路线、近地悬浮敌人与非常用检查点类型（传送外）不支持",
+    "name": "sim_path",
+    "parameters": {
+      "properties": {
+        "inject": {
+          "description": "行为注入（push 推拉 / block 部署阻挡），分号分隔多条",
+          "type": "string"
+        },
+        "k": {
+          "description": "避障相位参数，默认 1",
+          "type": "integer"
+        },
+        "levelId": {
+          "description": "关卡 levelId，如 level_main_01-07",
+          "type": "string"
+        },
+        "log": {
+          "description": "帧级 log 输出路径（相对路径基于工作区解析，仅允许工作区内），覆盖默认位置（工作区 sim_logs/）",
+          "type": "string"
+        },
+        "maxFrames": {
+          "description": "模拟帧上限，默认 12000",
+          "type": "integer"
+        },
+        "obstacle": {
+          "description": "额外障碍物格，分号分隔，如 7,2;7,3。",
+          "type": "string"
+        },
+        "route": {
+          "description": "自定义路线 DSL。不填则用数据库路线",
+          "type": "string"
+        },
+        "routeIndex": {
+          "description": "路线序号（0 起），如 5",
+          "type": "integer"
+        },
+        "speed": {
+          "description": "敌人属性移速（如 1.3）。缺省 1.0",
+          "type": "number"
+        },
+        "timeAxis": {
+          "description": "计时起点对象（默认全 0=f0），供 WAIT_GLOBAL/FRAGMENT/WAVE 使用；子键 global/fragment/wave，语义见《行动推演》skill 参数语法节",
+          "type": "object"
+        }
+      },
+      "required": [
+        "levelId",
+        "routeIndex"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "获取当前时间参照：本地时间（含星期）、时区、UTC 偏移、ISO 时刻。无参数。",
+    "name": "time",
+    "parameters": {
+      "properties": {},
+      "type": "object"
+    }
+  },
+  {
+    "description": "抓取指定 URL 的网页并提取正文文本。仅支持 http/https；自动跟随重定向（最多 5 跳，逐跳复查目标地址）；单跳超时 15 秒，页面体积上限 1MB。HTML 页面按可读性算法提取正文（文章页输出 Markdown，非文章页降级为纯文本），JSON 响应格式化返回，其余按纯文本返回；拒绝访问内网/本机/链路本地地址（防 SSRF）。maxLength 控制返回字符上限，超长自动截断并标注；失败返回中文错误信息（超时/HTTP 状态/页面过大/私网拒绝）",
+    "name": "web_fetch",
+    "parameters": {
+      "properties": {
+        "maxLength": {
+          "description": "返回正文的最大字符数，默认 12000，下限 200、上限 50000（自动钳制）",
+          "maximum": 50000,
+          "minimum": 200,
+          "type": "integer"
+        },
+        "url": {
+          "description": "要抓取的完整链接，需以 http:// 或 https:// 开头（含 https://）",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "在互联网上搜索关键词并返回结果列表（标题+链接+摘要），用于获取实时信息：最新新闻、技术文档、时事、或任何不在本地知识库内的外部信息。独立通用检索能力，不限定领域。经免费匿名搜索服务查询（请求超时 30 秒），结果按相关度排序；无结果、服务限流或错误时返回中文提示",
+    "name": "web_search",
+    "parameters": {
+      "properties": {
+        "maxResults": {
+          "description": "最大返回条数，默认 10，上限 20（自动钳制）",
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "query": {
+          "description": "搜索关键词（1~100 字内更佳）",
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "向工作目录写入 UTF-8 文本文件：不存在则创建（父目录自动创建），存在则整体覆盖。仅限工作区内，大小上限 10MB。修改既有文件局部用 edit。",
+    "name": "write_file",
+    "parameters": {
+      "properties": {
+        "content": {
+          "description": "完整文件内容（UTF-8，按原样写入，不自动追加换行）。空串合法（创建空文件）",
+          "type": "string"
+        },
+        "path": {
+          "description": "目标文件路径：绝对或相对工作目录的相对路径",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content"
+      ],
+      "type": "object"
+    }
+  }
+]
