@@ -3,10 +3,8 @@
 //! 不落盘：启停状态与插件配置的持久化是 M3 的事（D18 把配置与启停状态分两处）。
 //!
 //! M1 的台账「只写不读」：`get` / `list` 供 M3 的扩展页与诊断消费，本里程碑
-//! 内没有读调用点（`load_all` 只写），因此整模块允许 dead_code；M3 接入读侧
-//! 时删除本行。
-
-#![allow(dead_code)]
+//! 内没有读调用点（`load_all` 只写）。因此相关项**逐项**标 `allow(dead_code)`
+//! 并注明失效时机——不要改成文件级 allow，那会把将来真正的死代码一起藏掉。
 
 use std::collections::HashMap;
 
@@ -20,10 +18,12 @@ pub enum PluginState {
     /// 加载失败，原因即 [`super::PluginError`] 的 Display 文本。
     Failed(String),
     /// 被用户停用（M3 的启停写这里；M1 不会构造该值）。
+    #[allow(dead_code)] // M3 启停接入后删除
     Disabled,
 }
 
 /// 一个插件的台账记录。
+#[allow(dead_code)] // M3 的扩展页读取接口时删除（字段由 get/list 暴露）
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginRecord {
     pub manifest: PluginManifest,
@@ -48,11 +48,13 @@ impl PluginRegistry {
         self.records.insert(record.manifest.id.clone(), record);
     }
 
+    #[allow(dead_code)] // M3 扩展页读取后删除
     pub fn get(&self, id: &str) -> Option<&PluginRecord> {
         self.records.get(id)
     }
 
     /// 按 id 升序列出全部记录（供 M3 扩展页消费）。
+    #[allow(dead_code)] // M3 扩展页读取后删除
     pub fn list(&self) -> Vec<&PluginRecord> {
         let mut records: Vec<&PluginRecord> = self.records.values().collect();
         records.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));

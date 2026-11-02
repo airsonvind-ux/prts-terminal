@@ -184,7 +184,7 @@ fn load_one(
 
     let id = manifest.id.clone();
     if let Err(error) = manifest::validate(&manifest, dir_name, seen_ids) {
-        eprintln!("[plugins] {id} 校验失败：{error}");
+        eprintln!("[plugins] {dir_name}（id={id}）校验失败：{error}");
         let reason = error.to_string();
         // 同 id 的后来者不得覆盖先到者的记录（先到先得，后者整体作废）。
         if !matches!(error, PluginError::DuplicateId(_)) {
