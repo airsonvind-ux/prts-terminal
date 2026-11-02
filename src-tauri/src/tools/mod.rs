@@ -404,9 +404,8 @@ pub enum Origin {
 /// 注册表里的一项：工具本体 + 来源。
 struct RegisteredTool {
     tool: Box<dyn Tool>,
-    /// M1 只写不读：`get / list_defs / execute` 的对外行为必须与迁移前一致；
+    /// 只写不读的默认行为由 [`ToolRegistry::origin_of`] 兜底：生产代码目前不读它，
     /// M2 按来源成组摘除工具（启停）时才消费。
-    #[allow(dead_code)]
     origin: Origin,
 }
 
@@ -451,6 +450,15 @@ impl ToolRegistry {
     /// 移除指定名字的工具；返回是否真的移除了（插件注册失败时的回滚用）。
     pub fn remove(&mut self, name: &str) -> bool {
         self.tools.remove(name).is_some()
+    }
+
+    /// 工具来源：宿主内置，还是哪个插件贡献的。
+    ///
+    /// 生产代码目前不读它（M2 的启停与 M3 的扩展页才消费）；测试用它断言
+    /// `run_maa_task` 确实是从插件路径进来的，而不是宿主又偷偷注册了一份。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn origin_of(&self, name: &str) -> Option<&Origin> {
+        self.tools.get(name).map(|registered| &registered.origin)
     }
 
     /// 按名查找工具。
@@ -1091,6 +1099,29 @@ mod tests {
         assert_eq!(
             actual, expected,
             "工具定义与快照不一致：迁移改变了模型可见的工具面"
+        );
+    }
+
+    /// 端到端：真实读随包的 `content/plugins/maa/plugin.json` 走 `load_all`，
+    /// 确认 MAA 是从插件路径进来的（来源记成 `Plugin("maa")`，而不是宿主）。
+    #[test]
+    fn load_all_installs_maa_from_the_bundled_manifest() {
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let registry = crate::plugins::load_all(&mut reg, &policy);
+
+        let record = registry
+            .get("maa")
+            .expect("随包 content/plugins 下应有 maa 插件");
+        assert_eq!(record.state, crate::plugins::PluginState::Loaded);
+        assert_eq!(record.tools, vec!["run_maa_task".to_string()]);
+        assert_eq!(reg.list_defs().len(), 1);
+        assert!(
+            matches!(
+                reg.origin_of("run_maa_task"),
+                Some(crate::tools::Origin::Plugin(id)) if id == "maa"
+            ),
+            "MAA 工具必须由插件路径注册"
         );
     }
 }

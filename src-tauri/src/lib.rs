@@ -121,6 +121,10 @@ fn precheck_install_surface() {
     if !skills.is_dir() {
         missing.push(format!("内置技能源：{}", skills.display()));
     }
+    let plugins = config::bundled_plugins_dir();
+    if !plugins.is_dir() {
+        missing.push(format!("内置插件目录：{}", plugins.display()));
+    }
     let seed = config::db_seed_path();
     if !seed.is_file() {
         missing.push(format!("数据库初始副本：{}", seed.display()));
@@ -348,9 +352,11 @@ pub fn run() {
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
     // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
     // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
-    let tool_registry = {
+    let (tool_registry, plugin_registry) = {
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
+        // 插件装配与宿主用同一份策略（M2 的 process 通道要它），先留句柄再交出
+        let plugin_policy = Arc::clone(&policy);
         // 内置工具在此统一注册；每个工具注册时校验 JSON Schema，
         // 非法 schema 在此暴露（拒绝注册）
         tools::register_builtin(
@@ -361,7 +367,10 @@ pub fn run() {
             Arc::clone(&ledger),
         )
         .expect("内置工具注册失败（schema 校验未通过）");
-        Arc::new(reg)
+        // 插件工具（M1）：读 content/plugins 下的 manifest，按 id 分发到
+        // builtin::install。单个插件失败只在其台账里记 Failed，不拖垮宿主启动。
+        let plugin_registry = plugins::load_all(&mut reg, &plugin_policy);
+        (Arc::new(reg), plugin_registry)
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
@@ -590,6 +599,7 @@ pub fn run() {
         .plugin(tauri_plugin_prevent_default::debug())
         .manage(db)
         .manage(tool_registry)
+        .manage(plugin_registry)
         .manage(client_registry)
         .manage(llm_config)
         .manage(model_registry)

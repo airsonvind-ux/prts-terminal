@@ -1,22 +1,25 @@
-//! 插件系统（M1）：契约层。
+//! 插件系统（M1）：契约层与装配。
 //!
 //! 设计依据：`50-插件系统/_插件系统-设计.md`（D1–D28）与 `_插件系统-M1规格.md`
-//! （草案 2）。M1 只做三件事：manifest 解析与十条校验（[`manifest`]）、
-//! 内存插件台账（registry，第 2 步）、内置插件的显式安装表（builtin，第 3 步）。
+//! （草案 2）。M1 只做三件事：manifest 解析与十条校验（[`manifest`]）、内存插件
+//! 台账（[`registry`]）、内置插件的显式安装表与装配（[`builtin`] / [`load_all`]）。
 //!
 //! 诚实边界（D11）：M1 的 capability 只是声明，不做运行时门禁——builtin 插件
 //! 的代码本来就在宿主进程里，门禁无意义；真正的门禁在 M2 的 process 通道生效。
-
-// M1 第 1–4 步：契约层先落地、尚未接线，非测试构建里整棵子树没有调用点。
-// 第 5 步 load_all 接线后删除本行——届时再有 dead_code 就是真问题。
-#![allow(dead_code)]
 
 pub mod builtin;
 
 mod manifest;
 mod registry;
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
+
+pub use registry::{PluginRecord, PluginRegistry, PluginState};
 
 /// 插件层的统一错误。
 ///
@@ -115,6 +118,102 @@ pub fn register_plugin_tools(
 fn rollback_registered(reg: &mut ToolRegistry, registered: &[String]) {
     for name in registered.iter().rev() {
         reg.remove(name);
+    }
+}
+
+/// 扫描随包插件目录，逐个校验并安装，返回内存台账。
+///
+/// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 按 id 分发到
+/// [`builtin::install`]。**单个插件失败不影响宿主启动**：记一条 `Failed(原因)`
+/// 并 `eprintln!` 继续——M1 没有日志器（D28），告警统一走 stderr。
+///
+/// 目录不存在时返回空台账并告警：开发机构建里删掉 `content/plugins` 不该让应用
+/// 起不来；发布构建由启动自检兜底（`lib.rs` 的 `precheck_install_surface`）。
+///
+/// `_policy` 是 M2 的 process 通道要用的宿主策略，M1 只保留签名位置。
+pub fn load_all(reg: &mut ToolRegistry, _policy: &Arc<Policy>) -> PluginRegistry {
+    let dir = crate::config::bundled_plugins_dir();
+    let mut registry = PluginRegistry::new();
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("[plugins] 插件目录不可读：{}（{error}）", dir.display());
+            return registry;
+        }
+    };
+
+    let mut plugin_dirs: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    // 目录名升序：同 id 冲突时「先扫到的赢」是确定行为，不依赖文件系统顺序。
+    plugin_dirs.sort();
+
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for plugin_dir in plugin_dirs {
+        let Some(dir_name) = plugin_dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if dir_name.starts_with('.') {
+            continue;
+        }
+        load_one(reg, &plugin_dir, dir_name, &mut seen_ids, &mut registry);
+    }
+
+    registry
+}
+
+/// 装配单个插件目录；任何一步失败都只影响这个插件。
+fn load_one(
+    reg: &mut ToolRegistry,
+    plugin_dir: &Path,
+    dir_name: &str,
+    seen_ids: &mut HashSet<String>,
+    registry: &mut PluginRegistry,
+) {
+    // manifest 读不出来就没有可记账的 id：报错并跳过，不建记录。
+    let manifest = match manifest::read_manifest(plugin_dir) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("[plugins] 跳过 {dir_name}：{error}");
+            return;
+        }
+    };
+
+    let id = manifest.id.clone();
+    if let Err(error) = manifest::validate(&manifest, dir_name, seen_ids) {
+        eprintln!("[plugins] {id} 校验失败：{error}");
+        let reason = error.to_string();
+        // 同 id 的后来者不得覆盖先到者的记录（先到先得，后者整体作废）。
+        if !matches!(error, PluginError::DuplicateId(_)) {
+            registry.insert(PluginRecord {
+                manifest,
+                state: PluginState::Failed(reason),
+                tools: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    match builtin::install(&id, reg) {
+        Ok(tools) => {
+            registry.insert(PluginRecord {
+                manifest,
+                state: PluginState::Loaded,
+                tools,
+            });
+        }
+        Err(error) => {
+            eprintln!("[plugins] {id} 安装失败：{error}");
+            // 安装失败时 register_plugin_tools 已把本次注册摘干净。
+            registry.insert(PluginRecord {
+                manifest,
+                state: PluginState::Failed(error.to_string()),
+                tools: Vec::new(),
+            });
+        }
     }
 }
 
