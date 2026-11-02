@@ -21,7 +21,7 @@ use crate::config;
 use crate::maa::manager;
 use crate::maa::records;
 
-use super::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
+use crate::tools::{Tool, ToolContext, ToolDisplay, ToolError, ToolOutput};
 
 pub struct MaaTaskTool;
 

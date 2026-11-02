@@ -6,7 +6,6 @@
 // 模块声明
 mod agent;
 mod app;
-mod integrations;
 mod llm;
 mod platform;
 mod plugins;
@@ -21,7 +20,7 @@ pub use agent::{
     skills_snapshot,
 };
 pub use app::{commands, config, db_seed, events, workspace};
-pub use integrations::maa;
+pub use plugins::builtin::maa;
 pub use platform::{machine, notices, observability, updater};
 pub use runtime::{approval, exec, exec_settings, path_guard, policy, steer_queue, turn_registry};
 pub use storage::{attachments, credentials, db, session, session_store, settings};

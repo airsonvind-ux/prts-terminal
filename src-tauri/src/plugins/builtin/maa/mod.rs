@@ -13,3 +13,4 @@ pub mod connection;
 pub mod manager;
 pub mod records;
 pub mod settings;
+pub mod task;

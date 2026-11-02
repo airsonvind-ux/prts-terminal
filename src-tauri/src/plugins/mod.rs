@@ -11,6 +11,8 @@
 // 第 5 步 load_all 接线后删除本行——届时再有 dead_code 就是真问题。
 #![allow(dead_code)]
 
+pub mod builtin;
+
 mod manifest;
 mod registry;
 
