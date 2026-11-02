@@ -22,6 +22,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::config;
+use crate::host::PluginCtx;
 use crate::machine::MachineInfo;
 
 use super::bridge::Bridge;
@@ -92,6 +93,41 @@ struct Manager {
 }
 
 static MANAGER: OnceLock<Mutex<Manager>> = OnceLock::new();
+
+/// 插件能力的调用句柄：加载期由 `builtin::install` 注入一次（R4）。
+///
+/// 之所以是 `OnceLock`：`manager()` 是懒初始化的，拿不到构造参数；装配层是唯一
+/// 知道 `PluginCtx` 的人，所以在 `install` 时递进来。重复注入是接线错误，报错。
+static CTX: OnceLock<PluginCtx> = OnceLock::new();
+
+/// 注入能力句柄（`builtin::install` 调用，全进程一次）。
+///
+/// 同 id 重复注入视为成功：装配只会发生一次，但测试里 `install` 会被多个用例
+/// 各调一次（同一个进程），那不是装配错误。**换一个 id 再注入则报错**——那才是
+/// 「两个插件共用了同一个单例」这类真接线错误。
+pub fn init(ctx: PluginCtx) -> Result<(), String> {
+    match CTX.set(ctx) {
+        Ok(()) => Ok(()),
+        Err(incoming) => {
+            let existing = CTX.get().expect("set 失败时锁里必然已有值");
+            if existing.id() == incoming.id() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "MAA 插件的能力句柄已经注入给 {}，又收到 {}（装配顺序错误）",
+                    existing.id(),
+                    incoming.id()
+                ))
+            }
+        }
+    }
+}
+
+/// 取能力句柄；没注入过说明装配路径不对。
+pub(super) fn ctx() -> Result<&'static PluginCtx, String> {
+    CTX.get()
+        .ok_or_else(|| "MAA 插件尚未初始化（缺少 builtin::install 注入）".to_string())
+}
 
 fn manager() -> &'static Mutex<Manager> {
     MANAGER.get_or_init(|| {
@@ -558,28 +594,31 @@ pub fn shutdown() {
 
 impl Manager {
     fn start(&mut self) -> Result<(), String> {
+        // 前置检查保留在插件侧：报错文案要给出用户能做的事（装 MAA / 改设置），
+        // 而宿主的能力服务只能说「machine.json 或 MAA 目录不可用」。
         let data_dir = config::data_dir();
         let info = MachineInfo::load(&data_dir).ok_or_else(|| {
             "还没有本机信息（machine.json）。请重启 PRTS，或在设置里确认 MAA 安装位置。".to_string()
         })?;
-        let Some(maa_dir) = info.maa.clone() else {
+        if info.maa.is_none() {
             return Err("本机没有检测到 MAA。装好 MAA 再试，或在设置里指定 MAA 路径。".to_string());
-        };
+        }
 
         // 进程归宿主托管：这里只拿端口，连接与握手由 `Bridge::connect` 自己做。
-        // 端口抢不过别人时 `Bridge::connect` 会失败并让宿主把进程收掉。
-        let user_dir = data_dir.join("maa");
-        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
-        let port = match status.state {
-            crate::host::MaaBridgeState::Unavailable => {
-                return Err(status
-                    .error
-                    .unwrap_or_else(|| "桥起不来（宿主没有给出原因）".to_string()))
-            }
-            _ => status
-                .port
-                .ok_or_else(|| "桥起不来（宿主没有给出端口）".to_string())?,
-        };
+        // 端口抢不过别人时 `Bridge::connect` 会失败；桥进程由宿主收尸（Job Object）。
+        let status = ctx()?
+            .call("maa.bridge", json!({ "op": "ensure" }))
+            .map_err(|e| e.to_string())?;
+        if status["state"] == json!("unavailable") {
+            return Err(status["error"]
+                .as_str()
+                .unwrap_or("桥起不来（宿主没有给出原因）")
+                .to_string());
+        }
+        let port = status["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| "桥起不来（宿主没有给出端口）".to_string())?;
         let bridge = Bridge::connect(port).map_err(|e| e.to_string())?;
 
         if !bridge.available() {
@@ -1561,6 +1600,33 @@ mod tests {
         println!("已关桥");
     }
 
+    /// 真机测试用的能力句柄：只登记 `maa.bridge`，授权也只给这一条。
+    fn test_ctx(data_dir: &Path) -> PluginCtx {
+        let mut services = crate::host::HostServices::new();
+        services
+            .register(std::sync::Arc::new(crate::host::MaaBridgeService::new(
+                data_dir.to_path_buf(),
+            )))
+            .expect("登记 maa.bridge");
+        let api: std::sync::Arc<dyn crate::host::HostApi> = std::sync::Arc::new(services);
+        PluginCtx::for_test(
+            "maa",
+            api,
+            ["maa.bridge".to_string()].into_iter().collect(),
+        )
+    }
+
+    /// 从宿主能力层起桥并拿到端口（真机测试的前置步骤）。
+    fn test_ensure_port(data_dir: &Path) -> u16 {
+        let _ = init(test_ctx(data_dir));
+        let status = ctx()
+            .expect("能力句柄")
+            .call("maa.bridge", json!({ "op": "ensure" }))
+            .expect("起桥");
+        assert_ne!(status["state"], json!("unavailable"), "{status}");
+        status["port"].as_u64().expect("要能拿到端口") as u16
+    }
+
     /// 真机验证：起桥 → 握手 → 连发两条命令 → 关桥。
     ///
     /// **只加载 MaaCore，不连模拟器、不碰游戏窗口。**
@@ -1569,11 +1635,7 @@ mod tests {
     #[ignore = "真机验证，手动运行"]
     fn bridge_smoke() {
         let data_dir = crate::config::data_dir();
-        let info = MachineInfo::load(&data_dir).expect("需要 machine.json（先跑一次 PRTS 生成）");
-        let maa_dir = info.maa.clone().expect("本机需要已安装 MAA");
-        let user_dir = data_dir.join("maa");
-        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
-        let port = status.port.expect("要能拿到端口");
+        let port = test_ensure_port(&data_dir);
 
         let bridge = Bridge::connect(port).expect("起桥");
         println!("ready    = {}", bridge.ready);
@@ -1602,11 +1664,7 @@ mod tests {
     #[ignore = "真机验证，手动运行"]
     fn dispatch_mutex() {
         let data_dir = crate::config::data_dir();
-        let info = MachineInfo::load(&data_dir).expect("需要 machine.json（先跑一次 PRTS 生成）");
-        let maa_dir = info.maa.clone().expect("本机需要已安装 MAA");
-        let user_dir = data_dir.join("maa");
-        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
-        let port = status.port.expect("要能拿到端口");
+        let port = test_ensure_port(&data_dir);
 
         let bridge = Bridge::connect(port).expect("起桥");
         // 真跑任务才会置「未收尾」；这里直接造出来，第二个 submit 就该被拒。

@@ -119,11 +119,14 @@ pub fn read_frame(stream: &TcpStream) -> Result<Value, BridgeError> {
 /// 端口可能在宿主挑好之后被抢走：真桥 bind 失败会退出，而我们仍可能连到抢占者
 /// 的监听。进程生死只有宿主知道（宿主不探活），所以这个判断只能在这里做。
 fn ensure_host_running(stage: &str) -> Result<(), BridgeError> {
-    let status = crate::host::maa_bridge_status();
-    if status.state == crate::host::MaaBridgeState::Running {
+    let status = super::manager::ctx()
+        .map_err(BridgeError::Start)?
+        .call("maa.bridge", serde_json::json!({ "op": "status" }))
+        .map_err(|error| BridgeError::Start(error.to_string()))?;
+    if status["state"] == serde_json::json!("running") {
         return Ok(());
     }
-    Err(BridgeError::Start(match status.error {
+    Err(BridgeError::Start(match status["error"].as_str() {
         Some(error) => format!("桥进程在{stage}已退出（{error}），拒绝该连接"),
         None => format!("桥进程在{stage}已退出，拒绝该连接"),
     }))
@@ -205,12 +208,10 @@ impl Bridge {
     /// `available:false`（未装 MAA、版本不兼容、依赖缺失）**不当作错误**——
     /// 那是有意义的运行态，由调用方决定怎么呈现。
     pub fn connect(port: u16) -> Result<Self, BridgeError> {
-        let connected = Self::connect_inner(port);
-        if connected.is_err() {
-            // 桥只 accept 一次：这次连接失败，进程留着也没用；收掉，让下次重起。
-            let _ = crate::host::maa_bridge_shutdown();
-        }
-        connected
+        // 桥只 accept 一次：这次连接失败，宿主托管的进程会在自己的等待上限内
+        // 收场（退出码 4），下次 `ensure` 会把它收尸重起——插件不需要、也不能
+        // 替宿主杀进程（M2a：进程只经 `maa.bridge` 能力管）。
+        Self::connect_inner(port)
     }
 
     fn connect_inner(port: u16) -> Result<Self, BridgeError> {
@@ -454,19 +455,20 @@ impl Bridge {
         }
     }
 
-    /// 请求桥退出：先把 `shutdown` 帧发出去（让它把结果文件写完），再交给宿主收尸。
+    /// 请求桥退出：发一帧 `shutdown`（让它把结果文件写完），然后断开。
     ///
-    /// 进程不归这里管，所以这里没有 `kill`——收尸逻辑在 `host::internal::maa_bridge`。
+    /// 进程不归这里管，所以这里没有 `kill`——收尸逻辑在 `host::internal::maa_bridge`：
+    /// 桥收到 `shutdown` 会自己退，宿主在下次 `ensure`/`shutdown` 时收尾；
+    /// 应用退出则由 Job Object 兜底，不会留孤儿。
     pub fn shutdown(self) {
         let _ = write_frame(&self.stream, &json!({ "cmd": "shutdown" }));
-        let _ = crate::host::maa_bridge_shutdown();
     }
 }
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        // 桥只服务这一条连接：连接没了，进程留着也没用（幂等，无托管进程时是空操作）。
-        let _ = crate::host::maa_bridge_shutdown();
+        // 连接没了就是「这次不用了」：桥会在自己的等待上限内收场，
+        // 宿主负责收尸。这里不能直接杀进程（进程只经 `maa.bridge` 能力管）。
     }
 }
 

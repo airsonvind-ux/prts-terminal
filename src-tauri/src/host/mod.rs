@@ -17,15 +17,13 @@ use serde_json::Value;
 
 mod internal;
 
-/// MAA 桥的进程托管（M2a 临时出口）。
+/// M2a 登记的四条服务；构造入口只给 `plugins` 的装配层。
 ///
-/// `ensure` 只 spawn 并把端口交回来——**连接与握手归插件**，因为桥只 accept
-/// 一次，宿主探活会把插件唯一的机会用掉（见 `internal::maa_bridge` 的模块注释）。
-/// 2b 起由 `maa.bridge` 能力服务接管，届时删掉这几个再导出。
-pub(crate) use internal::maa_bridge::{
-    ensure as maa_bridge_ensure, shutdown as maa_bridge_shutdown, status as maa_bridge_status,
-    MaaBridgeState,
-};
+/// 服务实现全在 `internal` 下，`crate::host::internal::…` 本身不可见（D33），
+/// 插件与工具层都只能用 [`PluginCtx::call`]。
+pub(crate) use internal::fs::FsService;
+pub(crate) use internal::maa_bridge::MaaBridgeService;
+pub(crate) use internal::query::QueryService;
 
 /// 桥可执行文件是否就位——只解析路径，不启动、不连接。
 ///
@@ -334,6 +332,12 @@ impl std::fmt::Debug for PluginCtx {
             .field("granted", &self.granted)
             .finish_non_exhaustive()
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_plugin_ctx(id: &str) -> PluginCtx {
+    let api: Arc<dyn HostApi> = Arc::new(HostServices::new());
+    PluginCtx::for_test(id, api, Default::default())
 }
 
 #[cfg(test)]

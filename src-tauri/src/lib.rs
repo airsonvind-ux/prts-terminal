@@ -370,10 +370,17 @@ pub fn run() {
             Arc::clone(&ledger),
         )
         .expect("内置工具注册失败（schema 校验未通过）");
-        // 插件工具（M1）：读 content/plugins 下的 manifest，按 id 分发到
+        // 插件（M2a）：先造能力服务，再读 content/plugins 下的 manifest 分发到
         // builtin::install。单个插件失败只在其台账里记 Failed，不拖垮宿主启动。
-        let plugin_registry = plugins::load_all(&mut reg, &plugin_policy);
-        (Arc::new(reg), plugin_registry)
+        let roots = plugins::PluginRoots::from_config();
+        let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
+        let plugin_registry = plugins::load_all(&mut reg, &roots, &host_services, &plugin_policy);
+        let registry = Arc::new(reg);
+        // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
+        query_service
+            .bind_tools(Arc::clone(&registry))
+            .expect("query.call 的工具注册表只能绑定一次");
+        (registry, plugin_registry)
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──

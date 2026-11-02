@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::host::{HostServices, MaaBridgeService, QueryService, FsService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
 
@@ -121,45 +122,109 @@ fn rollback_registered(reg: &mut ToolRegistry, registered: &[String]) {
     }
 }
 
-/// 扫描随包插件目录，逐个校验并安装，返回内存台账。
+/// 插件系统的根目录（R2：一律构造时传入，不在调用期读 `config::*`）。
 ///
-/// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 按 id 分发到
-/// [`builtin::install`]。**单个插件失败不影响宿主启动**：记一条 `Failed(原因)`
-/// 并 `eprintln!` 继续——M1 没有日志器（D28），告警统一走 stderr。
+/// - `bundled`：随包发布的插件（开发构建指向源码树，发布构建指向 `resources/plugins`）；
+/// - `user`：用户安装的插件（M2 只扫描、不安装，M4 才做安装流程）；
+/// - `data`：数据根，`fs.plugin` / `fs.temp` / 桥的工作目录都从它推。
+#[derive(Debug, Clone)]
+pub struct PluginRoots {
+    pub bundled: PathBuf,
+    pub user: PathBuf,
+    pub data: PathBuf,
+}
+
+impl PluginRoots {
+    /// 生产装配用的一份（`lib.rs` 只调这里，测试自己造临时根）。
+    pub fn from_config() -> Self {
+        let data = crate::config::data_dir();
+        Self {
+            bundled: crate::config::bundled_plugins_dir(),
+            user: data.join("plugins"),
+            data,
+        }
+    }
+}
+
+/// 构造 M2a 登记的四条服务，返回注册表与 `query.call` 的绑定句柄。
+///
+/// `query.call` 需要工具注册表，而注册表要等 `load_all` 跑完才定型，所以这里
+/// 把句柄一并交回去：`lib.rs` 在 `Arc::new(reg)` 之后调
+/// [`crate::host::QueryService::bind_tools`]。
+pub fn default_services(
+    roots: &PluginRoots,
+    db: Option<Arc<crate::db::Database>>,
+) -> (Arc<HostServices>, Arc<QueryService>) {
+    let query = Arc::new(QueryService::new(db));
+    let query_owned: Arc<QueryService> = Arc::clone(&query);
+    let query_service: Arc<dyn crate::host::HostService> = query_owned;
+    let mut services = HostServices::new();
+    services
+        .register(Arc::new(FsService::new(roots.data.clone())))
+        .expect("fs.plugin 只能登记一次");
+    services
+        .register(Arc::new(FsService::temp(roots.data.clone())))
+        .expect("fs.temp 只能登记一次");
+    services
+        .register(query_service)
+        .expect("query.call 只能登记一次");
+    services
+        .register(Arc::new(MaaBridgeService::new(roots.data.clone())))
+        .expect("maa.bridge 只能登记一次");
+    (Arc::new(services), query)
+}
+
+/// 扫描插件目录，逐个校验并安装，返回内存台账。
+///
+/// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 能力裁剪 →
+/// 按 id 分发到 [`builtin::install`]。**单个插件失败不影响宿主启动**：记一条
+/// `Failed(原因)` 并 `eprintln!` 继续——M2 仍没有日志器（D28），告警统一走 stderr。
+///
+/// 扫描顺序是先 `bundled` 后 `user`：同 id 时随包插件先到先得，用户目录里的
+/// 同名者不覆盖、不记账（只报一条错）。
 ///
 /// 目录不存在时返回空台账并告警：开发机构建里删掉 `content/plugins` 不该让应用
 /// 起不来；发布构建由启动自检兜底（`lib.rs` 的 `precheck_install_surface`）。
 ///
-/// `_policy` 是 M2 的 process 通道要用的宿主策略，M1 只保留签名位置。
-pub fn load_all(reg: &mut ToolRegistry, _policy: &Arc<Policy>) -> PluginRegistry {
-    let dir = crate::config::bundled_plugins_dir();
+/// `_policy` 是 M2b 的 process 通道要用的宿主策略，M2a 只保留签名位置。
+pub fn load_all(
+    reg: &mut ToolRegistry,
+    roots: &PluginRoots,
+    services: &Arc<HostServices>,
+    _policy: &Arc<Policy>,
+) -> PluginRegistry {
     let mut registry = PluginRegistry::new();
-
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) => {
-            eprintln!("[plugins] 插件目录不可读：{}（{error}）", dir.display());
-            return registry;
-        }
-    };
-
-    let mut plugin_dirs: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .collect();
-    // 目录名升序：同 id 冲突时「先扫到的赢」是确定行为，不依赖文件系统顺序。
-    plugin_dirs.sort();
-
     let mut seen_ids: HashSet<String> = HashSet::new();
-    for plugin_dir in plugin_dirs {
-        let Some(dir_name) = plugin_dir.file_name().and_then(|name| name.to_str()) else {
-            continue;
+
+    for dir in [&roots.bundled, &roots.user] {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                // 用户目录在多数机器上还不存在：那是正常状态，只在随包目录报错。
+                if dir == &roots.bundled {
+                    eprintln!("[plugins] 插件目录不可读：{}（{error}）", dir.display());
+                }
+                continue;
+            }
         };
-        if dir_name.starts_with('.') {
-            continue;
+
+        let mut plugin_dirs: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        // 目录名升序：同 id 冲突时「先扫到的赢」是确定行为，不依赖文件系统顺序。
+        plugin_dirs.sort();
+
+        for plugin_dir in plugin_dirs {
+            let Some(dir_name) = plugin_dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if dir_name.starts_with('.') {
+                continue;
+            }
+            load_one(reg, services, &plugin_dir, dir_name, &mut seen_ids, &mut registry);
         }
-        load_one(reg, &plugin_dir, dir_name, &mut seen_ids, &mut registry);
     }
 
     registry
@@ -168,6 +233,7 @@ pub fn load_all(reg: &mut ToolRegistry, _policy: &Arc<Policy>) -> PluginRegistry
 /// 装配单个插件目录；任何一步失败都只影响这个插件。
 fn load_one(
     reg: &mut ToolRegistry,
+    services: &Arc<HostServices>,
     plugin_dir: &Path,
     dir_name: &str,
     seen_ids: &mut HashSet<String>,
@@ -197,7 +263,32 @@ fn load_one(
         return;
     }
 
-    match builtin::install(&id, reg) {
+    // 能力裁剪：声明 ∩ 已登记；未登记、需审批、协议不够都在这里整体失败（D25）。
+    let protocol = manifest
+        .requires
+        .as_ref()
+        .and_then(|requires| requires.protocol)
+        .unwrap_or(manifest::SUPPORTED_PROTOCOL);
+    let granted = match crate::host::resolve_granted(services.as_ref(), &manifest.capabilities, protocol)
+    {
+        Ok(granted) => granted,
+        Err(error) => {
+            let reason = error.to_string();
+            eprintln!("[plugins] {id} 能力裁剪失败：{reason}");
+            registry.insert(PluginRecord {
+                manifest,
+                state: PluginState::Failed(reason),
+                tools: Vec::new(),
+            });
+            return;
+        }
+    };
+
+    let owned: Arc<HostServices> = Arc::clone(services);
+    let api: Arc<dyn crate::host::HostApi> = owned;
+    let ctx = crate::host::PluginCtx::new(id.clone(), api, granted);
+
+    match builtin::install(&id, ctx, reg) {
         Ok(tools) => {
             registry.insert(PluginRecord {
                 manifest,

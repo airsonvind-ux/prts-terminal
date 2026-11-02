@@ -19,7 +19,11 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
+use serde_json::{json, Value};
+
 use crate::config;
+use crate::host::{HostError, HostService, HostServiceInfo};
+use crate::machine::MachineInfo;
 
 /// 退出时等桥自己收场的上限；超时就强杀（与原实现一致：20 × 50ms）。
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(1_000);
@@ -383,9 +387,148 @@ fn attach_kill_on_close_job(child: &Child) -> Option<std::os::windows::io::Owned
     }
 }
 
+/// `maa.bridge` 能力的静态描述。
+///
+/// `stateful: true`——它托管的是跨越多次调用的子进程；`concurrency_safe: false`
+/// 是因为 `ensure` 与 `shutdown` 对同一个进程是互斥的（内部另有锁，这里如实声明）。
+static MAA_BRIDGE_INFO: HostServiceInfo = HostServiceInfo {
+    key: "maa.bridge",
+    summary: "MAA 桥进程托管：起桥（只给端口，不连接）、查状态、收尸",
+    stateful: true,
+    requires_user_grant: false,
+    timeout: Some(Duration::from_secs(30)),
+    concurrency_safe: false,
+    since: 1,
+};
+
+/// `maa.bridge` 的服务实现：进程归宿主，连接归插件。
+///
+/// 三个 op 都**不碰 socket**：`ensure` 只 spawn 并立即返回端口，握手与就绪判定
+/// 全在插件侧（桥只 accept 一次，宿主先连上去会吃掉插件唯一的连接机会，D41）。
+pub struct MaaBridgeService {
+    /// 数据根：`MachineInfo` 与桥的工作目录都从这里推。
+    data_dir: PathBuf,
+}
+
+impl MaaBridgeService {
+    /// 构造；`data_dir` 与宿主其它部分共用同一个根。
+    pub fn new(data_dir: PathBuf) -> Self {
+        Self { data_dir }
+    }
+}
+
+impl HostService for MaaBridgeService {
+    fn info(&self) -> &'static HostServiceInfo {
+        &MAA_BRIDGE_INFO
+    }
+
+    fn call(&self, _caller: &str, args: Value) -> Result<Value, HostError> {
+        let op = args
+            .get("op")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HostError::invalid_args("maa.bridge", "缺少 op 字段"))?;
+
+        let status = match op {
+            "ensure" => {
+                let Some(info) = MachineInfo::load(&self.data_dir) else {
+                    return Err(HostError::failed(
+                        "maa.bridge",
+                        "还没有本机信息（machine.json）：请重启 PRTS，或在设置里确认 MAA 安装位置",
+                    ));
+                };
+                let Some(maa_dir) = info.maa.clone() else {
+                    return Err(HostError::failed(
+                        "maa.bridge",
+                        "本机没有检测到 MAA：装好 MAA 再试，或在设置里指定 MAA 路径",
+                    ));
+                };
+                ensure(&maa_dir, &self.data_dir.join("maa"))
+            }
+            "status" => status(),
+            "shutdown" => shutdown(),
+            other => {
+                return Err(HostError::invalid_args(
+                    "maa.bridge",
+                    format!("未知 op：{other}（可用：ensure/status/shutdown）"),
+                ))
+            }
+        };
+
+        Ok(status_json(&status))
+    }
+}
+
+/// 状态 → 协议里的形状（规格 §4：`{state, port, error}`）。
+fn status_json(status: &MaaBridgeStatus) -> Value {
+    let state = match status.state {
+        MaaBridgeState::Starting => "starting",
+        MaaBridgeState::Running => "running",
+        MaaBridgeState::Stopped => "stopped",
+        MaaBridgeState::Unavailable => "unavailable",
+    };
+    json!({
+        "state": state,
+        "port": status.port,
+        "error": status.error,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试桩：把 `status()` 换成一个固定应答，验证服务的参数解析与序列化。
+    struct FixedStatus(MaaBridgeStatus);
+
+    impl HostService for FixedStatus {
+        fn info(&self) -> &'static HostServiceInfo {
+            &MAA_BRIDGE_INFO
+        }
+
+        fn call(&self, _caller: &str, args: Value) -> Result<Value, HostError> {
+            match args.get("op").and_then(Value::as_str) {
+                Some("status") => Ok(status_json(&self.0)),
+                Some(other) => Err(HostError::invalid_args(
+                    "maa.bridge",
+                    format!("未知 op：{other}"),
+                )),
+                None => Err(HostError::invalid_args("maa.bridge", "缺少 op 字段")),
+            }
+        }
+    }
+
+    #[test]
+    fn status_json_keeps_the_contract_shape() {
+        let running = status_json(&MaaBridgeStatus {
+            state: MaaBridgeState::Running,
+            port: Some(43715),
+            error: None,
+        });
+        assert_eq!(running["state"], "running");
+        assert_eq!(running["port"], 43715);
+        assert_eq!(running["error"], Value::Null);
+
+        let unavailable = status_json(&MaaBridgeStatus::unavailable("没有桥"));
+        assert_eq!(unavailable["state"], "unavailable");
+        assert_eq!(unavailable["port"], Value::Null);
+        assert_eq!(unavailable["error"], "没有桥");
+    }
+
+    #[test]
+    fn service_rejects_unknown_ops_and_parses_ensure() {
+        let service = FixedStatus(MaaBridgeStatus::starting(4000));
+        let err = service
+            .call("maa", serde_json::json!({"op": "nope"}))
+            .unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs { .. }), "{err:?}");
+        let err = service.call("maa", serde_json::json!({})).unwrap_err();
+        assert!(matches!(err, HostError::InvalidArgs { .. }), "{err:?}");
+
+        let ok = service
+            .call("maa", serde_json::json!({"op": "status"}))
+            .unwrap();
+        assert_eq!(ok["state"], "starting");
+    }
 
     #[test]
     fn free_port_is_bindable() {
