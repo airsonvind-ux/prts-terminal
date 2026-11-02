@@ -17,7 +17,7 @@ mod registry;
 mod rpc;
 mod transport;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -184,6 +184,65 @@ pub fn default_services(
     (Arc::new(services), query)
 }
 
+// ═══════════════════════════════════════════════════════
+// 启用状态（data_dir()/plugins.json）
+// ═══════════════════════════════════════════════════════
+
+/// 启停状态文件名（D18：配置与启停状态分两处，这个文件只管启停）。
+pub const ENABLED_FILE_NAME: &str = "plugins.json";
+
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+struct EnabledFile {
+    #[serde(default)]
+    enabled: HashMap<String, bool>,
+}
+
+/// 读启用状态。缺失与读不懂都按「全启用」处理——插件不该因为一个小文件
+/// 写坏就整体消失；损坏的文件先备份成 `plugins.json.bad` 再重建。
+fn load_enabled(data_dir: &Path) -> HashMap<String, bool> {
+    let path = data_dir.join(ENABLED_FILE_NAME);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return HashMap::new(),
+        Err(error) => {
+            eprintln!(
+                "[plugins] 启用状态读不出来：{}（{error}），按全启用处理",
+                path.display()
+            );
+            return HashMap::new();
+        }
+    };
+
+    match serde_json::from_str::<EnabledFile>(&text) {
+        Ok(file) => file.enabled,
+        Err(error) => {
+            let backup = path.with_extension("json.bad");
+            let note = match std::fs::rename(&path, &backup) {
+                Ok(()) => format!("已备份到 {}", backup.display()),
+                Err(rename_error) => format!("备份失败（{rename_error}），原文件未动"),
+            };
+            eprintln!(
+                "[plugins] 启用状态损坏：{}（{error}），{note}；本次按全启用处理",
+                path.display()
+            );
+            HashMap::new()
+        }
+    }
+}
+
+/// 写启用状态（M3 的扩展页调；M2b 只读，但落盘格式在这里定死）。
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_enabled(data_dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
+    let path = data_dir.join(ENABLED_FILE_NAME);
+    // 先读回原内容：未知 id 要原样保留（规格 §6「保留不清洗」）。
+    let mut state = load_enabled(data_dir);
+    state.insert(id.to_string(), enabled);
+    let file = EnabledFile { enabled: state };
+    let text = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
+    std::fs::write(&path, text).map_err(|error| format!("写 {} 失败：{error}", path.display()))
+}
+
 /// 扫描插件目录，逐个校验并安装，返回内存台账。
 ///
 /// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 能力裁剪 →
@@ -208,7 +267,9 @@ pub fn load_all(
     _policy: &Arc<Policy>,
 ) -> Arc<Mutex<PluginRegistry>> {
     let ledger = Arc::new(Mutex::new(PluginRegistry::new()));
-    let mut seen_ids: HashSet<String> = HashSet::new();
+    // 启用状态与「已占用 id 的路径」都跨两个目录共享。
+    let enabled = load_enabled(&roots.data);
+    let mut scan = Scan::default();
 
     for dir in [&roots.bundled, &roots.user] {
         let entries = match std::fs::read_dir(dir) {
@@ -237,11 +298,26 @@ pub fn load_all(
             if dir_name.starts_with('.') {
                 continue;
             }
-            load_one(reg, services, &plugin_dir, dir_name, &mut seen_ids, &ledger);
+            load_one(
+                reg,
+                services,
+                &plugin_dir,
+                dir_name,
+                &mut scan,
+                &enabled,
+                &ledger,
+            );
         }
     }
 
     ledger
+}
+
+/// 一次扫描的跨插件状态：已占用的 id（校验规则 2）与已成功加载插件的路径。
+#[derive(Default)]
+struct Scan {
+    seen_ids: HashSet<String>,
+    paths: HashMap<String, PathBuf>,
 }
 
 /// 装配单个插件目录；任何一步失败都只影响这个插件。
@@ -251,7 +327,8 @@ fn load_one(
     services: &Arc<HostServices>,
     plugin_dir: &Path,
     dir_name: &str,
-    seen_ids: &mut HashSet<String>,
+    scan: &mut Scan,
+    enabled: &HashMap<String, bool>,
     ledger: &Arc<Mutex<PluginRegistry>>,
 ) {
     // manifest 读不出来就没有可记账的 id：报错并跳过，不建记录。
@@ -264,18 +341,43 @@ fn load_one(
     };
 
     let id = manifest.id.clone();
-    if let Err(error) = manifest::validate(&manifest, dir_name, seen_ids) {
-        eprintln!("[plugins] {dir_name}（id={id}）校验失败：{error}");
-        let reason = error.to_string();
-        // 同 id 的后来者不得覆盖先到者的记录（先到先得，后者整体作废）。
-        if !matches!(error, PluginError::DuplicateId(_)) {
-            insert(&ledger, PluginRecord {
-                manifest,
-                state: PluginState::Failed(reason),
-                tools: Vec::new(),
-                reported_capabilities: Vec::new(),
-            });
+    if let Err(error) = manifest::validate(&manifest, dir_name, &mut scan.seen_ids) {
+        match &error {
+            // 同 id 的外部插件不写台账、不覆盖内置记录（N3），只报清两个路径。
+            PluginError::DuplicateId(duplicated) => {
+                let first = scan
+                    .paths
+                    .get(duplicated)
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "（已登记的插件）".to_string());
+                eprintln!(
+                    "[plugins] 跳过外部插件：{}（id={duplicated}）与已加载的 {first} 同名，内置优先",
+                    plugin_dir.display()
+                );
+            }
+            _ => {
+                eprintln!("[plugins] {dir_name}（id={id}）校验失败：{error}");
+                insert(&ledger, PluginRecord {
+                    manifest,
+                    state: PluginState::Failed(error.to_string()),
+                    tools: Vec::new(),
+                    reported_capabilities: Vec::new(),
+                });
+            }
         }
+        return;
+    }
+    scan.paths.insert(id.clone(), plugin_dir.to_path_buf());
+
+    // 启用状态在加载期的最后一刻生效：校验失败与停用是两回事，前者报错、后者安静跳过。
+    if !enabled.get(&id).copied().unwrap_or(true) {
+        eprintln!("[plugins] {id} 已在 {ENABLED_FILE_NAME} 里停用，跳过加载");
+        insert(&ledger, PluginRecord {
+            manifest,
+            state: PluginState::Disabled,
+            tools: Vec::new(),
+            reported_capabilities: Vec::new(),
+        });
         return;
     }
 
@@ -476,5 +578,153 @@ mod tests {
         let names = register_plugin_tools(&mut reg, "probe", vec![]).unwrap();
         assert!(names.is_empty());
         assert_eq!(reg.list_defs().len(), 0);
+    }
+
+    // ── 4b：plugins.json 与外部目录 ──────────────────────────
+
+    /// 一个只给本用例用的临时目录（测试并行，名字带计数器）。
+    fn scratch(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "prts-plugins-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        dir
+    }
+
+    #[test]
+    fn missing_enabled_file_means_everything_is_enabled() {
+        let dir = scratch("missing-enabled");
+        assert!(load_enabled(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enabled_file_round_trips_and_keeps_unknown_ids() {
+        let dir = scratch("enabled-round-trip");
+        // 先手写一条未知 id：M2 没有对应插件，但它必须被保留（规格 §6）。
+        std::fs::write(
+            dir.join(ENABLED_FILE_NAME),
+            r#"{"enabled":{"ghost":true}}"#,
+        )
+        .expect("写初始文件");
+
+        set_enabled(&dir, "maa", false).expect("写启用状态");
+        let state = load_enabled(&dir);
+        assert_eq!(state.get("maa"), Some(&false));
+        assert_eq!(state.get("ghost"), Some(&true), "未知 id 不得被清洗");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_enabled_file_is_backed_up_and_ignored() {
+        let dir = scratch("enabled-corrupt");
+        std::fs::write(dir.join(ENABLED_FILE_NAME), "{ 不是 JSON").expect("写坏文件");
+
+        assert!(load_enabled(&dir).is_empty(), "损坏时按全启用处理");
+        assert!(
+            dir.join(format!("{ENABLED_FILE_NAME}.bad")).is_file(),
+            "损坏的文件要备份成 plugins.json.bad"
+        );
+        assert!(
+            !dir.join(ENABLED_FILE_NAME).is_file(),
+            "备份后原文件应当已经不在了"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disabled_plugin_is_recorded_but_not_installed() {
+        let data = scratch("disabled-data");
+        set_enabled(&data, "maa", false).expect("停用 maa");
+        let roots = PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user: data.join("plugins"),
+            data: data.clone(),
+        };
+        let (services, _query) = default_services(&roots, None);
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let ledger = load_all(&mut reg, &roots, &services, &policy);
+
+        let ledger = ledger.lock().expect("台账锁不该中毒");
+        let record = ledger.get("maa").expect("停用的插件也要留一条记录");
+        assert_eq!(record.state, PluginState::Disabled);
+        assert!(record.tools.is_empty());
+        assert!(reg.get("run_maa_task").is_none(), "停用的插件不得注册工具");
+        drop(ledger);
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn external_plugin_with_a_bundled_id_does_not_override_it() {
+        let data = scratch("duplicate-data");
+        let user = data.join("plugins");
+        let external = user.join("maa");
+        std::fs::create_dir_all(&external).expect("建外部插件目录");
+        std::fs::write(
+            external.join("plugin.json"),
+            r#"{"manifestVersion":1,"id":"maa","name":"外部的 maa","version":"0.1.1",
+                "kind":"builtin","activation":[],"capabilities":[],"contributes":{}}"#,
+        )
+        .expect("写外部 manifest");
+
+        let roots = PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user,
+            data: data.clone(),
+        };
+        let (services, _query) = default_services(&roots, None);
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let ledger = load_all(&mut reg, &roots, &services, &policy);
+
+        let ledger = ledger.lock().expect("台账锁不该中毒");
+        let record = ledger.get("maa").expect("随包的 maa 仍应在台账里");
+        assert_eq!(record.state, PluginState::Loaded);
+        assert_eq!(record.manifest.name, "MAA 自动化", "内置那份优先");
+        assert_eq!(record.tools, vec!["run_maa_task".to_string()]);
+        assert_eq!(reg.list_defs().len(), 1, "同名外部插件不得再注册一遍");
+        drop(ledger);
+
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn broken_manifest_does_not_break_startup() {
+        let data = scratch("broken-data");
+        let user = data.join("plugins");
+        let broken = user.join("broken");
+        std::fs::create_dir_all(&broken).expect("建坏插件目录");
+        std::fs::write(broken.join("plugin.json"), "{ 这不是 JSON").expect("写坏 manifest");
+
+        let roots = PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user,
+            data: data.clone(),
+        };
+        let (services, _query) = default_services(&roots, None);
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let ledger = load_all(&mut reg, &roots, &services, &policy);
+
+        let ledger = ledger.lock().expect("台账锁不该中毒");
+        assert!(ledger.get("broken").is_none(), "读不出 manifest 的目录不记账");
+        assert_eq!(
+            ledger.get("maa").map(|record| record.state.clone()),
+            Some(PluginState::Loaded),
+            "坏插件不该拖垮后面的插件"
+        );
+        drop(ledger);
+        assert!(reg.get("run_maa_task").is_some());
+
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

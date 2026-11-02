@@ -22,8 +22,8 @@ pub enum PluginState {
     Faulted(String),
     /// 加载失败，原因即 [`super::PluginError`] 的 Display 文本。
     Failed(String),
-    /// 被用户停用（M3 的启停写这里；M2 不会构造该值）。
-    #[allow(dead_code)] // M3 启停接入后删除
+    /// 被用户停用：`plugins.json` 里写了 `false`，加载期就不注册工具（M3 的
+    /// 扩展页负责改写这个文件）。
     Disabled,
 }
 
