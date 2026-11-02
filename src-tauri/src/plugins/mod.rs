@@ -27,8 +27,11 @@ use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
 
-use self::manifest::{PluginKind, PluginManifest};
+use self::manifest::PluginManifest;
 
+pub use manifest::PluginKind;
+#[cfg(test)]
+pub(crate) use manifest::parse_manifest;
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
 
 /// 插件层的统一错误。
@@ -387,11 +390,16 @@ fn load_one(
     config: &PluginsConfig,
     ledger: &Arc<Mutex<PluginRegistry>>,
 ) {
-    // manifest 读不出来就没有可记账的 id：报错并跳过，不建记录。
+    // manifest 读不出来就没有可记账的 id：记进「未登记目录」让扩展页能看见，
+    // 否则用户装错位置的插件会静默消失（S7）。
     let manifest = match manifest::read_manifest(plugin_dir) {
         Ok(manifest) => manifest,
         Err(error) => {
             eprintln!("[plugins] 跳过 {dir_name}：{error}");
+            ledger
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert_unregistered(dir_name, &error.to_string());
             return;
         }
     };

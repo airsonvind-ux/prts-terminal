@@ -1,4 +1,7 @@
-// 设置页 · "扩展"子页（MAA 接入）
+// 设置页 · 插件「MAA 自动化」的设置页
+//
+// 从原来的「扩展」子页拆出来：扩展页现在是插件容器（管理页 + 各插件的设置页），
+// 这一页只是其中一个插件的设置内容，由 PluginSettingsHost 按 id 挂上来。
 //
 // 三节：账号 → 连接 → 增强。
 //
@@ -25,17 +28,17 @@ import type {
   MaaPatch,
   MaaResolved,
   MaaServer,
-  MaaSettings,
+  MaaSettings as MaaSettingsConfig,
   MaaStatus,
 } from "../../types";
 import { SettingsRow } from "./ui/SettingsRow";
 import { Select } from "./ui/Select";
 import { SectionHint, SectionWarning, SettingsSection } from "./ui/SettingsSection";
 import choiceStyles from "./ui/choice.module.css";
-import styles from "./SettingsExtension.module.css";
+import styles from "./MaaSettings.module.css";
 
-export interface SettingsExtensionProps {
-  maa: MaaSettings;
+export interface MaaSettingsProps {
+  maa: MaaSettingsConfig;
   /** 对话处理中（禁用全部控件；漏斗另有守卫） */
   busy: boolean;
   /** 「测试连接」进行中（状态由 Panel 持有——子页切走会卸载，留在子页会丢） */
@@ -84,7 +87,7 @@ function pickResolved(status: MaaStatus | null, emulator: string): MaaResolved |
   return status.resolved.find((r) => r.emulator === want) ?? status.resolved[0];
 }
 
-export function SettingsExtension({
+export function MaaSettings({
   maa,
   busy,
   testing,
@@ -92,7 +95,7 @@ export function SettingsExtension({
   onPatch,
   onChooseEmulatorDir,
   onChooseAdbFile,
-}: SettingsExtensionProps) {
+}: MaaSettingsProps) {
   const [status, setStatus] = useState<MaaStatus | null>(null);
   // 文本框草稿：失焦时提交（与现有页的文本字段约定一致）
   const [draft, setDraft] = useState({

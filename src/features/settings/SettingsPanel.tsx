@@ -10,7 +10,7 @@ import {
 } from "react";
 import { SettingsAbout } from "./SettingsAbout";
 import { SettingsApp } from "./SettingsApp";
-import { SettingsExtension } from "./SettingsExtension";
+import { PluginSettingsHost } from "./PluginSettingsHost";
 import { SettingsModel } from "./SettingsModel";
 import { SettingsSafety } from "./SettingsSafety";
 import { SettingsSkills } from "./SettingsSkills";
@@ -209,14 +209,17 @@ export function SettingsPanel() {
           {activeTab === "memory" && <SettingsMemory busy={settingsBusy} />}
           {activeTab === "usage" && <SettingsUsage />}
           {activeTab === "extension" && (
-            <SettingsExtension
-              maa={settings.maa}
-              busy={settingsBusy}
-              testing={maaInFlight > 0}
-              onTest={handleTestConnection}
-              onPatch={(patch, label) => updateSettings({ maa: patch }, label)}
-              onChooseEmulatorDir={handleChooseEmulatorDir}
-              onChooseAdbFile={handleChooseAdbFile}
+            <PluginSettingsHost
+              maaProps={{
+                maa: settings.maa,
+                busy: settingsBusy,
+                testing: maaInFlight > 0,
+                onTest: handleTestConnection,
+                onPatch: (patch, label) =>
+                  updateSettings({ maa: patch }, label),
+                onChooseEmulatorDir: handleChooseEmulatorDir,
+                onChooseAdbFile: handleChooseAdbFile,
+              }}
             />
           )}
           {activeTab === "app" && (

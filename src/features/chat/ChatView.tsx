@@ -16,6 +16,7 @@ import { useUIStore } from "../../stores/useUIStore";
 import { useCompactionStore } from "../../stores/useCompactionStore";
 import { EMPTY_STEER_PENDING, useSteerStore } from "../../stores/useSteerStore";
 import { showToast } from "../../stores/useToastStore";
+import { isPluginDropArmed } from "../settings/pluginDropArbiter";
 import { useGuideStore } from "../../stores/useGuideStore";
 import {
   draftKeyFor,
@@ -222,6 +223,9 @@ export function ChatView({ onDragHandle }: Props) {
             setDragActive(false);
           } else if (type === "drop") {
             setDragActive(false);
+            // 设置页的「安装插件」拖拽区优先：两边都会收到同一个 webview 级事件，
+            // 它按坐标判断过落点在安装区上方就会先武装自己（见 pluginDropArbiter）。
+            if (isPluginDropArmed()) return;
             uploadPaths(event.payload.paths);
           }
         });

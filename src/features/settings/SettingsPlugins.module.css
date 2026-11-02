@@ -1,0 +1,264 @@
+/* 设置页 · 插件容器与管理页样式 */
+
+.container {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── 标题区：管理页 + 有设置页的插件 ── */
+
+.tabBar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--depth-1);
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 2px 6px 8px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+
+.tabActive {
+  border-bottom-color: var(--accent);
+}
+
+.tabButton {
+  font-size: 12px;
+  font-family: var(--font-ui);
+  color: var(--text-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.tabActive .tabButton {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+/* 开关：点开关只切开关，不切页（命中区互不重叠） */
+.tabSwitch {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 8px;
+}
+
+/* ── 管理页 ── */
+
+.installRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.actionButton {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.actionButton:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--depth-4);
+}
+
+.actionButton:disabled {
+  color: var(--text-3);
+  cursor: default;
+  opacity: 0.7;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+.dropZone {
+  border: 1px dashed var(--depth-1);
+  border-radius: var(--radius-sm);
+  padding: 14px 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropZoneOver {
+  border-color: var(--accent);
+  background: var(--depth-2);
+  color: var(--text-1);
+}
+
+/* 待确认卡片 */
+.previewCard {
+  border: 1px solid var(--depth-1);
+  border-radius: var(--radius-sm);
+  background: var(--depth-2);
+  padding: 10px 12px;
+  margin: 10px 0;
+}
+
+.previewTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin-bottom: 6px;
+}
+
+.previewGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.previewKey {
+  color: var(--text-3);
+}
+
+.previewActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.primaryButton {
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-1);
+  background: var(--depth-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.primaryButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 已安装清单 */
+.rowList {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--depth-1);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
+}
+
+.dotOk {
+  background: #4caf50;
+}
+
+.dotBad {
+  background: #d9544d;
+}
+
+.name {
+  font-size: 12px;
+  color: var(--text-1);
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-ui);
+}
+
+button.name {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--depth-1);
+  text-underline-offset: 3px;
+}
+
+.meta {
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.rowSpacer {
+  flex: 1;
+}
+
+.reason {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+/* 卸载两步确认：整行变成一条确认提示 */
+.confirmRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--depth-1);
+  font-size: 11px;
+  color: var(--text-2);
+  flex-wrap: wrap;
+}
+
+.confirmCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.error {
+  margin: 8px 0;
+  font-size: 11px;
+  color: #d9544d;
+  line-height: 1.5;
+}
+
+.empty {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
