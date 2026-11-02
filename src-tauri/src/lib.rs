@@ -153,7 +153,7 @@ fn precheck_install_surface() {
             config::data_notice_path().display()
         ));
     }
-    if crate::maa::bridge::resolve_exe().is_err() {
+    if !crate::host::maa_bridge_ready() {
         missing.push("MAA 桥可执行文件：prts-maa-bridge.exe".to_string());
     }
 

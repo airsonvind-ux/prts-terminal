@@ -15,6 +15,24 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+mod internal;
+
+/// MAA 桥的进程托管（M2a 临时出口）。
+///
+/// `ensure` 只 spawn 并把端口交回来——**连接与握手归插件**，因为桥只 accept
+/// 一次，宿主探活会把插件唯一的机会用掉（见 `internal::maa_bridge` 的模块注释）。
+/// 2b 起由 `maa.bridge` 能力服务接管，届时删掉这几个再导出。
+pub(crate) use internal::maa_bridge::{
+    ensure as maa_bridge_ensure, shutdown as maa_bridge_shutdown, status as maa_bridge_status,
+    MaaBridgeState,
+};
+
+/// 桥可执行文件是否就位——只解析路径，不启动、不连接。
+///
+/// 只有 release 的启动自检会调用它，开发构建下自然没人引用。
+#[cfg_attr(debug_assertions, allow(unused_imports))]
+pub(crate) use internal::maa_bridge::ready as maa_bridge_ready;
+
 /// 一条宿主能力的静态描述。
 ///
 /// 由服务实现以 `static` 形式持有，因此 `HostApi` 可以直接返回 `&'static`；

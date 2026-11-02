@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use crate::config;
 use crate::machine::MachineInfo;
 
-use super::bridge::{self, Bridge};
+use super::bridge::Bridge;
 use super::connection::{self, Overrides, PickError, Resolved};
 use super::settings::MaaSettings;
 
@@ -566,10 +566,21 @@ impl Manager {
             return Err("本机没有检测到 MAA。装好 MAA 再试，或在设置里指定 MAA 路径。".to_string());
         };
 
-        let exe = bridge::resolve_exe().map_err(|e| e.to_string())?;
-        let port = bridge::free_port().map_err(|e| e.to_string())?;
+        // 进程归宿主托管：这里只拿端口，连接与握手由 `Bridge::connect` 自己做。
+        // 端口抢不过别人时 `Bridge::connect` 会失败并让宿主把进程收掉。
         let user_dir = data_dir.join("maa");
-        let bridge = Bridge::spawn(&exe, &maa_dir, &user_dir, port).map_err(|e| e.to_string())?;
+        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
+        let port = match status.state {
+            crate::host::MaaBridgeState::Unavailable => {
+                return Err(status
+                    .error
+                    .unwrap_or_else(|| "桥起不来（宿主没有给出原因）".to_string()))
+            }
+            _ => status
+                .port
+                .ok_or_else(|| "桥起不来（宿主没有给出端口）".to_string())?,
+        };
+        let bridge = Bridge::connect(port).map_err(|e| e.to_string())?;
 
         if !bridge.available() {
             let reason = bridge
@@ -1560,11 +1571,11 @@ mod tests {
         let data_dir = crate::config::data_dir();
         let info = MachineInfo::load(&data_dir).expect("需要 machine.json（先跑一次 PRTS 生成）");
         let maa_dir = info.maa.clone().expect("本机需要已安装 MAA");
-        let exe = bridge::resolve_exe().expect("要能定位桥可执行文件");
-        let port = bridge::free_port().expect("取空闲端口");
         let user_dir = data_dir.join("maa");
+        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
+        let port = status.port.expect("要能拿到端口");
 
-        let bridge = Bridge::spawn(&exe, &maa_dir, &user_dir, port).expect("起桥");
+        let bridge = Bridge::connect(port).expect("起桥");
         println!("ready    = {}", bridge.ready);
         assert!(bridge.is_alive(), "起完之后桥该是活的");
 
@@ -1593,11 +1604,11 @@ mod tests {
         let data_dir = crate::config::data_dir();
         let info = MachineInfo::load(&data_dir).expect("需要 machine.json（先跑一次 PRTS 生成）");
         let maa_dir = info.maa.clone().expect("本机需要已安装 MAA");
-        let exe = bridge::resolve_exe().expect("要能定位桥可执行文件");
-        let port = bridge::free_port().expect("取空闲端口");
         let user_dir = data_dir.join("maa");
+        let status = crate::host::maa_bridge_ensure(&maa_dir, &user_dir);
+        let port = status.port.expect("要能拿到端口");
 
-        let bridge = Bridge::spawn(&exe, &maa_dir, &user_dir, port).expect("起桥");
+        let bridge = Bridge::connect(port).expect("起桥");
         // 真跑任务才会置「未收尾」；这里直接造出来，第二个 submit 就该被拒。
         bridge.begin_run(vec![1]);
         assert!(bridge.run_in_flight(), "begin_run 之后应视为在跑");
