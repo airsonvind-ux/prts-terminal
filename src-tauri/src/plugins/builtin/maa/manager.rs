@@ -1208,7 +1208,7 @@ mod tests {
     /// 一条队列跑 `[StartUp, OperBox, Depot]`（**会启动并操作游戏**），记录：
     /// 每个任务（taskid）的起止时刻、任务内的最大静默、收尾事件的 code + name，
     /// 以及 Depot 是否与 OperBox 一样是“增量 + done”。
-    /// 运行：`cargo test --lib maa::manager::tests::wait_budget_timing -- --ignored --nocapture`
+    /// 运行：`cargo test --lib plugins::builtin::maa::manager::tests::wait_budget_timing -- --ignored --nocapture`
     #[test]
     #[ignore = "真机验证：耗时校准（会启动并操作游戏；期间勿操作模拟器）"]
     fn wait_budget_timing() {
@@ -1352,7 +1352,7 @@ mod tests {
     ///
     /// **只读识别**（OperBox）：会真的操作模拟器（导航 / 滑动 / 识别），约 1-2 分钟。
     /// 验的是：任务能不能跑完、`recognition` 事件的**实际结构**、以及它的体量。
-    /// 运行：`cargo test --lib maa::manager::tests::operbox_round_trip -- --ignored --nocapture`
+    /// 运行：`cargo test --lib plugins::builtin::maa::manager::tests::operbox_round_trip -- --ignored --nocapture`
     #[test]
     #[ignore = "真机验证：OperBox 闭环（需先启动模拟器；期间勿操作模拟器）"]
     fn operbox_round_trip() {
@@ -1519,7 +1519,7 @@ mod tests {
     /// 真机验证（第一步）：连接流程 + 真信号形状 + 实际截图方式。
     ///
     /// **只连接、只看，不派任何任务。** 需要模拟器已启动。
-    /// 运行：`cargo test --lib maa::manager::tests::connect_and_introspect -- --ignored --nocapture`
+    /// 运行：`cargo test --lib plugins::builtin::maa::manager::tests::connect_and_introspect -- --ignored --nocapture`
     #[test]
     #[ignore = "真机验证：连模拟器（需先启动模拟器）"]
     fn connect_and_introspect() {
@@ -1553,7 +1553,7 @@ mod tests {
     /// 真机验证：起桥 → 握手 → 连发两条命令 → 关桥。
     ///
     /// **只加载 MaaCore，不连模拟器、不碰游戏窗口。**
-    /// 运行：`cargo test --lib maa::manager::tests::bridge_smoke -- --ignored --nocapture`
+    /// 运行：`cargo test --lib plugins::builtin::maa::manager::tests::bridge_smoke -- --ignored --nocapture`
     #[test]
     #[ignore = "真机验证，手动运行"]
     fn bridge_smoke() {
@@ -1586,7 +1586,7 @@ mod tests {
     ///
     /// **不连模拟器、不碰游戏**：管理器里放一个真桥，造一个「未收尾的运行」，
     /// 只验闸的位置与判据（submit 的锁内、ensure 之后）。
-    /// 运行：`cargo test --lib maa::manager::tests::dispatch_mutex -- --ignored --nocapture`
+    /// 运行：`cargo test --lib plugins::builtin::maa::manager::tests::dispatch_mutex -- --ignored --nocapture`
     #[test]
     #[ignore = "真机验证，手动运行"]
     fn dispatch_mutex() {

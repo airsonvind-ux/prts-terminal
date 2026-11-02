@@ -180,6 +180,28 @@ pub fn bundled_docs_dir() -> PathBuf {
     }
 }
 
+/// 内置插件目录（随包只读资源）。
+///
+/// 开发构建 = `src-tauri/content/plugins`；发布构建 = 程序目录下
+/// `resources/plugins`。**不做存在性探测**：缺失由启动前自检拦下（发布构建），
+/// 开发构建按空目录处理。
+pub fn bundled_plugins_dir() -> PathBuf {
+    if is_dev() {
+        resource_root().join("content").join("plugins")
+    } else {
+        resource_root().join("resources").join("plugins")
+    }
+}
+
+/// 插件可写数据目录：数据根下的 `plugin-data/`。
+///
+/// M1 只解析路径、不创建目录、不写入——真正的内容由 M2 的 process 通道
+/// 按 `<id>/` 落进去。**纯路径解析**（与模块文档一致），需要目录的地方
+/// 自行 `create_dir_all`。
+pub fn plugin_data_dir() -> PathBuf {
+    data_dir().join("plugin-data")
+}
+
 /// 许可证文件（随包资源；关于页展示全文用）。
 ///
 /// 开发构建 = 仓库根 `LICENSE`（`resource_root()` 指向 `src-tauri/`，故上跳一级）；

@@ -13,7 +13,6 @@ mod fs_grep;
 mod fs_write;
 mod knowledge;
 mod list_knowledge;
-mod maa_task;
 mod memory;
 mod query_enemy;
 mod query_level;
@@ -40,7 +39,6 @@ pub use fs_grep::GrepTool;
 pub use fs_write::{EditTool, WriteFileTool};
 pub use knowledge::ReadKnowledgeTool;
 pub use list_knowledge::ListKnowledgeTool;
-pub use maa_task::MaaTaskTool;
 pub use memory::{MemoryExperienceTool, MemoryGrowthTool};
 pub use query_enemy::QueryEnemy;
 pub use query_level::QueryLevel;
@@ -391,10 +389,30 @@ pub trait Tool: Send + Sync {
 // ToolRegistry —— 工具的集中登记处
 // ═══════════════════════════════════════════════════════
 
+/// 工具来源（M1 新增）：宿主内置工具，还是某个插件贡献的工具。
+///
+/// 只做记账，不做门禁：M1 的 builtin 插件与宿主同进程，权限声明没有运行时
+/// 意义（D11）；来源字段供 M2 的启停与 M3 的扩展页区分「这个工具是谁的」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// 宿主内置工具（`register_builtin` 注册）。
+    Host,
+    /// 插件贡献的工具，附插件 id。
+    Plugin(String),
+}
+
+/// 注册表里的一项：工具本体 + 来源。
+struct RegisteredTool {
+    tool: Box<dyn Tool>,
+    /// 只写不读的默认行为由 [`ToolRegistry::origin_of`] 兜底：生产代码目前不读它，
+    /// M2 按来源成组摘除工具（启停）时才消费。
+    origin: Origin,
+}
+
 /// 工具注册表。应用启动时注册所有可用工具，
 /// orchestrator 通过 Registry 查找和执行工具。
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, RegisteredTool>,
 }
 
 impl ToolRegistry {
@@ -404,20 +422,48 @@ impl ToolRegistry {
         }
     }
 
-    /// 注册一个工具。同名工具后注册的覆盖先注册的。
+    /// 注册一个工具（宿主来源）。同名工具后注册的覆盖先注册的。
     ///
     /// 注册时校验 `parameters()` 的 JSON Schema 合法性（模块 3 P1：
     /// schema 校验——注册时校验 + 执行前校验参数），非法 schema 拒绝注册。
     pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), String> {
+        self.register_with_origin(tool, Origin::Host)
+    }
+
+    /// 注册一个工具并记录来源。
+    ///
+    /// 与 [`Self::register`] 同为「后注册覆盖」语义——26 个内置工具依赖它做
+    /// 局部替换（历史行为，迁移不得改变）。插件路径的同名策略相反：
+    /// `plugins::register_plugin_tools` 在调用本方法前先查重，重名即失败并
+    /// 回滚，因为跨插件覆盖别人的工具是最难排查的一类故障。
+    pub fn register_with_origin(
+        &mut self,
+        tool: Box<dyn Tool>,
+        origin: Origin,
+    ) -> Result<(), String> {
         schema::validate_tool_schema(&tool.parameters())?;
         let name = tool.name().to_string();
-        self.tools.insert(name, tool);
+        self.tools.insert(name, RegisteredTool { tool, origin });
         Ok(())
+    }
+
+    /// 移除指定名字的工具；返回是否真的移除了（插件注册失败时的回滚用）。
+    pub fn remove(&mut self, name: &str) -> bool {
+        self.tools.remove(name).is_some()
+    }
+
+    /// 工具来源：宿主内置，还是哪个插件贡献的。
+    ///
+    /// 生产代码目前不读它（M2 的启停与 M3 的扩展页才消费）；测试用它断言
+    /// `run_maa_task` 确实是从插件路径进来的，而不是宿主又偷偷注册了一份。
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn origin_of(&self, name: &str) -> Option<&Origin> {
+        self.tools.get(name).map(|registered| &registered.origin)
     }
 
     /// 按名查找工具。
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|t| t.as_ref())
+        self.tools.get(name).map(|registered| registered.tool.as_ref())
     }
 
     /// 解析指定工具本次调用的展示切片（tool/call 卡片信息）。
@@ -436,7 +482,11 @@ impl ToolRegistry {
     /// 会让请求前缀在工具区断裂（DeepSeek 前缀缓存整轮全未命中）。
     /// 排序后输出跨重启逐字节稳定，是前缀缓存的硬约束。
     pub fn list_defs(&self) -> Vec<ToolDef> {
-        let mut defs: Vec<ToolDef> = self.tools.values().map(|t| t.to_def()).collect();
+        let mut defs: Vec<ToolDef> = self
+            .tools
+            .values()
+            .map(|registered| registered.tool.to_def())
+            .collect();
         defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
         defs
     }
@@ -587,9 +637,6 @@ pub fn register_builtin(
     // + 经历记忆只读（经历写入只走后台管线，memory_experience 无写参数面）。
     reg.register(Box::new(MemoryExperienceTool::new(Arc::clone(&memory))))?;
     reg.register(Box::new(MemoryGrowthTool::new(Arc::clone(&memory), ledger)))?;
-    // MAA 接入（桥 ↔ 工具层）：把游戏操作交给本机 MAA。
-    // 有状态且带副作用（桥连接 / 任务队列 / 截图落盘），is_concurrency_safe=false。
-    reg.register(Box::new(MaaTaskTool))?;
     Ok(())
 }
 
@@ -867,15 +914,18 @@ mod tests {
         // + 既有 11 查询/知识工具 + 1 Skill 激活 + 1 SimPath + 1 run_command（M3-A）
         // + 网络域 2 工具（M5：web_search/web_fetch）+ 时间 1 工具（Phase4 1.3）
         // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）
-        // + MAA 1 工具（run_maa_task）+ 截图 1 工具（capture_game_screen）= 26；
+        // + 截图 1 工具（capture_game_screen）= 25；
+        // MAA 1 工具（run_maa_task）自插件系统 M1 起不走这里，由
+        // `plugins::builtin::install("maa", …)` 注册（见 build_full_registry）。
         // echo 为测试辅助不注册（2026-08-31）；缓存工具已移除（2026-08）。
-        assert_eq!(reg.list_defs().len(), 26);
+        assert_eq!(reg.list_defs().len(), 25);
 
         // 记忆工具确已注册且名字稳定
         assert!(reg.get("memory_experience").is_some());
         assert!(reg.get("memory_growth").is_some());
-        // MAA 工具确已注册（名字即 LLM 的调用名）
-        assert!(reg.get("run_maa_task").is_some());
+        // MAA 工具已退出内置注册路径——它必须由插件路径提供，
+        // 这里断言"不在"，防止有人把注册偷偷加回来（回退后门）。
+        assert!(reg.get("run_maa_task").is_none());
         // 截图工具确已注册（与 MAA 独立；名字即 LLM 的调用名）
         assert!(reg.get("capture_game_screen").is_some());
 
@@ -943,6 +993,135 @@ mod tests {
         assert!(
             matches!(&err, ToolError::Parse(msg) if !msg.contains("缺少必填参数") && !msg.contains("类型错误")),
             "guard 应放行合法参数，got: {err}"
+        );
+    }
+
+    // ── 工具定义快照（插件系统 M1 的硬门禁）──
+    // MAA 迁为内置插件的前后，模型可见的工具面必须逐字节一致。
+    // 快照覆盖 name / description / parameters 三元组与排序，
+    // 任何一处变化都视为迁移改变了行为。
+
+    fn tool_defs_fixture_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("tool_defs.json")
+    }
+
+    /// 构建含全部内置工具的注册表（最小临时依赖，不碰真实工作区）。
+    fn build_full_registry() -> ToolRegistry {
+        use crate::knowledge::index::KnowledgeIndex;
+
+        let mut reg = ToolRegistry::new();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let workspace_root =
+            std::env::temp_dir().join(format!("prts-snap-ws-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&workspace_root).unwrap();
+        let kb_root =
+            std::env::temp_dir().join(format!("prts-snap-kb-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&kb_root).unwrap();
+        std::fs::write(
+            kb_root.join("test.md"),
+            "---\ntitle: 测试条目\nbrief: b\n---\n内容",
+        )
+        .unwrap();
+        let knowledge = Arc::new(KnowledgeIndex::load(&kb_root).unwrap());
+        let mem_root =
+            std::env::temp_dir().join(format!("prts-snap-mem-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&mem_root).unwrap();
+        let memory = Arc::new(Mutex::new(
+            crate::memory::MemoryStore::load(&mem_root).unwrap(),
+        ));
+        let ledger = Arc::new(Mutex::new(crate::notices::Notices::load(&mem_root)));
+
+        // M1 装配路径：内置工具走 register_builtin，插件工具走
+        // plugins::builtin::install（生产装配由 plugins::load_all 统一调用，
+        // 这里直接调安装入口，避开测试对 content/plugins 目录的依赖）。
+        register_builtin(
+            &mut reg,
+            Arc::new(Policy::new(workspace_root.clone())),
+            knowledge,
+            memory,
+            ledger,
+        )
+        .expect("所有内置工具 schema 应合法");
+        crate::plugins::builtin::install("maa", &mut reg).expect("内置插件 maa 应装配成功");
+
+        let _ = std::fs::remove_dir_all(&workspace_root);
+        let _ = std::fs::remove_dir_all(&kb_root);
+        let _ = std::fs::remove_dir_all(&mem_root);
+        reg
+    }
+
+    fn tool_defs_snapshot(reg: &ToolRegistry) -> serde_json::Value {
+        let mut rows: Vec<serde_json::Value> = reg
+            .list_defs()
+            .into_iter()
+            .map(|d| {
+                serde_json::json!({
+                    "name": d.function.name,
+                    "description": d.function.description,
+                    "parameters": d.function.parameters,
+                })
+            })
+            .collect();
+        rows.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+        serde_json::Value::Array(rows)
+    }
+
+    /// 重生成夹具：`cargo test dump_tool_defs -- --ignored --nocapture`
+    /// 只在有意改变工具面时执行，且需在提交说明里写清理由。
+    #[test]
+    #[ignore = "夹具生成器，不参与常规测试"]
+    fn dump_tool_defs() {
+        let reg = build_full_registry();
+        let snapshot = tool_defs_snapshot(&reg);
+        let path = tool_defs_fixture_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&snapshot).unwrap()).unwrap();
+        println!(
+            "wrote {} tools -> {}",
+            snapshot.as_array().map(|a| a.len()).unwrap_or(0),
+            path.display()
+        );
+    }
+
+    #[test]
+    fn tool_defs_unchanged() {
+        let reg = build_full_registry();
+        let actual = tool_defs_snapshot(&reg);
+        let text = std::fs::read_to_string(tool_defs_fixture_path())
+            .expect("缺少夹具 src-tauri/tests/fixtures/tool_defs.json");
+        let expected: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            actual, expected,
+            "工具定义与快照不一致：迁移改变了模型可见的工具面"
+        );
+    }
+
+    /// 端到端：真实读随包的 `content/plugins/maa/plugin.json` 走 `load_all`，
+    /// 确认 MAA 是从插件路径进来的（来源记成 `Plugin("maa")`，而不是宿主）。
+    #[test]
+    fn load_all_installs_maa_from_the_bundled_manifest() {
+        let mut reg = ToolRegistry::new();
+        let policy = Arc::new(Policy::new(std::env::temp_dir()));
+        let registry = crate::plugins::load_all(&mut reg, &policy);
+
+        let record = registry
+            .get("maa")
+            .expect("随包 content/plugins 下应有 maa 插件");
+        assert_eq!(record.state, crate::plugins::PluginState::Loaded);
+        assert_eq!(record.tools, vec!["run_maa_task".to_string()]);
+        assert_eq!(reg.list_defs().len(), 1);
+        assert!(
+            matches!(
+                reg.origin_of("run_maa_task"),
+                Some(crate::tools::Origin::Plugin(id)) if id == "maa"
+            ),
+            "MAA 工具必须由插件路径注册"
         );
     }
 }
