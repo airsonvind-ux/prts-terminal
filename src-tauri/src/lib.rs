@@ -6,6 +6,9 @@
 // 模块声明
 mod agent;
 mod app;
+// 能力层（M2a）：宿主原语对插件的统一出口。对外可见是刻意的——它是
+// 插件开发者要对照的契约（D30 三层里的中间层），不是内部实现细节。
+pub mod host;
 mod llm;
 mod platform;
 mod plugins;
