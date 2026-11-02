@@ -19,7 +19,7 @@ mod transport;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
@@ -187,8 +187,9 @@ pub fn default_services(
 /// 扫描插件目录，逐个校验并安装，返回内存台账。
 ///
 /// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 能力裁剪 →
-/// 按 id 分发到 [`builtin::install`]。**单个插件失败不影响宿主启动**：记一条
-/// `Failed(原因)` 并 `eprintln!` 继续——M2 仍没有日志器（D28），告警统一走 stderr。
+/// 按 id 分发到 [`builtin::install`] / [`process::install`]。**单个插件失败不影响
+/// 宿主启动**：记一条 `Failed(原因)` 并 `eprintln!` 继续——M2 仍没有日志器
+/// （D28），告警统一走 stderr。
 ///
 /// 扫描顺序是先 `bundled` 后 `user`：同 id 时随包插件先到先得，用户目录里的
 /// 同名者不覆盖、不记账（只报一条错）。
@@ -196,14 +197,17 @@ pub fn default_services(
 /// 目录不存在时返回空台账并告警：开发机构建里删掉 `content/plugins` 不该让应用
 /// 起不来；发布构建由启动自检兜底（`lib.rs` 的 `precheck_install_surface`）。
 ///
+/// 台账用 `Arc<Mutex<…>>` 返回：加载路径写 `Loaded`/`Failed`，调用路径写
+/// `Faulted`（规格 §6），两边必须看到同一份记录。
+///
 /// `_policy` 是 M2b 的 process 通道要用的宿主策略，M2a 只保留签名位置。
 pub fn load_all(
     reg: &mut ToolRegistry,
     roots: &PluginRoots,
     services: &Arc<HostServices>,
     _policy: &Arc<Policy>,
-) -> PluginRegistry {
-    let mut registry = PluginRegistry::new();
+) -> Arc<Mutex<PluginRegistry>> {
+    let ledger = Arc::new(Mutex::new(PluginRegistry::new()));
     let mut seen_ids: HashSet<String> = HashSet::new();
 
     for dir in [&roots.bundled, &roots.user] {
@@ -233,21 +237,22 @@ pub fn load_all(
             if dir_name.starts_with('.') {
                 continue;
             }
-            load_one(reg, services, &plugin_dir, dir_name, &mut seen_ids, &mut registry);
+            load_one(reg, services, &plugin_dir, dir_name, &mut seen_ids, &ledger);
         }
     }
 
-    registry
+    ledger
 }
 
 /// 装配单个插件目录；任何一步失败都只影响这个插件。
+#[allow(clippy::too_many_arguments)]
 fn load_one(
     reg: &mut ToolRegistry,
     services: &Arc<HostServices>,
     plugin_dir: &Path,
     dir_name: &str,
     seen_ids: &mut HashSet<String>,
-    registry: &mut PluginRegistry,
+    ledger: &Arc<Mutex<PluginRegistry>>,
 ) {
     // manifest 读不出来就没有可记账的 id：报错并跳过，不建记录。
     let manifest = match manifest::read_manifest(plugin_dir) {
@@ -264,7 +269,7 @@ fn load_one(
         let reason = error.to_string();
         // 同 id 的后来者不得覆盖先到者的记录（先到先得，后者整体作废）。
         if !matches!(error, PluginError::DuplicateId(_)) {
-            registry.insert(PluginRecord {
+            insert(&ledger, PluginRecord {
                 manifest,
                 state: PluginState::Failed(reason),
                 tools: Vec::new(),
@@ -286,7 +291,7 @@ fn load_one(
         Err(error) => {
             let reason = error.to_string();
             eprintln!("[plugins] {id} 能力裁剪失败：{reason}");
-            registry.insert(PluginRecord {
+            insert(&ledger, PluginRecord {
                 manifest,
                 state: PluginState::Failed(reason),
                 tools: Vec::new(),
@@ -303,7 +308,7 @@ fn load_one(
     // process 插件的握手是同步的，但台账先落一条 Starting：装配期间若有别的
     // 读侧（M3 的扩展页），看到的是「正在启动」而不是「不存在」。
     if manifest.kind == PluginKind::Process {
-        registry.insert(PluginRecord {
+        insert(&ledger, PluginRecord {
             manifest: manifest.clone(),
             state: PluginState::Starting,
             tools: Vec::new(),
@@ -319,13 +324,13 @@ fn load_one(
                 .entry
                 .clone()
                 .expect("process 插件必须有 entry（校验规则 5）");
-            process::install(&id, plugin_dir, &entry, ctx, reg)
+            process::install(&id, plugin_dir, &entry, ctx, Arc::clone(ledger), reg)
         }
     };
 
     match outcome {
         Ok((tools, reported_capabilities)) => {
-            registry.insert(PluginRecord {
+            insert(&ledger, PluginRecord {
                 manifest,
                 state: PluginState::Loaded,
                 tools,
@@ -336,12 +341,34 @@ fn load_one(
             eprintln!("[plugins] {id} 安装失败：{error}");
             // 安装失败时 register_plugin_tools 与 process::install 都已把本次
             // 注册摘干净、把进程收掉。
-            registry.insert(PluginRecord {
+            insert(&ledger, PluginRecord {
                 manifest,
                 state: PluginState::Failed(error.to_string()),
                 tools: Vec::new(),
                 reported_capabilities: Vec::new(),
             });
+        }
+    }
+}
+
+/// 写台账。锁中毒说明别处已经 panic 过，这里沿用既有数据继续记。
+fn insert(ledger: &Arc<Mutex<PluginRegistry>>, record: PluginRecord) {
+    ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(record);
+}
+
+/// 退出路径：收掉全部 process 插件，并清空 `plugin-temp`（规格 §4：退出时整体清理）。
+///
+/// 只由 `lib.rs` 的 `RunEvent::Exit` 调用。顺序不能反：先杀进程再删目录，
+/// 否则还在跑的插件可能把文件写回来。
+pub fn shutdown() {
+    process::shutdown_all();
+    let temp = crate::config::data_dir().join("plugin-temp");
+    if let Err(error) = std::fs::remove_dir_all(&temp) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("[plugins] 清理临时目录失败：{}（{error}）", temp.display());
         }
     }
 }

@@ -1113,11 +1113,14 @@ mod tests {
         let (services, _query) = crate::plugins::default_services(&roots, None);
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let registry = crate::plugins::load_all(&mut reg, &roots, &services, &policy);
+        let ledger = crate::plugins::load_all(&mut reg, &roots, &services, &policy);
 
-        let record = registry
+        let record = ledger
+            .lock()
+            .expect("台账锁不该中毒")
             .get("maa")
-            .expect("随包 content/plugins 下应有 maa 插件");
+            .expect("随包 content/plugins 下应有 maa 插件")
+            .clone();
         assert_eq!(record.state, crate::plugins::PluginState::Loaded);
         assert_eq!(record.tools, vec!["run_maa_task".to_string()]);
         assert_eq!(reg.list_defs().len(), 1);

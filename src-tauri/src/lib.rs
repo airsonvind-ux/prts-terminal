@@ -750,6 +750,13 @@ pub fn run() {
             commands::upload_attachment,
             commands::upload_attachment_blob,
         ])
-        .run(tauri::generate_context!())
-        .expect("启动 Tauri 应用失败");
+        .build(tauri::generate_context!())
+        .expect("构建 Tauri 应用失败")
+        .run(|_app, event| {
+            // 插件进程与临时目录只在这里收：process 插件是宿主的子进程，
+            // 不显式收尸就会变成孤儿（用户在任务管理器里能看到）。
+            if let tauri::RunEvent::Exit = event {
+                crate::plugins::shutdown();
+            }
+        });
 }

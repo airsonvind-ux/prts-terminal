@@ -278,6 +278,10 @@ pub fn resolve_granted(
 ///
 /// `id` 在加载期注入、之后不可改，调用时原样传给服务实现——这是 `fs.plugin`
 /// 能把路径钉死在 `<id>/` 下的唯一依据。
+///
+/// `Clone` 是共享同一份授权（plan 里的 `api`/`granted` 都是 `Arc`/集合）：
+/// process 插件重启时要把它交给新进程，不能把授权也重算一遍。
+#[derive(Clone)]
 pub struct PluginCtx {
     id: String,
     api: Arc<dyn HostApi>,

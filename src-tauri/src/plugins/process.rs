@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::manifest::{PluginEntry, SUPPORTED_PROTOCOL};
+use super::registry::PluginRegistry;
 use super::rpc::{self, Pending, RpcError, RpcResult};
 use super::transport::{write_frame, FrameReader};
 use super::PluginError;
@@ -25,6 +26,8 @@ use crate::tools::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
 
 /// 握手超时（规格 §5）。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// 调用超时后等插件自己对 `cancel` 的宽限（规格 §5）。
+const CANCEL_GRACE: Duration = Duration::from_secs(2);
 /// 工具声明的超时缺省值（规格 §5）。
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
 /// 工具名契约（D5 / 规格 §5）。
@@ -38,9 +41,13 @@ pub struct ProcessPlugin {
     pending: Arc<Pending>,
     child: Mutex<Child>,
     alive: Arc<AtomicBool>,
+    /// 正常收场（`shutdown` / 安装失败清理）时置位：此时的进程退出不算故障。
+    stopping: AtomicBool,
+    ledger: Arc<Mutex<PluginRegistry>>,
 }
 
 /// 握手结果：工具面**只此一处来源**（规格 §5）。
+#[derive(Debug)]
 pub struct Handshake {
     /// 插件自报的能力，只作诊断，不参与 `granted`（N8）。
     pub capabilities: Vec<String>,
@@ -63,6 +70,7 @@ impl ProcessPlugin {
         plugin_dir: &Path,
         entry: &PluginEntry,
         ctx: PluginCtx,
+        ledger: Arc<Mutex<PluginRegistry>>,
     ) -> Result<Arc<Self>, PluginError> {
         if let Some(transport) = entry.transport.as_deref() {
             if transport != "stdio" {
@@ -113,6 +121,8 @@ impl ProcessPlugin {
             pending: Arc::new(Pending::new()),
             child: Mutex::new(child),
             alive: Arc::new(AtomicBool::new(true)),
+            stopping: AtomicBool::new(false),
+            ledger,
         });
 
         let reader = Arc::clone(&plugin);
@@ -143,6 +153,11 @@ impl ProcessPlugin {
 
     /// 握手：`initialize` → 校验协议版本 → 取工具面。
     pub fn initialize(&self) -> Result<Handshake, PluginError> {
+        self.initialize_with_deadline(HANDSHAKE_TIMEOUT)
+    }
+
+    /// 同 [`ProcessPlugin::initialize`]，超时可调（测试用短超时，不装 10 秒的慢用例）。
+    pub fn initialize_with_deadline(&self, deadline: Duration) -> Result<Handshake, PluginError> {
         let result = self
             .request(
                 "initialize",
@@ -151,7 +166,7 @@ impl ProcessPlugin {
                     "hostVersion": env!("CARGO_PKG_VERSION"),
                     "pluginId": self.id,
                 }),
-                HANDSHAKE_TIMEOUT,
+                deadline,
             )
             .map_err(|error| PluginError::Process {
                 id: self.id.clone(),
@@ -197,6 +212,7 @@ impl ProcessPlugin {
 
     /// 让插件自己收场；不听话就杀掉。
     pub fn shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         let _ = self.request("shutdown", json!({}), Duration::from_secs(2));
         self.kill();
     }
@@ -234,6 +250,21 @@ impl ProcessPlugin {
                         timeout.as_secs_f32()
                     ),
                 );
+                // 工具调用超时先给插件一次收场机会（规格 §5）：发 cancel 通知，
+                // 等满宽限期还没回话才判故障、杀进程。握手与 shutdown 没有中途
+                // 取消的语义，直接算超时。
+                if method == "tool.call" {
+                    let cancel = json!({ "method": "cancel", "params": { "id": id } });
+                    let _ = self.send(&cancel);
+                    if let Ok(outcome) = receiver.recv_timeout(CANCEL_GRACE) {
+                        let _ = self.pending.resolve(id, outcome.clone());
+                        return outcome;
+                    }
+                    self.mark_dead(&format!(
+                        "{method} 超时且 cancel 在 {} 秒内没有回音",
+                        CANCEL_GRACE.as_secs()
+                    ));
+                }
                 // 摘槽位（接收端已经走了，这里只是清理）。
                 let _ = self.pending.resolve(id, Err(error.clone()));
                 Err(error)
@@ -368,7 +399,7 @@ impl ProcessPlugin {
             .ok();
     }
 
-    /// 通道断了：标记死亡、叫醒所有等待者、收掉进程。
+    /// 通道断了：标记死亡、叫醒所有等待者、收掉进程；不是正常收场就记故障。
     fn mark_dead(&self, reason: &str) {
         let first = self.alive.swap(false, Ordering::SeqCst);
         if first {
@@ -379,6 +410,13 @@ impl ProcessPlugin {
             format!("插件 {} 已退出：{reason}", self.id),
         ));
         self.kill();
+        if first && !self.stopping.load(Ordering::SeqCst) {
+            let mut ledger = self
+                .ledger
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            ledger.mark_faulted(&self.id, reason.to_string());
+        }
     }
 
     /// 杀进程并等它退出（幂等）。
@@ -401,12 +439,155 @@ impl Drop for ProcessPlugin {
     }
 }
 
+/// 一个 process 插件的生命周期句柄（D21：崩溃后不自动重启，下次调用试一次）。
+///
+/// 工具持有的是这个句柄而不是进程本身：进程没了，下一次调用照 D21 拉起一次；
+/// 拉起也失败就把原因记进台账，之后的调用直接返回同一条原因，直到用户重启 PRTS。
+pub struct Launcher {
+    id: String,
+    plugin_dir: std::path::PathBuf,
+    entry: PluginEntry,
+    ctx: PluginCtx,
+    ledger: Arc<Mutex<PluginRegistry>>,
+    current: Mutex<Option<Arc<ProcessPlugin>>>,
+    /// 插件声明过的工具名（插件自己的名字）。重启后必须还是同一套工具。
+    declared: Mutex<Vec<String>>,
+    /// 重启失败过：不再重试（D21「仍失败则标记故障直到用户手动重启」）。
+    restart_failed: Mutex<Option<String>>,
+}
+
+impl Launcher {
+    pub fn new(
+        id: &str,
+        plugin_dir: &Path,
+        entry: &PluginEntry,
+        ctx: PluginCtx,
+        ledger: Arc<Mutex<PluginRegistry>>,
+    ) -> Arc<Self> {
+        Arc::new(Launcher {
+            id: id.to_string(),
+            plugin_dir: plugin_dir.to_path_buf(),
+            entry: entry.clone(),
+            ctx,
+            ledger,
+            current: Mutex::new(None),
+            declared: Mutex::new(Vec::new()),
+            restart_failed: Mutex::new(None),
+        })
+    }
+
+    /// 拿一个可用进程：活着就复用，死了按 D21 拉起一次。
+    pub fn acquire(&self) -> Result<Arc<ProcessPlugin>, String> {
+        let mut slot = self
+            .current
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(plugin) = slot.as_ref() {
+            if plugin.is_alive() {
+                return Ok(Arc::clone(plugin));
+            }
+        }
+
+        if let Some(reason) = self
+            .restart_failed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+        {
+            return Err(format!(
+                "插件 {} 已故障：{reason}（重启 PRTS 后恢复）",
+                self.id
+            ));
+        }
+
+        // 旧进程已经由读线程/超时路径收掉了，这里只需要一次干净的拉起。
+        *slot = None;
+        match self.launch() {
+            Ok((plugin, _handshake)) => {
+                *slot = Some(Arc::clone(&plugin));
+                if let Ok(mut ledger) = self.ledger.lock() {
+                    ledger.mark_loaded(&self.id);
+                }
+                Ok(plugin)
+            }
+            Err(error) => {
+                eprintln!("[plugins] {} 重新拉起失败：{error}", self.id);
+                if let Ok(mut ledger) = self.ledger.lock() {
+                    ledger.mark_faulted(&self.id, format!("重新拉起失败：{error}"));
+                }
+                *self
+                    .restart_failed
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner()) = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    /// 拉起并握手。重启时还会核对工具面（`declared` 非空时）。
+    fn launch(&self) -> Result<(Arc<ProcessPlugin>, Handshake), String> {
+        let plugin = ProcessPlugin::spawn(
+            &self.id,
+            &self.plugin_dir,
+            &self.entry,
+            self.ctx.clone(),
+            Arc::clone(&self.ledger),
+        )
+        .map_err(|error| error.to_string())?;
+
+        let handshake = match plugin.initialize() {
+            Ok(handshake) => handshake,
+            Err(error) => {
+                plugin.kill_and_forget();
+                return Err(error.to_string());
+            }
+        };
+
+        // 重启后的工具面必须和注册时一致，否则注册表里的名字会指向不存在的工具。
+        let declared = self
+            .declared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        if !declared.is_empty() {
+            let mut names: Vec<&str> = handshake
+                .tools
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect();
+            names.sort_unstable();
+            let mut expected: Vec<&str> = declared.iter().map(String::as_str).collect();
+            expected.sort_unstable();
+            if names != expected {
+                plugin.kill_and_forget();
+                return Err(format!(
+                    "重启后声明的工具变了（注册时 {expected:?}，现在 {names:?}）"
+                ));
+            }
+        }
+
+        Ok((plugin, handshake))
+    }
+
+    /// 安装成功后把进程与工具面记下来。
+    fn adopt(&self, plugin: Arc<ProcessPlugin>, declared: &[String]) {
+        *self
+            .declared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = declared.to_vec();
+        *self
+            .current
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(plugin);
+    }
+}
+
 /// 宿主把插件工具挂进注册表的适配器。
 ///
 /// 模型看到的是带前缀的名字（`probe_echo`），管道上发的是插件自己的名字
 /// （`echo`）——前缀是宿主的命名空间，插件不需要知道。
 pub struct PluginTool {
-    plugin: Arc<ProcessPlugin>,
+    launcher: Arc<Launcher>,
     name: String,
     method: String,
     description: String,
@@ -415,10 +596,10 @@ pub struct PluginTool {
 }
 
 impl PluginTool {
-    pub fn new(plugin: Arc<ProcessPlugin>, prefix: &str, spec: PluginToolSpec) -> Self {
+    pub fn new(launcher: Arc<Launcher>, prefix: &str, spec: PluginToolSpec) -> Self {
         let name = format!("{prefix}_{}", spec.name);
         Self {
-            plugin,
+            launcher,
             name,
             method: spec.name,
             description: spec.description,
@@ -452,14 +633,13 @@ impl Tool for PluginTool {
             serde_json::from_str(params).map_err(|error| ToolError::Parse(error.to_string()))?
         };
 
-        let result = self
-            .plugin
+        let plugin = self.launcher.acquire().map_err(ToolError::Execution)?;
+        let result = plugin
             .call_tool(&self.method, args, self.timeout)
             .map_err(|error| {
                 ToolError::Execution(format!(
                     "插件 {} 的 {} 调用失败：{error}",
-                    self.plugin.id(),
-                    self.method
+                    self.launcher.id, self.method
                 ))
             })?;
 
@@ -487,19 +667,17 @@ pub fn install(
     plugin_dir: &Path,
     entry: &PluginEntry,
     ctx: PluginCtx,
+    ledger: Arc<Mutex<PluginRegistry>>,
     reg: &mut ToolRegistry,
 ) -> Result<(Vec<String>, Vec<String>), PluginError> {
-    let plugin = ProcessPlugin::spawn(id, plugin_dir, entry, ctx)?;
-
-    let handshake = match plugin.initialize() {
-        Ok(handshake) => handshake,
-        Err(error) => {
-            plugin.kill_and_forget();
-            return Err(error);
-        }
-    };
+    let launcher = Launcher::new(id, plugin_dir, entry, ctx, ledger);
+    let (plugin, handshake) = launcher.launch().map_err(|detail| PluginError::Process {
+        id: id.to_string(),
+        detail,
+    })?;
 
     let prefix = id.replace('-', "_");
+    let declared: Vec<String> = handshake.tools.iter().map(|spec| spec.name.clone()).collect();
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     for spec in handshake.tools {
         let full = format!("{prefix}_{}", spec.name);
@@ -510,11 +688,18 @@ pub fn install(
                 value: format!("{full}（工具名必须匹配 ^[a-z][a-z0-9_]{{0,63}}$）"),
             });
         }
-        tools.push(Box::new(PluginTool::new(Arc::clone(&plugin), &prefix, spec)));
+        tools.push(Box::new(PluginTool::new(
+            Arc::clone(&launcher),
+            &prefix,
+            spec,
+        )));
     }
 
     match super::register_plugin_tools(reg, id, tools) {
-        Ok(names) => Ok((names, handshake.capabilities)),
+        Ok(names) => {
+            launcher.adopt(Arc::clone(&plugin), &declared);
+            Ok((names, handshake.capabilities))
+        }
         Err(error) => {
             plugin.kill_and_forget();
             Err(error)
@@ -525,6 +710,7 @@ pub fn install(
 impl ProcessPlugin {
     /// 安装失败时收掉进程，并把它从「运行中」表里摘掉。
     fn kill_and_forget(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         self.alive.store(false, Ordering::SeqCst);
         self.kill();
         forget(&self.id);
@@ -707,6 +893,54 @@ mod tests {
         probe.is_file().then_some(dir)
     }
 
+    /// 把探针复制成带故障模式后缀的名字，返回（目录，入口文件名）。
+    ///
+    /// 模式按 exe 文件名判别（见 `bin/probe_plugin.rs` 的模块文档）：测试不动
+    /// 探针协议，只换一个启动名。
+    fn probe_with_mode(mode: &str) -> Option<(std::path::PathBuf, String)> {
+        let dir = probe_dir()?;
+        let source = dir.join(format!("probe_plugin{}", std::env::consts::EXE_SUFFIX));
+        let target_dir = std::env::temp_dir().join(format!("prts-probe-{mode}"));
+        std::fs::create_dir_all(&target_dir).ok()?;
+        let name = format!("probe_{mode}{}", std::env::consts::EXE_SUFFIX);
+        std::fs::copy(&source, target_dir.join(&name)).ok()?;
+        Some((target_dir, name))
+    }
+
+    /// 一条 `Loaded` 的台账记录：故障路径要往里写 `Faulted`。
+    fn ledger_with(id: &str) -> Arc<Mutex<PluginRegistry>> {
+        let text = format!(
+            r#"{{"manifestVersion":1,"id":"{id}","name":"探针","version":"0.1.1",
+                 "kind":"process","entry":{{"exe":"probe_plugin.exe"}},
+                 "activation":[],"capabilities":[],"contributes":{{}}}}"#
+        );
+        let manifest = crate::plugins::manifest::parse_manifest(&text).expect("样本 manifest 应当能解析");
+        let mut registry = PluginRegistry::new();
+        registry.insert(crate::plugins::registry::PluginRecord {
+            manifest,
+            state: crate::plugins::registry::PluginState::Loaded,
+            tools: Vec::new(),
+            reported_capabilities: Vec::new(),
+        });
+        Arc::new(Mutex::new(registry))
+    }
+
+    /// 等台账出现 `Faulted`（读线程是异步写台账的）。
+    fn wait_faulted(ledger: &Arc<Mutex<PluginRegistry>>, id: &str) -> bool {
+        for _ in 0..100 {
+            {
+                let guard = ledger.lock().unwrap_or_else(|poison| poison.into_inner());
+                if let Some(record) = guard.get(id) {
+                    if matches!(record.state, crate::plugins::registry::PluginState::Faulted(_)) {
+                        return true;
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
     #[test]
     fn talks_to_the_probe_over_content_length_frames() {
         let Some(dir) = probe_dir() else {
@@ -717,8 +951,14 @@ mod tests {
             exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
             transport: Some("stdio".to_string()),
         };
-        let plugin = ProcessPlugin::spawn("probe", &dir, &entry, crate::host::test_plugin_ctx("probe"))
-            .expect("探针应当能起来");
+        let plugin = ProcessPlugin::spawn(
+            "probe",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe"),
+            ledger_with("probe"),
+        )
+        .expect("探针应当能起来");
 
         let handshake = plugin.initialize().expect("握手应当成功");
         assert_eq!(handshake.tools.len(), 1);
@@ -735,7 +975,135 @@ mod tests {
             .unwrap_err();
         assert_eq!(bad.code, crate::plugins::rpc::METHOD_NOT_FOUND);
 
-        crate::plugins::process::shutdown_all();
+        // 只收自己这一个：tests 并行跑，`shutdown_all` 会误杀别人的进程。
+        plugin.shutdown();
         assert!(!plugin.is_alive());
+    }
+
+    /// 故障一：握手超时（探针收到 `initialize` 不回话）。
+    #[test]
+    fn silent_probe_times_out_the_handshake() {
+        let Some((dir, exe)) = probe_with_mode("silent") else {
+            eprintln!("跳过：probe_plugin 还没构建");
+            return;
+        };
+        let entry = PluginEntry {
+            exe,
+            transport: Some("stdio".to_string()),
+        };
+        let plugin = ProcessPlugin::spawn(
+            "probe-silent",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe-silent"),
+            ledger_with("probe-silent"),
+        )
+        .expect("探针应当能起来");
+
+        let error = plugin
+            .initialize_with_deadline(Duration::from_millis(300))
+            .expect_err("不回 initialize 应当握手超时");
+        assert!(
+            error.to_string().contains("握手失败"),
+            "错误文案要指出握手失败：{error}"
+        );
+        plugin.kill_and_forget();
+    }
+
+    /// 故障二：协议版本不匹配（探针回 `protocol: 2`）。
+    #[test]
+    fn mismatched_probe_fails_the_handshake() {
+        let Some((dir, exe)) = probe_with_mode("mismatch") else {
+            eprintln!("跳过：probe_plugin 还没构建");
+            return;
+        };
+        let entry = PluginEntry {
+            exe,
+            transport: Some("stdio".to_string()),
+        };
+        let plugin = ProcessPlugin::spawn(
+            "probe-mismatch",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe-mismatch"),
+            ledger_with("probe-mismatch"),
+        )
+        .expect("探针应当能起来");
+
+        let error = plugin.initialize().expect_err("protocol 2 应当被拒绝");
+        assert!(
+            error.to_string().contains("协议版本不匹配"),
+            "错误文案要指出协议版本：{error}"
+        );
+        plugin.kill_and_forget();
+    }
+
+    /// 故障三：进程崩溃（探针收到第一次 `tool.call` 直接退出）。
+    #[test]
+    fn crashing_probe_is_marked_faulted() {
+        let Some((dir, exe)) = probe_with_mode("crash") else {
+            eprintln!("跳过：probe_plugin 还没构建");
+            return;
+        };
+        let entry = PluginEntry {
+            exe,
+            transport: Some("stdio".to_string()),
+        };
+        let ledger = ledger_with("probe-crash");
+        let plugin = ProcessPlugin::spawn(
+            "probe-crash",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe-crash"),
+            Arc::clone(&ledger),
+        )
+        .expect("探针应当能起来");
+        plugin.initialize().expect("崩溃模式握手仍应成功");
+
+        let error = plugin
+            .call_tool("echo", json!({}), Duration::from_secs(5))
+            .expect_err("进程已退出，调用应当失败");
+        assert_eq!(error.code, crate::plugins::rpc::PLUGIN_FAULT);
+        assert!(
+            wait_faulted(&ledger, "probe-crash"),
+            "崩溃的插件必须在台账里记 Faulted"
+        );
+        assert!(!plugin.is_alive());
+    }
+
+    /// 故障四：调用超时且不理 `cancel`（宿主等满宽限期后杀进程并记故障）。
+    #[test]
+    fn hanging_probe_is_killed_after_the_cancel_grace() {
+        let Some((dir, exe)) = probe_with_mode("hang") else {
+            eprintln!("跳过：probe_plugin 还没构建");
+            return;
+        };
+        let entry = PluginEntry {
+            exe,
+            transport: Some("stdio".to_string()),
+        };
+        let ledger = ledger_with("probe-hang");
+        let plugin = ProcessPlugin::spawn(
+            "probe-hang",
+            &dir,
+            &entry,
+            crate::host::test_plugin_ctx("probe-hang"),
+            Arc::clone(&ledger),
+        )
+        .expect("探针应当能起来");
+        plugin.initialize().expect("挂起模式握手仍应成功");
+
+        let error = plugin
+            .call_tool("echo", json!({}), Duration::from_millis(200))
+            .expect_err("不回话的调用应当超时");
+        assert_eq!(error.code, crate::plugins::rpc::TIMEOUT);
+        assert!(
+            wait_faulted(&ledger, "probe-hang"),
+            "超时且不理 cancel 的插件必须记 Faulted"
+        );
+        assert!(
+            !plugin.is_alive(),
+            "宽限期过后宿主应当把进程杀掉"
+        );
     }
 }
