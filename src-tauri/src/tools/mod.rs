@@ -39,7 +39,6 @@ pub use fs_grep::GrepTool;
 pub use fs_write::{EditTool, WriteFileTool};
 pub use knowledge::ReadKnowledgeTool;
 pub use list_knowledge::ListKnowledgeTool;
-pub use crate::maa::task::MaaTaskTool;
 pub use memory::{MemoryExperienceTool, MemoryGrowthTool};
 pub use query_enemy::QueryEnemy;
 pub use query_level::QueryLevel;
@@ -630,9 +629,6 @@ pub fn register_builtin(
     // + 经历记忆只读（经历写入只走后台管线，memory_experience 无写参数面）。
     reg.register(Box::new(MemoryExperienceTool::new(Arc::clone(&memory))))?;
     reg.register(Box::new(MemoryGrowthTool::new(Arc::clone(&memory), ledger)))?;
-    // MAA 接入（桥 ↔ 工具层）：把游戏操作交给本机 MAA。
-    // 有状态且带副作用（桥连接 / 任务队列 / 截图落盘），is_concurrency_safe=false。
-    reg.register(Box::new(MaaTaskTool))?;
     Ok(())
 }
 
@@ -910,15 +906,18 @@ mod tests {
         // + 既有 11 查询/知识工具 + 1 Skill 激活 + 1 SimPath + 1 run_command（M3-A）
         // + 网络域 2 工具（M5：web_search/web_fetch）+ 时间 1 工具（Phase4 1.3）
         // + 记忆 2 工具（Phase4 任务二 · 批 1：memory_experience/memory_growth）
-        // + MAA 1 工具（run_maa_task）+ 截图 1 工具（capture_game_screen）= 26；
+        // + 截图 1 工具（capture_game_screen）= 25；
+        // MAA 1 工具（run_maa_task）自插件系统 M1 起不走这里，由
+        // `plugins::builtin::install("maa", …)` 注册（见 build_full_registry）。
         // echo 为测试辅助不注册（2026-08-31）；缓存工具已移除（2026-08）。
-        assert_eq!(reg.list_defs().len(), 26);
+        assert_eq!(reg.list_defs().len(), 25);
 
         // 记忆工具确已注册且名字稳定
         assert!(reg.get("memory_experience").is_some());
         assert!(reg.get("memory_growth").is_some());
-        // MAA 工具确已注册（名字即 LLM 的调用名）
-        assert!(reg.get("run_maa_task").is_some());
+        // MAA 工具已退出内置注册路径——它必须由插件路径提供，
+        // 这里断言"不在"，防止有人把注册偷偷加回来（回退后门）。
+        assert!(reg.get("run_maa_task").is_none());
         // 截图工具确已注册（与 MAA 独立；名字即 LLM 的调用名）
         assert!(reg.get("capture_game_screen").is_some());
 
@@ -1030,8 +1029,9 @@ mod tests {
         ));
         let ledger = Arc::new(Mutex::new(crate::notices::Notices::load(&mem_root)));
 
-        // M1 装配路径：内置工具走 register_builtin，
-        // 插件工具由 plugins::load_all 追加（迁移后本测试不应变化）。
+        // M1 装配路径：内置工具走 register_builtin，插件工具走
+        // plugins::builtin::install（生产装配由 plugins::load_all 统一调用，
+        // 这里直接调安装入口，避开测试对 content/plugins 目录的依赖）。
         register_builtin(
             &mut reg,
             Arc::new(Policy::new(workspace_root.clone())),
@@ -1040,6 +1040,7 @@ mod tests {
             ledger,
         )
         .expect("所有内置工具 schema 应合法");
+        crate::plugins::builtin::install("maa", &mut reg).expect("内置插件 maa 应装配成功");
 
         let _ = std::fs::remove_dir_all(&workspace_root);
         let _ = std::fs::remove_dir_all(&kb_root);
