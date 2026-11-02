@@ -1,0 +1,16 @@
+{
+  "manifestVersion": 1,
+  "id": "maa",
+  "name": "MAA 自动化",
+  "version": "0.1.1",
+  "description": "把游戏操作交给本机 MAA",
+  "kind": "builtin",
+  "requires": { "app": ">=0.1.1" },
+  "capabilities": ["maa.bridge"],
+  "activation": ["onStartup"],
+  "contributes": {
+    "skills": [],
+    "settingsForm": "builtin-page",
+    "assets": []
+  }
+}

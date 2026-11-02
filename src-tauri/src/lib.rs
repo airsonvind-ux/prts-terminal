@@ -9,6 +9,7 @@ mod app;
 mod integrations;
 mod llm;
 mod platform;
+mod plugins;
 mod runtime;
 mod session_id;
 mod storage;
