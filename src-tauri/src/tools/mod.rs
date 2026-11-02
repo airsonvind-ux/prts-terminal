@@ -391,10 +391,31 @@ pub trait Tool: Send + Sync {
 // ToolRegistry —— 工具的集中登记处
 // ═══════════════════════════════════════════════════════
 
+/// 工具来源（M1 新增）：宿主内置工具，还是某个插件贡献的工具。
+///
+/// 只做记账，不做门禁：M1 的 builtin 插件与宿主同进程，权限声明没有运行时
+/// 意义（D11）；来源字段供 M2 的启停与 M3 的扩展页区分「这个工具是谁的」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// 宿主内置工具（`register_builtin` 注册）。
+    Host,
+    /// 插件贡献的工具，附插件 id。
+    Plugin(String),
+}
+
+/// 注册表里的一项：工具本体 + 来源。
+struct RegisteredTool {
+    tool: Box<dyn Tool>,
+    /// M1 只写不读：`get / list_defs / execute` 的对外行为必须与迁移前一致；
+    /// M2 按来源成组摘除工具（启停）时才消费。
+    #[allow(dead_code)]
+    origin: Origin,
+}
+
 /// 工具注册表。应用启动时注册所有可用工具，
 /// orchestrator 通过 Registry 查找和执行工具。
 pub struct ToolRegistry {
-    tools: HashMap<String, Box<dyn Tool>>,
+    tools: HashMap<String, RegisteredTool>,
 }
 
 impl ToolRegistry {
@@ -404,20 +425,39 @@ impl ToolRegistry {
         }
     }
 
-    /// 注册一个工具。同名工具后注册的覆盖先注册的。
+    /// 注册一个工具（宿主来源）。同名工具后注册的覆盖先注册的。
     ///
     /// 注册时校验 `parameters()` 的 JSON Schema 合法性（模块 3 P1：
     /// schema 校验——注册时校验 + 执行前校验参数），非法 schema 拒绝注册。
     pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), String> {
+        self.register_with_origin(tool, Origin::Host)
+    }
+
+    /// 注册一个工具并记录来源。
+    ///
+    /// 与 [`Self::register`] 同为「后注册覆盖」语义——26 个内置工具依赖它做
+    /// 局部替换（历史行为，迁移不得改变）。插件路径的同名策略相反：
+    /// `plugins::register_plugin_tools` 在调用本方法前先查重，重名即失败并
+    /// 回滚，因为跨插件覆盖别人的工具是最难排查的一类故障。
+    pub fn register_with_origin(
+        &mut self,
+        tool: Box<dyn Tool>,
+        origin: Origin,
+    ) -> Result<(), String> {
         schema::validate_tool_schema(&tool.parameters())?;
         let name = tool.name().to_string();
-        self.tools.insert(name, tool);
+        self.tools.insert(name, RegisteredTool { tool, origin });
         Ok(())
+    }
+
+    /// 移除指定名字的工具；返回是否真的移除了（插件注册失败时的回滚用）。
+    pub fn remove(&mut self, name: &str) -> bool {
+        self.tools.remove(name).is_some()
     }
 
     /// 按名查找工具。
     pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|t| t.as_ref())
+        self.tools.get(name).map(|registered| registered.tool.as_ref())
     }
 
     /// 解析指定工具本次调用的展示切片（tool/call 卡片信息）。
@@ -436,7 +476,11 @@ impl ToolRegistry {
     /// 会让请求前缀在工具区断裂（DeepSeek 前缀缓存整轮全未命中）。
     /// 排序后输出跨重启逐字节稳定，是前缀缓存的硬约束。
     pub fn list_defs(&self) -> Vec<ToolDef> {
-        let mut defs: Vec<ToolDef> = self.tools.values().map(|t| t.to_def()).collect();
+        let mut defs: Vec<ToolDef> = self
+            .tools
+            .values()
+            .map(|registered| registered.tool.to_def())
+            .collect();
         defs.sort_by(|a, b| a.function.name.cmp(&b.function.name));
         defs
     }
