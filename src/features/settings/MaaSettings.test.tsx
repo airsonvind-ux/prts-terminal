@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-// SettingsExtension · 扩展页（MAA 接入）
+// MaaSettings · 插件「MAA 自动化」的设置页
 // 覆盖：三节齐备、状态行口径、自动检测开/关的置灰与解锁、运行中锁定、
 //       无增强通道的退化、变更上抛。
 
 import { describe, expect, it, afterEach, vi } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { MaaSettings, MaaStatus } from "../../types";
-import { SettingsExtension } from "./SettingsExtension";
+import type { MaaSettings as MaaSettingsConfig, MaaStatus } from "../../types";
+import { MaaSettings } from "./MaaSettings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -22,7 +22,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   ),
 }));
 
-const MAA: MaaSettings = {
+const MAA: MaaSettingsConfig = {
   server: "official",
   auto_detect: true,
   screenshot_extras: true,
@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 async function render(
-  maa: MaaSettings = MAA,
+  maa: MaaSettingsConfig = MAA,
   busy = false,
   onPatch: (patch: unknown, label?: string) => void = () => {},
   onChooseEmulatorDir: () => void = () => {},
@@ -82,7 +82,7 @@ async function render(
   root = createRoot(container);
   await act(async () => {
     root.render(
-      React.createElement(SettingsExtension, {
+      React.createElement(MaaSettings, {
         maa,
         busy,
         testing,
@@ -102,7 +102,7 @@ const disabledControls = () =>
     )
   );
 
-describe("SettingsExtension（扩展页）", () => {
+describe("MaaSettings（插件设置页）", () => {
   it("三节齐备：账号 / 连接 / 增强，且不泄露技术细节", async () => {
     currentStatus = status();
     await render();
@@ -238,7 +238,7 @@ describe("SettingsExtension（扩展页）", () => {
     expect(radios[0].checked, "受控：外部没更新就还是官服").toBe(true);
 
     const checks = Array.from(
-      container!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+      container!.querySelectorAll<HTMLButtonElement>('[role="switch"]')
     );
     act(() => {
       checks[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -246,24 +246,17 @@ describe("SettingsExtension（扩展页）", () => {
     expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
   });
 
-  it("自动检测复选框：Enter 也可取消", async () => {
+  it("自动检测开关是原生按钮：键盘激活交给浏览器", async () => {
     currentStatus = status();
     const onPatch = vi.fn();
     await render(MAA, false, onPatch);
 
-    const auto = container!.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]'
+    const auto = container!.querySelector<HTMLButtonElement>(
+      '[role="switch"]'
     )!;
+    expect(auto.tagName).toBe("BUTTON");
+    expect(auto.getAttribute("type")).toBe("button");
     auto.focus();
-    act(() => {
-      auto.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        })
-      );
-    });
-    expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
+    expect(document.activeElement).toBe(auto);
   });
 });

@@ -30,6 +30,8 @@ let root: ReturnType<typeof createRoot>;
 /** 写命令的“是否有实际改动”应答（测试可覆写） */
 let updateChanged = true;
 let longtermChanged = true;
+/** memory_overview 的临时覆写（测专题数量约束） */
+let overviewOverride: MemoryOverview | null = null;
 
 const UPDATED_AT = Date.UTC(2026, 8, 20, 3, 0, 0); // 2026-09-20（本地 +8 同日）
 
@@ -47,7 +49,9 @@ const OVERVIEW: MemoryOverview = {
 };
 
 function route(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
-  if (cmd === "memory_overview") return Promise.resolve(OVERVIEW);
+  if (cmd === "memory_overview") {
+    return Promise.resolve(overviewOverride ?? OVERVIEW);
+  }
   if (cmd === "memory_get") {
     return Promise.resolve({
       kind: "growth",
@@ -140,8 +144,12 @@ async function flush(): Promise<void> {
 }
 
 function findButton(text: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll("button")].find((b) =>
-    (b.textContent ?? "").includes(text)
+  // 按钮的可见文案可能很短（「查看」「清除」），完整动作名在 aria-label 上，
+  // 所以两处都匹配：测试读的是"这个动作"，不是"这几个字"。
+  return [...container.querySelectorAll("button")].find(
+    (b) =>
+      (b.textContent ?? "").includes(text) ||
+      (b.getAttribute("aria-label") ?? "").includes(text)
   );
 }
 
@@ -184,6 +192,7 @@ function invokeCalls(cmd: string): unknown[][] {
 beforeEach(() => {
   __invokeMock.mockClear();
   __invokeMock.mockImplementation(route);
+  overviewOverride = null;
   updateChanged = true;
   longtermChanged = true;
   useConversationStore.setState({ conversations: [], activeId: "c1" });
@@ -203,16 +212,42 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(container.textContent).toContain("伤害计算");
     for (const label of [
       "新建专题",
-      "查看当下记忆",
-      "整理当下记忆",
-      "查看记忆",
-      "清除记忆",
+      "管理当前记忆",
+      "查看全部记忆",
+      "清除经历记忆",
     ]) {
       expect(findButton(label), `缺少按钮：${label}`).toBeTruthy();
     }
+    // 「近期」不再作为读数出现在主列表：它只是最近 5 条的窗口
+    expect(container.textContent).not.toContain("近期");
+    expect(container.textContent).not.toContain("当前对话");
     expect(container.textContent).not.toContain("编辑长期记忆");
     expect(container.textContent).not.toContain("查看记忆（");
     expect(container.textContent).not.toContain("当前注入");
+  });
+
+  it("成长专题超过四个时收进「全部 N 个」，点开铺满", async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      growth: Array.from({ length: 6 }, (_, i) => ({
+        name: `专题${i + 1}`,
+        brief: `简介${i + 1}`,
+        tags: [],
+        updatedAt: i + 1,
+        isProfile: false,
+      })),
+    };
+    render();
+    await flush();
+
+    expect(container.textContent).toContain("专题4");
+    expect(container.textContent).not.toContain("专题5");
+    clickText("全部 6 个");
+    await flush();
+    expect(container.textContent).toContain("专题6");
+    clickText("收起");
+    await flush();
+    expect(container.textContent).not.toContain("专题5");
   });
 
   it("点成长条目 → 阅读视图（含更新日期与标签）；编辑 → 保存走 memory_update", async () => {
@@ -312,7 +347,7 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({ name: "新专题" });
     // 回到主列表
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
   });
 
   it("阅读视图删除 → 二次确认 → memory_delete 并返回列表", async () => {
@@ -327,13 +362,13 @@ describe("SettingsMemory（结构定稿）", () => {
     clickText("确认删除");
     await flush();
     expect(invokeCalls("memory_delete")).toHaveLength(1);
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
   });
 
-  it("查看当下记忆：近期＋先前；编辑只挂长期记忆 → memory_set_longterm", async () => {
+  it("查看当前记忆：近期＋长期梗概；编辑只挂长期记忆 → memory_set_longterm", async () => {
     render();
     await flush();
-    clickText("查看当下记忆");
+    clickText("管理当前记忆");
     await flush();
     expect(container.textContent).toContain("伤害公式：确认相乘");
     expect(container.textContent).toContain("轴推进：确认了 3 波");
@@ -355,10 +390,39 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(calls[0][1]).toMatchObject({ text: "新长期" });
   });
 
-  it("查看记忆：按日期分组（新在前）、默认只标题、点开看内容；无来源与标签", async () => {
+  it("当前记忆的结构：近期经历按日期成组、长期梗概的编辑按钮在标题行", async () => {
     render();
     await flush();
-    clickText("查看记忆");
+    clickText("管理当前记忆");
+    await flush();
+    const text = container.textContent ?? "";
+    expect(text).toContain("2026-09-16");
+    expect(text).toContain("2026-09-15");
+    // 日期头新在前
+    expect(text.indexOf("2026-09-16")).toBeLessThan(text.indexOf("2026-09-15"));
+    // 「编辑」在长期梗概的标题行里，而不是跟在正文尾巴上
+    const editBtn = findButton("编辑")!;
+    expect(editBtn.parentElement?.textContent).toContain("长期梗概");
+  });
+
+  it("长期梗概超长时只给四行预览，可展开全文再收起", async () => {
+    const long = "长期梗概的一段".repeat(40);
+    overviewOverride = { ...OVERVIEW, previous: long };
+    render();
+    await flush();
+    clickText("管理当前记忆");
+    await flush();
+    expect(findButton("展开全文")).toBeTruthy();
+    clickText("展开全文");
+    expect(findButton("收起")).toBeTruthy();
+    clickText("收起");
+    expect(findButton("展开全文")).toBeTruthy();
+  });
+
+  it("查看全部记忆：按日期分组（新在前）、默认只标题、点开看内容；无来源与标签", async () => {
+    render();
+    await flush();
+    clickText("查看全部记忆");
     await flush();
     const text = container.textContent ?? "";
     expect(text).toContain("2026-09-16");
@@ -381,13 +445,13 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(container.textContent).not.toContain("s1");
   });
 
-  it("清除记忆 → 二次确认（面向用户的文案）→ memory_experience_clear", async () => {
+  it("清除经历记忆 → 二次确认（面向用户的文案）→ memory_experience_clear", async () => {
     render();
     await flush();
-    clickText("清除记忆");
+    clickText("清除经历记忆");
     await flush();
     expect(container.textContent).toContain("确认清除");
-    expect(container.textContent).toContain("成长页（关于博士与专题）不受影响");
+    expect(container.textContent).toContain("成长专题不受影响");
     expect(container.textContent).not.toContain("水位");
     clickText("确认清除");
     await flush();
@@ -415,7 +479,7 @@ describe("SettingsMemory（结构定稿）", () => {
     longtermChanged = false;
     render();
     await flush();
-    clickText("查看当下记忆");
+    clickText("管理当前记忆");
     await flush();
     clickText("编辑");
     clickText("保存");
@@ -427,10 +491,17 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(invokeCalls("memory_overview")).toHaveLength(1);
   });
 
-  it("整理当下记忆 → memory_tidy + 反馈文案", async () => {
+  it("整理当下记忆：先确认（说明会烧 token）→ memory_tidy + 反馈文案", async () => {
     render();
     await flush();
+    clickText("管理当前记忆");
+    await flush();
     clickText("整理当下记忆");
+    await flush();
+    // 未确认前不得调用
+    expect(invokeCalls("memory_tidy")).toHaveLength(0);
+    expect(container.textContent).toContain("会消耗额外 token");
+    clickText("开始整理");
     await flush();
     expect(invokeCalls("memory_tidy")).toHaveLength(1);
     expect(container.textContent).toContain("已整理：新建 1 条、重写 0 条");
@@ -443,7 +514,7 @@ describe("SettingsMemory（结构定稿）", () => {
     await flush();
     clickText("返回");
     await flush();
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
     expect(container.textContent).not.toContain("相乘关系");
   });
 

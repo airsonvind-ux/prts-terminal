@@ -1,9 +1,14 @@
-// 设置页 · "记忆"子页（2026-09 结构定稿）
+// 设置页 · "记忆"子页（2026-09 结构定稿，2026-11 版式重排）
 //
 // 结构：
-//  - 成长：专题页列表（关于博士居首）+ [新建专题]；点击条目 → 二级视图（阅读/编辑）。
-//  - 经历：[查看当下记忆]（视图①：近期只读＋先前可编辑）／[整理当下记忆]；
-//    「所有记忆」子块：[查看记忆]（视图②：全部条目按日期编排）／[清除记忆]（二次确认）。
+//  - 成长：2 列卡片（关于博士居首，默认露出 4 个，其余收进「全部 N 个」）
+//    + [新建专题]；点击卡片 → 二级视图（阅读/编辑）。
+//  - 经历：两个读数（经历条目 / 长期梗概）+ 三条功能行
+//    （当前记忆 → 管理；所有记忆 → 查看；清除记忆 → 清除）。
+//    「管理」进二级视图：那里才放整理（会调模型、烧 token，单独一次确认）。
+//    「近期」不再是主页面上的读数——它只是最近 5 条的滚动窗口，
+//    摆成一个数字会让人以为"近期只有 5 条"。
+//    清除确认从遮罩 modal 改成页内确认条（与插件卸载同一套语言）。
 //
 // 二级视图＝设置内容区内的替换视图（见 SettingsMemoryViews.tsx），不用整窗浮层。
 // 写类操作（新建/编辑/删除/整理/清除/长期记忆保存）在对话进行中禁用（沿用设置锁
@@ -11,17 +16,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { SettingsSection, SectionNote, SectionWarning } from "./ui/SettingsSection";
+import {
+  SettingsSection,
+  SectionWarning,
+} from "./ui/SettingsSection";
+import { Button } from "./ui/Button";
+import { Stat } from "./ui/Stat";
 import { showToast } from "../../stores/useToastStore";
-import { useConversationStore } from "../../stores/useConversationStore";
-import type { MemoryOverview, MemoryTidyResult } from "../../types";
+import type { MemoryOverview } from "../../types";
 import {
   CompiledView,
   GrowthView,
   LibraryView,
   type MemView,
 } from "./SettingsMemoryViews";
-import { useConfirmFocus } from "./useConfirmFocus";
+import { charCount } from "./memoryViewShared";
 import styles from "./SettingsMemory.module.css";
 
 export interface SettingsMemoryProps {
@@ -29,17 +38,15 @@ export interface SettingsMemoryProps {
   busy: boolean;
 }
 
+/** 成长专题默认露出几个（两行）；再多就收进「全部 N 个」 */
+const GROWTH_PREVIEW = 4;
+
 export function SettingsMemory({ busy }: SettingsMemoryProps) {
-  const activeId = useConversationStore((s) => s.activeId);
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
   const [loadErr, setLoadErr] = useState(false);
   const [view, setView] = useState<MemView>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [tidying, setTidying] = useState(false);
-  const [tidyMsg, setTidyMsg] = useState<string | null>(null);
-  const { modalRef, handleKeyDown } = useConfirmFocus(confirmClear, () =>
-    setConfirmClear(false)
-  );
+  const [showAllGrowth, setShowAllGrowth] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -66,27 +73,6 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
       return false;
     }
     return true;
-  };
-
-  const tidy = async () => {
-    if (!guard()) return;
-    if (!activeId) {
-      showToast("当前没有打开的对话", { kind: "warning" });
-      return;
-    }
-    setTidying(true);
-    setTidyMsg(null);
-    try {
-      const r = await invoke<MemoryTidyResult>("memory_tidy", {
-        conversationId: activeId,
-      });
-      setTidyMsg(r.message);
-      if (r.status !== "failed") await load();
-    } catch (e) {
-      setTidyMsg(`整理失败：${String(e)}`);
-    } finally {
-      setTidying(false);
-    }
   };
 
   const clearMemory = async () => {
@@ -139,118 +125,126 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
         <>
           {/* ── 成长 ── */}
           <SettingsSection title="成长">
-            <div className={styles.list}>
-              {overview.growth.map((g) => (
+            {/* 专题多了不能无限往下排：默认 4 个（两行），其余的收进「全部」。 */}
+            <div className={styles.growthGrid}>
+              {(showAllGrowth
+                ? overview.growth
+                : overview.growth.slice(0, GROWTH_PREVIEW)
+              ).map((g) => (
                 <button
                   key={g.name}
                   type="button"
                   data-focus-inset
-                  className={styles.row}
+                  className={styles.growthCard}
                   onClick={() => setView({ kind: "growth", name: g.name })}
-                  title={g.brief || undefined}
+                  title={g.brief || g.name}
                 >
-                  <span className={styles.rowName}>{g.name}</span>
-                  {g.brief && <span className={styles.rowBrief}>{g.brief}</span>}
+                  <span className={styles.growthName}>{g.name}</span>
+                  {g.brief && (
+                    <span className={styles.growthBrief}>{g.brief}</span>
+                  )}
                 </button>
               ))}
             </div>
             <div className={styles.actions}>
-              <button
-                className={styles.btn}
+              <Button
                 onClick={() => {
                   if (guard()) setView({ kind: "growthNew" });
                 }}
                 disabled={busy}
               >
                 新建专题
-              </button>
+              </Button>
+              {overview.growth.length > GROWTH_PREVIEW && (
+                <Button onClick={() => setShowAllGrowth((v) => !v)}>
+                  {showAllGrowth
+                    ? "收起"
+                    : `全部 ${overview.growth.length} 个`}
+                </Button>
+              )}
             </div>
           </SettingsSection>
 
           {/* ── 经历 ── */}
           <SettingsSection title="经历">
-            <div className={styles.actions}>
-              <button
-                className={styles.btn}
-                onClick={() => setView({ kind: "compiled" })}
-              >
-                查看当下记忆
-              </button>
-              <button
-                className={styles.btn}
-                onClick={() => void tidy()}
-                disabled={busy || tidying}
-              >
-                {tidying ? "整理中…" : "整理当下记忆"}
-              </button>
+            <div className={styles.stats}>
+              <Stat
+                label="经历条目"
+                value={overview.experienceCount}
+                accent
+              />
+              <Stat
+                label="长期梗概"
+                value={
+                  overview.previous ? `${charCount(overview.previous)} 字` : "—"
+                }
+                title={overview.previous || "还没有长期梗概"}
+              />
             </div>
-            {tidyMsg && <p className={styles.tidyMsg}>{tidyMsg}</p>}
-
-            <div className={styles.subTitle}>所有记忆</div>
-            <div className={styles.actions}>
-              <button
-                className={styles.btn}
-                onClick={() => setView({ kind: "library" })}
-              >
-                查看记忆
-              </button>
-              <button
-                className={`${styles.btn} ${styles.btnDanger}`}
-                onClick={() => {
-                  if (guard()) setConfirmClear(true);
-                }}
-                disabled={busy}
-              >
-                清除记忆
-              </button>
+            {/* 三件事各自成行：一行一件事，按钮从属于左边的标签。
+                整理会调模型、烧 token，所以不放在这一层——进了「管理」再确认。 */}
+            <div className={styles.actionList}>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>当前记忆</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="管理当前记忆"
+                    onClick={() => setView({ kind: "compiled" })}
+                  >
+                    管理
+                  </Button>
+                </div>
+              </div>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>所有记忆</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="查看全部记忆"
+                    onClick={() => setView({ kind: "library" })}
+                  >
+                    查看
+                  </Button>
+                </div>
+              </div>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>清除记忆</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="清除经历记忆"
+                    variant="danger"
+                    onClick={() => {
+                      if (guard()) setConfirmClear(true);
+                    }}
+                    disabled={busy}
+                  >
+                    清除
+                  </Button>
+                </div>
+              </div>
             </div>
 
-            <SectionNote>
-              经历记忆由后台自动维护；「整理当下记忆」对当前对话立即整理一次。
-            </SectionNote>
+            {confirmClear && (
+              <div
+                className={styles.confirmBar}
+                role="group"
+                aria-label="确认清除经历记忆"
+              >
+                <span className={styles.confirmText}>
+                  将清空经历条目与长期梗概；成长专题不受影响。此操作不可撤销。
+                </span>
+                <div className={styles.actions}>
+                  <Button onClick={() => setConfirmClear(false)}>取消</Button>
+                  <Button
+                    variant="danger"
+                    onClick={() => void clearMemory()}
+                  >
+                    确认清除
+                  </Button>
+                </div>
+              </div>
+            )}
           </SettingsSection>
         </>
-      )}
-
-      {/* ── 清除确认浮层 ── */}
-      {confirmClear && (
-        <div className={styles.backdrop} onClick={() => setConfirmClear(false)}>
-          <div
-            ref={modalRef}
-            className={styles.modal}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="memory-clear-title"
-            tabIndex={-1}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={handleKeyDown}
-          >
-            <div className={styles.modalHeader}>
-              <span id="memory-clear-title">清除经历记忆</span>
-            </div>
-            <div className={styles.modalBody}>
-              <SectionNote>
-                将清除全部经历记忆：经历条目与长期梗概都会清空；成长页（关于博士与专题）不受影响。此操作不可撤销。
-              </SectionNote>
-            </div>
-            <div className={styles.modalFooter}>
-              <button
-                type="button"
-                className={styles.btn}
-                data-confirm-cancel
-                onClick={() => setConfirmClear(false)}
-              >
-                取消
-              </button>
-              <button
-                className={`${styles.btn} ${styles.btnDanger}`}
-                onClick={() => void clearMemory()}
-              >
-                确认清除
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

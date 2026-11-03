@@ -151,7 +151,7 @@ export function OverlayContainer() {
    *
    * 同时返回面板尺寸（calc 绑定 --face-size，随窗口缩放自动调整）：
    *   history  → 0.67×0.64，窄面板容纳"标题+时间+删除键"三列
-   *   settings → 0.72×0.66，双栏表单所需最小宽度
+   *   settings → 0.86×0.72，双栏表单 + 扩展页列表所需宽度；再宽会挤压对话区
    */
   const renderPanel = () => {
     switch (overlay) {
@@ -168,8 +168,8 @@ export function OverlayContainer() {
         return {
           node: <SettingsPanel />,
           style: {
-            width: "calc(var(--face-size) * 0.72)",
-            height: "calc(var(--face-size) * 0.66)",
+            width: "calc(var(--face-size) * 0.86)",
+            height: "calc(var(--face-size) * 0.72)",
           },
         };
 

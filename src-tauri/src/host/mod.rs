@@ -385,7 +385,8 @@ mod tests {
     }
 
     impl EchoService {
-        fn new(info: &'static HostServiceInfo) -> Arc<dyn HostService> {
+        /// 测试桩：直接给出可登记的共享句柄（不是构造器语义，故不叫 `new`）。
+        fn shared(info: &'static HostServiceInfo) -> Arc<dyn HostService> {
             Arc::new(Self { info })
         }
     }
@@ -402,9 +403,9 @@ mod tests {
 
     fn registry() -> HostServices {
         let mut services = HostServices::new();
-        services.register(EchoService::new(&ECHO_INFO)).unwrap();
-        services.register(EchoService::new(&FUTURE_INFO)).unwrap();
-        services.register(EchoService::new(&APPROVAL_INFO)).unwrap();
+        services.register(EchoService::shared(&ECHO_INFO)).unwrap();
+        services.register(EchoService::shared(&FUTURE_INFO)).unwrap();
+        services.register(EchoService::shared(&APPROVAL_INFO)).unwrap();
         services
     }
 
@@ -452,8 +453,8 @@ mod tests {
     #[test]
     fn duplicate_registration_is_rejected() {
         let mut services = HostServices::new();
-        services.register(EchoService::new(&ECHO_INFO)).unwrap();
-        let err = services.register(EchoService::new(&ECHO_INFO)).unwrap_err();
+        services.register(EchoService::shared(&ECHO_INFO)).unwrap();
+        let err = services.register(EchoService::shared(&ECHO_INFO)).unwrap_err();
         assert!(err.contains("test.echo"), "错误必须指出是哪个键：{err}");
         assert_eq!(services.keys(), vec!["test.echo"]);
     }

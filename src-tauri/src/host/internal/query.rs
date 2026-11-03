@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn calls_an_allowlisted_host_tool() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry
             .register(Box::new(StubTool { name: "query_stage" }))
             .unwrap();
@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn rejects_plugin_contributed_tools() {
-        let mut registry = ToolRegistry::new();
+        let registry = ToolRegistry::new();
         registry
             .register_with_origin(
                 Box::new(StubTool { name: "query_stage" }),

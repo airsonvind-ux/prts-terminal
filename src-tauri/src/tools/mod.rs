@@ -58,7 +58,7 @@ pub use web_search::WebSearchTool;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +159,11 @@ impl Default for ToolContext {
 pub enum ToolError {
     /// 请求的工具名在 Registry 中不存在
     NotFound(String),
+    /// 工具属于一个已被停用或卸载的插件：名字曾经存在，现在不可调用。
+    ///
+    /// 与 `NotFound` 区分开是给模型看的——「没这个工具」会诱使它换个名字瞎试，
+    /// 「插件被停用」才是可行动的结论。消息直接面向模型输出，Display 原样透传。
+    Disabled(String),
     /// 工具执行过程中出错（数据库查询失败、数据异常等）
     Execution(String),
     /// 参数 JSON 解析失败
@@ -172,6 +177,7 @@ impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(name) => write!(f, "工具 '{}' 未注册", name),
+            Self::Disabled(msg) => f.write_str(msg),
             Self::Execution(msg) => write!(f, "工具执行失败：{}", msg),
             Self::Parse(msg) => write!(f, "参数解析失败：{}", msg),
             Self::CommandFailed(msg) => f.write_str(msg),
@@ -403,30 +409,65 @@ pub enum Origin {
 
 /// 注册表里的一项：工具本体 + 来源。
 struct RegisteredTool {
-    tool: Box<dyn Tool>,
-    /// 只写不读的默认行为由 [`ToolRegistry::origin_of`] 兜底：生产代码目前不读它，
-    /// M2 按来源成组摘除工具（启停）时才消费。
+    /// 共享所有权：`execute` 取到句柄后要立刻放开锁再执行（工具可能回打注册表），
+    /// 所以不能把借用递出去。
+    tool: Arc<dyn Tool>,
+    /// 来源供 M3 的启停（按插件成组摘除）与扩展页展示使用。
     origin: Origin,
+}
+
+/// 已停用 / 已卸载插件的工具名：名字曾经存在，现在不可调用。
+#[derive(Debug, Clone)]
+struct Tombstone {
+    plugin_name: String,
+    /// 「已停用」/「已卸载」，直接拼进面向模型的错误文案。
+    reason: &'static str,
 }
 
 /// 工具注册表。应用启动时注册所有可用工具，
 /// orchestrator 通过 Registry 查找和执行工具。
+///
+/// 内部可变（M3）：插件启停要在运行时增删工具，而 orchestrator 拿到的是
+/// `Arc<ToolRegistry>`。锁只包住 HashMap 本身——**任何工具代码都不许在持锁
+/// 期间执行**，否则 `query.call` 这类「工具执行中回打注册表」的路径会在同一
+/// 线程上等自己。
 pub struct ToolRegistry {
-    tools: HashMap<String, RegisteredTool>,
+    tools: RwLock<HashMap<String, RegisteredTool>>,
+    tombstones: RwLock<HashMap<String, Tombstone>>,
 }
 
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
-            tools: HashMap::new(),
+            tools: RwLock::new(HashMap::new()),
+            tombstones: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// 读工具表。锁中毒不该让注册表永久失效——那只是某个工具线程 panic 过。
+    fn tools_read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, RegisteredTool>> {
+        self.tools
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn tools_write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, RegisteredTool>> {
+        self.tools
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn tombstones_write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Tombstone>> {
+        self.tombstones
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// 注册一个工具（宿主来源）。同名工具后注册的覆盖先注册的。
     ///
     /// 注册时校验 `parameters()` 的 JSON Schema 合法性（模块 3 P1：
     /// schema 校验——注册时校验 + 执行前校验参数），非法 schema 拒绝注册。
-    pub fn register(&mut self, tool: Box<dyn Tool>) -> Result<(), String> {
+    pub fn register(&self, tool: Box<dyn Tool>) -> Result<(), String> {
         self.register_with_origin(tool, Origin::Host)
     }
 
@@ -437,33 +478,85 @@ impl ToolRegistry {
     /// `plugins::register_plugin_tools` 在调用本方法前先查重，重名即失败并
     /// 回滚，因为跨插件覆盖别人的工具是最难排查的一类故障。
     pub fn register_with_origin(
-        &mut self,
+        &self,
         tool: Box<dyn Tool>,
         origin: Origin,
     ) -> Result<(), String> {
         schema::validate_tool_schema(&tool.parameters())?;
         let name = tool.name().to_string();
-        self.tools.insert(name, RegisteredTool { tool, origin });
+        self.tools_write().insert(
+            name.clone(),
+            RegisteredTool {
+                tool: Arc::from(tool),
+                origin,
+            },
+        );
+        // 工具回来了，旧墓碑就该撤掉：否则「已停用」会盖住重新启用后的真实报错。
+        self.tombstones_write().remove(&name);
         Ok(())
     }
 
     /// 移除指定名字的工具；返回是否真的移除了（插件注册失败时的回滚用）。
-    pub fn remove(&mut self, name: &str) -> bool {
-        self.tools.remove(name).is_some()
+    pub fn remove(&self, name: &str) -> bool {
+        self.tools_write().remove(name).is_some()
+    }
+
+    /// 给一组工具立墓碑：插件停用 / 卸载后，旧对话再调用会得到「已停用」而不是
+    /// 「未注册」。墓碑只在内存里，重启即清（停用状态本身记在 plugins.json）。
+    #[cfg_attr(not(test), allow(dead_code))] // 提交 3 的启停路径落笔后删除
+    pub fn bury(&self, names: &[String], plugin_name: &str, reason: &'static str) {
+        let mut tombstones = self.tombstones_write();
+        for name in names {
+            tombstones.insert(
+                name.clone(),
+                Tombstone {
+                    plugin_name: plugin_name.to_string(),
+                    reason,
+                },
+            );
+        }
+    }
+
+    /// 撤掉墓碑（插件重新启用时用；正常注册也会顺带清）。
+    #[cfg_attr(not(test), allow(dead_code))] // 提交 3 的启停路径落笔后删除
+    pub fn unbury(&self, names: &[String]) {
+        let mut tombstones = self.tombstones_write();
+        for name in names {
+            tombstones.remove(name);
+        }
+    }
+
+    /// 查不到工具时的错误：有墓碑就说清是哪个插件把它带走了。
+    fn unavailable(&self, name: &str) -> ToolError {
+        let tombstones = self
+            .tombstones
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match tombstones.get(name) {
+            Some(tombstone) => ToolError::Disabled(format!(
+                "插件 {} {}",
+                tombstone.plugin_name, tombstone.reason
+            )),
+            None => ToolError::NotFound(name.to_string()),
+        }
     }
 
     /// 工具来源：宿主内置，还是哪个插件贡献的。
     ///
-    /// 生产代码目前不读它（M2 的启停与 M3 的扩展页才消费）；测试用它断言
-    /// `run_maa_task` 确实是从插件路径进来的，而不是宿主又偷偷注册了一份。
+    /// 返回值按值给出（内部可变之后拿不到借用）；生产代码目前不读它，
+    /// M3 的扩展页与启停才消费，测试用它断言 `run_maa_task` 确实来自插件路径。
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn origin_of(&self, name: &str) -> Option<&Origin> {
-        self.tools.get(name).map(|registered| &registered.origin)
+    pub fn origin_of(&self, name: &str) -> Option<Origin> {
+        self.tools_read()
+            .get(name)
+            .map(|registered| registered.origin.clone())
     }
 
-    /// 按名查找工具。
-    pub fn get(&self, name: &str) -> Option<&dyn Tool> {
-        self.tools.get(name).map(|registered| registered.tool.as_ref())
+    /// 按名查找工具（共享句柄，调用方自己决定持有多久）。
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.tools_read()
+            .get(name)
+            .map(|registered| Arc::clone(&registered.tool))
     }
 
     /// 解析指定工具本次调用的展示切片（tool/call 卡片信息）。
@@ -483,7 +576,7 @@ impl ToolRegistry {
     /// 排序后输出跨重启逐字节稳定，是前缀缓存的硬约束。
     pub fn list_defs(&self) -> Vec<ToolDef> {
         let mut defs: Vec<ToolDef> = self
-            .tools
+            .tools_read()
             .values()
             .map(|registered| registered.tool.to_def())
             .collect();
@@ -502,15 +595,18 @@ impl ToolRegistry {
         ctx: &ToolContext,
         params: &str,
     ) -> Result<ToolOutput, ToolError> {
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
+        // 锁只用来取句柄：工具执行期间必须已经放开，否则工具内部回打注册表
+        // （query.call）会在同一线程上等自己。
+        let tool = match self.get(name) {
+            Some(tool) => tool,
+            None => return Err(self.unavailable(name)),
+        };
 
         // ── pre-execute：执行前策略检查（当前空实现）──
         self.pre_execute(name, ctx, params)?;
 
         // ── guard：单调守卫（只能拒绝，不能撤销放行；当前恒放行）──
-        self.guard(name, ctx, params)?;
+        self.guard(tool.as_ref(), ctx, params)?;
 
         // ── execute：实际执行 ──
         let output = tool.execute(ctx, params)?;
@@ -519,7 +615,7 @@ impl ToolRegistry {
         self.post_execute(name, ctx, params, &output)?;
 
         // ── finalizeContent → result ──
-        Ok(self.finalize_result(tool, output))
+        Ok(self.finalize_result(tool.as_ref(), output))
     }
 
     /// 执行管线 · pre-execute。当前空实现（结构就位）。
@@ -532,11 +628,13 @@ impl ToolRegistry {
     /// 已落地守卫（模块 3 P1）：执行前 JSON Schema 参数校验
     /// （必填字段 + 顶层类型），违反转为 `ToolError::Parse`。
     /// 破坏性工具的批准策略（approval）随模块 10 沙箱落地时在此追加。
-    fn guard(&self, name: &str, _ctx: &ToolContext, params: &str) -> Result<(), ToolError> {
+    fn guard(
+        &self,
+        tool: &dyn Tool,
+        _ctx: &ToolContext,
+        params: &str,
+    ) -> Result<(), ToolError> {
         // 参数 schema 校验（LLM 传参错误在此拦截，统一错误信息）
-        let tool = self
-            .get(name)
-            .ok_or_else(|| ToolError::NotFound(name.to_string()))?;
         let args: serde_json::Value =
             serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;
         schema::validate_arguments(&tool.parameters(), &args).map_err(ToolError::Parse)
@@ -725,7 +823,7 @@ mod tests {
 
     #[test]
     fn registry_register_and_get() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(EchoTool)).unwrap();
 
         let tool = reg.get("echo");
@@ -746,12 +844,121 @@ mod tests {
 
     #[test]
     fn registry_execute() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(EchoTool)).unwrap();
 
         let ctx = ToolContext::new();
         let result = reg.execute("echo", &ctx, r#"{"x":1}"#).unwrap();
         assert_eq!(result.summary, r#"Echo: {"x":1}"#);
+    }
+
+    /// 门闩工具：进入 execute 后发信号，等测试放行才返回。
+    struct GateTool {
+        entered: std::sync::mpsc::Sender<()>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl Tool for GateTool {
+        fn name(&self) -> &str {
+            "gate"
+        }
+        fn description(&self) -> &str {
+            "测试用门闩工具"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
+        fn is_concurrency_safe(&self) -> bool {
+            false
+        }
+        fn execute(&self, _ctx: &ToolContext, _params: &str) -> Result<ToolOutput, ToolError> {
+            let _ = self.entered.send(());
+            let _ = self
+                .release
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .recv();
+            Ok(ToolOutput::text("released"))
+        }
+    }
+
+    /// 内部可变之后最容易犯的错：执行工具时还捏着读锁。`query.call` 会在工具
+    /// 内部回打注册表，那样就是同线程自己等自己。本用例在执行中途读注册表，
+    /// 锁没放开就会卡死在这里（用超时把它变成失败而不是挂住）。
+    #[test]
+    fn execute_does_not_hold_the_registry_lock() {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let reg = Arc::new(ToolRegistry::new());
+        reg.register(Box::new(GateTool {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }))
+        .unwrap();
+
+        let worker = {
+            let reg = Arc::clone(&reg);
+            std::thread::spawn(move || {
+                reg.execute("gate", &ToolContext::new(), "{}")
+                    .map(|output| output.summary)
+            })
+        };
+
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("工具应当开始执行");
+        // 执行期间读注册表：若 execute 仍持锁，这里会阻塞。
+        let defs = reg.list_defs();
+        assert_eq!(defs.len(), 1, "执行期间注册表必须可读");
+
+        let _ = release_tx.send(());
+        let summary = worker
+            .join()
+            .expect("执行线程不该 panic")
+            .expect("工具应当正常返回");
+        assert_eq!(summary, "released");
+    }
+
+    #[test]
+    fn disabled_tool_reports_the_plugin_instead_of_not_found() {
+        let reg = ToolRegistry::new();
+        reg.register_with_origin(Box::new(EchoTool), Origin::Plugin("demo".to_string()))
+            .unwrap();
+        assert!(reg.remove("echo"));
+
+        reg.bury(&["echo".to_string()], "演示插件", "已停用");
+        let err = reg
+            .execute("echo", &ToolContext::new(), "{}")
+            .expect_err("停用后不该还能调用");
+        match &err {
+            ToolError::Disabled(message) => {
+                assert!(message.contains("演示插件"), "文案要点名插件：{message}");
+                assert!(message.contains("已停用"), "文案要说清是停用：{message}");
+            }
+            other => panic!("应当是 Disabled，实际是 {other:?}"),
+        }
+        assert_eq!(
+            err.to_string(),
+            "插件 演示插件 已停用",
+            "Display 原样透传，模型看到的就是这句话"
+        );
+
+        // 墓碑撤掉后回到「未注册」。
+        reg.unbury(&["echo".to_string()]);
+        assert!(matches!(
+            reg.execute("echo", &ToolContext::new(), "{}"),
+            Err(ToolError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn re_registering_clears_the_tombstone() {
+        let reg = ToolRegistry::new();
+        reg.bury(&["echo".to_string()], "演示插件", "已卸载");
+        reg.register(Box::new(EchoTool)).unwrap();
+
+        let output = reg.execute("echo", &ToolContext::new(), "{}").unwrap();
+        assert_eq!(output.canonical["text"], "Echo: {}");
     }
 
     #[test]
@@ -767,7 +974,7 @@ mod tests {
 
     #[test]
     fn registry_list_defs() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(EchoTool)).unwrap();
 
         let defs = reg.list_defs();
@@ -795,7 +1002,7 @@ mod tests {
             }
         }
 
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         // 注册序与名字序不同（若按注册序 / 迭代序输出，本用例可识别）
         reg.register(Box::new(StubTool("zeta"))).unwrap();
         reg.register(Box::new(StubTool("alpha"))).unwrap();
@@ -846,7 +1053,7 @@ mod tests {
 
     #[test]
     fn registry_display_for_dispatches_and_defaults_empty() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(DisplayProbeTool)).unwrap();
         let ctx = ToolContext::new();
         assert_eq!(
@@ -951,7 +1158,7 @@ mod tests {
                 Ok(ToolOutput::text(params))
             }
         }
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let err = reg.register(Box::new(BadSchemaTool)).unwrap_err();
         assert!(err.contains("type"), "got: {err}");
         assert!(reg.get("bad_schema").is_none());
@@ -960,7 +1167,7 @@ mod tests {
     #[test]
     fn guard_rejects_missing_required_arg_before_execution() {
         // 参数校验在管线 guard 阶段拦截（工具内部解析之前，统一错误信息）
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(QueryLevel)).unwrap();
         let ctx = ToolContext::new(); // 无 db——若 guard 不拦截会走到 Execution("数据库未连接")
         let err = reg
@@ -974,7 +1181,7 @@ mod tests {
 
     #[test]
     fn guard_accepts_valid_args_and_rejects_wrong_type() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(QueryEnemy)).unwrap();
         let ctx = ToolContext::new();
         // names 类型错误（应为数组）→ guard 拦截
@@ -1050,7 +1257,7 @@ mod tests {
         .expect("所有内置工具 schema 应合法");
         // M2a：安装入口多一个能力句柄。这里给一个不登记任何服务的注册表——
         // 安装路径只把句柄存进插件单例，不该在安装期调用任何能力。
-        crate::plugins::builtin::install("maa", crate::host::test_plugin_ctx("maa"), &mut reg)
+        crate::plugins::builtin::install("maa", crate::host::test_plugin_ctx("maa"), &reg)
             .expect("内置插件 maa 应装配成功");
 
         let _ = std::fs::remove_dir_all(&workspace_root);
@@ -1111,9 +1318,10 @@ mod tests {
     fn load_all_installs_maa_from_the_bundled_manifest() {
         let roots = crate::plugins::PluginRoots::from_config();
         let (services, _query) = crate::plugins::default_services(&roots, None);
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
-        let ledger = crate::plugins::load_all(&mut reg, &roots, &services, &policy);
+        let config = crate::plugins::PluginsConfig::load(&roots.data);
+        let ledger = crate::plugins::load_all(&reg, &roots, &config, &services, &policy);
 
         let record = ledger
             .lock()

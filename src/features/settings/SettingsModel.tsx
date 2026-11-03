@@ -23,6 +23,7 @@ import type {
 } from "../../types";
 import { THINKING_LABELS } from "../../thinking";
 import { SectionWarning } from "./ui/SettingsSection";
+import { Button } from "./ui/Button";
 import { ModelListSection } from "./SettingsModelList";
 import styles from "./SettingsProvider.module.css";
 import { Select } from "./ui/Select";
@@ -174,9 +175,9 @@ export function SettingsModel({
                   placeholder="https://api.example.com/v1"
                 />
               </label>
-              <button className={styles.fetchButton} onClick={saveCustom} disabled={busy}>
+              <Button variant="primary" onClick={saveCustom} disabled={busy}>
                 使用此自定义供应商
-              </button>
+              </Button>
             </>
           )}
         </>
@@ -226,15 +227,16 @@ export function SettingsModel({
               onPatch(home({ api_key: next }), "API Key");
             }}
           />
-          <button
+          <Button
+            variant="icon"
             className={styles.keyToggle}
-            type="button"
             disabled={!canCopy}
             onClick={() => void copyKey()}
             title={keyToggleTitle}
+            aria-label="复制密钥"
           >
             {copying ? "…" : ICON_COPY}
-          </button>
+          </Button>
         </div>
         {keyLast4 && (
           <span className={styles.keyHint} role="status">
@@ -248,8 +250,8 @@ export function SettingsModel({
         <div className={styles.labelRow}>
           <span className={styles.label}>模型</span>
           {modelListStatus === "loaded" && (
-            <button
-              type="button"
+            <Button
+              variant="icon"
               className={styles.refreshBtn}
               data-focus-inset
               disabled={busy}
@@ -258,7 +260,7 @@ export function SettingsModel({
               aria-label="刷新模型列表"
             >
               ↻
-            </button>
+            </Button>
           )}
         </div>
         <ModelListSection
@@ -319,7 +321,7 @@ export function SettingsModel({
 
       {/* ── 验证连接 ── */}
       <div className={styles.verifyRow}>
-        <button
+        <Button
           className={`${styles.verifyButton} ${
             verifyStatus === "loading"
               ? styles.verifyLoading
@@ -336,7 +338,7 @@ export function SettingsModel({
           {verifyStatus === "loading" && "验证中…"}
           {verifyStatus === "success" && "连接成功"}
           {verifyStatus === "error" && "连接失败"}
-        </button>
+        </Button>
         {verifyStatus === "error" && (
           <span className={styles.verifyErrorText}>{verifyError}</span>
         )}

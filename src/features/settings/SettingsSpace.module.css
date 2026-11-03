@@ -2,97 +2,73 @@
  *
  * 空间页：普通纵向排列——页面内容超过可视高度时由设置页内容区滚动。
  * （不做"整页占满 + 树填充"：默认窗口下高度不足时，填充型布局会把树压到
- *   0 高且页面无溢出，列表消失在底部、无法滚到——2026-09 实测反馈。） */
+ *   0 高且页面无溢出，列表消失在底部、无法滚到——2026-09 实测反馈。）
+ *
+ * 2026-11 UI 优化：路径与按钮拆成三层（小标签 / 等宽路径块 / 操作行）。
+ * 原来路径与「选择目录」同行、按钮又靠右，长路径被按钮切碎且对齐散乱。 */
 
 .container {
   display: flex;
   flex-direction: column;
+  gap: var(--space-4);
 }
 
-/* ── 工作空间：多行排布（label / 路径行 / 打开行 / hint） ──
- * 排布取舍（2026-09）：两个动作同行会超宽折行，所以「选择目录」跟在路径右侧
- * （与路径同行，名字短、靠路径语境自明），「在资源管理器中打开」独行用全名。 */
+/* ── 路径块：小标签 → 等宽路径 → 操作行 ── */
 
-.wsLabel {
-  font-size: 11px;
-  color: var(--text-2);
-}
-
-/* 路径行：路径（可换行，占满余宽）+ 选择目录（紧凑按钮，不换行、不缩） */
-.wsPathRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.wsValue {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--text-1);
-  line-height: 1.5;
-  word-break: break-all;
-  padding: 1px 0 2px;
-}
-
-.wsValueEmpty {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
+.pathLabel {
+  font-size: var(--fs-meta);
   color: var(--text-3);
-  padding: 1px 0 2px;
 }
 
-/* 动作按钮：紧凑、不内折行。横向内边距收到 8px——默认窗口下内容区约 122px，
- * 「在资源管理器中打开」（9 字 ≈ 117px 含内边距）靠它才放得下。 */
-.actionButton {
-  flex: 0 0 auto;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
+/* 路径是机器字符串：等宽、单行省略、悬停看全；底框把它和说明文字分开 */
+.pathBlock {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 5px 8px;
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.actionButton:hover {
-  border-color: var(--accent);
   background: var(--depth-4);
 }
 
-.actionButton:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.actionButton:disabled:hover {
-  border-color: var(--depth-1);
-  background: var(--depth-2);
-}
-
-.wsActions {
-  display: flex;
-  gap: 8px;
-}
-
-/* 「默认」标记：跟在路径后，弱化处理（不是状态告警，只是来源说明） */
-.wsBadge {
-  margin-left: 6px;
-  font-size: 10px;
-  color: var(--text-3);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 0 4px;
+.pathValue {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  color: var(--text-1);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.wsHint {
-  margin: 4px 0 0;
-  font-size: 11px;
+.pathEmpty {
   color: var(--text-3);
+}
+
+/* 「默认」标记：来源说明，不是状态告警，弱化处理 */
+.badge {
+  flex: none;
+  font-size: var(--fs-meta);
+  color: var(--accent);
+  border: 1px solid rgba(74, 171, 234, 0.4);
+  border-radius: 999px;
+  padding: 0 5px;
+  line-height: 1.5;
+}
+
+/* 操作行：三个等权按钮左对齐；放不下就折行，不挤路径 */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.hint {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--text-2);
   line-height: 1.4;
 }

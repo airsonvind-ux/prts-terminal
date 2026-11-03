@@ -81,6 +81,58 @@ export interface MaaResolved {
   root: string;
 }
 
+// ── 插件（M3 扩展页；后端 commands::plugins 的 camelCase 契约）──
+
+/** 插件形态：内置（随包）或独立进程 */
+export type PluginKind = "builtin" | "process";
+
+/** 运行状态；`starting` 在界面上按「正常」显示（启动中） */
+export type PluginRuntimeState =
+  | "loaded"
+  | "starting"
+  | "failed"
+  | "faulted"
+  | "disabled";
+
+/** list_plugins 的一行 */
+export interface PluginView {
+  id: string;
+  name: string;
+  version: string;
+  kind: PluginKind;
+  state: PluginRuntimeState;
+  /** 异常原因（failed / faulted 才有） */
+  reason: string | null;
+  /** 这个插件注册的工具名；停用或异常时为空：这时工具面不算数 */
+  tools: string[];
+  hasSettingsPage: boolean;
+  capabilities: string[];
+}
+
+/** 有目录但读不出 manifest 的插件目录 */
+export interface UnregisteredPluginDir {
+  dirName: string;
+  reason: string;
+}
+
+export interface PluginList {
+  plugins: PluginView[];
+  unregistered: UnregisteredPluginDir[];
+}
+
+/** preview_plugin_install 的返回值（确认时装回 token 即可） */
+export interface PluginPreview {
+  token: string;
+  name: string;
+  id: string;
+  version: string;
+  author: string | null;
+  kind: PluginKind;
+  capabilities: string[];
+  fileCount: number;
+  totalBytes: number;
+}
+
 /** 应用内更新状态（updater_status / update-status 事件） */
 export type UpdatePhase =
   | "idle"

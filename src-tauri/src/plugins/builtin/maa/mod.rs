@@ -29,7 +29,7 @@ pub mod task;
 ///
 /// 两件事：把能力句柄注入 `manager` 的单例（R4：插件侧懒初始化拿不到构造参数），
 /// 再注册工具。桥的定位与连接在 `manager` 的懒初始化里，与安装时机无关。
-pub fn install(ctx: PluginCtx, reg: &mut ToolRegistry) -> Result<Vec<String>, PluginError> {
+pub fn install(ctx: PluginCtx, reg: &ToolRegistry) -> Result<Vec<String>, PluginError> {
     manager::init(ctx).map_err(|error| PluginError::Invalid {
         field: "context",
         value: error,

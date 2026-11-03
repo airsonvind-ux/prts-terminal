@@ -1122,7 +1122,7 @@ mod tests {
 
     #[test]
     fn successful_external_provenance_marks_turn_taint() {
-        let mut reg = ToolRegistry::new();
+        let reg = ToolRegistry::new();
         reg.register(Box::new(ExternalProbe)).unwrap();
         let ctx = ToolContext::new();
         let result = StreamResult {

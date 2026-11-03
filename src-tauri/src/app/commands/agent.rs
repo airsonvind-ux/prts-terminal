@@ -365,16 +365,21 @@ pub async fn agent_process(
 
     // ── 技能目录冻结快照（批 2）：与记忆区同点位、同 key ──
     // 首见冻结（活体目录文本 → sidecar）；活体不可读时不冻结（下轮重试）。
+    let live_index = crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+        .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+        .ok();
     let skill_catalog = {
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
-            .ok();
+        let live = live_index.as_ref().map(|idx| idx.catalog_text());
         let mut snaps = skills_snapshot_store
             .lock()
             .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
         snaps.get_or_freeze(conversation_key, live.as_deref())
     };
+    // 插件能力段：与技能目录同一次加载，随对话一起冻进前缀。
+    let plugin_block = live_index
+        .as_ref()
+        .map(|idx| crate::plugins::plugin_capabilities_text(&tools, &idx.catalog_entries()))
+        .unwrap_or_default();
 
     // ── 完整前缀冻结快照（批 5）：system 全文 + 工具定义 ──
     // 对话创建即冻结，此后一律照用（跨重启、跨应用升级逐字节不变）；
@@ -385,6 +390,7 @@ pub async fn agent_process(
         let live_system = crate::orchestrator::context::assemble_system_prompt_with_memory(
             &skill_catalog,
             &memory_block,
+            &plugin_block,
         );
         let live_tools = tools.list_defs();
         let mut snaps = prefix_snapshot_store

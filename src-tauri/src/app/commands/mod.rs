@@ -7,6 +7,7 @@ mod conversation;
 mod files;
 mod interaction;
 mod memory;
+mod plugins;
 mod prelude;
 mod settings;
 mod skills;
@@ -19,6 +20,7 @@ pub use conversation::*;
 pub use files::*;
 pub use interaction::*;
 pub use memory::*;
+pub use plugins::*;
 pub use settings::*;
 pub use skills::*;
 pub use system::*;
@@ -507,6 +509,7 @@ mod tests {
         refresh_frozen_snapshots(
             "c1",
             Some("目录 B"),
+            "",
             &[],
             &memory,
             &snapshots,
@@ -535,7 +538,7 @@ mod tests {
         assert!(prefix_json.contains("画像"), "前缀快照应含新记忆");
 
         // 活体不可读 → 跳过（保持旧值）
-        refresh_frozen_snapshots("c1", None, &[], &memory, &snapshots, &skills, &prefix);
+        refresh_frozen_snapshots("c1", None, "", &[], &memory, &snapshots, &skills, &prefix);
         assert_eq!(
             std::fs::read_to_string(sessions.join("c1.skills.txt")).unwrap(),
             "目录 B",

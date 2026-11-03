@@ -1,0 +1,236 @@
+/* 设置页 · 扩展页（列表 / 详情 / 安装）。
+ *
+ * 尺寸按 UI 规格草案 2：面板内容区 268 宽（0.86 面板 − 左栏 52 − 内边距 24），
+ * 页头 27 高、正文自己滚动。字号只用 10/11/13 三档，靠颜色与间距分层。
+ */
+
+.host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex: none;
+}
+
+.pageTitle {
+  font-size: 13px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pageSpacer {
+  flex: 1;
+}
+
+.backButton {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 0 4px;
+}
+
+.backButton:hover {
+  color: var(--text-1);
+}
+
+.pageBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+}
+
+/* ── 列表 ─────────────────────────────────────────────── */
+
+/* 整区是拖拽落点（命中判定在 SettingsPlugins.hitsList），不是某个虚线方块 */
+.listZone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100%;
+}
+
+.rowList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sectionHint {
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 2px 6px 4px;
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skeleton span {
+  display: block;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.skeleton span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px 6px;
+}
+
+.emptyText {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.error {
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--danger);
+  border-left: 2px solid var(--danger);
+  background: rgba(201, 83, 71, 0.08);
+  word-break: break-word;
+}
+
+/* ── 详情 ─────────────────────────────────────────────── */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 两列键值：标签定宽，值吃掉剩下的行 */
+.facts {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.facts dt {
+  color: var(--text-3);
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text-1);
+  word-break: break-word;
+}
+
+.factBad {
+  color: var(--danger) !important;
+}
+
+/* 工具名走等宽：run_maa_task 这类标识符用正文字体容易被读成一句话 */
+.toolNames {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+}
+
+.factMuted {
+  color: var(--text-3);
+}
+
+.capability {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  background: var(--depth-3);
+}
+
+.moreButton {
+  font-size: var(--fs-meta);
+  color: var(--accent);
+  padding: 0;
+}
+
+.moreButton:hover {
+  text-decoration: underline;
+}
+
+.detailActions {
+  display: flex;
+  gap: 6px;
+}
+
+.confirmRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.confirmCheck {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* ── 安装 ─────────────────────────────────────────────── */
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.installActions {
+  display: flex;
+  gap: 6px;
+}
+
+.installTarget {
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-3);
+}

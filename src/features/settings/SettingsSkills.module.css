@@ -1,4 +1,5 @@
-/* 设置页 · 技能子页样式：安装入口按钮组 + 已安装清单 */
+/* 设置页 · 技能子页样式：只剩安装入口按钮组、含脚本警告块与清单容器。
+ * 行形态与按钮已交给 ui/（ListRow / Button），这里不再重复定义。 */
 
 .container {
   display: flex;
@@ -9,39 +10,6 @@
 .actions {
   display: flex;
   gap: 8px;
-}
-
-/* 动作按钮：紧凑、不内折行 */
-.actionButton {
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.actionButton:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--depth-4);
-}
-
-.actionButton:disabled {
-  color: var(--text-3);
-  cursor: default;
-  opacity: 0.7;
-}
-
-/* 节内说明（安装节与清单节共用） */
-.sectionHint {
-  margin: 0 0 6px;
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.4;
 }
 
 /* 含脚本安装警告：紧凑清单，不抢安装入口的层级 */
@@ -95,74 +63,50 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 容器内行式清单：成块 + 行分隔 + hover */
-
+/* 技能清单容器（行本身由 ListRow 画） */
 .skillList {
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--depth-3);
-}
-
-.skillRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 5px 8px;
-}
-
-.skillRow + .skillRow {
-  border-top: 1px solid var(--depth-1);
-}
-
-.skillRow:hover {
-  background: var(--depth-4);
-}
-
-/* 主区（FileLink）：名称 + 描述两行，占满余宽 */
-.skillMain {
-  flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  /* FileLink 的焦点环画在元素内部；留出内边距，环才不会贴住文字。
-     负 margin 抵消外扩，文字位置和行高保持不变。 */
-  padding: 3px 5px;
-  margin: -3px -5px;
+  gap: 2px;
+}
+
+/* 技能名是打开源 md 的入口：悬停时名称转 accent + 下划线，配合整行抬起，
+   让「这一条可以点开」在鼠标移上去之前就看得出来（行本身也给了 pointer）。 */
+.skillLink {
+  display: inline-block;
+  max-width: 100%;
 }
 
 .skillName {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-1);
+  border-bottom: 1px solid transparent;
+  transition: color 0.12s ease, border-color 0.12s ease;
 }
 
-.skillDesc {
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.skillLink:hover .skillName,
+.skillLink:focus-visible .skillName {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
 }
 
-/* 侧区：来源标签 + 移除（两步确认） */
-.skillSide {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-top: 1px;
-}
-
+/* 侧区：来源胶囊 + 移除按钮 */
 .sourceTag {
-  font-size: 10px;
-  color: var(--text-3);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  font-size: var(--fs-meta);
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  padding: 1px 6px;
   white-space: nowrap;
+  color: var(--text-2);
+  background: var(--depth-3);
+}
+
+.sourceTagUser {
+  color: var(--accent);
+  background: rgba(74, 171, 234, 0.12);
+}
+
+.sourceTagUntrusted {
+  color: var(--warn);
+  background: rgba(214, 158, 74, 0.12);
 }
 
 .emptyHint {

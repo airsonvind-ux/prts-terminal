@@ -9,7 +9,7 @@
   "capabilities": ["maa.bridge"],
   "activation": ["onStartup"],
   "contributes": {
-    "skills": [],
+    "skills": ["MAA 任务"],
     "settingsForm": "builtin-page",
     "assets": []
   }

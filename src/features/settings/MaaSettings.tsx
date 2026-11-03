@@ -1,4 +1,7 @@
-// 设置页 · "扩展"子页（MAA 接入）
+// 设置页 · 插件「MAA 自动化」的设置页
+//
+// 从原来的「扩展」子页拆出来：扩展页现在是插件容器（管理页 + 各插件的设置页），
+// 这一页只是其中一个插件的设置内容，由 PluginSettingsHost 按 id 挂上来。
 //
 // 三节：账号 → 连接 → 增强。
 //
@@ -18,24 +21,25 @@ import {
   useCallback,
   useEffect,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   MaaPatch,
   MaaResolved,
   MaaServer,
-  MaaSettings,
+  MaaSettings as MaaSettingsConfig,
   MaaStatus,
 } from "../../types";
 import { SettingsRow } from "./ui/SettingsRow";
 import { Select } from "./ui/Select";
 import { SectionHint, SectionWarning, SettingsSection } from "./ui/SettingsSection";
-import choiceStyles from "./ui/choice.module.css";
-import styles from "./SettingsExtension.module.css";
+import { Button } from "./ui/Button";
+import { ChoiceCard } from "./ui/ChoiceCard";
+import { Switch } from "./ui/Switch";
+import styles from "./MaaSettings.module.css";
 
-export interface SettingsExtensionProps {
-  maa: MaaSettings;
+export interface MaaSettingsProps {
+  maa: MaaSettingsConfig;
   /** 对话处理中（禁用全部控件；漏斗另有守卫） */
   busy: boolean;
   /** 「测试连接」进行中（状态由 Panel 持有——子页切走会卸载，留在子页会丢） */
@@ -84,7 +88,7 @@ function pickResolved(status: MaaStatus | null, emulator: string): MaaResolved |
   return status.resolved.find((r) => r.emulator === want) ?? status.resolved[0];
 }
 
-export function SettingsExtension({
+export function MaaSettings({
   maa,
   busy,
   testing,
@@ -92,7 +96,7 @@ export function SettingsExtension({
   onPatch,
   onChooseEmulatorDir,
   onChooseAdbFile,
-}: SettingsExtensionProps) {
+}: MaaSettingsProps) {
   const [status, setStatus] = useState<MaaStatus | null>(null);
   // 文本框草稿：失焦时提交（与现有页的文本字段约定一致）
   const [draft, setDraft] = useState({
@@ -132,13 +136,6 @@ export function SettingsExtension({
   const auto = maa.auto_detect;
   const selected = pickResolved(status, maa.emulator);
 
-  // 复选框原生只用 Space 切换；额外接受 Enter，方便把它当按钮用的键盘用户。
-  const toggleCheckboxOnEnter = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      e.currentTarget.click();
-    }
-  };
   /** 自动检测中显示判定值（不可改）；关掉后显示用户自己的值 */
   const shown = (autoValue: string | undefined, own: string) =>
     auto ? (autoValue ?? "") : own;
@@ -149,17 +146,17 @@ export function SettingsExtension({
       <SettingsSection title="账号">
         <div className={styles.serverRow}>
           {(Object.keys(SERVER_LABELS) as MaaServer[]).map((value) => (
-            <label key={value} className={styles.serverOption}>
-              <input
-                type="radio"
-                name="maaServer"
-                className={choiceStyles.choice}
-                disabled={locked}
-                checked={maa.server === value}
-                onChange={() => onPatch({ server: value }, "服务器")}
-              />
-              <span className={styles.serverTitle}>{SERVER_LABELS[value]}</span>
-            </label>
+            <ChoiceCard
+              key={value}
+              name="maaServer"
+              title={SERVER_LABELS[value]}
+              description={
+                value === "official" ? "官方服务器账号" : "Bilibili 账号"
+              }
+              checked={maa.server === value}
+              disabled={locked}
+              onSelect={() => onPatch({ server: value }, "服务器")}
+            />
           ))}
         </div>
       </SettingsSection>
@@ -174,9 +171,9 @@ export function SettingsExtension({
                 ? statusText(status)
                 : "正在读取状态…"}
           </div>
-          <button className={styles.testButton} disabled={testing} onClick={runTest}>
+          <Button disabled={testing} onClick={runTest}>
             {testing ? "连接中…" : "测试连接"}
-          </button>
+          </Button>
         </div>
         {running && <SectionWarning>MAA 正在运行，暂不可改</SectionWarning>}
         {busy && (
@@ -188,13 +185,11 @@ export function SettingsExtension({
           label="自动检测"
           hint="自动识别；关掉后可自己指定"
           control={
-            <input
-              type="checkbox"
-              className={choiceStyles.choice}
+            <Switch
+              label="自动检测"
               disabled={locked}
               checked={auto}
-              onChange={(e) => onPatch({ auto_detect: e.target.checked }, "自动检测")}
-              onKeyDown={toggleCheckboxOnEnter}
+              onChange={(next) => onPatch({ auto_detect: next }, "自动检测")}
             />
           }
         />
@@ -232,13 +227,9 @@ export function SettingsExtension({
                   }
                 }}
               />
-              <button
-                className={styles.actionButton}
-                disabled={locked || auto}
-                onClick={onChooseEmulatorDir}
-              >
+              <Button disabled={locked || auto} onClick={onChooseEmulatorDir}>
                 选择
-              </button>
+              </Button>
             </div>
           }
         />
@@ -279,13 +270,9 @@ export function SettingsExtension({
                   }
                 }}
               />
-              <button
-                className={styles.actionButton}
-                disabled={locked || auto}
-                onClick={onChooseAdbFile}
-              >
+              <Button disabled={locked || auto} onClick={onChooseAdbFile}>
                 选择
-              </button>
+              </Button>
             </div>
           }
         />
@@ -302,15 +289,13 @@ export function SettingsExtension({
               label="截图增强"
               hint="用模拟器自带截图，速度更快"
               control={
-                <input
-                  type="checkbox"
-                  className={choiceStyles.choice}
+                <Switch
+                  label="截图增强"
                   disabled={locked}
                   checked={maa.screenshot_extras}
-                  onChange={(e) =>
-                    onPatch({ screenshot_extras: e.target.checked }, "截图增强")
+                  onChange={(next) =>
+                    onPatch({ screenshot_extras: next }, "截图增强")
                   }
-                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />
@@ -319,15 +304,13 @@ export function SettingsExtension({
               label="触控增强"
               hint="支持模拟器开启「应用保活」时使用"
               control={
-                <input
-                  type="checkbox"
-                  className={choiceStyles.choice}
+                <Switch
+                  label="触控增强"
                   disabled={locked}
                   checked={maa.touch_extras}
-                  onChange={(e) =>
-                    onPatch({ touch_extras: e.target.checked }, "触控增强")
+                  onChange={(next) =>
+                    onPatch({ touch_extras: next }, "触控增强")
                   }
-                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />

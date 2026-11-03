@@ -16,6 +16,7 @@ import type { AppMeta } from "../../types";
 import { showToast } from "../../stores/useToastStore";
 import { useUpdaterStore } from "../../stores/useUpdaterStore";
 import { SettingsSection, SectionHint } from "./ui/SettingsSection";
+import { Button } from "./ui/Button";
 import prtsIcon from "../../assets/prts-icon.svg";
 import styles from "./SettingsAbout.module.css";
 
@@ -183,37 +184,34 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
         )}
         <div className={styles.updateActions}>
           {updater?.phase === "available" && (
-            <button
-              className={`${styles.updateBtn} ${styles.updatePrimary}`}
+            <Button
+              variant="primary"
               disabled={updaterAction !== null}
               onClick={() => void useUpdaterStore.getState().download()}
             >
               {updaterAction === "download" ? "下载中…" : "下载更新"}
-            </button>
+            </Button>
           )}
           {updater?.phase === "downloaded" && (
-            <button
-              className={`${styles.updateBtn} ${styles.updatePrimary}`}
+            <Button
+              variant="primary"
               disabled={updaterAction !== null || installBlocked}
               title={blockerText || undefined}
               onClick={() => void useUpdaterStore.getState().install()}
             >
               {updaterAction === "install" ? "启动中…" : "重启并安装"}
-            </button>
+            </Button>
           )}
           {canCheck && (
-            <button
-              className={styles.updateBtn}
+            <Button
               disabled={updaterAction !== null}
               onClick={() => void useUpdaterStore.getState().check()}
             >
               {updater?.phase === "error" ? "重试检查" : "检查更新"}
-            </button>
+            </Button>
           )}
           {showManualDownload && (
-            <button className={styles.updateBtn} onClick={openDownload}>
-              手动下载
-            </button>
+            <Button onClick={openDownload}>手动下载</Button>
           )}
         </div>
         {updater?.phase === "downloaded" && installBlocked && (
@@ -241,8 +239,7 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
               数据来源、许可与非官方说明
             </span>
           </div>
-          <button
-            className={styles.resourceBtn}
+          <Button
             onClick={toggleDataNotice}
             aria-expanded={dataNoticeOpen}
             aria-label={
@@ -250,7 +247,7 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
             }
           >
             {dataNoticeOpen ? "收起" : "查看"}
-          </button>
+          </Button>
         </div>
 
         {dataNoticeOpen &&
@@ -271,15 +268,14 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
               随包文档，用系统默认应用打开
             </span>
           </div>
-          <button
-            className={styles.resourceBtn}
+          <Button
             onClick={openUserGuide}
             disabled={!meta}
             title="用系统默认应用打开《使用说明》"
             aria-label="打开使用说明"
           >
             打开
-          </button>
+          </Button>
         </div>
 
         <div className={styles.resourceRow}>
@@ -289,14 +285,13 @@ export function SettingsAbout({ meta }: SettingsAboutProps) {
               Apache 2.0 · AGPL 3.0 · 第三方组件
             </span>
           </div>
-          <button
-            className={styles.resourceBtn}
+          <Button
             onClick={toggleLicense}
             aria-expanded={licenseOpen}
             aria-label={licenseOpen ? "收起许可证" : "查看许可证"}
           >
             {licenseOpen ? "收起" : "查看"}
-          </button>
+          </Button>
         </div>
 
         {licenseOpen &&

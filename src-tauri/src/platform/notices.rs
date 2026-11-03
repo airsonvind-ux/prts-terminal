@@ -81,6 +81,74 @@ pub struct NoticeEvent {
     pub ts: String,
 }
 
+/// 目录条目的来源。
+///
+/// 不复用 `tools::Origin`：注册表那边的形状只有插件 id（够做 `query.call`
+/// 的来源判定，拿不到展示名），这里是持久化与文案用的形状，展示名由记账方
+/// 查插件台账补齐。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CatalogOrigin {
+    /// 宿主自带（内置工具 / 内置技能）。
+    #[default]
+    Host,
+    /// 插件提供：`id` 用于对账，`display_name` 用于文案。
+    Plugin { id: String, display_name: String },
+    /// 旧基线没有来源信息（三元组格式之前写下的值）。只在读入路径出现，
+    /// 不补造：比对时按「未知」处理，文案不带归属。
+    Unknown,
+}
+
+impl CatalogOrigin {
+    /// 文案后缀：插件条目带展示名，宿主与未知来源不带。
+    fn suffix(&self) -> String {
+        match self {
+            CatalogOrigin::Plugin { display_name, .. } => format!("（{display_name}）"),
+            CatalogOrigin::Host | CatalogOrigin::Unknown => String::new(),
+        }
+    }
+}
+
+/// 目录条目：名字 + 描述 + 来源。目录维度（技能 / 工具）用它做差异比对与记账。
+///
+/// `description` 为空表示「该条目的描述未知」（旧基线），不参与「更新」判定。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogEntry {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub origin: CatalogOrigin,
+}
+
+impl CatalogEntry {
+    /// 宿主条目。
+    pub fn host(name: impl Into<String>, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            origin: CatalogOrigin::Host,
+        }
+    }
+
+    /// 插件条目（`id` 对账用，`display_name` 进文案）。
+    pub fn plugin(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            origin: CatalogOrigin::Plugin {
+                id: id.into(),
+                display_name: display_name.into(),
+            },
+        }
+    }
+}
+
 /// 维度类别：值维度（覆写式快照，入首轮快照）／目录维度（基线驱动，不入快照）。
 ///
 /// 供前端按类别筛选（新对话快照只放值维度）——新增维度时声明一次类别即可，
@@ -332,49 +400,61 @@ impl Notices {
         self.persist();
     }
 
-    /// 技能目录差异（(name, desc) 对：描述变化可捕捉；文案与目录组装同构）。
-    pub fn diff_skill_catalog(&mut self, skills: &[(String, String)]) {
-        self.diff_catalog_pairs(DimKey::SkillCatalog, skills);
+    /// 技能目录差异（条目带来源：描述变化可捕捉，归属进文案）。
+    ///
+    /// `context` 是这次变化的一句话背景（如「插件 MAA 自动化已停用」），
+    /// 有差异时作为首行；宿主侧变化（如技能页安装）传 `None`，文案保持原样。
+    pub fn diff_skill_catalog(&mut self, skills: &[CatalogEntry], context: Option<&str>) {
+        self.diff_catalog_pairs(DimKey::SkillCatalog, skills, context);
     }
 
     /// 技能目录差异：首启只记基线（不告知、不耗序号）；有差异 →
-    /// stamp=++seq、note=差异（新增 / 更新条目按 `- 名称：描述` 目录行格式，
-    /// 移除列名）。
-    fn diff_catalog_pairs(&mut self, k: DimKey, skills: &[(String, String)]) {
-        let last = pairs_from_value(&self.dim_ref(k).value);
+    /// stamp=++seq、note=差异（新增 / 更新条目按 `- 名称（插件）：描述` 目录行
+    /// 格式，移除列名；插件条目带展示名）。
+    fn diff_catalog_pairs(
+        &mut self,
+        k: DimKey,
+        entries: &[CatalogEntry],
+        context: Option<&str>,
+    ) {
+        let last = catalog_entries_from_value(&self.dim_ref(k).value);
         let seeded = self.dim_ref(k).value.is_empty() && self.dim_ref(k).stamp == 0;
-        let mut current: Vec<(String, String)> = skills.to_vec();
-        current.sort();
-        current.dedup_by(|a, b| a.0 == b.0);
+        let mut current: Vec<CatalogEntry> = entries.to_vec();
+        current.sort_by(|a, b| a.name.cmp(&b.name));
+        current.dedup_by(|a, b| a.name == b.name);
         if seeded {
             let d = self.dim_mut(k);
-            d.value = pairs_to_value(&current);
+            d.value = catalog_entries_to_value(&current);
             d.note.clear();
             self.persist();
             return;
         }
-        let (detail, new_base) = catalog_pairs_diff(&current, &last);
+        let (detail, new_base) = catalog_entries_diff(&current, &last);
+        let detail = detail.map(|d| match context {
+            Some(c) if !c.trim().is_empty() => format!("{c}\n{d}"),
+            _ => d,
+        });
         match detail {
             Some(note) => {
                 let s = self.alloc_seq();
                 let d = self.dim_mut(k);
-                d.value = pairs_to_value(&new_base);
+                d.value = catalog_entries_to_value(&new_base);
                 d.stamp = s;
                 d.note = note;
                 self.persist();
             }
             None => {
                 let d = self.dim_mut(k);
-                d.value = pairs_to_value(&new_base);
+                d.value = catalog_entries_to_value(&new_base);
                 self.persist();
             }
         }
     }
 
-    /// 工具目录差异（(name, desc) 对，与技能目录同构）：描述变化也能捕捉，
-    /// 应用升级带来的工具改动才说得清（只比名字会漏掉“名字未变、描述改了”）。
-    pub fn diff_tool_catalog(&mut self, tools: &[(String, String)]) {
-        self.diff_catalog_pairs(DimKey::ToolCatalog, tools);
+    /// 工具目录差异（与技能目录同构）：描述变化也能捕捉，应用升级带来的工具
+    /// 改动才说得清（只比名字会漏掉“名字未变、描述改了”）。
+    pub fn diff_tool_catalog(&mut self, tools: &[CatalogEntry], context: Option<&str>) {
+        self.diff_catalog_pairs(DimKey::ToolCatalog, tools, context);
     }
 
     // ── 只读接口 ──
@@ -422,54 +502,70 @@ fn baseline_to_value(baseline: &[String]) -> String {
     serde_json::to_string(baseline).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// 技能基线（(name, desc) 对的 JSON）→ 数组；非法/空 → 空。
-/// 兼容旧格式（仅名字数组）：desc 视为未知（空串），不参与“更新”判定。
-fn pairs_from_value(value: &str) -> Vec<(String, String)> {
+/// 目录基线（JSON）→ 条目；非法/空 → 空。
+///
+/// 兼容两种旧格式：`[[name, desc], …]`（二元组）与 `[name, …]`（仅名字）。
+/// 旧格式没有来源，读入时一律 [`CatalogOrigin::Unknown`]，不补造。
+fn catalog_entries_from_value(value: &str) -> Vec<CatalogEntry> {
     let v = value.trim();
     if v.is_empty() {
         return Vec::new();
     }
+    if let Ok(entries) = serde_json::from_str::<Vec<CatalogEntry>>(v) {
+        return entries;
+    }
     if let Ok(pairs) = serde_json::from_str::<Vec<(String, String)>>(v) {
-        return pairs;
+        return pairs
+            .into_iter()
+            .map(|(name, description)| CatalogEntry {
+                name,
+                description,
+                origin: CatalogOrigin::Unknown,
+            })
+            .collect();
     }
     serde_json::from_str::<Vec<String>>(v)
         .unwrap_or_default()
         .into_iter()
-        .map(|n| (n, String::new()))
+        .map(|name| CatalogEntry {
+            name,
+            description: String::new(),
+            origin: CatalogOrigin::Unknown,
+        })
         .collect()
 }
 
-fn pairs_to_value(pairs: &[(String, String)]) -> String {
-    serde_json::to_string(pairs).unwrap_or_else(|_| "[]".to_string())
+fn catalog_entries_to_value(entries: &[CatalogEntry]) -> String {
+    serde_json::to_string(entries).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// 计算 (name, desc) 目录差异（纯函数）：返回 (变化详情, 更新后基线)。
+/// 计算目录差异（纯函数）：返回 (变化详情, 更新后基线)。
 /// - 首启（last 为空）：不写详情，仅返回新基线
 /// - 无差异：None 详情（desc 回填静默进行）
-/// - 有差异：新增 / 更新条目按 `- 名称：描述` 目录行格式；移除列名
+/// - 有差异：新增 / 更新条目按 `- 名称（插件）：描述` 目录行格式；移除列名
+/// - 移除项取**基线里的条目**——条目已经从当前集合消失，来源只能从基线读
 /// - 旧基线 desc 为空（格式迁移中）不参与“更新”判定，防误报
-fn catalog_pairs_diff(
-    current: &[(String, String)],
-    last: &[(String, String)],
-) -> (Option<String>, Vec<(String, String)>) {
+fn catalog_entries_diff(
+    current: &[CatalogEntry],
+    last: &[CatalogEntry],
+) -> (Option<String>, Vec<CatalogEntry>) {
     if last.is_empty() {
         return (None, current.to_vec());
     }
 
-    let added: Vec<&(String, String)> = current
+    let added: Vec<&CatalogEntry> = current
         .iter()
-        .filter(|(n, _)| !last.iter().any(|(ln, _)| ln == n))
+        .filter(|e| !last.iter().any(|l| l.name == e.name))
         .collect();
-    let removed: Vec<&str> = last
+    let removed: Vec<&CatalogEntry> = last
         .iter()
-        .filter(|(ln, _)| !current.iter().any(|(n, _)| n == ln))
-        .map(|(ln, _)| ln.as_str())
+        .filter(|l| !current.iter().any(|e| e.name == l.name))
         .collect();
-    let updated: Vec<&(String, String)> = current
+    let updated: Vec<&CatalogEntry> = current
         .iter()
-        .filter(|(n, d)| {
+        .filter(|e| {
             last.iter()
-                .any(|(ln, ld)| ln == n && !ld.is_empty() && ld != d)
+                .any(|l| l.name == e.name && !l.description.is_empty() && l.description != e.description)
         })
         .collect();
 
@@ -480,20 +576,34 @@ fn catalog_pairs_diff(
     let mut parts: Vec<String> = Vec::new();
     if !added.is_empty() {
         let mut seg = String::from("新增：");
-        for (n, d) in &added {
-            seg.push_str(&format!("\n- {n}：{d}"));
+        for e in &added {
+            seg.push_str(&format!(
+                "\n- {}{}：{}",
+                e.name,
+                e.origin.suffix(),
+                e.description
+            ));
         }
         parts.push(seg);
     }
     if !updated.is_empty() {
         let mut seg = String::from("更新：");
-        for (n, d) in &updated {
-            seg.push_str(&format!("\n- {n}：{d}"));
+        for e in &updated {
+            seg.push_str(&format!(
+                "\n- {}{}：{}",
+                e.name,
+                e.origin.suffix(),
+                e.description
+            ));
         }
         parts.push(seg);
     }
     if !removed.is_empty() {
-        parts.push(format!("移除：{}", removed.join("、")));
+        let names: Vec<String> = removed
+            .iter()
+            .map(|e| format!("{}{}", e.name, e.origin.suffix()))
+            .collect();
+        parts.push(format!("移除：{}", names.join("、")));
     }
     (Some(parts.join("\n")), current.to_vec())
 }
@@ -616,6 +726,16 @@ mod tests {
         dir
     }
 
+    /// 宿主条目。
+    fn host(name: &str, description: &str) -> CatalogEntry {
+        CatalogEntry::host(name, description)
+    }
+
+    /// 插件条目。
+    fn plugin(name: &str, description: &str, id: &str, display: &str) -> CatalogEntry {
+        CatalogEntry::plugin(name, description, id, display)
+    }
+
     #[test]
     fn seed_sets_values_without_consuming_seq() {
         let dir = unique_temp_dir("seed");
@@ -728,18 +848,18 @@ mod tests {
     fn catalog_first_run_records_baseline_only() {
         let dir = unique_temp_dir("sk-base");
         let mut n = Notices::load(&dir);
-        n.diff_skill_catalog(&[
-            ("推演分析".into(), "推演规则".into()),
-            ("数值计算".into(), "计算规则".into()),
-        ]);
+        n.diff_skill_catalog(
+            &[host("推演分析", "推演规则"), host("数值计算", "计算规则")],
+            None,
+        );
         assert_eq!(n.seq(), 0, "首启不耗序号");
         assert_eq!(n.dims.skill_catalog.stamp, 0);
         assert!(n.dims.skill_catalog.note.is_empty());
         assert_eq!(
-            pairs_from_value(&n.dims.skill_catalog.value),
+            catalog_entries_from_value(&n.dims.skill_catalog.value),
             vec![
-                ("推演分析".to_string(), "推演规则".to_string()),
-                ("数值计算".to_string(), "计算规则".to_string())
+                host("推演分析", "推演规则"),
+                host("数值计算", "计算规则")
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -750,26 +870,23 @@ mod tests {
         let dir = unique_temp_dir("sk-diff");
         {
             let mut n = Notices::load(&dir);
-            n.diff_skill_catalog(&[("A".into(), "da".into()), ("B".into(), "db".into())]);
+            n.diff_skill_catalog(&[host("A", "da"), host("B", "db")], None);
         }
         {
             let mut n = Notices::load(&dir);
             // 乱序自防御；新增按目录行格式、移除列名
-            n.diff_skill_catalog(&[("C".into(), "dc".into()), ("A".into(), "da".into())]);
+            n.diff_skill_catalog(&[host("C", "dc"), host("A", "da")], None);
             assert_eq!(n.seq(), 1);
             assert_eq!(n.dims.skill_catalog.stamp, 1);
             assert_eq!(n.dims.skill_catalog.note, "新增：\n- C：dc\n移除：B");
             assert_eq!(
-                pairs_from_value(&n.dims.skill_catalog.value),
-                vec![
-                    ("A".to_string(), "da".to_string()),
-                    ("C".to_string(), "dc".to_string())
-                ]
+                catalog_entries_from_value(&n.dims.skill_catalog.value),
+                vec![host("A", "da"), host("C", "dc")]
             );
         }
         {
             let mut n = Notices::load(&dir);
-            n.diff_skill_catalog(&[("A".into(), "da".into()), ("C".into(), "dc".into())]);
+            n.diff_skill_catalog(&[host("A", "da"), host("C", "dc")], None);
             assert_eq!(n.seq(), 1, "无差异不耗序号");
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -780,11 +897,11 @@ mod tests {
         let dir = unique_temp_dir("sk-upd");
         {
             let mut n = Notices::load(&dir);
-            n.diff_skill_catalog(&[("A".into(), "旧描述".into())]);
+            n.diff_skill_catalog(&[host("A", "旧描述")], None);
         }
         {
             let mut n = Notices::load(&dir);
-            n.diff_skill_catalog(&[("A".into(), "新描述".into())]);
+            n.diff_skill_catalog(&[host("A", "新描述")], None);
             assert_eq!(n.seq(), 1);
             assert_eq!(n.dims.skill_catalog.note, "更新：\n- A：新描述");
         }
@@ -798,14 +915,11 @@ mod tests {
         let mut n = Notices::load(&dir);
         n.dims.skill_catalog.value = "[\"A\",\"B\"]".to_string();
         n.persist();
-        n.diff_skill_catalog(&[("A".into(), "da".into()), ("B".into(), "db".into())]);
+        n.diff_skill_catalog(&[host("A", "da"), host("B", "db")], None);
         assert_eq!(n.seq(), 0, "仅格式迁移不算差异");
         assert_eq!(
-            pairs_from_value(&n.dims.skill_catalog.value),
-            vec![
-                ("A".to_string(), "da".to_string()),
-                ("B".to_string(), "db".to_string())
-            ]
+            catalog_entries_from_value(&n.dims.skill_catalog.value),
+            vec![host("A", "da"), host("B", "db")]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -815,15 +929,18 @@ mod tests {
         let dir = unique_temp_dir("tool");
         {
             let mut n = Notices::load(&dir);
-            n.diff_tool_catalog(&[("read_file".into(), "读取文件".into())]);
+            n.diff_tool_catalog(&[host("read_file", "读取文件")], None);
         }
         {
             let mut n = Notices::load(&dir);
-            n.diff_tool_catalog(&[
-                ("read_file".into(), "读取文件".into()),
-                ("write_file".into(), "写入文件".into()),
-                ("sim_path".into(), "推演路径".into()),
-            ]);
+            n.diff_tool_catalog(
+                &[
+                    host("read_file", "读取文件"),
+                    host("write_file", "写入文件"),
+                    host("sim_path", "推演路径"),
+                ],
+                None,
+            );
             assert_eq!(n.seq(), 1);
             assert_eq!(
                 n.dims.tool_catalog.note,
@@ -831,6 +948,48 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plugin_entries_carry_their_owner_into_the_note() {
+        // 插件被停用：条目从当前集合消失，归属只能从基线读。
+        let dir = unique_temp_dir("tool-plugin");
+        {
+            let mut n = Notices::load(&dir);
+            n.diff_tool_catalog(
+                &[host("read_file", "读取文件"), plugin("run_maa_task", "跑 MAA", "maa", "MAA 自动化")],
+                None,
+            );
+        }
+        {
+            let mut n = Notices::load(&dir);
+            n.diff_tool_catalog(
+                &[host("read_file", "读取文件")],
+                Some("插件 MAA 自动化已停用"),
+            );
+            assert_eq!(
+                n.dims.tool_catalog.note,
+                "插件 MAA 自动化已停用\n移除：run_maa_task（MAA 自动化）"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_pairs_baseline_upgrades_to_triples_without_false_positives() {
+        // M2 之前写下的二元组基线：读入后 origin 未知，写回变三元组且不误报。
+        let dir = unique_temp_dir("legacy-pairs");
+        let mut n = Notices::load(&dir);
+        n.dims.tool_catalog.value = "[[\"A\",\"da\"]]".to_string();
+        n.persist();
+        n.diff_tool_catalog(&[host("A", "da")], None);
+        assert_eq!(n.seq(), 0, "仅格式迁移不算差异");
+        let value = &n.dims.tool_catalog.value;
+        assert!(value.contains("\"origin\""), "写回三元组：{value}");
+        assert_eq!(
+            catalog_entries_from_value(value),
+            vec![host("A", "da")]
+        );
     }
 
     #[test]
@@ -872,8 +1031,8 @@ mod tests {
         {
             let mut n = Notices::load(&dir);
             n.sync_environment_snapshots("/ws", "deepseek/m", "/kb");
-            n.diff_tool_catalog(&[("a".into(), "甲工具".into())]);
-            n.diff_tool_catalog(&[("a".into(), "甲工具".into()), ("b".into(), "乙工具".into())]);
+            n.diff_tool_catalog(&[host("a", "甲工具")], None);
+            n.diff_tool_catalog(&[host("a", "甲工具"), host("b", "乙工具")], None);
             n.note_memory_change("记忆", "博士新建了成长页「甲」");
         }
         let n = Notices::load(&dir);

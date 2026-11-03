@@ -106,21 +106,27 @@ pub async fn compact_conversation(
         snaps.get_or_assemble(conversation_key, &mem)
     };
     // 技能目录冻结快照（批 2）：压缩读旧快照——请求须复用主请求真前缀。
+    let live_index = crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+        .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+        .ok();
     let skill_catalog = {
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
-            .ok();
+        let live = live_index.as_ref().map(|idx| idx.catalog_text());
         let mut snaps = skills_snapshot_store
             .lock()
             .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
         snaps.get_or_freeze(conversation_key, live.as_deref())
     };
+    // 插件能力段：与主请求同一口径，压缩请求的前缀才逐字节一致。
+    let plugin_block = live_index
+        .as_ref()
+        .map(|idx| crate::plugins::plugin_capabilities_text(&tools, &idx.catalog_entries()))
+        .unwrap_or_default();
     // 完整前缀冻结快照（批 5）：压缩请求须与主请求前缀逐字节一致。
     let (system_prompt, tool_defs) = {
         let live_system = crate::orchestrator::context::assemble_system_prompt_with_memory(
             &skill_catalog,
             &memory_block,
+            &plugin_block,
         );
         let live_tools = tools.list_defs();
         let mut snaps = prefix_snapshot_store
@@ -225,14 +231,20 @@ pub async fn compact_conversation(
     result.map(|o| {
         // 批 4 · 压缩并更新：摘要成功（含降级规则产出——上下文同样被替换）→
         // 以活体重刷两份冻结快照（有差才写；best-effort，失败不改变压缩结果）。
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
-            .ok();
+        let live_index =
+            crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+                .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
+                .ok();
+        let live = live_index.as_ref().map(|idx| idx.catalog_text());
+        let live_plugin_block = live_index
+            .as_ref()
+            .map(|idx| crate::plugins::plugin_capabilities_text(&tools, &idx.catalog_entries()))
+            .unwrap_or_default();
         let live_tools = tools.list_defs();
         refresh_frozen_snapshots(
             &request.conversation_id,
             live.as_deref(),
+            &live_plugin_block,
             &live_tools,
             &memory_store,
             &snapshot_store,
@@ -318,6 +330,7 @@ fn load_compaction_events(
 pub(super) fn refresh_frozen_snapshots(
     conversation_id: &str,
     live_catalog: Option<&str>,
+    live_plugin_block: &str,
     live_tools: &[crate::llm::ToolDef],
     memory_store: &Arc<Mutex<MemoryStore>>,
     snapshot_store: &Arc<Mutex<SnapshotStore>>,
@@ -347,7 +360,11 @@ pub(super) fn refresh_frozen_snapshots(
     let live_system = match (memory_store.lock(), snapshot_store.lock()) {
         (Ok(mem), Ok(mut snaps)) => {
             let block = snaps.get_or_assemble(Some(conversation_id), &mem);
-            crate::orchestrator::context::assemble_system_prompt_with_memory(catalog, &block)
+            crate::orchestrator::context::assemble_system_prompt_with_memory(
+                catalog,
+                &block,
+                live_plugin_block,
+            )
         }
         _ => {
             eprintln!("[commands] 前缀快照刷新跳过（记忆/记忆快照锁失败）");

@@ -34,7 +34,8 @@
 /* ── 左侧导航 ── */
 
 .sidebar {
-  width: 52px;
+  /* 56px：两字标签左对齐 + 8px 内缩 + 2px 选中竖条，留一点呼吸但不吃内容宽度 */
+  width: 56px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -50,7 +51,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
-  padding: 6px 6px 4px;
+  padding: 6px 8px 4px;
   margin-bottom: 2px;
 }
 
@@ -66,14 +67,14 @@
   font-size: 11px;
   font-family: var(--font-ui);
   color: var(--text-2);
-  padding: 5px 6px;
+  padding: 5px 8px;
   cursor: pointer;
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
   transition: color 0.12s ease, background 0.12s ease, border-left-color 0.15s ease;
   white-space: nowrap;
-  text-align: center;
+  text-align: left;
   box-sizing: border-box;
 }
 
@@ -98,7 +99,7 @@
 }
 
 .contentTitle {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-1);
   padding: 6px 10px;
@@ -109,8 +110,19 @@
 .contentBody {
   flex: 1;
   position: relative;
-  padding: 8px;
+  /* 12px：面板 0.86×0.72 后内容区约 268×237，留白与行距同一档 */
+  padding: 12px;
   overflow-y: auto;
   /* 紧凑档滚动条（设置页尺度小于主界面）：视觉 4px，机制见 styles/scrollbar.css */
+  --scrollbar-inset: 2px;
+}
+
+/* 扩展页自己排版（页头 + 可滚动正文）：外层不出 padding，也不出滚动条 */
+.contentBodyFlush {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 0;
+  overflow: hidden;
   --scrollbar-inset: 2px;
 }

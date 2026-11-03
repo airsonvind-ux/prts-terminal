@@ -355,7 +355,7 @@ pub fn run() {
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
     // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
     // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
-    let (tool_registry, plugin_registry) = {
+    let (tool_registry, plugin_registry, plugins_config, plugin_installer, host_services, plugin_roots) = {
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
         // 插件装配与宿主用同一份策略（M2 的 process 通道要它），先留句柄再交出
@@ -373,14 +373,28 @@ pub fn run() {
         // 插件（M2a）：先造能力服务，再读 content/plugins 下的 manifest 分发到
         // builtin::install。单个插件失败只在其台账里记 Failed，不拖垮宿主启动。
         let roots = plugins::PluginRoots::from_config();
+        // 启停配置只读一次、内存里留一份：启停/安装/卸载都经它串行落盘（M3 §八）。
+        let plugins_config = Arc::new(plugins::PluginsConfig::load(&roots.data));
         let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
-        let plugin_registry = plugins::load_all(&mut reg, &roots, &host_services, &plugin_policy);
+        let plugin_registry =
+            plugins::load_all(&reg, &roots, &plugins_config, &host_services, &plugin_policy);
+        // 技能索引要按台账找插件技能根：登记一次，此后启停即时反映到目录。
+        plugins::attach_skill_ledger(Arc::clone(&plugin_registry));
         let registry = Arc::new(reg);
         // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
         query_service
             .bind_tools(Arc::clone(&registry))
             .expect("query.call 的工具注册表只能绑定一次");
-        (registry, plugin_registry)
+        // 安装管道的暂存区在构造时就清空：上次没确认的安装不该留到这次（M3 §五）。
+        let installer = Arc::new(plugins::install::Installer::new(&roots.data));
+        (
+            registry,
+            plugin_registry,
+            plugins_config,
+            installer,
+            host_services,
+            Arc::new(roots),
+        )
     };
 
     // ── 记忆区冻结快照（随对话档案落盘 sessions/{cid}.memory.txt）──
@@ -494,33 +508,19 @@ pub fn run() {
             }
         };
 
-        let mut ledger = ledger.lock().unwrap();
-        ledger.sync_environment_snapshots(
-            &workspace_root.to_string_lossy(),
-            &model_label,
-            &knowledge_dir().to_string_lossy(),
-        );
-        let (maa, emulator, game_pc) = machine_info.dim_values();
-        ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
-        // 技能目录：扫描失败 → 跳过 diff（保留既有基线；首启失败则下次
-        // 运行仍按首启处理——空清单不覆盖真实基线）
-        match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
-            Ok(idx) => {
-                // (name, desc) 对：描述变化也可捕捉（批 3）
-                let pairs = idx.catalog_pairs();
-                ledger.diff_skill_catalog(&pairs);
-            }
-            Err(e) => {
-                eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
-            }
+        {
+            let mut ledger = ledger.lock().unwrap();
+            ledger.sync_environment_snapshots(
+                &workspace_root.to_string_lossy(),
+                &model_label,
+                &knowledge_dir().to_string_lossy(),
+            );
+            let (maa, emulator, game_pc) = machine_info.dim_values();
+            ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
         }
-        // 工具目录：register_builtin 之后快照（(name, desc) 对，与技能目录同构）
-        let tool_pairs: Vec<(String, String)> = tool_registry
-            .list_defs()
-            .iter()
-            .map(|d| (d.function.name.clone(), d.function.description.clone()))
-            .collect();
-        ledger.diff_tool_catalog(&tool_pairs);
+        // 技能与工具目录：统一走 refresh_catalogs（先取快照、后记账；条目带来源，
+        // 插件提供的工具/技能在提醒里写明归属）。
+        plugins::refresh_catalogs(&tool_registry, &ledger, &plugin_registry, None);
     }
 
     // ── 会话存储（对话持久化 · Phase 4：data_dir/sessions/{conversationId}.jsonl
@@ -610,6 +610,10 @@ pub fn run() {
         .manage(db)
         .manage(tool_registry)
         .manage(plugin_registry)
+        .manage(plugins_config)
+        .manage(plugin_installer)
+        .manage(host_services)
+        .manage(plugin_roots)
         .manage(client_registry)
         .manage(llm_config)
         .manage(model_registry)
@@ -684,6 +688,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent_process,
+            commands::list_plugins,
+            commands::pick_plugin_folder,
+            commands::set_plugin_enabled,
+            commands::preview_plugin_install,
+            commands::confirm_plugin_install,
+            commands::uninstall_plugin,
+            commands::retry_plugin,
             commands::get_settings,
             commands::get_credentials_status,
             commands::get_guide_seen,

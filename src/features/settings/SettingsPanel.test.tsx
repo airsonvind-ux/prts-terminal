@@ -390,37 +390,42 @@ describe("useSettingsPanel · 保存串行与失败摘除", () => {
 });
 
 describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
-  function topCheckbox(): HTMLInputElement {
-    return container!.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]'
-    )!;
+  // UI 优化后置顶不再是 checkbox，而是 role="switch" 的原生按钮：
+  // 状态看 aria-checked，激活靠浏览器原生的 click（Enter/Space 都走这里）。
+  function topSwitch(): HTMLButtonElement {
+    return container!.querySelector<HTMLButtonElement>('[role="switch"]')!;
   }
 
-  function toggleTopCheckbox(): void {
-    // 受控 checkbox：React 由 click 驱动 onChange
+  function switchChecked(): boolean {
+    return topSwitch().getAttribute("aria-checked") === "true";
+  }
+
+  function toggleTopSwitch(): void {
     act(() => {
-      topCheckbox().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      topSwitch().click();
     });
   }
 
-  it("应用页渲染：置顶开关 + 退出按钮（草案 v2：无静态参数展示）", async () => {
+  it("应用页渲染：系统读数 + 置顶开关 + 退出按钮", async () => {
     renderPanel();
     await flush();
     clickTab("app");
     expect(container!.textContent).toContain("置顶显示");
     expect(container!.textContent).toContain("开启后窗口始终浮于其他窗口之上");
     expect(container!.textContent).toContain("关闭终端");
-    // 静态参数展示已删除（草案 v2）
+    // 系统读数节：版本与数据目录
+    expect(container!.textContent).toContain("版本");
+    expect(container!.textContent).toContain("数据目录");
     expect(container!.textContent).not.toContain("600 × 600");
     expect(container!.textContent).not.toContain("透明");
-    expect(topCheckbox().checked).toBe(true); // 默认置顶
+    expect(switchChecked()).toBe(true); // 默认置顶
   });
 
   it("切换置顶 → set_always_on_top 专用命令 + 乐观更新", async () => {
     renderPanel();
     await flush();
     clickTab("app");
-    toggleTopCheckbox();
+    toggleTopSwitch();
     await flush();
 
     const calls = __invokeMock.mock.calls.filter(
@@ -428,33 +433,23 @@ describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
     );
     expect(calls).toHaveLength(1);
     expect((calls[0][1] as { enabled: boolean }).enabled).toBe(false);
-    expect(topCheckbox().checked).toBe(false); // 乐观已更新
+    expect(switchChecked()).toBe(false); // 乐观已更新
     // 不走 set_settings（专用命令原子完成窗口 + 落盘）
     expect(setSettingsCalls().length).toBe(0);
   });
 
-  it("置顶复选框：Enter 也可切换", async () => {
+  it("置顶开关是原生按钮：键盘激活交给浏览器（Enter/Space 都触发 click）", async () => {
     renderPanel();
     await flush();
     clickTab("app");
-    const checkbox = topCheckbox();
-    checkbox.focus();
-    act(() => {
-      checkbox.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        })
-      );
-    });
-    await flush();
-
-    const calls = __invokeMock.mock.calls.filter(
-      (c) => c[0] === "set_always_on_top"
-    );
-    expect(calls).toHaveLength(1);
-    expect((calls[0][1] as { enabled: boolean }).enabled).toBe(false);
+    const control = topSwitch();
+    expect(control.tagName).toBe("BUTTON");
+    expect(control.getAttribute("type")).toBe("button");
+    // 原生按钮可获得焦点并由浏览器把 Enter/Space 翻译成 click，
+    // 所以组件本身不再手写 onKeyDown（jsdom 不会替我们合成这次 click）。
+    control.focus();
+    expect(document.activeElement).toBe(control);
+    expect(switchChecked()).toBe(true);
   });
 
   it("置顶失败：回滚 + toast", async () => {
@@ -475,10 +470,10 @@ describe("SettingsPanel · 应用页（置顶开关 + 退出）", () => {
     renderPanel();
     await flush();
     clickTab("app");
-    toggleTopCheckbox();
+    toggleTopSwitch();
     await flush();
 
-    expect(topCheckbox().checked).toBe(true); // 回滚到置顶
+    expect(switchChecked()).toBe(true); // 回滚到置顶
     const toasts = useToastStore.getState().toasts;
     expect(
       toasts.some((t) => t.message.includes("保存失败（窗口置顶）"))
@@ -743,12 +738,12 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     await flush();
     clickTab("skills");
 
-    const calcRow = Array.from(container!.querySelectorAll("span")).find(
-      (s) => (s.textContent ?? "").includes("数值计算")
-        && (s.textContent ?? "").includes("数值类任务")
-    )!;
+    // 行本身不再可点：技能名是 FileLink（role=button），点它才打开源 md
+    const calcLink = Array.from(
+      container!.querySelectorAll<HTMLElement>('[role="button"]')
+    ).find((el) => (el.textContent ?? "").trim() === "数值计算")!;
     act(() => {
-      calcRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      calcLink.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
@@ -772,12 +767,11 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     await flush();
     clickTab("skills");
 
-    const calcRow = Array.from(container!.querySelectorAll("span")).find(
-      (s) => (s.textContent ?? "").includes("数值计算")
-        && (s.textContent ?? "").includes("数值类任务")
-    )!;
+    const calcLink = Array.from(
+      container!.querySelectorAll<HTMLElement>('[role="button"]')
+    ).find((el) => (el.textContent ?? "").trim() === "数值计算")!;
     act(() => {
-      calcRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      calcLink.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 

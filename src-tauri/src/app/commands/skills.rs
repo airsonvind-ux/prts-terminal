@@ -56,7 +56,7 @@ pub fn install_skill(
     let source = std::path::PathBuf::from(&source_path);
     let root = crate::skills_index::skills_dir();
     let installed = crate::skills_install::install_skill(&source, &root, confirm_scripts)?;
-    diff_skills_now(&root, &ledger);
+    diff_skills_now(&ledger);
     Ok(SkillEntry {
         name: installed.name,
         description: installed.description,
@@ -89,18 +89,19 @@ pub fn remove_skill(
     let path = std::path::PathBuf::from(&file_path);
     let root = crate::skills_index::skills_dir();
     let name = crate::skills_install::remove_skill(&path, &root)?;
-    diff_skills_now(&root, &ledger);
+    diff_skills_now(&ledger);
     Ok(name)
 }
 
 /// 重算技能目录 diff 并记账（best-effort：记账失败仅终端留痕，不改写安装 /
 /// 移除的结果——动作本身已成功，提醒属增量信息）。
-fn diff_skills_now(root: &std::path::Path, ledger: &Arc<Mutex<Notices>>) {
-    let pairs = crate::skills_index::SkillIndex::load(root)
-        .map(|idx| idx.catalog_pairs())
-        .unwrap_or_default();
+fn diff_skills_now(ledger: &Arc<Mutex<Notices>>) {
+    let entries: Vec<crate::notices::CatalogEntry> =
+        crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+            .map(|idx| idx.catalog_entries())
+            .unwrap_or_default();
     match ledger.lock() {
-        Ok(mut l) => l.diff_skill_catalog(&pairs),
+        Ok(mut l) => l.diff_skill_catalog(&entries, None),
         Err(e) => eprintln!("[commands] 技能目录提醒记账失败：{e}"),
     }
 }

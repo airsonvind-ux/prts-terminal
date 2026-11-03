@@ -1,43 +1,15 @@
 /* 设置页 · 安全子页样式（两档命令执行模式）
-   选项块本身走通用件 SettingsRow 的 inline 形态（圆点与文字同行、说明在下），
+   选项本体走通用件 ChoiceCard（整块可选、内部仍是原生 radio），
    本文件只留页级容器。 */
 
 .container {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-3);
 }
 
-/* 整个选项块（标题行 + 说明）可点选 */
-.option {
+.cards {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 4px 2px;
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-}
-
-.option:hover {
-  background: var(--depth-4);
-}
-
-.optionHead {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--text-1);
-}
-
-.optionTitle {
-  cursor: pointer;
-}
-
-/* 说明：缩进对齐选项标题（radio 圆点宽 + 间距），灰调小字 */
-.optionNote {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-3);
-  padding-left: 22px;
+  gap: var(--space-2);
 }

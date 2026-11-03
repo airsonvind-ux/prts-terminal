@@ -18,8 +18,12 @@ pub const MANIFEST_FILE_NAME: &str = "plugin.json";
 /// 本宿主支持的插件协议版本（M2 的 process 通道握手用；M1 只校验声明）。
 pub const SUPPORTED_PROTOCOL: u32 = 1;
 
-/// capability 白名单（D25：未知即拒绝，不做静默降级）。
-pub const KNOWN_CAPABILITIES: [&str; 4] = ["maa.bridge", "fs.pluginData", "agent.query", "network"];
+/// capability 白名单的兜底值（D25：未知即拒绝，不做静默降级）。
+///
+/// D40 起真正的来源是服务注册表（`HostServices::keys()`）；这个常量只给离线
+/// 校验与单测当默认值，必须与 `host/internal/` 里登记的服务键保持一致。
+#[cfg_attr(not(test), allow(dead_code))]
+pub const KNOWN_CAPABILITIES: [&str; 4] = ["fs.plugin", "fs.temp", "query.call", "maa.bridge"];
 
 /// 插件 manifest（`plugin.json`）。
 ///
@@ -127,10 +131,23 @@ pub fn read_manifest(dir: &Path) -> Result<PluginManifest, PluginError> {
 ///
 /// `dir_name` 只用于「id 与目录名不一致」的告警；`seen_ids` 由调用方跨目录
 /// 共享，用于规则 2 的同父目录 id 去重（`load_all` 按目录名排序后逐个传入）。
+#[cfg_attr(not(test), allow(dead_code))] // 生产路径走 validate_with（白名单来自注册表）
 pub fn validate(
     manifest: &PluginManifest,
     dir_name: &str,
     seen_ids: &mut HashSet<String>,
+) -> Result<(), PluginError> {
+    validate_with(manifest, dir_name, seen_ids, &KNOWN_CAPABILITIES)
+}
+
+/// 同 [`validate`]，但能力白名单由调用方给（D40：白名单来自服务注册表）。
+///
+/// `load_all` 与安装管道都传 `HostServices::keys()`，测试可以传自己的小集合。
+pub fn validate_with(
+    manifest: &PluginManifest,
+    dir_name: &str,
+    seen_ids: &mut HashSet<String>,
+    known_capabilities: &[&str],
 ) -> Result<(), PluginError> {
     // 1. id 格式
     if !is_valid_id(&manifest.id) {
@@ -207,9 +224,9 @@ pub fn validate(
         }
     }
 
-    // 8. capability 逐条白名单
+    // 8. capability 逐条白名单（D40：真实存在的服务键，见 [`KNOWN_CAPABILITIES`]）
     for cap in &manifest.capabilities {
-        if !KNOWN_CAPABILITIES.contains(&cap.as_str()) {
+        if !known_capabilities.contains(&cap.as_str()) {
             return Err(PluginError::UnknownCapability(cap.clone()));
         }
     }
@@ -352,6 +369,13 @@ mod tests {
     fn check(v: &Value) -> Result<(), PluginError> {
         let mut seen = HashSet::new();
         validate(&from_value(v), "maa", &mut seen)
+    }
+
+    /// 规则 9 的用例要一个含 `network` 的白名单（D40 之后生产环境不会给）。
+    fn check_with_network(v: &Value) -> Result<(), PluginError> {
+        let mut seen = HashSet::new();
+        let known = ["fs.plugin", "fs.temp", "query.call", "maa.bridge", "network"];
+        validate_with(&from_value(v), "maa", &mut seen, &known)
     }
 
     fn process_value() -> Value {
@@ -518,7 +542,9 @@ mod tests {
     fn network_capability_requires_allowed_hosts() {
         let mut v = sample_value();
         v["capabilities"] = serde_json::json!(["network"]);
-        match check(&v) {
+        // 生产白名单里没有 network（D40），规则 9 只在宿主将来登记时才走得到，
+        // 所以这里显式喂一个含 network 的白名单。
+        match check_with_network(&v) {
             Err(PluginError::Invalid {
                 field: "network.allowedHosts",
                 ..
@@ -527,15 +553,25 @@ mod tests {
         }
 
         v["network"] = serde_json::json!({ "allowedHosts": ["api.example.com"] });
-        assert!(check(&v).is_ok());
+        assert!(check_with_network(&v).is_ok());
 
         v["network"] = serde_json::json!({ "allowedHosts": [""] });
-        match check(&v) {
+        match check_with_network(&v) {
             Err(PluginError::Invalid {
                 field: "network.allowedHosts",
                 ..
             }) => {}
             other => panic!("空 allowedHosts 条目应被拒绝，got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn network_is_not_a_capability_by_default() {
+        let mut v = sample_value();
+        v["capabilities"] = serde_json::json!(["network"]);
+        match check(&v) {
+            Err(PluginError::UnknownCapability(name)) => assert_eq!(name, "network"),
+            other => panic!("D40 之后 network 应当算未知能力，got: {other:?}"),
         }
     }
 

@@ -1,4 +1,5 @@
 import type { ModelInfo } from "../../types";
+import { Button } from "./ui/Button";
 import styles from "./SettingsProvider.module.css";
 
 export type ModelListStatus = "idle" | "loading" | "loaded" | "empty" | "error";
@@ -29,9 +30,7 @@ export function ModelListSection({
   return (
     <div className={styles.modelSection}>
       {status === "idle" && (
-        <button className={styles.fetchButton} onClick={onFetch}>
-          获取模型列表
-        </button>
+        <Button onClick={onFetch}>获取模型列表</Button>
       )}
       {status === "loading" && (
         <div className={styles.modelStatus}>
@@ -41,17 +40,13 @@ export function ModelListSection({
       {status === "error" && (
         <div className={styles.modelStatus}>
           <span className={styles.modelError}>{error}</span>
-          <button className={styles.retryButton} onClick={onFetch}>
-            重试
-          </button>
+          <Button onClick={onFetch}>重试</Button>
         </div>
       )}
       {status === "empty" && (
         <div className={styles.modelStatus}>
           <span className={styles.modelEmpty}>该 API Key 下未找到可用模型</span>
-          <button className={styles.retryButton} onClick={onFetch}>
-            重新获取
-          </button>
+          <Button onClick={onFetch}>重新获取</Button>
         </div>
       )}
       {models.length > 0 && (

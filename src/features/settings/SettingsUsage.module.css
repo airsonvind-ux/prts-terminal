@@ -121,16 +121,20 @@
 .heroLabel {
   display: block;
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-bottom: 2px;
 }
 
+/* 读数走方舟青 + 等宽：这一块是仪表，不是可点的强调色 */
 .heroValue {
-  font-size: 22px;
+  font-family: var(--font-mono);
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.1;
-  color: var(--accent);
+  letter-spacing: -0.01em;
+  color: var(--cyan);
   font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 12px var(--cyan-soft);
 }
 
 .donutWrap {
@@ -175,6 +179,7 @@
 
 .catBar {
   height: 6px;
+  border-radius: 1px;
   background: var(--depth-2);
   overflow: hidden;
 }
@@ -182,6 +187,7 @@
 .catFill {
   display: block;
   height: 100%;
+  border-radius: 1px;
   background: var(--accent);
 }
 
@@ -189,6 +195,7 @@
   display: flex;
   flex-direction: column;
   text-align: right;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
@@ -198,11 +205,11 @@
 }
 
 .catHit {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
 }
 
 .empty {
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
 }

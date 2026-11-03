@@ -10,7 +10,7 @@
 .container {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-2);
 }
 
 /* ── 表单字段 ── */
@@ -36,27 +36,9 @@
   flex: 1;
 }
 
+/* 方形图标按钮的几何与悬停态由 ui/Button 的 icon 变体给；这里只管字号 */
 .refreshBtn {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   font-size: 12px;
-  line-height: 1;
-  color: var(--text-3);
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-
-.refreshBtn:hover {
-  color: var(--accent);
-  background: rgba(96, 165, 250, 0.1);
 }
 
 .input {
@@ -93,26 +75,9 @@
   min-width: 0;
 }
 
+/* 同上：几何与悬停交给 icon 变体，这里只描字号 */
 .keyToggle {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   font-size: 12px;
-  color: var(--text-3);
-  background: transparent;
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
-}
-
-.keyToggle:hover {
-  color: var(--text-1);
-  border-color: var(--text-3);
 }
 
 .keyHint {
@@ -156,26 +121,10 @@
   margin-top: 4px;
 }
 
+/* 验证按钮：几何与基色来自 ui/Button，这里只保留连接态的三档颜色 */
 .verifyButton {
-  height: 26px;
+  align-self: flex-start;
   padding: 0 10px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.verifyButton:hover:not(:disabled) {
-  background: var(--depth-4);
-}
-
-.verifyButton:disabled {
-  cursor: default;
-  opacity: 0.7;
 }
 
 .verifyLoading {
@@ -183,20 +132,20 @@
 }
 
 .verifySuccess {
-  color: #5cb878;
-  border-color: #3a6b4a;
-  background: #1e2d24;
+  color: var(--ok);
+  border-color: var(--ok);
+  background: rgba(92, 158, 120, 0.12);
 }
 
 .verifyError {
-  color: #e05555;
-  border-color: #6e3535;
-  background: #2d1e1e;
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(201, 83, 71, 0.12);
 }
 
 .verifyErrorText {
-  font-size: 10px;
-  color: #e05555;
+  font-size: var(--fs-body);
+  color: var(--danger);
   line-height: 1.4;
   word-break: break-all;
 }
@@ -243,16 +192,16 @@
 /* ── 字段提示（错误/警告） ── */
 
 .fieldHint {
-  font-size: 10px;
-  color: #e05555;
+  font-size: var(--fs-body);
+  color: var(--danger);
   line-height: 1.4;
   margin-top: 2px;
 }
 
 /* 字段下灰色说明（一行式 hint：如思考强度行） */
 .fieldNote {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: var(--fs-body);
+  color: var(--text-2);
   line-height: 1.4;
   margin-top: 1px;
 }
@@ -273,7 +222,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--fs-body);
   line-height: 1.4;
 }
 
@@ -300,31 +249,11 @@
 }
 
 .modelError {
-  color: #e05555;
+  color: var(--danger);
 }
 
 .modelEmpty {
   color: var(--text-3);
-}
-
-/* ── 重试按钮 ── */
-
-.retryButton {
-  align-self: flex-start;
-  height: 20px;
-  padding: 0 8px;
-  font-size: 10px;
-  font-family: var(--font-ui);
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.retryButton:hover {
-  background: rgba(96, 165, 250, 0.1);
 }
 
 /* ── 模型列表 ── */
@@ -348,7 +277,7 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  height: 26px;
+  height: 28px;
   padding: 0 6px;
   border: 0;
   font-size: 11px;
@@ -428,7 +357,7 @@
   height: 14px;
   font-size: 9px;
   font-weight: 600;
-  color: #5cb878;
+  color: var(--ok);
   background: rgba(92, 184, 120, 0.15);
   border-radius: 3px;
   line-height: 1;
@@ -454,27 +383,10 @@
 
 .modelItemContext {
   flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-3);
   margin-left: 8px;
-}
-
-/* ── 获取模型按钮（idle 状态） ── */
-
-.fetchButton {
-  align-self: flex-start;
-  height: 22px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.fetchButton:hover {
-  background: rgba(96, 165, 250, 0.1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  text-align: right;
 }

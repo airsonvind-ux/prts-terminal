@@ -670,7 +670,7 @@ mod tests {
     /// 测试用 system 前缀：口径 = 无目录 + 无记忆态（与生产同源——
     /// 命令层把冻结后的 system 全文传进来，这里用同一个装配函数生成）。
     fn sys() -> String {
-        asm_system("", "")
+        asm_system("", "", "")
     }
 
     // ── 主路径 ──
@@ -887,7 +887,7 @@ mod tests {
         )];
         let catalog = "- 数值计算：计算规则\n- 行动推演：推演规则";
         let memory = "## 记忆\n### 关于博士\n- 偏好简洁回答";
-        let system = asm_system(catalog, memory);
+        let system = asm_system(catalog, memory, "");
         let out = run_summary(
             &client,
             &cfg(),
