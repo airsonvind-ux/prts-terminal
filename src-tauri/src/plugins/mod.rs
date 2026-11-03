@@ -776,6 +776,60 @@ pub fn uninstall_plugin(
     Ok(())
 }
 
+/// 重算技能与工具目录的提醒差异（M3 修补：启停 / 安装 / 卸载 / 启动统一走这里）。
+///
+/// 锁纪律：先各自取快照（插件台账、工具注册表、技能索引），全拿到之后才锁
+/// `notices` 记账——反过来会让「锁内重进插件层」有自锁风险（S9）。
+///
+/// 技能索引加载失败时只跳过技能一维：工具面照记，基线不被空清单覆盖。
+pub fn refresh_catalogs(
+    reg: &ToolRegistry,
+    notices: &Arc<Mutex<crate::notices::Notices>>,
+    plugin_ledger: &Arc<Mutex<PluginRegistry>>,
+    context: Option<&str>,
+) {
+    let display_names: HashMap<String, String> = {
+        let guard = plugin_ledger
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        guard
+            .list()
+            .into_iter()
+            .map(|record| (record.manifest.id.clone(), record.manifest.name.clone()))
+            .collect()
+    };
+
+    let tools: Vec<crate::notices::CatalogEntry> = reg
+        .list_defs()
+        .into_iter()
+        .map(|def| {
+            let name = def.function.name.clone();
+            let origin = match reg.origin_of(&name) {
+                Some(Origin::Plugin(id)) => crate::notices::CatalogOrigin::Plugin {
+                    display_name: display_names.get(&id).cloned().unwrap_or_else(|| id.clone()),
+                    id,
+                },
+                _ => crate::notices::CatalogOrigin::Host,
+            };
+            crate::notices::CatalogEntry {
+                name,
+                description: def.function.description.clone(),
+                origin,
+            }
+        })
+        .collect();
+
+    let skills = crate::skills_index::SkillIndex::load_roots(&skill_roots())
+        .ok()
+        .map(|index| index.catalog_entries());
+
+    let mut guard = notices.lock().unwrap_or_else(|poison| poison.into_inner());
+    guard.diff_tool_catalog(&tools, context);
+    if let Some(skills) = skills {
+        guard.diff_skill_catalog(&skills, context);
+    }
+}
+
 /// 删一个目录；不存在不算错（卸载要可重复调用）。
 #[allow(dead_code)] // 提交 5 的 command 层接线后删除
 fn remove_dir_all(path: &Path) -> Result<(), String> {
@@ -1174,5 +1228,44 @@ mod tests {
         assert!(config.snapshot().is_empty(), "卸载要清掉开关记录");
 
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn refresh_catalogs_marks_plugin_entries_and_removals() {
+        use crate::notices::DimKey;
+
+        let (roots, _services, reg, _config, ledger) = loaded("refresh-catalogs");
+        let notices = Arc::new(Mutex::new(crate::notices::Notices::load(
+            &roots.data.join("refresh-notices"),
+        )));
+        let tool_value = |notices: &Arc<Mutex<crate::notices::Notices>>| -> String {
+            notices
+                .lock()
+                .expect("提醒锁不该中毒")
+                .dim_views()
+                .into_iter()
+                .find(|(key, _)| *key == DimKey::ToolCatalog)
+                .map(|(_, value)| value.note.clone())
+                .unwrap_or_default()
+        };
+
+        // 首次：只登记基线，\"首启不写详情\" 是既有语义。
+        refresh_catalogs(&reg, &notices, &ledger, None);
+        assert_eq!(tool_value(&notices), "", "首启只登记基线，不该有提醒");
+
+        // 摘掉工具再刷新：首行是上下文，移除行仍带归属（归属从基线读）。
+        reg.remove("run_maa_task");
+        refresh_catalogs(&reg, &notices, &ledger, Some("插件 MAA 自动化 已停用"));
+        let second = tool_value(&notices);
+        assert!(
+            second.starts_with("插件 MAA 自动化 已停用"),
+            "上下文要作为首行：{second}"
+        );
+        assert!(
+            second.contains("移除：run_maa_task（MAA 自动化）"),
+            "移除项要保留归属：{second}"
+        );
+
+        let _ = std::fs::remove_dir_all(&roots.data);
     }
 }

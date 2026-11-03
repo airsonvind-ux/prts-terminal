@@ -3,6 +3,8 @@
 //! 全部 `async`：里面要么碰盘（安装/卸载），要么要拿几把锁，跑在主线程会卡界面。
 //! 真正的活儿交给 `spawn_blocking`，命令本身只做参数搬运。
 
+#![allow(clippy::too_many_arguments)] // Tauri 命令参数面与前端 invoke 契约固定，拆 struct 会改变 IPC 形状
+
 use super::prelude::*;
 
 use crate::host::HostServices;
@@ -97,6 +99,15 @@ pub fn list_plugins(ledger: State<'_, Arc<Mutex<PluginRegistry>>>) -> PluginList
     list_from_ledger(&ledger)
 }
 
+/// 台账里的展示名（提醒文案要用）；查不到就退回 id，不编造。
+fn plugin_name(ledger: &Arc<Mutex<PluginRegistry>>, id: &str) -> String {
+    let guard = ledger.lock().unwrap_or_else(|poison| poison.into_inner());
+    guard
+        .get(id)
+        .map(|record| record.manifest.name.clone())
+        .unwrap_or_else(|| id.to_string())
+}
+
 /// 「安装文件夹」按钮：选一个目录，交给 `preview_plugin_install` 做预览。
 ///
 /// 与设置页其它选择器同构：`run_on_main_thread` 弹窗，oneshot 桥回 async 命令；
@@ -123,17 +134,25 @@ pub async fn set_plugin_enabled(
     config: State<'_, Arc<PluginsConfig>>,
     services: State<'_, Arc<HostServices>>,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
+    notices: State<'_, Arc<Mutex<Notices>>>,
 ) -> Result<PluginList, String> {
     let reg = Arc::clone(&reg);
     let config = Arc::clone(&config);
     let services = Arc::clone(&services);
     let ledger = Arc::clone(&ledger);
+    let notices = Arc::clone(&notices);
     tauri::async_runtime::spawn_blocking(move || {
+        let name = plugin_name(&ledger, &id);
         if enabled {
             crate::plugins::enable_plugin(&id, &reg, &config, &services, &ledger)?;
         } else {
             crate::plugins::disable_plugin(&id, &reg, &config, &services, &ledger)?;
         }
+        let context = format!(
+            "插件 {name} {}",
+            if enabled { "已启用" } else { "已停用" }
+        );
+        crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));
         Ok(list_from_ledger(&ledger))
     })
     .await
@@ -176,6 +195,7 @@ pub async fn confirm_plugin_install(
     services: State<'_, Arc<HostServices>>,
     reg: State<'_, Arc<ToolRegistry>>,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
+    notices: State<'_, Arc<Mutex<Notices>>>,
 ) -> Result<PluginList, String> {
     let roots = Arc::clone(&roots);
     let installer = Arc::clone(&installer);
@@ -183,8 +203,11 @@ pub async fn confirm_plugin_install(
     let services = Arc::clone(&services);
     let reg = Arc::clone(&reg);
     let ledger = Arc::clone(&ledger);
+    let notices = Arc::clone(&notices);
     tauri::async_runtime::spawn_blocking(move || {
-        installer.confirm(&token, &roots, &config, &services, &reg, &ledger)?;
+        let record = installer.confirm(&token, &roots, &config, &services, &reg, &ledger)?;
+        let context = format!("插件 {} 已安装", record.manifest.name);
+        crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));
         Ok(list_from_ledger(&ledger))
     })
     .await
@@ -199,13 +222,18 @@ pub async fn uninstall_plugin(
     config: State<'_, Arc<PluginsConfig>>,
     reg: State<'_, Arc<ToolRegistry>>,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
+    notices: State<'_, Arc<Mutex<Notices>>>,
 ) -> Result<PluginList, String> {
     let roots = Arc::clone(&roots);
     let config = Arc::clone(&config);
     let reg = Arc::clone(&reg);
     let ledger = Arc::clone(&ledger);
+    let notices = Arc::clone(&notices);
     tauri::async_runtime::spawn_blocking(move || {
+        let name = plugin_name(&ledger, &id);
         crate::plugins::uninstall_plugin(&id, delete_data, &roots, &config, &reg, &ledger)?;
+        let context = format!("插件 {name} 已卸载");
+        crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));
         Ok(list_from_ledger(&ledger))
     })
     .await

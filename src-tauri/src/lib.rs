@@ -508,38 +508,19 @@ pub fn run() {
             }
         };
 
-        let mut ledger = ledger.lock().unwrap();
-        ledger.sync_environment_snapshots(
-            &workspace_root.to_string_lossy(),
-            &model_label,
-            &knowledge_dir().to_string_lossy(),
-        );
-        let (maa, emulator, game_pc) = machine_info.dim_values();
-        ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
-        // 技能目录：扫描失败 → 跳过 diff（保留既有基线；首启失败则下次
-        // 运行仍按首启处理——空清单不覆盖真实基线）
-        match crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots()) {
-            Ok(idx) => {
-                // 条目带来源：宿主根排在最前，插件根在提交 3 接进来。
-                let entries: Vec<crate::notices::CatalogEntry> = idx.catalog_entries();
-                ledger.diff_skill_catalog(&entries, None);
-            }
-            Err(e) => {
-                eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
-            }
+        {
+            let mut ledger = ledger.lock().unwrap();
+            ledger.sync_environment_snapshots(
+                &workspace_root.to_string_lossy(),
+                &model_label,
+                &knowledge_dir().to_string_lossy(),
+            );
+            let (maa, emulator, game_pc) = machine_info.dim_values();
+            ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
         }
-        // 工具目录：register_builtin 之后快照（与技能目录同构，条目带来源）
-        let tool_entries: Vec<crate::notices::CatalogEntry> = tool_registry
-            .list_defs()
-            .iter()
-            .map(|d| {
-                crate::notices::CatalogEntry::host(
-                    d.function.name.clone(),
-                    d.function.description.clone(),
-                )
-            })
-            .collect();
-        ledger.diff_tool_catalog(&tool_entries, None);
+        // 技能与工具目录：统一走 refresh_catalogs（先取快照、后记账；条目带来源，
+        // 插件提供的工具/技能在提醒里写明归属）。
+        plugins::refresh_catalogs(&tool_registry, &ledger, &plugin_registry, None);
     }
 
     // ── 会话存储（对话持久化 · Phase 4：data_dir/sessions/{conversationId}.jsonl
