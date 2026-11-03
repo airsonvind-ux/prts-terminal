@@ -162,7 +162,9 @@ fn main() -> ExitCode {
                 if name == "echo" {
                     reply(&mut output, &id, json!({ "echo": args }));
                 } else {
-                    error(&mut output, &id, -32601, "探针只有 echo 一个工具");
+                    // M4 起：工具名是参数，未知工具回「参数错误」（-32602）；
+                    // -32601 只留给「未知方法」。手册与校验器都按这一条写。
+                    error(&mut output, &id, -32602, "探针只有 echo 一个工具");
                 }
             }
             "shutdown" => {

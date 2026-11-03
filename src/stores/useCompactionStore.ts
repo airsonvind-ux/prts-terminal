@@ -3,7 +3,7 @@
 //
 // 职责：压缩 = 前端发起的一次对话级状态转换。本 store 承载编排：
 //   1. 前端计算保留段起点（computeRetainedFrom，轮边界对齐）并做 noop 预判
-//      （对话太短 nothing / 新内容太少 too_soon——非错误提示，不发命令）；
+//      （全在保留范围内 nothing / 能折叠的太少 too_soon——非错误提示，不发命令）；
 //   2. 折叠区派生态（链式 = 旧摘要 + 上次边界后的轮；已折叠原文不回灌）
 //      发给后端 `compact_conversation`（静默独立 LLM 摘要 run：system/工具面
 //      与主请求逐字节同源以复用 KV cache 前缀；无可见事件）；
@@ -79,7 +79,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 1. 保留段起点（轮边界对齐）与 noop 预判（非错误，info toast）──
     const retainedFrom = computeRetainedFrom(conv.turns);
     if (retainedFrom === 0) {
-      showToast("对话历史太短，暂无可压缩内容", { kind: "info" });
+      showToast("内容还不够，暂时不用压缩", { kind: "info" });
       return;
     }
     // 链式折叠起点 = 上次压缩边界（2026-09-25 裁决）：已折叠原文不回灌——
@@ -94,7 +94,12 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       foldedTurns.length < NOOP_MIN_FOLD_TURNS ||
       foldEstimate < NOOP_MIN_FOLD_TOKENS
     ) {
-      showToast("距上次压缩后的新内容太少，暂不压缩", { kind: "info" });
+      showToast(
+        conv.compaction
+          ? "上次压缩后新增的内容还不够，暂时不用压缩"
+          : "内容还不够，暂时不用压缩",
+        { kind: "info" }
+      );
       return;
     }
 

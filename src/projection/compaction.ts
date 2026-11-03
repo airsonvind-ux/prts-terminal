@@ -14,7 +14,7 @@ export const SUMMARY_BLOCK_END = "[/对话压缩摘要]";
 export const RETAIN_BUDGET_TOKENS = 20_000;
 /** noop 预判：折叠区轮数下限（少于则「对话太短」） */
 export const NOOP_MIN_FOLD_TURNS = 2;
-/** noop 预判：折叠区估算 token 下限（低于则「新内容太少」） */
+/** noop 预判：折叠区估算 token 下限（低于则「能折叠的太少」） */
 export const NOOP_MIN_FOLD_TOKENS = 4_000;
 
 /**

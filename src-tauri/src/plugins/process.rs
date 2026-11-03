@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -82,19 +82,26 @@ impl ProcessPlugin {
             }
         }
 
-        let exe = plugin_dir.join(&entry.exe);
-        if !exe.is_file() {
-            return Err(PluginError::Process {
-                id: id.to_string(),
-                detail: format!(
-                    "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
-                    exe.display()
-                ),
-            });
-        }
+        // 入口的两种形态（M4 §3.2），判据在 `plugins::resolve_program`：
+        //  1. 插件目录里有这个文件（含 `hello.exe` 这种没有分隔符的名字）→ 用它；
+        //  2. 目录里没有、且是不含分隔符的裸名 → 按 PATH 解析（解释型语言靠它，
+        //     例如 {"exe": "python", "args": ["hello.py"]}）；
+        //  3. 其余一律报「入口不存在」。
+        // 与 `plugin_check` 共用同一份实现：校验器说「能起」的东西，宿主必须能起。
+        let program = match super::resolve_program(plugin_dir, entry) {
+            Ok(super::ProgramResolution::InDir(path)) => path,
+            Ok(super::ProgramResolution::OnPath(name)) => PathBuf::from(name),
+            Err(detail) => {
+                return Err(PluginError::Process {
+                    id: id.to_string(),
+                    detail,
+                })
+            }
+        };
 
-        let mut command = Command::new(&exe);
+        let mut command = Command::new(&program);
         command
+            .args(&entry.args)
             .current_dir(plugin_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -108,7 +115,7 @@ impl ProcessPlugin {
 
         let mut child = command.spawn().map_err(|error| PluginError::Process {
             id: id.to_string(),
-            detail: format!("起进程失败（{}）：{error}", exe.display()),
+            detail: format!("起进程失败（{}）：{error}", program.display()),
         })?;
 
         let stdin = child.stdin.take().expect("stdin 已设为 piped");
@@ -742,7 +749,7 @@ impl ProcessPlugin {
 }
 
 /// 工具名契约：`^[a-z][a-z0-9_]{0,63}$`（D5，长度含首字符 1..=64）。
-fn is_valid_tool_name(name: &str) -> bool {
+pub fn is_valid_tool_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     if bytes.is_empty() || bytes.len() > MAX_TOOL_NAME_LEN {
         return false;
@@ -1035,6 +1042,7 @@ mod tests {
         let entry = PluginEntry {
             exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe",
@@ -1058,7 +1066,8 @@ mod tests {
         let bad = plugin
             .call_tool("nope", json!({}), Duration::from_secs(5))
             .unwrap_err();
-        assert_eq!(bad.code, crate::plugins::rpc::METHOD_NOT_FOUND);
+        // 未知工具名是「参数错误」（M4 起），-32601 只留给未知方法。
+        assert_eq!(bad.code, crate::plugins::rpc::INVALID_PARAMS);
 
         // 只收自己这一个：tests 并行跑，`shutdown_all` 会误杀别人的进程。
         plugin.shutdown();
@@ -1075,6 +1084,7 @@ mod tests {
         let entry = PluginEntry {
             exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let reg = ToolRegistry::new();
         let ledger = ledger_with("probe_kill");
@@ -1104,6 +1114,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe-silent",
@@ -1134,6 +1145,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe-mismatch",
@@ -1162,6 +1174,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let ledger = ledger_with("probe-crash");
         let plugin = ProcessPlugin::spawn(
@@ -1195,6 +1208,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let ledger = ledger_with("probe-hang");
         let plugin = ProcessPlugin::spawn(

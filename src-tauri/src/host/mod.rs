@@ -41,6 +41,12 @@ pub struct HostServiceInfo {
     pub key: &'static str,
     /// 一句话说明，写进协议文档与将来的扩展页。
     pub summary: &'static str,
+    /// 参数说明，写给插件作者看（生成手册《04 能力》时原样落进表格）。
+    ///
+    /// 与 `summary` 分工：`summary` 说这条能力**是什么**，这里说**怎么传参**。
+    pub params_doc: &'static str,
+    /// 返回说明，同样是写给插件作者的；形状变了要同步改这里。
+    pub returns_doc: &'static str,
     /// 是否持有跨调用的状态（M2 登记的服务都是无状态的）。
     pub stateful: bool,
     /// 是否需要用户逐次授权；M2 没有审批器，这类服务在加载期一律拒。
@@ -154,6 +160,17 @@ impl HostServices {
     /// 已登记的服务键（按登记顺序；仅供装配期自检与测试）。
     pub fn keys(&self) -> Vec<&'static str> {
         self.services.iter().map(|service| service.info().key).collect()
+    }
+
+    /// 全部服务描述（按 key 排序）。
+    ///
+    /// 校验器用它 dump 能力表，手册《04 能力》由那份 JSON 生成；顺序稳定是为了
+    /// 让生成结果可复现（C7：顺序抖动会造成假红）。
+    pub fn infos(&self) -> Vec<&'static HostServiceInfo> {
+        let mut infos: Vec<&'static HostServiceInfo> =
+            self.services.iter().map(|service| service.info()).collect();
+        infos.sort_by_key(|info| info.key);
+        infos
     }
 }
 
@@ -352,6 +369,8 @@ mod tests {
     static ECHO_INFO: HostServiceInfo = HostServiceInfo {
         key: "test.echo",
         summary: "回声（测试桩）",
+        params_doc: "任意参数，原样回显",
+        returns_doc: "调用方与参数",
         stateful: false,
         requires_user_grant: false,
         timeout: None,
@@ -362,6 +381,8 @@ mod tests {
     static FUTURE_INFO: HostServiceInfo = HostServiceInfo {
         key: "test.future",
         summary: "协议 2 才有的服务（测试桩）",
+        params_doc: "无",
+        returns_doc: "无",
         stateful: false,
         requires_user_grant: false,
         timeout: None,
@@ -372,6 +393,8 @@ mod tests {
     static APPROVAL_INFO: HostServiceInfo = HostServiceInfo {
         key: "test.approval",
         summary: "需要用户授权的服务（测试桩）",
+        params_doc: "无",
+        returns_doc: "无",
         stateful: true,
         requires_user_grant: true,
         timeout: None,

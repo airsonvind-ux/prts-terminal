@@ -1,6 +1,6 @@
 //! 外部插件的安装管道（M3 只支持「选择文件夹」，zip 留到 M4）。
 //!
-//! 流程：复制到 `plugin-tmp/<token>/` → 读 manifest 走 M1 十条校验 → 重名检查 →
+//! 流程：复制到 `plugin-tmp/<token>/` → 读 manifest 走十二条校验 → 重名检查 →
 //! 返回预览 → 确认后 `rename` 落到 `plugin-tmp` 的兄弟目录 `plugins/<id>/`（同卷，
 //! 原子）→ 尝试加载 → 失败回滚删目录。
 //!

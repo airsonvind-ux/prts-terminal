@@ -64,3 +64,8 @@ src-tauri/windows/nsis-images/_preview/
 # 范围表预览（本地生成物，不入库，2026-11-01）
 data-pipeline/maintenance/sources/范围表-预览.md
 data-pipeline/scripts/render_ranges.py
+
+# 插件模板（plugin-templates/）的构建产物：模板本身入库，二进制不入库
+plugin-templates/*/target/
+plugin-templates/*/Cargo.lock
+plugin-templates/*/*.exe

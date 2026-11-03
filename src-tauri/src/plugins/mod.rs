@@ -1,7 +1,7 @@
 //! 插件系统：契约层、能力装配与 process 通道。
 //!
 //! 设计依据：`50-插件系统/_插件系统-设计.md`（D1–D41）与 `_插件系统-M2规格.md`
-//! （草案 4）。分工：[`manifest`] 解析与十条校验、[`registry`] 内存台账、
+//! （草案 4）。分工：[`manifest`] 解析与十二条校验、[`registry`] 内存台账、
 //! [`builtin`] 内置插件的显式安装表、[`transport`] 分帧、[`rpc`] 请求应答配对、
 //! [`process`] process 插件的生命周期，[`load_all`] 负责把两者装到一起。
 //!
@@ -27,12 +27,107 @@ use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
 
-use self::manifest::PluginManifest;
+use self::manifest::{is_bare_exe_name, PluginEntry, PluginManifest};
 
 pub use manifest::PluginKind;
 #[cfg(test)]
 pub(crate) use manifest::parse_manifest;
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
+
+/// 插件开发者会用到的协议门面（M4）。
+///
+/// 只为「同一份实现、两处调用」而存在：`plugin_check`、`gen_capabilities` 这类
+/// 独立二进制拿不到私有模块，又必须与宿主用同一套判据（校验器不许另写一套）。
+/// 这里只再导出既有的 `pub` 项，`plugins` 本身保持私有。
+pub mod sdk {
+    pub use super::manifest::{
+        is_bare_exe_name, parse_manifest, read_manifest, validate_with, PluginEntry, PluginKind,
+        PluginManifest, MANIFEST_FILE_NAME, MAX_ENTRY_ARGS, SUPPORTED_PROTOCOL,
+    };
+    pub use super::rpc::{
+        RpcError, CAPABILITY_DENIED, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND,
+        PLUGIN_FAULT, TIMEOUT,
+    };
+    pub use super::transport::{write_frame, FrameError, FrameReader, MAX_FRAME_BYTES};
+    pub use super::process::is_valid_tool_name;
+    pub use super::{resolve_program, ProgramResolution, PluginError};
+
+    /// 宿主当前登记的能力键（D40：白名单由注册表生成，不另抄一份）。
+    ///
+    /// 给 `plugin_check` 用：校验器与宿主必须对同一份列表下结论，否则
+    /// 「本地通过、装进宿主失败」会变成最难查的一类问题。
+    pub fn known_capabilities() -> Vec<&'static str> {
+        let roots = super::PluginRoots::from_config();
+        let (services, _query) = super::default_services(&roots, None);
+        services.keys()
+    }
+
+    /// 给 `plugin_check --dump-capabilities` 用：能力表连同参数与返回说明。
+    ///
+    /// 手册《04 能力》的表格由这份 JSON 生成，因此顺序按 key 排序、字段缺一不可
+    /// （生成器遇到空字段直接失败，见 `scripts/gen-capability-doc.mjs`）。
+    pub fn known_capability_infos() -> Vec<&'static crate::host::HostServiceInfo> {
+        let roots = super::PluginRoots::from_config();
+        let (services, _query) = super::default_services(&roots, None);
+        services.infos()
+    }
+}
+
+/// `entry.exe` 解析出来的程序。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramResolution {
+    /// 插件目录里就有这个文件（相对路径，已确认在插件目录内）。
+    InDir(PathBuf),
+    /// 裸命令名，交给 `Command` 按 PATH 解析。
+    OnPath(String),
+}
+
+impl ProgramResolution {
+    /// 写进报错与校验器输出的名字。
+    pub fn display(&self) -> String {
+        match self {
+            Self::InDir(path) => path.display().to_string(),
+            Self::OnPath(name) => name.clone(),
+        }
+    }
+}
+
+/// 把 `entry.exe` 解析成可执行的程序（M4 §3.2 的三级判定）。
+///
+/// 1. 插件目录里有这个文件 → 用它（`hello.exe` 这种裸名走这条）；
+/// 2. 目录里没有、且是不含分隔符的裸名 → 按 PATH 解析（`python` 走这条）；
+/// 3. 其余 → 报「入口不存在」。
+///
+/// 顺序不能反：模板里的 `hello.exe` 是裸名，先查目录才不需要给每个模板加 `./`。
+/// 宿主与 `plugin_check` 共用这一份判据——校验器不许另写一套，否则手册与实现
+/// 会对同一个名字给出两种结论。
+pub fn resolve_program(plugin_dir: &Path, entry: &PluginEntry) -> Result<ProgramResolution, String> {
+    let joined = plugin_dir.join(&entry.exe);
+    if joined.is_file() {
+        // 一级只允许落在插件目录内：`..`/绝对路径/盘符已被校验拦住，
+        // 这里再挡一次符号链接指向目录外的情况（安装管道虽然拒符号链接，
+        // 但 bundled/用户目录里可能有绕过安装管道放进来的东西）。
+        let base = plugin_dir.canonicalize().unwrap_or_else(|_| plugin_dir.to_path_buf());
+        let real = joined.canonicalize().unwrap_or_else(|_| joined.clone());
+        if !real.starts_with(&base) {
+            return Err(format!(
+                "入口指向插件目录之外：{}（解析到 {}）",
+                joined.display(),
+                real.display()
+            ));
+        }
+        return Ok(ProgramResolution::InDir(joined));
+    }
+
+    if is_bare_exe_name(&entry.exe) {
+        return Ok(ProgramResolution::OnPath(entry.exe.clone()));
+    }
+
+    Err(format!(
+        "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
+        joined.display()
+    ))
+}
 
 /// 台账句柄：技能索引靠它把「已加载的插件」翻译成技能根。
 /// 装配时登记一次（`lib.rs`）；未登记时 `skill_roots()` 只返回宿主根。
@@ -354,7 +449,7 @@ impl PluginsConfig {
 
 /// 扫描插件目录，逐个校验并安装，返回内存台账。
 ///
-/// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十条校验 → 能力裁剪 →
+/// 装配顺序（规格 §7）：读 `plugin.json` → 反序列化 → 十二条校验 → 能力裁剪 →
 /// 按 id 分发到 [`builtin::install`] / [`process::install`]。**单个插件失败不影响
 /// 宿主启动**：记一条 `Failed(原因)` 并 `eprintln!` 继续——M2 仍没有日志器
 /// （D28），告警统一走 stderr。

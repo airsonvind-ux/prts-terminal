@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "id": "python-hello",
+  "name": "Python 示例插件",
+  "version": "0.1.0",
+  "description": "最小可运行的 Python 插件：一次握手、一个工具",
+  "kind": "process",
+  "entry": { "exe": "python", "args": ["hello.py"], "transport": "stdio" },
+  "requires": { "protocol": 1 },
+  "capabilities": [],
+  "activation": ["onStartup"]
+}

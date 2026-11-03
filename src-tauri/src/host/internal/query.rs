@@ -50,6 +50,8 @@ pub const ALLOWED_TOOLS: [&str; 13] = [
 static INFO: HostServiceInfo = HostServiceInfo {
     key: KEY,
     summary: "同步调用宿主的只读工具（13 个允许项，见 query.call allowlist）",
+    params_doc: "{ tool: 工具名, args: 该工具的参数对象 }",
+    returns_doc: "{ result: 工具的文本结果 }",
     stateful: false,
     requires_user_grant: false,
     timeout: Some(Duration::from_secs(30)),
