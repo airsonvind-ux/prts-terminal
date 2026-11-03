@@ -16,7 +16,10 @@
     "verify:signature": "node scripts/verify-update-signature.mjs",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "gen:capabilities": "node scripts/gen-capability-doc.mjs",
+    "check:docs": "node scripts/check-plugin-docs.mjs",
+    "build:plugin-kit": "node scripts/build-plugin-dev-kit.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
