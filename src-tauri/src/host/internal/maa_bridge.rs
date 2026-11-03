@@ -394,6 +394,8 @@ fn attach_kill_on_close_job(child: &Child) -> Option<std::os::windows::io::Owned
 static MAA_BRIDGE_INFO: HostServiceInfo = HostServiceInfo {
     key: "maa.bridge",
     summary: "MAA 桥进程托管：起桥（只给端口，不连接）、查状态、收尸",
+    params_doc: "{ op: ensure|status|shutdown }（ensure 不收参数，宿主自己读 MAA 配置）",
+    returns_doc: "{ state: starting|running|stopped|unavailable, port?, error? }",
     stateful: true,
     requires_user_grant: false,
     timeout: Some(Duration::from_secs(30)),

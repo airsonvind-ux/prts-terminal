@@ -198,15 +198,21 @@ fn print_help() {
 }
 
 fn dump_capabilities(_json: bool) -> ExitCode {
-    let capabilities: Vec<Value> = prts_terminal_lib::sdk::known_capabilities()
+    // 规格 §八：按 key 排序的数组，字段固定；手册《04 能力》的表格由这份输出生成。
+    let capabilities: Vec<Value> = prts_terminal_lib::sdk::known_capability_infos()
         .into_iter()
-        .map(|key| json!({ "key": key }))
+        .map(|info| {
+            json!({
+                "key": info.key,
+                "summary": info.summary,
+                "params": info.params_doc,
+                "returns": info.returns_doc,
+                "stateful": info.stateful,
+                "since": info.since,
+            })
+        })
         .collect();
-    let document = json!({
-        "protocol": SUPPORTED_PROTOCOL,
-        "capabilities": capabilities,
-    });
-    match serde_json::to_string_pretty(&document) {
+    match serde_json::to_string_pretty(&capabilities) {
         Ok(text) => {
             println!("{text}");
             ExitCode::SUCCESS

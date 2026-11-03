@@ -61,6 +61,16 @@ pub mod sdk {
         let (services, _query) = super::default_services(&roots, None);
         services.keys()
     }
+
+    /// 给 `plugin_check --dump-capabilities` 用：能力表连同参数与返回说明。
+    ///
+    /// 手册《04 能力》的表格由这份 JSON 生成，因此顺序按 key 排序、字段缺一不可
+    /// （生成器遇到空字段直接失败，见 `scripts/gen-capability-doc.mjs`）。
+    pub fn known_capability_infos() -> Vec<&'static crate::host::HostServiceInfo> {
+        let roots = super::PluginRoots::from_config();
+        let (services, _query) = super::default_services(&roots, None);
+        services.infos()
+    }
 }
 
 /// `entry.exe` 解析出来的程序。

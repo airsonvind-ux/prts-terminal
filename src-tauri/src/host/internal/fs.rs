@@ -31,6 +31,8 @@ const FS_TEMP: &str = "fs.temp";
 static PLUGIN_INFO: HostServiceInfo = HostServiceInfo {
     key: FS_PLUGIN,
     summary: "插件私有数据目录：读写、列目录、删除；purge 需要 confirm",
+    params_doc: "{ op: read|write|list|stat|delete|purge, path?, data?, confirm? }",
+    returns_doc: "{ data?, bytes?, entries?, exists?, kind? }",
     stateful: false,
     requires_user_grant: false,
     timeout: Some(Duration::from_secs(30)),
@@ -41,6 +43,8 @@ static PLUGIN_INFO: HostServiceInfo = HostServiceInfo {
 static TEMP_INFO: HostServiceInfo = HostServiceInfo {
     key: FS_TEMP,
     summary: "插件临时目录：读写、列目录、清空（应用退出时整体清理）",
+    params_doc: "{ op: read|write|list|clear, path?, data? }",
+    returns_doc: "{ data?, bytes?, entries?, existed? }",
     stateful: false,
     requires_user_grant: false,
     timeout: Some(Duration::from_secs(30)),
