@@ -603,7 +603,10 @@
   pointer-events: none;
 }
 
-.card:focus-within {
+/* 键盘焦点环只给「键盘」：用 :focus-visible 而不是 :focus-within——
+ * 鼠标点卡片时原生 radio 也会拿到焦点，:focus-within 会让选中卡片外面
+ * 再套一圈描边（用户实测：选中边框 + 点击后多出来的外框，两层很怪）。 */
+.card:has(.cardInput:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
