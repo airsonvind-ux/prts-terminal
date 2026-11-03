@@ -3,11 +3,12 @@
 // 结构：
 //  - 成长：2 列卡片（关于博士居首，默认露出 4 个，其余收进「全部 N 个」）
 //    + [新建专题]；点击卡片 → 二级视图（阅读/编辑）。
-//  - 经历：三个读数（经历条目 / 近期 / 长期梗概）+ 三条功能行
-//    （当前对话 → 查看／整理；所有记忆 → 查看；清除记忆 → 清除）。
-//    四个动作原来挤成一排，读到的只是"四个按钮"；现在一行一件事，
-//    按钮从属于左边的标签。清除确认从遮罩 modal 改成页内确认条
-//    （与插件卸载同一套语言）。
+//  - 经历：两个读数（经历条目 / 长期梗概）+ 三条功能行
+//    （当前记忆 → 管理；所有记忆 → 查看；清除记忆 → 清除）。
+//    「管理」进二级视图：那里才放整理（会调模型、烧 token，单独一次确认）。
+//    「近期」不再是主页面上的读数——它只是最近 5 条的滚动窗口，
+//    摆成一个数字会让人以为"近期只有 5 条"。
+//    清除确认从遮罩 modal 改成页内确认条（与插件卸载同一套语言）。
 //
 // 二级视图＝设置内容区内的替换视图（见 SettingsMemoryViews.tsx），不用整窗浮层。
 // 写类操作（新建/编辑/删除/整理/清除/长期记忆保存）在对话进行中禁用（沿用设置锁
@@ -22,8 +23,7 @@ import {
 import { Button } from "./ui/Button";
 import { Stat } from "./ui/Stat";
 import { showToast } from "../../stores/useToastStore";
-import { useConversationStore } from "../../stores/useConversationStore";
-import type { MemoryOverview, MemoryTidyResult } from "../../types";
+import type { MemoryOverview } from "../../types";
 import {
   CompiledView,
   GrowthView,
@@ -42,13 +42,10 @@ export interface SettingsMemoryProps {
 const GROWTH_PREVIEW = 4;
 
 export function SettingsMemory({ busy }: SettingsMemoryProps) {
-  const activeId = useConversationStore((s) => s.activeId);
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
   const [loadErr, setLoadErr] = useState(false);
   const [view, setView] = useState<MemView>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [tidying, setTidying] = useState(false);
-  const [tidyMsg, setTidyMsg] = useState<string | null>(null);
   const [showAllGrowth, setShowAllGrowth] = useState(false);
 
   const load = useCallback(async () => {
@@ -76,27 +73,6 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
       return false;
     }
     return true;
-  };
-
-  const tidy = async () => {
-    if (!guard()) return;
-    if (!activeId) {
-      showToast("当前没有打开的对话", { kind: "warning" });
-      return;
-    }
-    setTidying(true);
-    setTidyMsg(null);
-    try {
-      const r = await invoke<MemoryTidyResult>("memory_tidy", {
-        conversationId: activeId,
-      });
-      setTidyMsg(r.message);
-      if (r.status !== "failed") await load();
-    } catch (e) {
-      setTidyMsg(`整理失败：${String(e)}`);
-    } finally {
-      setTidying(false);
-    }
   };
 
   const clearMemory = async () => {
@@ -197,7 +173,6 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 value={overview.experienceCount}
                 accent
               />
-              <Stat label="近期" value={overview.recent.length} />
               <Stat
                 label="长期梗概"
                 value={
@@ -206,24 +181,17 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 title={overview.previous || "还没有长期梗概"}
               />
             </div>
-            {/* 四个动作各自成行：一行一件事，按钮从属于左边的标签。
-                挤成一排时，读到的只是"四个按钮"，看不出它们分别管什么。 */}
+            {/* 三件事各自成行：一行一件事，按钮从属于左边的标签。
+                整理会调模型、烧 token，所以不放在这一层——进了「管理」再确认。 */}
             <div className={styles.actionList}>
               <div className={styles.actionRow}>
-                <span className={styles.actionLabel}>当前对话</span>
+                <span className={styles.actionLabel}>当前记忆</span>
                 <div className={styles.actions}>
                   <Button
-                    aria-label="查看当下记忆"
+                    aria-label="管理当前记忆"
                     onClick={() => setView({ kind: "compiled" })}
                   >
-                    查看
-                  </Button>
-                  <Button
-                    aria-label="整理当下记忆"
-                    onClick={() => void tidy()}
-                    disabled={busy || tidying}
-                  >
-                    {tidying ? "整理中…" : "整理"}
+                    管理
                   </Button>
                 </div>
               </div>
@@ -254,8 +222,6 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 </div>
               </div>
             </div>
-
-            {tidyMsg && <p className={styles.tidyMsg}>{tidyMsg}</p>}
 
             {confirmClear && (
               <div

@@ -196,15 +196,22 @@
 
 .viewCaption {
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
   margin: 2px 0;
+}
+
+/* 视图里的一句说明（窗口上限之类），比 SectionNote 轻 */
+.fieldHint {
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text-2);
 }
 
 /* ── 经历读数 ── */
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2);
 }
 
@@ -231,6 +238,26 @@
   flex: 1;
   min-width: 0;
   font-size: var(--fs-body);
+  color: var(--text-2);
+}
+
+/* 带副行说明的功能行（整理这种"要知道代价"的动作） */
+.actionText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.actionText .actionLabel {
+  flex: none;
+  color: var(--text-1);
+}
+
+.actionHint {
+  font-size: var(--fs-meta);
+  line-height: 1.4;
   color: var(--text-2);
 }
 
@@ -319,22 +346,60 @@
 
 /* ── 记忆库（视图②：日期分组） ── */
 
+/* 进来先看到"有多少"：条目 / 天数 / 已收纳 */
+.libraryStats {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--depth-1);
+}
+
+.libraryStat {
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.libraryStat b {
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
 .dateGroup {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  margin-top: var(--space-2);
 }
 
 .dateLabel {
-  font-size: 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.dateCount {
+  font-family: var(--font-ui);
+  font-size: var(--fs-meta);
   color: var(--text-3);
-  margin-top: 4px;
 }
 
 .entry {
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
   background: var(--depth-3);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.entryOpen {
+  border-color: var(--depth-4);
 }
 
 .entryHead {
@@ -352,6 +417,27 @@
 
 .entryHead:hover {
   background: var(--depth-4);
+}
+
+.entryHead:hover .entryTitle {
+  color: var(--text-0);
+}
+
+.entryChevron {
+  flex: 0 0 auto;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-3);
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+
+.entryHead:hover .entryChevron,
+.entryChevronOpen {
+  color: var(--accent);
+}
+
+.entryChevronOpen {
+  transform: rotate(90deg);
 }
 
 .entryTitle {

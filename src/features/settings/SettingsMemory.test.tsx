@@ -212,13 +212,15 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(container.textContent).toContain("伤害计算");
     for (const label of [
       "新建专题",
-      "查看当下记忆",
-      "整理当下记忆",
+      "管理当前记忆",
       "查看全部记忆",
       "清除经历记忆",
     ]) {
       expect(findButton(label), `缺少按钮：${label}`).toBeTruthy();
     }
+    // 「近期」不再作为读数出现在主列表：它只是最近 5 条的窗口
+    expect(container.textContent).not.toContain("近期");
+    expect(container.textContent).not.toContain("当前对话");
     expect(container.textContent).not.toContain("编辑长期记忆");
     expect(container.textContent).not.toContain("查看记忆（");
     expect(container.textContent).not.toContain("当前注入");
@@ -345,7 +347,7 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({ name: "新专题" });
     // 回到主列表
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
   });
 
   it("阅读视图删除 → 二次确认 → memory_delete 并返回列表", async () => {
@@ -360,13 +362,13 @@ describe("SettingsMemory（结构定稿）", () => {
     clickText("确认删除");
     await flush();
     expect(invokeCalls("memory_delete")).toHaveLength(1);
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
   });
 
-  it("查看当下记忆：近期＋先前；编辑只挂长期记忆 → memory_set_longterm", async () => {
+  it("查看当前记忆：近期＋长期梗概；编辑只挂长期记忆 → memory_set_longterm", async () => {
     render();
     await flush();
-    clickText("查看当下记忆");
+    clickText("管理当前记忆");
     await flush();
     expect(container.textContent).toContain("伤害公式：确认相乘");
     expect(container.textContent).toContain("轴推进：确认了 3 波");
@@ -448,7 +450,7 @@ describe("SettingsMemory（结构定稿）", () => {
     longtermChanged = false;
     render();
     await flush();
-    clickText("查看当下记忆");
+    clickText("管理当前记忆");
     await flush();
     clickText("编辑");
     clickText("保存");
@@ -460,10 +462,17 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(invokeCalls("memory_overview")).toHaveLength(1);
   });
 
-  it("整理当下记忆 → memory_tidy + 反馈文案", async () => {
+  it("整理当下记忆：先确认（说明会烧 token）→ memory_tidy + 反馈文案", async () => {
     render();
     await flush();
+    clickText("管理当前记忆");
+    await flush();
     clickText("整理当下记忆");
+    await flush();
+    // 未确认前不得调用
+    expect(invokeCalls("memory_tidy")).toHaveLength(0);
+    expect(container.textContent).toContain("会消耗额外 token");
+    clickText("开始整理");
     await flush();
     expect(invokeCalls("memory_tidy")).toHaveLength(1);
     expect(container.textContent).toContain("已整理：新建 1 条、重写 0 条");
@@ -476,7 +485,7 @@ describe("SettingsMemory（结构定稿）", () => {
     await flush();
     clickText("返回");
     await flush();
-    expect(findButton("查看当下记忆")).toBeTruthy();
+    expect(findButton("管理当前记忆")).toBeTruthy();
     expect(container.textContent).not.toContain("相乘关系");
   });
 
