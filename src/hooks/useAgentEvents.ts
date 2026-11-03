@@ -22,11 +22,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useProcessingStore, stashTitleUsage, titleExpectedFor } from "../stores/useProcessingStore";
 import { useConversationStore } from "../stores/useConversationStore";
 import { useSteerStore } from "../stores/useSteerStore";
-import { showToast } from "../stores/useToastStore";
 import { defaultTitleForContent } from "../projection";
 import type { AgentEvent, UsageDelta, UserMessageEvent } from "../types";
-
-const staleNotified = new Set<string>();
 
 export function useAgentEvents(): void {
   useEffect(() => {
@@ -137,17 +134,12 @@ export function useAgentEvents(): void {
           break;
         }
 
-        // ── 旧对话快照提示（R-08）：只陈述事实，不改变本轮前缀 ──
-        case "conversation/snapshot-stale": {
-          if (staleNotified.has(e.conversationId)) break;
-          staleNotified.add(e.conversationId);
-          const suffix = e.appVersion ? `（创建于 v${e.appVersion}）` : "";
-          showToast(`该对话仍使用创建时的工具与技能快照${suffix}。`, {
-            kind: "warning",
-            dedupeKey: `snapshot-stale:${e.conversationId}`,
-          });
+        // ── 旧对话快照（R-08）：事实仍在事件流里，前端不再弹提示 ──
+        // 快照隔离本身是静默的（用户看不到也不影响正确性），提示只在
+        // 真正需要解释「工具为什么少了」时才值得占一次注意力；那类提示
+        // 现在由 notices 的目录 diff 负责，比这里的一次性 toast 更准。
+        case "conversation/snapshot-stale":
           break;
-        }
 
         // ── 记忆用量（后端内部累加后推送；前端镜像进投影）──
         case "memory/usage": {
