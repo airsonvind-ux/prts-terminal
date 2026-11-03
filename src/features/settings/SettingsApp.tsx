@@ -83,10 +83,9 @@ export function SettingsApp({
 
       <SettingsSection title="退出">
         <div className={styles.row}>
-          <div className={styles.rowText}>
-            <span className={styles.rowLabel}>退出</span>
-            <span className={styles.rowHint}>中止进行中的对话并退出应用</span>
-          </div>
+          {/* 这里不放行标题：「退出」已经是节标题，再写一遍就成了同词重复。
+              动作名由右侧按钮承担，左侧只留一句后果说明。 */}
+          <span className={styles.rowHint}>中止进行中的对话并退出应用</span>
           <Button
             variant="danger"
             onClick={() => void handleQuit()}
