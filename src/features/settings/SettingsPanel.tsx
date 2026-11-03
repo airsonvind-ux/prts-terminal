@@ -150,9 +150,16 @@ export function SettingsPanel() {
 
       {/* ── 右侧内容（active-only：仅当前页渲染） ── */}
       <div className={styles.content}>
-        <div className={styles.contentTitle}>{activeLabel}</div>
+        {/* 扩展页自己画页头（列表 / 详情 / 安装三种标题），外层不再叠一层 */}
+        {activeTab !== "extension" && (
+          <div className={styles.contentTitle}>{activeLabel}</div>
+        )}
         <div
-          className={styles.contentBody}
+          className={
+            activeTab === "extension"
+              ? styles.contentBodyFlush
+              : styles.contentBody
+          }
           data-guide="settings-body"
           id="settings-panel"
           role="tabpanel"

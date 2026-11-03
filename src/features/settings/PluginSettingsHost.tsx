@@ -1,18 +1,22 @@
-// 设置页 · 扩展页容器（M3 §一）。
+// 设置页 · 扩展页容器（UI 规格草案 2 §三）。
 //
-// 标题区（[管理] + 有设置页的插件）+ 内容区（管理页或某个插件的设置页）。
-// 插件的设置页用显式表 `id → 组件` 挂载：不做动态导入、不做命名约定，
-// 表里没有的内置插件显示「这个插件没有设置页」，而不是白屏。
+// 三个视图，全部在面板内切换（不嵌套 modal——设置面板本身已是 aria-modal）：
+//   list    扩展列表（整区是拖拽落点）
+//   detail  某个插件的详情与设置页
+//   install 安装（二级视图，复用「页头 + 返回」）
 //
 // 所有写操作都返回最新的 PluginList，直接替换本地快照——不做乐观更新，
 // 后端才是唯一事实（安装会落位、卸载会删目录，猜错了界面会撒谎）。
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PluginList, PluginPreview } from "../../types";
-import { MaaSettings, type MaaSettingsProps } from "./MaaSettings";
-import { PluginTabBar, type PluginTab } from "./PluginTabBar";
+import { Button } from "./ui/Button";
+import { MaaSettings } from "./MaaSettings";
+import type { MaaSettingsProps } from "./MaaSettings";
+import { PluginDetail } from "./PluginDetail";
+import { PluginInstall } from "./PluginInstall";
 import { SettingsPlugins } from "./SettingsPlugins";
 import styles from "./SettingsPlugins.module.css";
 
@@ -42,6 +46,11 @@ const SETTINGS_PAGES: Partial<
 
 const EMPTY: PluginList = { plugins: [], unregistered: [] };
 
+type View =
+  | { kind: "list" }
+  | { kind: "detail"; id: string }
+  | { kind: "install" };
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -51,18 +60,21 @@ export function PluginSettingsHost({
   turnBusy,
 }: PluginSettingsHostProps) {
   const [list, setList] = useState<PluginList>(EMPTY);
-  const [active, setActive] = useState("manage");
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<View>({ kind: "list" });
   const [preview, setPreview] = useState<PluginPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
+    setLoading(true);
     invoke<PluginList>("list_plugins")
       .then((next) => {
         setList(next);
         setError(null);
       })
-      .catch((e) => setError(messageOf(e)));
+      .catch((e) => setError(messageOf(e)))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(refresh, [refresh]);
@@ -85,6 +97,7 @@ export function PluginSettingsHost({
     setError(null);
     try {
       setPreview(await invoke<PluginPreview>("preview_plugin_install", { path }));
+      setView({ kind: "install" });
     } catch (e) {
       setError(messageOf(e));
     } finally {
@@ -92,94 +105,188 @@ export function PluginSettingsHost({
     }
   }, []);
 
-  const handleInstallFolder = useCallback(async () => {
+  const pickFolder = useCallback(async () => {
+    setBusy(true);
+    setError(null);
     try {
       const path = await invoke<string | null>("pick_plugin_folder");
       if (path) await previewPath(path);
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setBusy(false);
     }
   }, [previewPath]);
 
-  const tabs = useMemo<PluginTab[]>(() => {
-    const manage: PluginTab = {
-      key: "manage",
-      label: "管理",
-      switchable: false,
-    };
-    const pages: PluginTab[] = list.plugins
-      .filter((plugin) => plugin.hasSettingsPage)
-      .map((plugin) => ({
-        key: plugin.id,
-        label: plugin.name,
-        switchable: true,
-        enabled: plugin.state !== "disabled",
-        // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
-        busy: busy || (turnBusy && plugin.state !== "disabled"),
-        disabledReason: TURN_BUSY_HINT,
-        onToggle: (next: boolean) =>
-          void run(() =>
-            invoke<PluginList>("set_plugin_enabled", {
-              id: plugin.id,
-              enabled: next,
-            }),
-          ),
-      }));
-    return [manage, ...pages];
-  }, [list, busy, run, turnBusy]);
+  const backToList = useCallback(() => {
+    setView({ kind: "list" });
+    setPreview(null);
+  }, []);
 
-  // 插件被卸载（或没有设置页）时，当前页回退到管理页——不留一个空壳。
-  const activePage = SETTINGS_PAGES[active];
+  // Esc：先回列表，面板还开着。必须 preventDefault——OverlayContainer 只在
+  // 事件未被处理时才关闭面板（见它的 Escape 分支）。
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+    if (view.kind === "list") return;
+    event.preventDefault();
+    backToList();
+  };
+
+  const active =
+    view.kind === "detail"
+      ? list.plugins.find((plugin) => plugin.id === view.id) ?? null
+      : null;
+
+  // 详情页的插件被卸载（或列表刷新后消失）→ 回列表，不留空壳。
+  useEffect(() => {
+    if (view.kind === "detail" && !active) setView({ kind: "list" });
+  }, [view, active]);
+
+  const locked = turnBusy;
 
   return (
-    <div className={styles.container}>
-      <PluginTabBar
-        tabs={tabs}
-        active={activePage ? active : "manage"}
-        onSelect={setActive}
-      />
+    <div className={styles.host} onKeyDown={onKeyDown}>
+      <header className={styles.pageHeader}>
+        {view.kind === "list" ? (
+          <>
+            <span className={styles.pageTitle}>扩展</span>
+            <span className={styles.pageSpacer} />
+            <Button
+              aria-label="安装插件"
+              title="安装插件"
+              disabled={busy}
+              onClick={() => {
+                setPreview(null);
+                setError(null);
+                setView({ kind: "install" });
+              }}
+            >
+              ＋
+            </Button>
+            <Button
+              aria-label="刷新"
+              title="刷新"
+              disabled={busy}
+              onClick={refresh}
+            >
+              ⟳
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              className={styles.backButton}
+              onClick={backToList}
+              aria-label="返回列表"
+            >
+              ‹ 返回
+            </Button>
+            <span className={styles.pageTitle} title={active?.name}>
+              {view.kind === "detail" ? (active?.name ?? "") : "安装插件"}
+            </span>
+            {view.kind === "detail" && active && (
+              <>
+                <span className={styles.pageSpacer} />
+                <input
+                  type="checkbox"
+                  aria-label={`启用 ${active.name}`}
+                  checked={active.state !== "disabled"}
+                  // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
+                  disabled={
+                    busy || (locked && active.state !== "disabled")
+                  }
+                  title={
+                    locked && active.state !== "disabled"
+                      ? TURN_BUSY_HINT
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    void run(() =>
+                      invoke<PluginList>("set_plugin_enabled", {
+                        id: active.id,
+                        enabled: e.target.checked,
+                      }),
+                    )
+                  }
+                />
+              </>
+            )}
+          </>
+        )}
+      </header>
 
-      {activePage ? (
-        activePage({ maaProps, turnBusy })
-      ) : (
-        <SettingsPlugins
-          list={list}
-          busy={busy}
-          locked={turnBusy}
-          lockedHint={TURN_BUSY_HINT}
-          preview={preview}
-          installing={busy && preview !== null}
-          error={error}
-          onInstallFolder={() => void handleInstallFolder()}
-          onDropFolder={(path) => void previewPath(path)}
-          onConfirmInstall={() => {
-            const token = preview?.token;
-            if (!token) return;
-            void run(async () => {
-              const next = await invoke<PluginList>("confirm_plugin_install", {
-                token,
+      <div className={styles.pageBody}>
+        {error && (
+          <div className={styles.error} role="alert">
+            {error}
+          </div>
+        )}
+
+        {view.kind === "list" && (
+          <SettingsPlugins
+            list={list}
+            loading={loading}
+            busy={busy}
+            locked={locked}
+            lockedHint={TURN_BUSY_HINT}
+            onOpen={(id) => setView({ kind: "detail", id })}
+            onRetry={refresh}
+            onSetEnabled={(id, enabled) =>
+              void run(() =>
+                invoke<PluginList>("set_plugin_enabled", { id, enabled }),
+              )
+            }
+            onDropFolder={(path) => void previewPath(path)}
+          />
+        )}
+
+        {view.kind === "detail" && active && (
+          <PluginDetail
+            plugin={active}
+            busy={busy}
+            locked={locked}
+            lockedHint={TURN_BUSY_HINT}
+            settingsPage={SETTINGS_PAGES[active.id]?.({
+              maaProps,
+              turnBusy,
+            })}
+            onRetry={() =>
+              void run(() => invoke<PluginList>("retry_plugin", { id: active.id }))
+            }
+            onUninstall={(deleteData) =>
+              void run(async () => {
+                const next = await invoke<PluginList>("uninstall_plugin", {
+                  id: active.id,
+                  deleteData,
+                });
+                setView({ kind: "list" });
+                return next;
+              })
+            }
+          />
+        )}
+
+        {view.kind === "install" && (
+          <PluginInstall
+            preview={preview}
+            busy={busy}
+            onPick={() => void pickFolder()}
+            onCancel={() => setPreview(null)}
+            onConfirm={() => {
+              const token = preview?.token;
+              if (!token) return;
+              void run(async () => {
+                const next = await invoke<PluginList>("confirm_plugin_install", {
+                  token,
+                });
+                setPreview(null);
+                setView({ kind: "list" });
+                return next;
               });
-              setPreview(null);
-              return next;
-            });
-          }}
-          onCancelInstall={() => setPreview(null)}
-          onSetEnabled={(id, enabled) =>
-            void run(() =>
-              invoke<PluginList>("set_plugin_enabled", { id, enabled }),
-            )
-          }
-          onUninstall={(id, deleteData) =>
-            void run(() =>
-              invoke<PluginList>("uninstall_plugin", { id, deleteData }),
-            )
-          }
-          onRetry={(id) =>
-            void run(() => invoke<PluginList>("retry_plugin", { id }))
-          }
-          onOpenSettings={setActive}
-        />
-      )}
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

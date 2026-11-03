@@ -1,264 +1,221 @@
-/* 设置页 · 插件容器与管理页样式 */
+/* 设置页 · 扩展页（列表 / 详情 / 安装）。
+ *
+ * 尺寸按 UI 规格草案 2：面板内容区 268 宽（0.86 面板 − 左栏 52 − 内边距 24），
+ * 页头 27 高、正文自己滚动。字号只用 10/11/13 三档，靠颜色与间距分层。
+ */
 
-.container {
+.host {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
-/* ── 标题区：管理页 + 有设置页的插件 ── */
-
-.tabBar {
+.pageHeader {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  border-bottom: 1px solid var(--depth-1);
-  margin-bottom: 12px;
-  overflow-x: auto;
-}
-
-.tab {
-  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 2px 6px 8px;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  white-space: nowrap;
-}
-
-.tabActive {
-  border-bottom-color: var(--accent);
-}
-
-.tabButton {
-  font-size: 12px;
-  font-family: var(--font-ui);
-  color: var(--text-2);
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-}
-
-.tabActive .tabButton {
-  color: var(--text-1);
-  font-weight: 600;
-}
-
-/* 开关：点开关只切开关，不切页（命中区互不重叠） */
-.tabSwitch {
-  display: inline-flex;
-  align-items: center;
-  padding-right: 8px;
-}
-
-/* ── 管理页 ── */
-
-.installRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.actionButton {
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.actionButton:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--depth-4);
-}
-
-.actionButton:disabled {
-  color: var(--text-3);
-  cursor: default;
-  opacity: 0.7;
-}
-
-.hint {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.4;
-}
-
-.dropZone {
-  border: 1px dashed var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 14px 12px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-3);
-  line-height: 1.5;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.dropZoneOver {
-  border-color: var(--accent);
-  background: var(--depth-2);
-  color: var(--text-1);
-}
-
-/* 待确认卡片 */
-.previewCard {
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  background: var(--depth-2);
-  padding: 10px 12px;
-  margin: 10px 0;
-}
-
-.previewTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-1);
-  margin-bottom: 6px;
-}
-
-.previewGrid {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px 10px;
-  font-size: 11px;
-  color: var(--text-2);
-  line-height: 1.6;
-}
-
-.previewKey {
-  color: var(--text-3);
-}
-
-.previewActions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-
-.primaryButton {
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-4);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 4px 10px;
-  cursor: pointer;
-}
-
-.primaryButton:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-/* 已安装清单 */
-.rowList {
-  display: flex;
-  flex-direction: column;
-  margin-top: 8px;
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--depth-1);
-  font-size: 11px;
-  color: var(--text-2);
-}
-
-.row:last-child {
-  border-bottom: 0;
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+  height: 27px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex: none;
-  background: var(--text-3);
 }
 
-.dotOk {
-  background: #4caf50;
-}
-
-.dotBad {
-  background: #d9544d;
-}
-
-.name {
-  font-size: 12px;
+.pageTitle {
+  font-size: 13px;
   color: var(--text-1);
-  background: none;
-  border: 0;
-  padding: 0;
-  font-family: var(--font-ui);
-}
-
-button.name {
-  cursor: pointer;
-  text-decoration: underline;
-  text-decoration-color: var(--depth-1);
-  text-underline-offset: 3px;
-}
-
-.meta {
-  color: var(--text-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.rowSpacer {
+.pageSpacer {
   flex: 1;
 }
 
-.reason {
-  color: var(--text-3);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 260px;
-}
-
-/* 卸载两步确认：整行变成一条确认提示 */
-.confirmRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--depth-1);
+.backButton {
   font-size: 11px;
   color: var(--text-2);
-  flex-wrap: wrap;
+  padding: 0 4px;
 }
 
-.confirmCheck {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
+.backButton:hover {
+  color: var(--text-1);
 }
 
-.error {
-  margin: 8px 0;
-  font-size: 11px;
-  color: #d9544d;
-  line-height: 1.5;
+.pageBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+}
+
+/* ── 列表 ─────────────────────────────────────────────── */
+
+/* 整区是拖拽落点（命中判定在 SettingsPlugins.hitsList），不是某个虚线方块 */
+.listZone {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100%;
+}
+
+.rowList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sectionHint {
+  font-size: 10px;
+  color: var(--text-3);
+  padding: 2px 6px 4px;
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.skeleton span {
+  display: block;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.skeleton span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.skeleton span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .empty {
-  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 18px 6px;
+}
+
+.emptyText {
+  margin: 0;
   font-size: 11px;
+  color: var(--text-3);
+}
+
+.error {
+  margin-bottom: 8px;
+  padding: 5px 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--danger);
+  border-left: 2px solid var(--danger);
+  background: rgba(201, 83, 71, 0.08);
+  word-break: break-word;
+}
+
+/* ── 详情 ─────────────────────────────────────────────── */
+
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 两列键值：标签定宽，值吃掉剩下的行 */
+.facts {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.facts dt {
+  color: var(--text-3);
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text-1);
+  word-break: break-word;
+}
+
+.factBad {
+  color: var(--danger) !important;
+}
+
+.capability {
+  display: inline-block;
+  margin: 0 8px 2px 0;
+  color: var(--text-2);
+}
+
+.moreButton {
+  font-size: 10px;
+  color: var(--accent);
+  padding: 0;
+}
+
+.moreButton:hover {
+  text-decoration: underline;
+}
+
+.detailActions {
+  display: flex;
+  gap: 6px;
+}
+
+.confirmRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.confirmCheck {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+  font-size: 10px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* ── 安装 ─────────────────────────────────────────────── */
+
+.install {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.installActions {
+  display: flex;
+  gap: 6px;
+}
+
+.installTarget {
+  margin: 0;
+  font-size: 10px;
   color: var(--text-3);
 }

@@ -120,3 +120,13 @@
   /* 紧凑档滚动条（设置页尺度小于主界面）：视觉 4px，机制见 styles/scrollbar.css */
   --scrollbar-inset: 2px;
 }
+
+/* 扩展页自己排版（页头 + 可滚动正文）：外层不出 padding，也不出滚动条 */
+.contentBodyFlush {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 0;
+  overflow: hidden;
+  --scrollbar-inset: 2px;
+}
