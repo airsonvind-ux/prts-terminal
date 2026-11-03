@@ -84,7 +84,9 @@
   font-family: var(--font-ui);
   font-size: 11px;
   line-height: 1;
-  color: var(--text-1);
+  /* 静止用 T2：按钮是次要信息，别和一整页正文抢同一档亮度。
+     悬停时跳到 T0（差两档），这才看得出来字变了。 */
+  color: var(--text-2);
   /* 静止态看得出是按钮，但别抢戏：直接用调色板里的 D4（比面板 D3 亮一档），
      不用白色叠出来的中性灰——那层灰和这套偏冷的蓝灰不在一族里，
      放在面板上会显得"脏"。 */
@@ -108,11 +110,12 @@
   cursor: not-allowed;
 }
 
-/* plain：默认形态；悬停时底亮一档（D4→D5）、字亮一档（T1→T0）、边也提上来 */
+/* plain：默认形态；悬停时字跳两档（T2→T0）、底亮一档（D4→D5）、
+   边用 accent 而不是灰白——灰白在这套蓝灰里是"外来的"颜色。 */
 .buttonPlain:hover:not(:disabled) {
   color: var(--text-0);
   background: var(--depth-5);
-  border-color: var(--text-3);
+  border-color: rgba(74, 171, 234, 0.45);
 }
 
 /* primary：accent 描边 + 淡底，主动作 */
@@ -152,7 +155,7 @@
 .buttonIcon:hover:not(:disabled) {
   color: var(--text-0);
   background: var(--depth-5);
-  border-color: var(--text-3);
+  border-color: rgba(74, 171, 234, 0.45);
 }
 
 /* ── ListRow（主行 + 副行 + 右侧槽位） ── */

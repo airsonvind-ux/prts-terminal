@@ -36,13 +36,9 @@
   flex: 1;
 }
 
-/* 方形图标按钮的几何由 ui/Button 的 icon 变体给；这里只管颜色与字号 */
+/* 方形图标按钮的几何与悬停态由 ui/Button 的 icon 变体给；这里只管字号 */
 .refreshBtn {
   font-size: 12px;
-}
-
-.refreshBtn:hover:not(:disabled) {
-  color: var(--accent);
 }
 
 .input {
@@ -79,15 +75,9 @@
   min-width: 0;
 }
 
-/* 同上：几何交给 icon 变体，这里只描边界与悬停色 */
+/* 同上：几何与悬停交给 icon 变体，这里只描字号 */
 .keyToggle {
-  border-color: var(--depth-1);
   font-size: 12px;
-}
-
-.keyToggle:hover:not(:disabled) {
-  color: var(--text-1);
-  border-color: var(--text-3);
 }
 
 .keyHint {
