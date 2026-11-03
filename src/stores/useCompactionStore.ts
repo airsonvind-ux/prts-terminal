@@ -29,7 +29,6 @@ import {
   computeRetainedFrom,
   deriveMessages,
   estimateTurnTokens,
-  formatTokens,
   NOOP_MIN_FOLD_TOKENS,
   NOOP_MIN_FOLD_TURNS,
 } from "../projection";
@@ -80,9 +79,8 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 1. 保留段起点（轮边界对齐）与 noop 预判（非错误，info toast）──
     const retainedFrom = computeRetainedFrom(conv.turns);
     if (retainedFrom === 0) {
-      const total = conv.turns.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
       showToast(
-        `暂时不用压缩：压缩只处理较早的对话，最近的会原样保留；目前轮次合计约 ${formatTokens(total)} token，都在这段里（占用数字还含系统提示与工具定义）`,
+        "暂时不用压缩：这段对话都还在最近保留的部分里，压了也省不出多少空间",
         { kind: "info" }
       );
       return;
@@ -99,11 +97,14 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       foldedTurns.length < NOOP_MIN_FOLD_TURNS ||
       foldEstimate < NOOP_MIN_FOLD_TOKENS
     ) {
-      const amount = formatTokens(foldEstimate);
+      // 用「几轮」而不是 token：用户能数的是轮数，token 数对他们没有意义。
+      const howMany = foldedTurns.length;
       showToast(
         conv.compaction
-          ? `暂时不用压缩：距上次压缩只新增了约 ${amount} token，多攒一些再压更划算`
-          : `暂时不用压缩：能换成摘要的只有约 ${amount} token，太少了压了不划算；再聊几轮通常就够了`,
+          ? `暂时不用压缩：上次压缩之后只聊了 ${howMany} 轮，再聊几轮再压更划算`
+          : howMany <= 1
+            ? "暂时不用压缩：能折起来的只有最开头那一轮，太少了"
+            : `暂时不用压缩：能折起来的只有最开头 ${howMany} 轮，太少了`,
         { kind: "info" }
       );
       return;

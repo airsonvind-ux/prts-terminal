@@ -34,17 +34,6 @@ export function estimateTextTokens(text: string): number {
 }
 
 /**
- * token 数的用户可读写法：低于 1000 原样，其余折成 `4.8K` / `19K`。
- * 只用于提示文案，内部阈值与比较仍是原始数值。
- */
-export function formatTokens(tokens: number): string {
-  if (!Number.isFinite(tokens) || tokens <= 0) return "0";
-  if (tokens < 1000) return String(Math.round(tokens));
-  const k = tokens / 1000;
-  return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}K`;
-}
-
-/**
  * 估算单轮事件的文本 token（近似：只统计会派生进 LLM 消息的文本字段；
  * 结构事件不计）。轮粒度误差可接受——cut 只决定保留多少，无正确性影响。
  */

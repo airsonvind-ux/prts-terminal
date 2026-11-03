@@ -173,10 +173,12 @@ export function PluginSettingsHost({
           enabled,
         });
         if (enabled) {
-          showToast(`已启用 ${name}。它的工具和技能要在新建对话里才会出现`, {
-            kind: "info",
-            dedupeKey: "plugin-enabled",
-          });
+          // 关掉再打开时工具其实已经在当前前缀里（走了会立即恢复），所以
+          // 不能说「必须新对话」；两种情况用同一句话都成立。
+          showToast(
+            `已启用 ${name}。如果这个对话里本来就有它，现在就能用；否则要新建对话或压缩后才出现`,
+            { kind: "info", dedupeKey: "plugin-enabled" }
+          );
         }
         return next;
       });
@@ -334,7 +336,7 @@ export function PluginSettingsHost({
                 setView({ kind: "list" });
                 // 装完当前对话看不到它的工具：先说清楚，省得用户以为没装上。
                 showToast(
-                  `已安装 ${name ?? "插件"}。它的工具和技能要在新建对话里才会出现`,
+                  `已安装 ${name ?? "插件"}。新建对话或压缩后，它的工具和技能才会出现`,
                   { kind: "info", dedupeKey: "plugin-installed" }
                 );
                 return next;

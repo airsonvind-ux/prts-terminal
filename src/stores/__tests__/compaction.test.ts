@@ -176,7 +176,7 @@ describe("runCompaction 主路径", () => {
     seedConversation("c1", [userTurn("你好"), userTurn("再见")]);
     await useCompactionStore.getState().runCompaction("c1");
     expect(invokeCount("compact_conversation")).toBe(0);
-    expect(toastMessages().join("|")).toContain("都在这段里");
+    expect(toastMessages().join("|")).toContain("最近保留的部分里");
     expect(
       useConversationStore.getState().conversations[0].compaction
     ).toBeUndefined();
@@ -187,7 +187,7 @@ describe("runCompaction 主路径", () => {
     seedConversation("c1", [huge, userTurn("短问题")]);
     await useCompactionStore.getState().runCompaction("c1");
     expect(invokeCount("compact_conversation")).toBe(0);
-    expect(toastMessages().join("|")).toContain("能换成摘要的只有");
+    expect(toastMessages().join("|")).toContain("能折起来的只有");
   });
 
   it("失败：后端 Err → 压缩失败 toast，状态不变（幂等可重试）", async () => {

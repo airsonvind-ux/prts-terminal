@@ -26,7 +26,6 @@ export {
   CONTEXT_HARD_RATIO,
   outputReserveTokens,
   willNextTurnOverflow,
-  formatTokens,
 } from "./projection/compaction";
 
 // ── Reminder 块（M1）：build（拼装，sendMessage 用）与 strip（展示剥离）
