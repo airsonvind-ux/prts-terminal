@@ -3,7 +3,7 @@
 //
 // 职责：压缩 = 前端发起的一次对话级状态转换。本 store 承载编排：
 //   1. 前端计算保留段起点（computeRetainedFrom，轮边界对齐）并做 noop 预判
-//      （对话太短 nothing / 新内容太少 too_soon——非错误提示，不发命令）；
+//      （全在保留范围内 nothing / 能折叠的太少 too_soon——非错误提示，不发命令）；
 //   2. 折叠区派生态（链式 = 旧摘要 + 上次边界后的轮；已折叠原文不回灌）
 //      发给后端 `compact_conversation`（静默独立 LLM 摘要 run：system/工具面
 //      与主请求逐字节同源以复用 KV cache 前缀；无可见事件）；
@@ -29,6 +29,7 @@ import {
   computeRetainedFrom,
   deriveMessages,
   estimateTurnTokens,
+  formatTokens,
   NOOP_MIN_FOLD_TOKENS,
   NOOP_MIN_FOLD_TURNS,
 } from "../projection";
@@ -79,7 +80,11 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 1. 保留段起点（轮边界对齐）与 noop 预判（非错误，info toast）──
     const retainedFrom = computeRetainedFrom(conv.turns);
     if (retainedFrom === 0) {
-      showToast("对话历史太短，暂无可压缩内容", { kind: "info" });
+      const total = conv.turns.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
+      showToast(
+        `暂不压缩：整个对话只有约 ${formatTokens(total)} token，全部在保留范围内，没有更早的部分可折叠`,
+        { kind: "info" }
+      );
       return;
     }
     // 链式折叠起点 = 上次压缩边界（2026-09-25 裁决）：已折叠原文不回灌——
@@ -94,14 +99,20 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       foldedTurns.length < NOOP_MIN_FOLD_TURNS ||
       foldEstimate < NOOP_MIN_FOLD_TOKENS
     ) {
-      showToast("距上次压缩后的新内容太少，暂不压缩", { kind: "info" });
+      const amount = formatTokens(foldEstimate);
+      showToast(
+        conv.compaction
+          ? `暂不压缩：距上次压缩只新增了约 ${amount} token，至少要 ${formatTokens(NOOP_MIN_FOLD_TOKENS)}`
+          : `暂不压缩：能折叠的只有约 ${amount} token，至少要 ${formatTokens(NOOP_MIN_FOLD_TOKENS)} 且不止一轮`,
+        { kind: "info" }
+      );
       return;
     }
 
     // ── 2. 折叠区派生态（error 等结构事件已过滤；链式：旧摘要代表已折叠区）──
     const folded = deriveMessages(foldedTurns);
     if (folded.length === 0) {
-      showToast("没有可压缩的内容", { kind: "info" });
+      showToast("暂不压缩：折叠区里没有可折叠的对话内容", { kind: "info" });
       return;
     }
     const payload = conv.compaction

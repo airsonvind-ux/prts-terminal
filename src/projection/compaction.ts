@@ -14,7 +14,7 @@ export const SUMMARY_BLOCK_END = "[/对话压缩摘要]";
 export const RETAIN_BUDGET_TOKENS = 20_000;
 /** noop 预判：折叠区轮数下限（少于则「对话太短」） */
 export const NOOP_MIN_FOLD_TURNS = 2;
-/** noop 预判：折叠区估算 token 下限（低于则「新内容太少」） */
+/** noop 预判：折叠区估算 token 下限（低于则「能折叠的太少」） */
 export const NOOP_MIN_FOLD_TOKENS = 4_000;
 
 /**
@@ -31,6 +31,17 @@ export function estimateTextTokens(text: string): number {
     else nonAscii += 1;
   }
   return Math.max(1, Math.ceil(ascii * 0.3 + nonAscii * 0.6));
+}
+
+/**
+ * token 数的用户可读写法：低于 1000 原样，其余折成 `4.8K` / `19K`。
+ * 只用于提示文案，内部阈值与比较仍是原始数值。
+ */
+export function formatTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens <= 0) return "0";
+  if (tokens < 1000) return String(Math.round(tokens));
+  const k = tokens / 1000;
+  return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}K`;
 }
 
 /**
