@@ -115,6 +115,19 @@
   background: var(--depth-4);
 }
 
+/* icon：方形，只放图标；几何固定 22×22，不吃 padding */
+.buttonIcon {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-3);
+}
+
+.buttonIcon:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--depth-4);
+}
+
 /* ── ListRow（主行 + 副行 + 右侧槽位） ── */
 
 .listRow {

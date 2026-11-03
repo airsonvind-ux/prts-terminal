@@ -36,27 +36,13 @@
   flex: 1;
 }
 
+/* 方形图标按钮的几何由 ui/Button 的 icon 变体给；这里只管颜色与字号 */
 .refreshBtn {
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
   font-size: 12px;
-  line-height: 1;
-  color: var(--text-3);
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: color 0.12s ease, background 0.12s ease;
 }
 
-.refreshBtn:hover {
+.refreshBtn:hover:not(:disabled) {
   color: var(--accent);
-  background: rgba(96, 165, 250, 0.1);
 }
 
 .input {
@@ -93,24 +79,13 @@
   min-width: 0;
 }
 
+/* 同上：几何交给 icon 变体，这里只描边界与悬停色 */
 .keyToggle {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+  border-color: var(--depth-1);
   font-size: 12px;
-  color: var(--text-3);
-  background: transparent;
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease;
 }
 
-.keyToggle:hover {
+.keyToggle:hover:not(:disabled) {
   color: var(--text-1);
   border-color: var(--text-3);
 }
@@ -156,26 +131,10 @@
   margin-top: 4px;
 }
 
+/* 验证按钮：几何与基色来自 ui/Button，这里只保留连接态的三档颜色 */
 .verifyButton {
   height: 26px;
   padding: 0 10px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.verifyButton:hover:not(:disabled) {
-  background: var(--depth-4);
-}
-
-.verifyButton:disabled {
-  cursor: default;
-  opacity: 0.7;
 }
 
 .verifyLoading {
@@ -183,15 +142,15 @@
 }
 
 .verifySuccess {
-  color: #5cb878;
-  border-color: #3a6b4a;
-  background: #1e2d24;
+  color: var(--ok);
+  border-color: var(--ok);
+  background: rgba(92, 158, 120, 0.12);
 }
 
 .verifyError {
-  color: #e05555;
-  border-color: #6e3535;
-  background: #2d1e1e;
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(201, 83, 71, 0.12);
 }
 
 .verifyErrorText {
@@ -305,26 +264,6 @@
 
 .modelEmpty {
   color: var(--text-3);
-}
-
-/* ── 重试按钮 ── */
-
-.retryButton {
-  align-self: flex-start;
-  height: 20px;
-  padding: 0 8px;
-  font-size: 10px;
-  font-family: var(--font-ui);
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.retryButton:hover {
-  background: rgba(96, 165, 250, 0.1);
 }
 
 /* ── 模型列表 ── */
@@ -457,24 +396,4 @@
   font-size: 10px;
   color: var(--text-3);
   margin-left: 8px;
-}
-
-/* ── 获取模型按钮（idle 状态） ── */
-
-.fetchButton {
-  align-self: flex-start;
-  height: 22px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.fetchButton:hover {
-  background: rgba(96, 165, 250, 0.1);
 }

@@ -743,12 +743,12 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     await flush();
     clickTab("skills");
 
-    const calcRow = Array.from(container!.querySelectorAll("span")).find(
-      (s) => (s.textContent ?? "").includes("数值计算")
-        && (s.textContent ?? "").includes("数值类任务")
-    )!;
+    // 行本身不再可点：技能名是 FileLink（role=button），点它才打开源 md
+    const calcLink = Array.from(
+      container!.querySelectorAll<HTMLElement>('[role="button"]')
+    ).find((el) => (el.textContent ?? "").trim() === "数值计算")!;
     act(() => {
-      calcRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      calcLink.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
@@ -772,12 +772,11 @@ describe("SettingsPanel · 技能页（由空间页技能节拆出）", () => {
     await flush();
     clickTab("skills");
 
-    const calcRow = Array.from(container!.querySelectorAll("span")).find(
-      (s) => (s.textContent ?? "").includes("数值计算")
-        && (s.textContent ?? "").includes("数值类任务")
-    )!;
+    const calcLink = Array.from(
+      container!.querySelectorAll<HTMLElement>('[role="button"]')
+    ).find((el) => (el.textContent ?? "").trim() === "数值计算")!;
     act(() => {
-      calcRow.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      calcLink.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 

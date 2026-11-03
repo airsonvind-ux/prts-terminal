@@ -2,12 +2,18 @@
 //
 // 两个节：「安装技能」（支持形态与生效时机的说明 + 两枚安装入口）、
 // 「已安装技能」（内置 / 用户差异说明 + 清单）。
-// 清单主区经 FileLink 打开源 md（open_path + 成败 toast）；
-// 移除只对用户技能开放，行内两步确认避免静默删除。
+// 清单与扩展页同构：ListRow 一行一个技能，主行可点开源 md（FileLink 负责
+// open_path 与成败 toast），右侧槽位是来源标签与两步行内确认的移除按钮。
 
 import { useState } from "react";
 import type { SkillEntry, SkillPreview } from "../../types";
-import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
+import {
+  SettingsSection,
+  SectionHint,
+  SectionWarning,
+} from "./ui/SettingsSection";
+import { ListRow } from "./ui/ListRow";
+import { Button } from "./ui/Button";
 import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./SettingsSkills.module.css";
 
@@ -58,16 +64,12 @@ export function SettingsSkills({
             对话处理中仍可安装；技能改动从下一轮生效，当前对话不受影响
           </SectionWarning>
         )}
-        <p className={styles.sectionHint}>
+        <SectionHint>
           支持 .md 文件，或包含 SKILL.md 的技能文件夹；安装后即可使用
-        </p>
+        </SectionHint>
         <div className={styles.actions}>
-          <button className={styles.actionButton} onClick={onInstallFile}>
-            安装 .md 文件
-          </button>
-          <button className={styles.actionButton} onClick={onInstallFolder}>
-            安装技能文件夹
-          </button>
+          <Button onClick={onInstallFile}>安装 .md 文件</Button>
+          <Button onClick={onInstallFolder}>安装技能文件夹</Button>
         </div>
         {pendingInstall && (
           <SectionWarning>
@@ -90,20 +92,16 @@ export function SettingsSkills({
               ))}
             </div>
             <div className={styles.actions}>
-              <button
-                className={styles.actionButton}
-                disabled={installing}
-                onClick={onCancelInstall}
-              >
+              <Button disabled={installing} onClick={onCancelInstall}>
                 取消
-              </button>
-              <button
-                className={styles.actionButton}
+              </Button>
+              <Button
+                variant="primary"
                 disabled={installing}
                 onClick={onConfirmInstall}
               >
                 {installing ? "安装中…" : "仍要安装"}
-              </button>
+              </Button>
             </div>
           </SectionWarning>
         )}
@@ -112,9 +110,9 @@ export function SettingsSkills({
       <SettingsSection
         title={skills ? `已安装技能（${skills.length}）` : "已安装技能"}
       >
-        <p className={styles.sectionHint}>
+        <SectionHint>
           内置技能由应用提供、不可移除；自己安装的技能可移除，不影响原始文件
-        </p>
+        </SectionHint>
         {skills === null ? (
           <span className={styles.emptyHint}>技能清单加载中…</span>
         ) : skills.length === 0 ? (
@@ -129,56 +127,53 @@ export function SettingsSkills({
                   ? "需确认"
                   : "用户";
               return (
-                <div key={s.name} className={styles.skillRow}>
-                  <FileLink
-                    path={s.filePath}
-                    className={styles.skillMain}
-                    successHint={`已打开「${s.name}」`}
-                    title={s.description}
-                  >
-                    <span className={styles.skillName}>{s.name}</span>
-                    <span className={styles.skillDesc}>{s.description}</span>
-                  </FileLink>
-                  <div className={styles.skillSide}>
-                    <span
-                      className={styles.sourceTag}
-                      title={
-                        s.trust === "untrusted"
-                          ? "执行包内脚本时会再次确认"
-                          : undefined
-                      }
+                <ListRow
+                  key={s.name}
+                  title={
+                    <FileLink
+                      path={s.filePath}
+                      successHint={`已打开「${s.name}」`}
+                      title={s.description}
                     >
-                      {sourceLabel}
-                    </span>
-                    {!isBuiltin &&
-                      (armed === s.name ? (
-                        <>
-                          <button
-                            className={styles.actionButton}
-                            onClick={() => {
-                              setArmed(null);
-                              onRemove(s);
-                            }}
-                          >
-                            确认移除
-                          </button>
-                          <button
-                            className={styles.actionButton}
-                            onClick={() => setArmed(null)}
-                          >
-                            取消
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          className={styles.actionButton}
-                          onClick={() => setArmed(s.name)}
-                        >
-                          移除
-                        </button>
-                      ))}
-                  </div>
-                </div>
+                      {s.name}
+                    </FileLink>
+                  }
+                  subtitle={s.description}
+                  titleAttr={s.description}
+                  trailing={
+                    <>
+                      <span
+                        className={styles.sourceTag}
+                        title={
+                          s.trust === "untrusted"
+                            ? "执行包内脚本时会再次确认"
+                            : undefined
+                        }
+                      >
+                        {sourceLabel}
+                      </span>
+                      {!isBuiltin &&
+                        (armed === s.name ? (
+                          <>
+                            <Button
+                              variant="danger"
+                              onClick={() => {
+                                setArmed(null);
+                                onRemove(s);
+                              }}
+                            >
+                              确认移除
+                            </Button>
+                            <Button onClick={() => setArmed(null)}>取消</Button>
+                          </>
+                        ) : (
+                          <Button onClick={() => setArmed(s.name)}>
+                            移除
+                          </Button>
+                        ))}
+                    </>
+                  }
+                />
               );
             })}
           </div>
