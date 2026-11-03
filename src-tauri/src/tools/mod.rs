@@ -1316,7 +1316,23 @@ mod tests {
     /// 确认 MAA 是从插件路径进来的（来源记成 `Plugin("maa")`，而不是宿主）。
     #[test]
     fn load_all_installs_maa_from_the_bundled_manifest() {
-        let roots = crate::plugins::PluginRoots::from_config();
+        // 不能用 from_config：那会读开发机真实的 plugins.json，把本机开关状态
+        // 带进断言（MAA 一停用，这条测试就变成假的失败）。
+        let data = std::env::temp_dir().join(format!(
+            "prts-tools-bundled-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(&data).expect("建临时目录");
+        let roots = crate::plugins::PluginRoots {
+            bundled: crate::config::bundled_plugins_dir(),
+            user: data.join("plugins"),
+            data: data.clone(),
+        };
         let (services, _query) = crate::plugins::default_services(&roots, None);
         let reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(std::env::temp_dir()));
@@ -1339,5 +1355,6 @@ mod tests {
             ),
             "MAA 工具必须由插件路径注册"
         );
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

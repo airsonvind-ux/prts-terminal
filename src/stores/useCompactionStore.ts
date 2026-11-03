@@ -82,7 +82,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     if (retainedFrom === 0) {
       const total = conv.turns.reduce((sum, t) => sum + estimateTurnTokens(t), 0);
       showToast(
-        `暂不压缩：整个对话只有约 ${formatTokens(total)} token，全部在保留范围内，没有更早的部分可折叠`,
+        `暂时不用压缩：压缩只处理较早的对话，最近的会原样保留；目前轮次合计约 ${formatTokens(total)} token，都在这段里（占用数字还含系统提示与工具定义）`,
         { kind: "info" }
       );
       return;
@@ -102,8 +102,8 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       const amount = formatTokens(foldEstimate);
       showToast(
         conv.compaction
-          ? `暂不压缩：距上次压缩只新增了约 ${amount} token，至少要 ${formatTokens(NOOP_MIN_FOLD_TOKENS)}`
-          : `暂不压缩：能折叠的只有约 ${amount} token，至少要 ${formatTokens(NOOP_MIN_FOLD_TOKENS)} 且不止一轮`,
+          ? `暂时不用压缩：距上次压缩只新增了约 ${amount} token，多攒一些再压更划算`
+          : `暂时不用压缩：能换成摘要的只有约 ${amount} token，太少了压了不划算；再聊几轮通常就够了`,
         { kind: "info" }
       );
       return;
@@ -112,7 +112,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 2. 折叠区派生态（error 等结构事件已过滤；链式：旧摘要代表已折叠区）──
     const folded = deriveMessages(foldedTurns);
     if (folded.length === 0) {
-      showToast("暂不压缩：折叠区里没有可折叠的对话内容", { kind: "info" });
+      showToast("暂时不用压缩：折叠区里没有可折叠的对话内容", { kind: "info" });
       return;
     }
     const payload = conv.compaction

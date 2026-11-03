@@ -585,6 +585,8 @@ fn catalog_entries_diff(
             ));
         }
         parts.push(seg);
+        // 新增项只进新前缀：旧对话看不到，也不该让模型以为马上能用。
+        parts.push("以上新增要在新建对话或压缩后才可用".to_string());
     }
     if !updated.is_empty() {
         let mut seg = String::from("更新：");
@@ -878,7 +880,10 @@ mod tests {
             n.diff_skill_catalog(&[host("C", "dc"), host("A", "da")], None);
             assert_eq!(n.seq(), 1);
             assert_eq!(n.dims.skill_catalog.stamp, 1);
-            assert_eq!(n.dims.skill_catalog.note, "新增：\n- C：dc\n移除：B");
+            assert_eq!(
+                n.dims.skill_catalog.note,
+                "新增：\n- C：dc\n以上新增要在新建对话或压缩后才可用\n移除：B"
+            );
             assert_eq!(
                 catalog_entries_from_value(&n.dims.skill_catalog.value),
                 vec![host("A", "da"), host("C", "dc")]
@@ -944,7 +949,7 @@ mod tests {
             assert_eq!(n.seq(), 1);
             assert_eq!(
                 n.dims.tool_catalog.note,
-                "新增：\n- sim_path：推演路径\n- write_file：写入文件"
+                "新增：\n- sim_path：推演路径\n- write_file：写入文件\n以上新增要在新建对话或压缩后才可用"
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -1038,7 +1043,10 @@ mod tests {
         let n = Notices::load(&dir);
         assert_eq!(n.seq(), 2, "tool diff(1) + event(2)");
         assert_eq!(n.dims.workspace.value, "/ws");
-        assert_eq!(n.dims.tool_catalog.note, "新增：\n- b：乙工具");
+        assert_eq!(
+            n.dims.tool_catalog.note,
+            "新增：\n- b：乙工具\n以上新增要在新建对话或压缩后才可用"
+        );
         assert_eq!(n.events().len(), 1);
         assert_eq!(n.events()[0].title, "记忆");
         let _ = std::fs::remove_dir_all(&dir);

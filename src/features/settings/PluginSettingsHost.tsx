@@ -19,6 +19,7 @@ import type { MaaSettingsProps } from "./MaaSettings";
 import { PluginDetail } from "./PluginDetail";
 import { PluginInstall } from "./PluginInstall";
 import { SettingsPlugins } from "./SettingsPlugins";
+import { showToast } from "../../stores/useToastStore";
 import styles from "./SettingsPlugins.module.css";
 
 export interface PluginSettingsHostProps {
@@ -162,6 +163,27 @@ export function PluginSettingsHost({
     setPreview(null);
   }, []);
 
+  /** 启停：只开关插件，不切页。启用后当前对话看不到新工具，要当面说清。 */
+  const togglePlugin = useCallback(
+    (id: string, enabled: boolean) => {
+      const name = list.plugins.find((p) => p.id === id)?.name ?? id;
+      void run(async () => {
+        const next = await invoke<PluginList>("set_plugin_enabled", {
+          id,
+          enabled,
+        });
+        if (enabled) {
+          showToast(`已启用 ${name}。它的工具和技能要在新建对话里才会出现`, {
+            kind: "info",
+            dedupeKey: "plugin-enabled",
+          });
+        }
+        return next;
+      });
+    },
+    [list.plugins, run]
+  );
+
   // Esc：先回列表，面板还开着。必须 preventDefault——OverlayContainer 只在
   // 事件未被处理时才关闭面板（见它的 Escape 分支）。
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -239,14 +261,7 @@ export function PluginSettingsHost({
                       ? TURN_BUSY_HINT
                       : undefined
                   }
-                  onChange={(enabled) =>
-                    void run(() =>
-                      invoke<PluginList>("set_plugin_enabled", {
-                        id: active.id,
-                        enabled,
-                      }),
-                    )
-                  }
+                  onChange={(enabled) => togglePlugin(active.id, enabled)}
                 />
               </>
             )}
@@ -270,11 +285,7 @@ export function PluginSettingsHost({
             lockedHint={TURN_BUSY_HINT}
             onOpen={(id) => setView({ kind: "detail", id })}
             onRetry={refresh}
-            onSetEnabled={(id, enabled) =>
-              void run(() =>
-                invoke<PluginList>("set_plugin_enabled", { id, enabled }),
-              )
-            }
+            onSetEnabled={togglePlugin}
             onDropFolder={(path) => void previewPath(path)}
           />
         )}
@@ -313,6 +324,7 @@ export function PluginSettingsHost({
             onCancel={() => setPreview(null)}
             onConfirm={() => {
               const token = preview?.token;
+              const name = preview?.name;
               if (!token) return;
               void run(async () => {
                 const next = await invoke<PluginList>("confirm_plugin_install", {
@@ -320,6 +332,11 @@ export function PluginSettingsHost({
                 });
                 setPreview(null);
                 setView({ kind: "list" });
+                // 装完当前对话看不到它的工具：先说清楚，省得用户以为没装上。
+                showToast(
+                  `已安装 ${name ?? "插件"}。它的工具和技能要在新建对话里才会出现`,
+                  { kind: "info", dedupeKey: "plugin-installed" }
+                );
                 return next;
               });
             }}
