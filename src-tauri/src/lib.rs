@@ -378,6 +378,8 @@ pub fn run() {
         let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
         let plugin_registry =
             plugins::load_all(&reg, &roots, &plugins_config, &host_services, &plugin_policy);
+        // 技能索引要按台账找插件技能根：登记一次，此后启停即时反映到目录。
+        plugins::attach_skill_ledger(Arc::clone(&plugin_registry));
         let registry = Arc::new(reg);
         // query.call 需要最终的工具注册表（含插件工具），只能在 `Arc::new(reg)` 后绑定。
         query_service

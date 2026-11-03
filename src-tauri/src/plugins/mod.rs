@@ -21,7 +21,7 @@ pub mod install;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
@@ -33,6 +33,10 @@ pub use manifest::PluginKind;
 #[cfg(test)]
 pub(crate) use manifest::parse_manifest;
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
+
+/// 台账句柄：技能索引靠它把「已加载的插件」翻译成技能根。
+/// 装配时登记一次（`lib.rs`）；未登记时 `skill_roots()` 只返回宿主根。
+static SKILL_LEDGER: OnceLock<Arc<Mutex<PluginRegistry>>> = OnceLock::new();
 
 /// 插件层的统一错误。
 ///
@@ -164,14 +168,47 @@ impl PluginRoots {
 /// 技能索引的根列表：宿主根在前，插件根按 id 排序在其后。
 ///
 /// 索引是「先注册者赢」，宿主根排第一即宿主优先。插件根只含**已启用且加载
-/// 成功**的插件（停用插件的技能不该出现在目录里）；技能目录默认是插件目录下
+/// 成功**的插件（停用插件的技能不该出现在目录里）；技能目录固定为插件目录下
 /// 的 `skills/`，`contributes.skills` 只作声明、目录为准。
-///
-/// 提交 2 只返回宿主根（多根能力先上，接线在提交 3）。
 pub fn skill_roots() -> Vec<crate::skills_index::SkillRoot> {
-    vec![crate::skills_index::SkillRoot::host(
+    let mut roots = vec![crate::skills_index::SkillRoot::host(
         crate::skills_index::skills_dir(),
-    )]
+    )];
+    let Some(ledger) = SKILL_LEDGER.get() else {
+        // 未登记（单元测试 / 装配早期）：只扫宿主根。
+        return roots;
+    };
+    let guard = match ledger.lock() {
+        Ok(guard) => guard,
+        Err(poison) => poison.into_inner(),
+    };
+    let mut plugin_dirs: Vec<(String, String, PathBuf)> = guard
+        .list()
+        .into_iter()
+        .filter(|record| record.state == PluginState::Loaded)
+        .map(|record| {
+            (
+                record.manifest.id.clone(),
+                record.manifest.name.clone(),
+                record.dir.join("skills"),
+            )
+        })
+        .filter(|(_, _, dir)| dir.is_dir())
+        .collect();
+    plugin_dirs.sort_by(|a, b| a.0.cmp(&b.0));
+    for (id, display_name, dir) in plugin_dirs {
+        roots.push(crate::skills_index::SkillRoot::plugin(
+            dir,
+            id,
+            display_name,
+        ));
+    }
+    roots
+}
+
+/// 登记台账句柄，让技能索引能按 id 找到插件技能根（`lib.rs` 装配时调一次）。
+pub fn attach_skill_ledger(ledger: Arc<Mutex<PluginRegistry>>) {
+    let _ = SKILL_LEDGER.set(ledger);
 }
 
 /// 构造 M2a 登记的四条服务，返回注册表与 `query.call` 的绑定句柄。
@@ -483,6 +520,7 @@ fn load_one(
 
     match outcome {
         Ok((tools, reported_capabilities)) => {
+            warn_about_declared_skills(&manifest, plugin_dir);
             insert(ledger, PluginRecord {
                 manifest,
                 state: PluginState::Loaded,
@@ -512,6 +550,19 @@ fn insert(ledger: &Arc<Mutex<PluginRegistry>>, record: PluginRecord) {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .insert(record);
+}
+
+/// 声明与目录对不上时只告警：`contributes.skills` 是说明，目录才是事实。
+fn warn_about_declared_skills(manifest: &PluginManifest, plugin_dir: &Path) {
+    let skills_dir = plugin_dir.join("skills");
+    for declared in &manifest.contributes.skills {
+        if !skills_dir.join(declared).is_dir() {
+            eprintln!(
+                "[plugins] {} 声明的技能不存在：{declared}（以 skills/ 目录为准，已忽略）",
+                manifest.id
+            );
+        }
+    }
 }
 
 /// 退出路径：收掉全部 process 插件，并清空 `plugin-temp`（规格 §4：退出时整体清理）。
