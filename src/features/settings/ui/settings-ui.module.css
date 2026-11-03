@@ -512,44 +512,6 @@
   color: var(--cyan);
 }
 
-/* ── Segmented（分段选择：一排等分按钮，选中 = accent 底 + accent 字） ── */
-
-.segmented {
-  display: inline-flex;
-  gap: 1px;
-  padding: 1px;
-  background: var(--depth-1);
-  border-radius: var(--radius-sm);
-}
-
-.segment {
-  height: 20px;
-  padding: 0 8px;
-  font-family: var(--font-ui);
-  font-size: var(--fs-body);
-  color: var(--text-2);
-  background: transparent;
-  border: 0;
-  border-radius: 1px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.12s ease, background 0.12s ease;
-}
-
-.segment:hover:not(:disabled) {
-  color: var(--text-1);
-}
-
-.segment:disabled {
-  color: var(--text-3);
-  cursor: default;
-}
-
-.segmentActive {
-  color: var(--accent);
-  background: rgba(74, 171, 234, 0.14);
-}
-
 /* ── ChoiceCard（整块可选的单选卡片：原生 radio 藏在里面） ── */
 
 .card {
