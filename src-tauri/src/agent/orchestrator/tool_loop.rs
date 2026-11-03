@@ -552,12 +552,14 @@ pub(super) fn execute_tools_and_append_with_blocks(
     // primary 模式已在流式回调写入（含中止轮）；legacy 模式在这里批量写。
     if !sink.persists_tool_calls() {
         for tc in &result.tool_calls {
+            let facts = tools.facts_of(&tc.function.name);
             sink.log_only(SessionEvent::tool_call_with_display(
                 session_id,
                 &tc.id,
                 &tc.function.name,
                 &tc.function.arguments,
                 tools.display_for(&tc.function.name, &tc.function.arguments, ctx),
+                facts.as_ref(),
             ));
         }
     }

@@ -382,6 +382,16 @@ pub trait Tool: Send + Sync {
         ToolDisplay::default()
     }
 
+    /// 调用文案里的动词短语（「清点图片」「执行MAA任务」），四态由前端拼：
+    /// `PRTS正在{短语}...` / `PRTS{短语}完成` / `PRTS{短语}失败：…`。
+    ///
+    /// 默认 `None` 走前端的工具名表；插件工具与内置插件（MAA）显式给出，
+    /// 让「插件贡献的工具」在文案层只有一条通路（工具文案规格草案 2 §二）。
+    /// 返回值是静态短语，不带「PRTS」「正在」「完成」等模板成分。
+    fn action(&self) -> Option<&str> {
+        None
+    }
+
     /// 生成发送给 LLM 的 ToolDef。
     ///
     /// 一般不需要覆写。默认实现将 name / description / parameters
@@ -405,6 +415,23 @@ pub enum Origin {
     Host,
     /// 插件贡献的工具，附插件 id。
     Plugin(String),
+}
+
+/// 发 tool/call 事件时要带的两件事：工具是谁的、它的调用文案。
+///
+/// 一次加锁取全，避免「先查来源再查文案」之间被启停改掉，出现
+/// 「按插件工具渲染、却拿到宿主工具的文案」这种半新半旧的组合。
+#[derive(Debug, Clone)]
+pub struct ToolFacts {
+    pub origin: Origin,
+    pub action: Option<String>,
+}
+
+impl ToolFacts {
+    /// 是否插件贡献的工具（事件里的 `pluginTool` 就是它）。
+    pub fn is_plugin(&self) -> bool {
+        matches!(self.origin, Origin::Plugin(_))
+    }
 }
 
 /// 注册表里的一项：工具本体 + 来源。
@@ -557,6 +584,17 @@ impl ToolRegistry {
         self.tools_read()
             .get(name)
             .map(|registered| Arc::clone(&registered.tool))
+    }
+
+    /// 发 tool/call 事件前取「来源 + 调用文案」，两件事一次查完。
+    ///
+    /// 未注册工具返回 `None`：调用方按「宿主工具、无文案」处理即可，
+    /// 展示层不该因为查不到而报错。
+    pub fn facts_of(&self, name: &str) -> Option<ToolFacts> {
+        self.tools_read().get(name).map(|registered| ToolFacts {
+            origin: registered.origin.clone(),
+            action: registered.tool.action().map(str::to_string),
+        })
     }
 
     /// 解析指定工具本次调用的展示切片（tool/call 卡片信息）。

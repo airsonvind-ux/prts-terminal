@@ -23,6 +23,42 @@ function result(callId: string, summary: string): SessionEvent {
   };
 }
 
+describe("buildToolSlots · 调用文案三级派生", () => {
+  it("作者声明了 action 就用它", () => {
+    const slots = buildToolSlots([
+      {
+        type: "tool/call",
+        sessionId: "s",
+        callId: "c1",
+        toolName: "pic_catalog_list_images",
+        params: "{}",
+        action: "清点图片",
+        pluginTool: true,
+      },
+    ]);
+    expect(slots[0].phrase).toBe("清点图片");
+  });
+
+  it("插件工具没写 action：保底给完整工具名", () => {
+    const slots = buildToolSlots([
+      {
+        type: "tool/call",
+        sessionId: "s",
+        callId: "c1",
+        toolName: "pic_catalog_list_images",
+        params: "{}",
+        pluginTool: true,
+      },
+    ]);
+    expect(slots[0].phrase).toBe("调用插件工具：pic_catalog_list_images");
+  });
+
+  it("宿主工具沿用工具名表（旧归档同样走这条）", () => {
+    const slots = buildToolSlots([call("c1")]);
+    expect(slots[0].phrase).toBe("查询数据库");
+  });
+});
+
 describe("buildToolSlots · 重复/空 callId", () => {
   it("空 callId 按事件顺序逐个配对，不让结果全部覆盖第一个槽", () => {
     const events: SessionEvent[] = [];

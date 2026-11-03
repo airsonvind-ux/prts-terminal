@@ -194,6 +194,13 @@ export interface ToolCallEvent {
    * 旧归档/无信息工具无此字段 → 按缺省处理（不附加任何信息）。
    */
   display?: ToolDisplay;
+  /**
+   * 调用文案的动词短语（插件在 initialize 的 tools[] 里声明，MAA 由内置声明）。
+   * 缺省 = 作者没写，前端按 pluginTool 决定走保底还是工具名表。
+   */
+  action?: string;
+  /** 是否插件贡献的工具（来自注册表来源；旧归档缺省 false）。 */
+  pluginTool?: boolean;
 }
 
 /** 展示切片链接类型：file（open_path 打开）/ url（系统浏览器打开） */

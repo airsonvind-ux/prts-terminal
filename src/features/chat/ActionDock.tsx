@@ -20,6 +20,7 @@ import {
 import { useUpdaterStore } from "../../stores/useUpdaterStore";
 import { showToast } from "../../stores/useToastStore";
 import { toolAction } from "../../toolDisplay";
+import { callPhrase } from "./eventSlots";
 import { categoryPhrase } from "./EventBadge";
 import { NoticeDock, UpdateDock } from "./UpdateDock";
 import styles from "./ActionDock.module.css";
@@ -90,7 +91,7 @@ function collectPendingApprovals(
         conversationTitle: "",
         command: fullCommand ?? event.command,
         commandAvailable: fullCommand !== null,
-        phrase: toolAction(call?.toolName ?? "run_command"),
+        phrase: call ? callPhrase(call) : toolAction("run_command"),
         ruleId: event.ruleId,
         privilege: event.privilege,
         justification: event.justification,

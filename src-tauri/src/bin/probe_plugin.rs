@@ -131,6 +131,7 @@ fn main() -> ExitCode {
                         "capabilities": [],
                         "tools": [{
                             "name": "echo",
+                            "action": "回显参数",
                             "description": "把参数原样回给宿主（探针用）",
                             "parameters": {
                                 "type": "object",

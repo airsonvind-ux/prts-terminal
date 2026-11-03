@@ -138,6 +138,11 @@ pub enum ApprovalRejectReason {
     Drop,
 }
 
+/// serde 的 `skip_serializing_if` 判据：false 不落盘（旧归档读回也是 false）。
+fn is_false_flag(value: &bool) -> bool {
+    !*value
+}
+
 /// 持久事实事件（Discriminated Union）。
 ///
 /// serde 输出 `{ "type": "turn/start", ... }` 形式，与 IPC 合约一致。
@@ -145,8 +150,7 @@ pub enum ApprovalRejectReason {
 /// `SessionLog` 中的位置隐式给出（索引即 seq，单调连续）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum SessionEvent {
-    /// turn 开始：一次 agent_process 处理周期
+pub enum SessionEvent {    /// turn 开始：一次 agent_process 处理周期
     #[serde(rename = "turn/start", rename_all = "camelCase")]
     TurnStart { session_id: String },
 
@@ -245,6 +249,12 @@ pub enum SessionEvent {
         params: String,
         #[serde(default, skip_serializing_if = "crate::tools::ToolDisplay::is_empty")]
         display: crate::tools::ToolDisplay,
+        /// 调用文案的动词短语（作者声明；MAA 由内置声明）。旧归档无此字段。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+        /// 是否插件工具：没有 action 时前端据此走「调用插件工具：{名字}」保底。
+        #[serde(default, skip_serializing_if = "is_false_flag")]
+        plugin_tool: bool,
     },
 
     /// 图片投递事实：记录某条 user/tool 消息的 image block 是否真的进入请求体。
@@ -461,15 +471,22 @@ impl SessionEvent {
             tool_name: tool_name.to_string(),
             params: params.to_string(),
             display: crate::tools::ToolDisplay::default(),
+            action: None,
+            plugin_tool: false,
         }
     }
-    /// 带展示切片的 tool/call（orchestrator 发出 IPC / 写 log 时使用）。
+    /// 带展示切片与调用文案的 tool/call（orchestrator 发出 IPC / 写 log 时使用）。
+    ///
+    /// `facts` 来自 `Registry::facts_of`：来源决定 `pluginTool`（前端据此选
+    /// 保底文案），action 由工具自己声明。查询不到工具时传 `None`，按
+    /// 「宿主工具、无文案」记录——展示层不该因为查不到而报错。
     pub fn tool_call_with_display(
         session_id: &str,
         call_id: &str,
         tool_name: &str,
         params: &str,
         display: crate::tools::ToolDisplay,
+        facts: Option<&crate::tools::ToolFacts>,
     ) -> Self {
         Self::ToolCall {
             session_id: session_id.to_string(),
@@ -477,6 +494,8 @@ impl SessionEvent {
             tool_name: tool_name.to_string(),
             params: params.to_string(),
             display,
+            action: facts.and_then(|facts| facts.action.clone()),
+            plugin_tool: facts.is_some_and(crate::tools::ToolFacts::is_plugin),
         }
     }
     pub fn tool_result(
@@ -1301,6 +1320,7 @@ mod tests {
             "read_file",
             "{}",
             crate::tools::ToolDisplay::link(crate::tools::DisplayLink::file("C:/ws/a.md", "a.md")),
+            None,
         );
         let json = serde_json::to_string(&ev).unwrap();
         assert!(json.contains("\"display\""), "got {json}");
@@ -1313,6 +1333,7 @@ mod tests {
             "query_enemy",
             "{}",
             crate::tools::ToolDisplay::info("源石虫"),
+            None,
         );
         let json2 = serde_json::to_string(&ev2).unwrap();
         assert!(
@@ -1321,9 +1342,59 @@ mod tests {
         );
     }
 
+    /// 插件工具：action 与 pluginTool 一起落盘；宿主工具两者省略。
     #[test]
-    fn turn_end_reason_vocabulary() {
-        for (reason, expected) in [
+    fn tool_call_carries_the_action_phrase_only_when_there_is_one() {
+        let facts = crate::tools::ToolFacts {
+            origin: crate::tools::Origin::Plugin("demo".into()),
+            action: Some("清点图片".to_string()),
+        };
+        let ev = SessionEvent::tool_call_with_display(
+            "s1",
+            "c1",
+            "demo_list",
+            "{}",
+            crate::tools::ToolDisplay::default(),
+            Some(&facts),
+        );
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"action\":\"清点图片\""), "got {json}");
+        assert!(json.contains("\"pluginTool\":true"), "got {json}");
+
+        // 宿主工具没有文案：两个字段都不写，旧读端照常读。
+        let ev = SessionEvent::tool_call_with_display(
+            "s1",
+            "c2",
+            "read_file",
+            "{}",
+            crate::tools::ToolDisplay::default(),
+            None,
+        );
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(!json.contains("\"action\""), "got {json}");
+        assert!(!json.contains("\"pluginTool\""), "got {json}");
+    }
+
+    /// 旧归档没有这两个字段：读回 None/false，前端回落既有工具名表。
+    #[test]
+    fn older_archives_without_action_still_deserialize() {
+        let old = r#"{"type":"tool/call","sessionId":"s1","callId":"c1","toolName":"read_file","params":"{}"}"#;
+        let event: SessionEvent = serde_json::from_str(old).expect("旧归档应能反序列化");
+        match event {
+            SessionEvent::ToolCall {
+                action,
+                plugin_tool,
+                ..
+            } => {
+                assert!(action.is_none());
+                assert!(!plugin_tool);
+            }
+            other => panic!("事件类型不对：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn turn_end_reason_vocabulary() {        for (reason, expected) in [
             (TurnEndReason::Completed, "completed"),
             (TurnEndReason::Error, "error"),
             (TurnEndReason::Aborted, "aborted"),

@@ -50,7 +50,10 @@ pub mod sdk {
     };
     pub use super::transport::{write_frame, FrameError, FrameReader, MAX_FRAME_BYTES};
     pub use super::process::is_valid_tool_name;
-    pub use super::{resolve_program, ProgramResolution, PluginError};
+    pub use super::{
+        parse_action, resolve_program, ActionProblem, ProgramResolution, PluginError,
+        MAX_ACTION_CHARS,
+    };
 
     /// 宿主当前登记的能力键（D40：白名单由注册表生成，不另抄一份）。
     ///
@@ -127,6 +130,55 @@ pub fn resolve_program(plugin_dir: &Path, entry: &PluginEntry) -> Result<Program
         "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
         joined.display()
     ))
+}
+
+/// `tools[].action` 的字数上限（按字符计，CJK 与 ASCII 同计）。
+pub const MAX_ACTION_CHARS: usize = 16;
+
+/// 调用文案不合格的原因。
+///
+/// `Display` 文案就是校验器 check 5 打印的那一行、也是宿主拒绝安装时的原因，
+/// 两边必须一字不差——手册《09 排错》直接引用这些句子。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionProblem {
+    /// 超过字数上限。
+    TooLong { chars: usize },
+    /// 含空白（首尾、内部、全角空格）或不可见字符（零宽、BOM、控制符）。
+    Whitespace,
+}
+
+impl std::fmt::Display for ActionProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLong { chars } => write!(f, "action 超过 {MAX_ACTION_CHARS} 字（现在 {chars} 字）"),
+            Self::Whitespace => write!(f, "action 含空白或不可见字符"),
+        }
+    }
+}
+
+/// 解析插件声明的调用文案（工具文案规格草案 2 §三）。
+///
+/// 缺失、空串、纯空白都算「未提供」（`Ok(None)`，前端走保底文案）；
+/// 非空则不许有任何空白或不可见字符，并且最多 [`MAX_ACTION_CHARS`] 字。
+///
+/// 宿主（`parse_tools`）与校验器（check 5）共用这一份判据：同一个 `action`
+/// 在本地通过、装进宿主却被拒，是最难查的一类问题。
+pub fn parse_action(raw: &str) -> Result<Option<String>, ActionProblem> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    // 先判空白：`" 清点图片 "` 该报「含空白」而不是先被 trim 掉再悄悄接受。
+    if raw
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '\u{200b}' | '\u{feff}'))
+    {
+        return Err(ActionProblem::Whitespace);
+    }
+    let chars = raw.chars().count();
+    if chars > MAX_ACTION_CHARS {
+        return Err(ActionProblem::TooLong { chars });
+    }
+    Ok(Some(raw.to_string()))
 }
 
 /// 台账句柄：技能索引靠它把「已加载的插件」翻译成技能根。
@@ -1435,5 +1487,59 @@ mod tests {
         assert_eq!(empty, "");
 
         let _ = std::fs::remove_dir_all(&roots.data);
+    }
+
+    // ── 调用文案（工具文案规格草案 2 §三）──
+
+    #[test]
+    fn action_accepts_a_short_phrase_and_rejects_the_template_parts() {
+        assert_eq!(parse_action("清点图片").unwrap(), Some("清点图片".to_string()));
+        // 边界：正好 16 字可以，17 字不行。
+        assert!(parse_action(&"图".repeat(MAX_ACTION_CHARS)).is_ok());
+        assert_eq!(
+            parse_action(&"图".repeat(MAX_ACTION_CHARS + 1)),
+            Err(ActionProblem::TooLong {
+                chars: MAX_ACTION_CHARS + 1
+            })
+        );
+    }
+
+    #[test]
+    fn action_treats_blank_and_missing_as_not_provided() {
+        // 空串 / 纯空白 = 未提供，走保底文案，不报错。
+        assert_eq!(parse_action(""), Ok(None));
+        assert_eq!(parse_action("   "), Ok(None));
+        assert_eq!(parse_action("\u{3000}"), Ok(None));
+    }
+
+    #[test]
+    fn action_rejects_whitespace_and_invisible_characters() {
+        for raw in [
+            " 清点图片",       // 首部空格
+            "清点图片 ",       // 尾部空格
+            "清点 图片",       // 内部空格
+            "清点\u{3000}图片", // 全角空格
+            "清点\u{200b}图片", // 零宽空格
+            "清点\n图片",      // 换行
+        ] {
+            assert_eq!(
+                parse_action(raw),
+                Err(ActionProblem::Whitespace),
+                "应拒绝：{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn action_problem_messages_are_the_ones_the_validator_prints() {
+        // 校验器 check 5 与宿主报错共用这两句，手册 09 直接引用。
+        assert_eq!(
+            ActionProblem::TooLong { chars: 21 }.to_string(),
+            "action 超过 16 字（现在 21 字）"
+        );
+        assert_eq!(
+            ActionProblem::Whitespace.to_string(),
+            "action 含空白或不可见字符"
+        );
     }
 }

@@ -447,8 +447,16 @@ pub(super) fn handle_stream_event_collect(
             // 展示切片：在此（tool/call 发出前）解析——用户于调用发起时即见对象/
             // 文件链接；失败同链保留（挂在 call 侧数据上）
             let display = tools.display_for(&name, &arguments, tool_ctx);
-            let event =
-                SessionEvent::tool_call_with_display(session_id, &id, &name, &arguments, display);
+            // 来源与调用文案同一次查完：两件事都决定这张卡片怎么拼。
+            let facts = tools.facts_of(&name);
+            let event = SessionEvent::tool_call_with_display(
+                session_id,
+                &id,
+                &name,
+                &arguments,
+                display,
+                facts.as_ref(),
+            );
             if sink.persists_tool_calls() {
                 // primary：流式阶段就落 log——即使 preflight 中止，UI 卡片事实
                 // 也在官方日志里；投影会补齐/丢弃不完整配对（R-26）。

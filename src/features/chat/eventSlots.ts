@@ -4,10 +4,28 @@
 import type {
   SessionEvent,
   ToolApprovalResultEvent,
+  ToolCallEvent,
   ToolDisplay,
   ToolProvenance,
 } from "../../types";
 import { toolAction } from "../../toolDisplay";
+
+/**
+ * 卡片短语：作者声明的 action → 插件工具保底 → 既有工具名表。
+ *
+ * 三级派生在**事件值**上做，不依赖任何全局映射：短语随事件一起进归档，
+ * 卸载插件后回看旧对话，仍是当时的文案。
+ *
+ * 审批卡（ActionDock）也走这里：它拿到的 tool/call 事件与槽位同源，
+ * 「PRTS正在…（等待确认）」不该和其它三态说两套话。
+ */
+export function callPhrase(e: ToolCallEvent): string {
+  if (e.action) return e.action;
+  // 插件工具带前缀，工具名表按开头匹配一定查不到；保底把完整名字给出来，
+  // 能搜到、也能和工具定义对上。
+  if (e.pluginTool) return `调用插件工具：${e.toolName}`;
+  return toolAction(e.toolName);
+}
 
 export interface ToolSlot {
   callId: string;
@@ -57,7 +75,7 @@ export function buildToolSlots(events: SessionEvent[]): ToolSlot[] {
       result.push({
         callId: e.callId,
         toolName: e.toolName,
-        phrase: toolAction(e.toolName),
+        phrase: callPhrase(e),
         ok: null,
         summary: "",
         display: e.display ?? null,
