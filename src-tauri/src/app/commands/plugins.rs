@@ -29,8 +29,9 @@ pub struct PluginView {
     pub state: String,
     /// 异常原因（只有 failed / faulted 有）。
     pub reason: Option<String>,
-    /// 停用或异常时不显示工具数（§二）。
-    pub tool_count: Option<usize>,
+    /// 这个插件注册的工具名。只给名字不给数量：用户看「工具 1」没有意义，
+    /// 看 `run_maa_task` 才知道它到底往对话里加了什么。
+    pub tools: Vec<String>,
     pub has_settings_page: bool,
     pub capabilities: Vec<String>,
 }
@@ -51,12 +52,12 @@ pub struct PluginList {
 
 /// 一条台账记录 → 一行的显示数据。
 fn view_of(record: &PluginRecord) -> PluginView {
-    let (state, reason, tool_count) = match &record.state {
-        PluginState::Starting => ("starting".to_string(), None, None),
-        PluginState::Loaded => ("loaded".to_string(), None, Some(record.tools.len())),
-        PluginState::Faulted(reason) => ("faulted".to_string(), Some(reason.clone()), None),
-        PluginState::Failed(reason) => ("failed".to_string(), Some(reason.clone()), None),
-        PluginState::Disabled => ("disabled".to_string(), None, None),
+    let (state, reason, tools) = match &record.state {
+        PluginState::Starting => ("starting".to_string(), None, Vec::new()),
+        PluginState::Loaded => ("loaded".to_string(), None, record.tools.clone()),
+        PluginState::Faulted(reason) => ("faulted".to_string(), Some(reason.clone()), Vec::new()),
+        PluginState::Failed(reason) => ("failed".to_string(), Some(reason.clone()), Vec::new()),
+        PluginState::Disabled => ("disabled".to_string(), None, Vec::new()),
     };
     PluginView {
         id: record.manifest.id.clone(),
@@ -68,7 +69,7 @@ fn view_of(record: &PluginRecord) -> PluginView {
         },
         state,
         reason,
-        tool_count,
+        tools,
         has_settings_page: record.manifest.kind == PluginKind::Builtin
             && PLUGINS_WITH_SETTINGS_PAGE.contains(&record.manifest.id.as_str()),
         capabilities: record.manifest.capabilities.clone(),
@@ -300,29 +301,30 @@ mod tests {
     }
 
     #[test]
-    fn loaded_rows_show_tools_and_abnormal_rows_do_not() {        let loaded = view_of(&record("maa", PluginState::Loaded, &["run_maa_task"]));
+    fn loaded_rows_carry_tool_names_and_abnormal_rows_carry_none() {
+        let loaded = view_of(&record("maa", PluginState::Loaded, &["run_maa_task"]));
         assert_eq!(loaded.state, "loaded");
-        assert_eq!(loaded.tool_count, Some(1));
+        assert_eq!(loaded.tools, vec!["run_maa_task"], "给名字，不给数量");
         assert!(loaded.has_settings_page, "maa 有设置页");
         assert_eq!(loaded.kind, "builtin");
 
         let failed = view_of(&record("x", PluginState::Failed("坏了".into()), &[]));
         assert_eq!(failed.state, "failed");
         assert_eq!(failed.reason.as_deref(), Some("坏了"));
-        assert_eq!(failed.tool_count, None, "异常行不显示工具数");
+        assert!(failed.tools.is_empty(), "异常行没有工具面");
         assert!(!failed.has_settings_page);
 
         let faulted = view_of(&record("y", PluginState::Faulted("崩了".into()), &["t"]));
         assert_eq!(faulted.state, "faulted");
-        assert_eq!(faulted.tool_count, None);
+        assert!(faulted.tools.is_empty());
 
         let disabled = view_of(&record("z", PluginState::Disabled, &[]));
         assert_eq!(disabled.state, "disabled");
-        assert_eq!(disabled.tool_count, None);
+        assert!(disabled.tools.is_empty());
 
         let starting = view_of(&record("s", PluginState::Starting, &[]));
         assert_eq!(starting.state, "starting");
-        assert_eq!(starting.tool_count, None);
+        assert!(starting.tools.is_empty());
     }
 
     #[test]
@@ -351,7 +353,7 @@ mod tests {
         };
         let value = serde_json::to_value(&list).expect("序列化");
         let row = &value["plugins"][0];
-        assert!(row.get("toolCount").is_some(), "前端读 toolCount");
+        assert!(row.get("tools").is_some(), "前端读 tools");
         assert!(row.get("hasSettingsPage").is_some());
         assert!(value["unregistered"][0].get("dirName").is_some());
     }

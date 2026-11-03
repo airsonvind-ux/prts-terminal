@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { PluginView } from "../../types";
 import { Button } from "./ui/Button";
+import { Switch } from "./ui/Switch";
 import {
   capabilityLabel,
   kindLabel,
@@ -98,8 +99,16 @@ export function PluginDetail({
         </dd>
 
         <dt>工具</dt>
-        {/* 停用/异常时后端给 null：显示破折号，不写 0（0 会被读成"这个插件没能力"） */}
-        <dd>{plugin.toolCount === null ? "—" : plugin.toolCount}</dd>
+        {/* 列名字而不是数量：用户看「工具 1」不知道多了什么，看 run_maa_task 才知道 */}
+        <dd>
+          {plugin.state !== "loaded" ? (
+            <span className={styles.factMuted}>—</span>
+          ) : plugin.tools.length === 0 ? (
+            <span className={styles.factMuted}>无</span>
+          ) : (
+            <span className={styles.toolNames}>{plugin.tools.join("、")}</span>
+          )}
+        </dd>
       </dl>
 
       {settingsPage ? (
@@ -127,15 +136,15 @@ export function PluginDetail({
 
       {canUninstall && confirming && (
         <div className={styles.confirmRow}>
-          <label className={styles.confirmCheck}>
-            <input
-              type="checkbox"
+          <span className={styles.confirmCheck}>
+            <Switch
+              label="同时删除它的数据"
               checked={deleteData}
               disabled={busy || locked}
-              onChange={(e) => setDeleteData(e.target.checked)}
+              onChange={setDeleteData}
             />
             同时删除它的数据
-          </label>
+          </span>
           <Button
             variant="danger"
             disabled={busy || locked}

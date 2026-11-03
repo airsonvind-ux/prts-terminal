@@ -161,6 +161,17 @@
   color: var(--danger) !important;
 }
 
+/* 工具名走等宽：run_maa_task 这类标识符用正文字体容易被读成一句话 */
+.toolNames {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+}
+
+.factMuted {
+  color: var(--text-3);
+}
+
 .capability {
   display: inline-block;
   margin: 0 6px 2px 0;

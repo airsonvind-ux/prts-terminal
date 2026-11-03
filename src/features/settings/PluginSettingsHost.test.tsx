@@ -6,7 +6,7 @@
 //   - 点开关只切开关，不进详情；对话处理中「关闭」方向置灰
 //   - 内置插件没有卸载按钮；外部插件卸载要两步确认
 //   - 能力超过两条折叠成「能力（N）」
-//   - 停用/异常时工具数显示「—」，异常行副行显示原因
+//   - 停用/异常时工具显示「—」，详情页正常时列工具名，异常行副行显示原因
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { act } from "react";
@@ -69,7 +69,7 @@ function listFixture(): PluginList {
         kind: "builtin",
         state: "loaded",
         reason: null,
-        toolCount: 1,
+        tools: ["run_maa_task"],
         hasSettingsPage: true,
         capabilities: ["maa.bridge"],
       },
@@ -80,7 +80,7 @@ function listFixture(): PluginList {
         kind: "process",
         state: "disabled",
         reason: null,
-        toolCount: null,
+        tools: [],
         hasSettingsPage: false,
         capabilities: ["fs.plugin", "query.call", "maa.bridge"],
       },
@@ -178,11 +178,11 @@ describe("PluginSettingsHost（扩展页）", () => {
 
   it("点开关只切开关，不进入详情", async () => {
     await renderHost();
-    const checkbox = rowNamed("MAA 自动化").querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement;
+    const toggle = rowNamed("MAA 自动化").querySelector(
+      '[role="switch"]',
+    ) as HTMLButtonElement;
 
-    await act(async () => checkbox.click());
+    await act(async () => toggle.click());
 
     expect(title()).toBe("扩展");
     expect(invokeMock).toHaveBeenCalledWith("set_plugin_enabled", {
@@ -195,13 +195,13 @@ describe("PluginSettingsHost（扩展页）", () => {
     await renderHost(true);
 
     const loaded = rowNamed("MAA 自动化").querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement;
+      '[role="switch"]',
+    ) as HTMLButtonElement;
     expect(loaded.disabled).toBe(true);
 
     const disabled = rowNamed("演示插件").querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement;
+      '[role="switch"]',
+    ) as HTMLButtonElement;
     expect(disabled.disabled).toBe(false);
   });
 
@@ -245,7 +245,13 @@ describe("PluginSettingsHost（扩展页）", () => {
     expect(container.textContent).toContain("启动 / 关闭 MAA 桥进程");
   });
 
-  it("停用插件的工具数显示破折号，异常行的副行是原因", async () => {
+  it("详情页列出工具名而不是数量", async () => {
+    await renderHost();
+    await act(async () => rowNamed("MAA 自动化").click());
+    expect(toolRowValue()).toBe("run_maa_task");
+  });
+
+  it("非正常状态的工具显示破折号，异常行的副行是原因", async () => {
     invokeMock.mockImplementation(async (cmd: string) => {
       if (cmd !== "list_plugins") return listFixture();
       return {

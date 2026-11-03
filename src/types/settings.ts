@@ -103,8 +103,8 @@ export interface PluginView {
   state: PluginRuntimeState;
   /** 异常原因（failed / faulted 才有） */
   reason: string | null;
-  /** 停用或异常时为 null：这时工具面不算数，不显示 */
-  toolCount: number | null;
+  /** 这个插件注册的工具名；停用或异常时为空：这时工具面不算数 */
+  tools: string[];
   hasSettingsPage: boolean;
   capabilities: string[];
 }

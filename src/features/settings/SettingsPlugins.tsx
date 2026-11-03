@@ -9,6 +9,7 @@ import type { PluginList, PluginRuntimeState } from "../../types";
 import { ListRow } from "./ui/ListRow";
 import type { ListRowDot } from "./ui/ListRow";
 import { Button } from "./ui/Button";
+import { Switch } from "./ui/Switch";
 import { finishPluginDrop, notePluginDragOver } from "./pluginDropArbiter";
 import styles from "./SettingsPlugins.module.css";
 
@@ -137,9 +138,8 @@ export function SettingsPlugins({
                 disabled={plugin.state === "starting"}
                 onActivate={() => onOpen(plugin.id)}
                 trailing={
-                  <input
-                    type="checkbox"
-                    aria-label={`启用 ${plugin.name}`}
+                  <Switch
+                    label={`启用 ${plugin.name}`}
                     checked={plugin.state !== "disabled"}
                     // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
                     disabled={
@@ -151,9 +151,7 @@ export function SettingsPlugins({
                         ? lockedHint
                         : undefined
                     }
-                    onChange={(e) =>
-                      onSetEnabled(plugin.id, e.target.checked)
-                    }
+                    onChange={(checked) => onSetEnabled(plugin.id, checked)}
                   />
                 }
               />

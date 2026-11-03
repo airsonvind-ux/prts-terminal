@@ -15,16 +15,18 @@ interface SwitchProps {
   /** 读屏与悬停提示用；视觉上的文字由调用方的行标题承担 */
   label: string;
   disabled?: boolean;
+  /** 覆盖悬停提示（例如「对话处理中」这类临时原因） */
+  title?: string;
 }
 
-export function Switch({ checked, onChange, label, disabled }: SwitchProps) {
+export function Switch({ checked, onChange, label, disabled, title }: SwitchProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      title={label}
+      title={title ?? label}
       disabled={disabled}
       className={[styles.switch, checked ? styles.switchOn : ""]
         .filter(Boolean)

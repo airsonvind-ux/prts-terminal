@@ -89,11 +89,6 @@
   background: var(--depth-4);
 }
 
-/* 分组空隙（应用 | 对话与上下文 | 信息与扩展）：8px，不做分隔线 */
-.navItemBreak {
-  margin-top: 8px;
-}
-
 /* ── 右侧内容 ── */
 
 .content {

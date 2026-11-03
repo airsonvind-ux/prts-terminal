@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { PluginList, PluginPreview } from "../../types";
 import { Button } from "./ui/Button";
+import { Switch } from "./ui/Switch";
 import { MaaSettings } from "./MaaSettings";
 import type { MaaSettingsProps } from "./MaaSettings";
 import { PluginDetail } from "./PluginDetail";
@@ -228,24 +229,21 @@ export function PluginSettingsHost({
             {view.kind === "detail" && active && (
               <>
                 <span className={styles.pageSpacer} />
-                <input
-                  type="checkbox"
-                  aria-label={`启用 ${active.name}`}
+                <Switch
+                  label={`启用 ${active.name}`}
                   checked={active.state !== "disabled"}
                   // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
-                  disabled={
-                    busy || (locked && active.state !== "disabled")
-                  }
+                  disabled={busy || (locked && active.state !== "disabled")}
                   title={
                     locked && active.state !== "disabled"
                       ? TURN_BUSY_HINT
                       : undefined
                   }
-                  onChange={(e) =>
+                  onChange={(enabled) =>
                     void run(() =>
                       invoke<PluginList>("set_plugin_enabled", {
                         id: active.id,
-                        enabled: e.target.checked,
+                        enabled,
                       }),
                     )
                   }

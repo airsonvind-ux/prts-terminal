@@ -208,32 +208,15 @@
   gap: var(--space-2);
 }
 
-/* ── 「所有记忆」一行式（标签左、动作右） ── */
+/* ── 经历之下的动作行（上面一道细线分隔，不再叠说明文字） ── */
 
-.lineRow {
+.bottomRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
+  flex-wrap: wrap;
   padding-top: var(--space-2);
   border-top: 1px solid var(--depth-1);
-}
-
-.lineText {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.lineLabel {
-  font-size: var(--fs-body);
-  color: var(--text-1);
-}
-
-.lineHint {
-  font-size: var(--fs-meta);
-  color: var(--text-3);
 }
 
 /* ── 页内确认条（替代遮罩 modal：清除经历记忆） ── */

@@ -1,9 +1,10 @@
 // 设置页 · "记忆"子页（2026-09 结构定稿，2026-11 版式重排）
 //
 // 结构：
-//  - 成长：2 列卡片（关于博士居首）+ [新建专题]；点击卡片 → 二级视图（阅读/编辑）。
-//  - 经历：三个读数（经历条目 / 近期 / 长期梗概）+ [查看当下记忆]／[整理当下记忆]。
-//  - 所有记忆：一行式（标签左、动作右）——[查看记忆]／[清除记忆]，
+//  - 成长：2 列卡片（关于博士居首，默认露出 4 个，其余收进「全部 N 个」）
+//    + [新建专题]；点击卡片 → 二级视图（阅读/编辑）。
+//  - 经历：三个读数（经历条目 / 近期 / 长期梗概）+ [查看当下记忆]／[整理当下记忆]；
+//    下面一道细线之后是 [查看全部记忆]／[清除经历记忆]，
 //    清除确认从遮罩 modal 改成页内确认条（与插件卸载同一套语言）。
 //
 // 二级视图＝设置内容区内的替换视图（见 SettingsMemoryViews.tsx），不用整窗浮层。
@@ -14,7 +15,6 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   SettingsSection,
-  SectionHint,
   SectionWarning,
 } from "./ui/SettingsSection";
 import { Button } from "./ui/Button";
@@ -36,6 +36,9 @@ export interface SettingsMemoryProps {
   busy: boolean;
 }
 
+/** 成长专题默认露出几个（两行）；再多就收进「全部 N 个」 */
+const GROWTH_PREVIEW = 4;
+
 export function SettingsMemory({ busy }: SettingsMemoryProps) {
   const activeId = useConversationStore((s) => s.activeId);
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
@@ -44,6 +47,7 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [tidying, setTidying] = useState(false);
   const [tidyMsg, setTidyMsg] = useState<string | null>(null);
+  const [showAllGrowth, setShowAllGrowth] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -143,8 +147,12 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
         <>
           {/* ── 成长 ── */}
           <SettingsSection title="成长">
+            {/* 专题多了不能无限往下排：默认 4 个（两行），其余的收进「全部」。 */}
             <div className={styles.growthGrid}>
-              {overview.growth.map((g) => (
+              {(showAllGrowth
+                ? overview.growth
+                : overview.growth.slice(0, GROWTH_PREVIEW)
+              ).map((g) => (
                 <button
                   key={g.name}
                   type="button"
@@ -169,6 +177,13 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
               >
                 新建专题
               </Button>
+              {overview.growth.length > GROWTH_PREVIEW && (
+                <Button onClick={() => setShowAllGrowth((v) => !v)}>
+                  {showAllGrowth
+                    ? "收起"
+                    : `全部 ${overview.growth.length} 个`}
+                </Button>
+              )}
             </div>
           </SettingsSection>
 
@@ -202,25 +217,21 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
             </div>
             {tidyMsg && <p className={styles.tidyMsg}>{tidyMsg}</p>}
 
-            <div className={styles.lineRow}>
-              <div className={styles.lineText}>
-                <span className={styles.lineLabel}>所有记忆</span>
-                <span className={styles.lineHint}>按日期编排；清除只影响经历</span>
-              </div>
-              <div className={styles.actions}>
-                <Button onClick={() => setView({ kind: "library" })}>
-                  查看记忆
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={() => {
-                    if (guard()) setConfirmClear(true);
-                  }}
-                  disabled={busy}
-                >
-                  清除记忆
-                </Button>
-              </div>
+            {/* 经历之外还有一份按日期编排的记忆库；清除只作用于经历。
+                不再叠标题 + 说明 + 尾注三行文字——按钮名字自己说清楚了。 */}
+            <div className={styles.bottomRow}>
+              <Button onClick={() => setView({ kind: "library" })}>
+                查看全部记忆
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  if (guard()) setConfirmClear(true);
+                }}
+                disabled={busy}
+              >
+                清除经历记忆
+              </Button>
             </div>
 
             {confirmClear && (
@@ -230,7 +241,7 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 aria-label="确认清除经历记忆"
               >
                 <span className={styles.confirmText}>
-                  将清除全部经历记忆：经历条目与长期梗概都会清空；成长页（关于博士与专题）不受影响。此操作不可撤销。
+                  将清空经历条目与长期梗概；成长专题不受影响。此操作不可撤销。
                 </span>
                 <div className={styles.actions}>
                   <Button onClick={() => setConfirmClear(false)}>取消</Button>
@@ -243,10 +254,6 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 </div>
               </div>
             )}
-
-            <SectionHint>
-              经历记忆由后台自动维护；「整理当下记忆」对当前对话立即整理一次。
-            </SectionHint>
           </SettingsSection>
         </>
       )}
