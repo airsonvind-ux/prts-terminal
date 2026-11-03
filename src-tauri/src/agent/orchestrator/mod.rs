@@ -211,7 +211,7 @@ pub async fn process(
         steer_queue,
         workspace_root,
         emit,
-        context::assemble_system_prompt_with_memory("", ""), // 无目录 / 无记忆
+        context::assemble_system_prompt_with_memory("", "", ""), // 无目录 / 无记忆 / 无插件
         tools.list_defs(),
     )
     .await
@@ -516,7 +516,7 @@ async fn dispatch_turn(
         abort,
         steer_queue,
         workspace_root,
-        &context::assemble_system_prompt_with_memory("", ""), // 无目录 / 无记忆
+        &context::assemble_system_prompt_with_memory("", "", ""), // 无目录 / 无记忆 / 无插件
         llm_call::VisionSupport::Unknown,                     // 薄包装：无模型注册表，不声明能力
     )
     .await

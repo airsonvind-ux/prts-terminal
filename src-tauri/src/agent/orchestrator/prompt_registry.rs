@@ -16,6 +16,11 @@ pub const ORDER_BASE: i32 = 0;
 pub const ORDER_UI: i32 = 10;
 /// Catalog 层区间（Skill 目录）
 pub const ORDER_CATALOG: i32 = 100;
+/// 插件能力区间：紧跟 Skill 目录之后、记忆区之前。
+///
+/// 只在存在插件工具或插件技能时注册（见 `context::assemble_system_prompt_with_memory`），
+/// 无插件时不出这一段——纯宿主态的 system prompt 逐字节不变。
+pub const ORDER_PLUGIN: i32 = 110;
 /// 记忆区区间（Phase 4 任务二 · 批 1）：置于 Catalog 之后（system 尾部，
 /// 「跨对话分叉段后置」）。对话内冻结快照，不随记忆变化重组装。
 pub const ORDER_MEMORY: i32 = 150;

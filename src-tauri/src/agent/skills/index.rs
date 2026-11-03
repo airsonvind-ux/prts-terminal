@@ -296,19 +296,26 @@ impl SkillIndex {
     ///
     /// 描述在目录层统一压成单行并限长；来源只映射受控枚举，不展示
     /// frontmatter 里的任意字符串。
+    ///
+    /// 按来源分组（M3 修补 §五）：宿主条目在前、格式不变；插件条目在后，
+    /// 名字后面补「（插件展示名）」，让模型知道这条能力是谁提供的。
     pub fn catalog_text(&self) -> String {
-        self.names()
-            .into_iter()
-            .map(|name| {
-                let meta = self.skills.get(name);
-                let desc = meta
-                    .map(|m| catalog_description(&m.description))
-                    .unwrap_or_default();
-                let source = source_label(meta.and_then(|m| m.source.as_deref()));
-                format!("- {name}［{source}］：{desc}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut host = Vec::new();
+        let mut plugin = Vec::new();
+        for name in self.names() {
+            let meta = self.skills.get(name);
+            let desc = meta
+                .map(|m| catalog_description(&m.description))
+                .unwrap_or_default();
+            let source = source_label(meta.and_then(|m| m.source.as_deref()));
+            match self.origins.get(name) {
+                Some(CatalogOrigin::Plugin { display_name, .. }) => {
+                    plugin.push(format!("- {name}（{display_name}）［{source}］：{desc}"));
+                }
+                _ => host.push(format!("- {name}［{source}］：{desc}")),
+            }
+        }
+        host.into_iter().chain(plugin).collect::<Vec<_>>().join("\n")
     }
 
     /// 全部条目 `(name, description)` 对，按 name 排序（提醒 diff / 基线用，批 3）。
@@ -722,6 +729,14 @@ mod tests {
                 id: "demo".into(),
                 display_name: "演示插件".into(),
             })
+        );
+
+        // 目录文本按来源分组：宿主行格式不变，插件行补展示名
+        let text = idx.catalog_text();
+        assert_eq!(
+            text,
+            "- 同名技能［用户］：宿主版本\n- 插件技能（演示插件）［用户］：插件独有",
+            "宿主在前、插件在后且带归属"
         );
 
         let _ = std::fs::remove_dir_all(&host);

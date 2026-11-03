@@ -33,7 +33,8 @@ use super::prompt_registry::builtin_registry;
 use crate::llm::ChatMessage;
 
 pub use super::prompt_registry::{
-    PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_UI,
+    PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_PLUGIN,
+    ORDER_UI,
 };
 pub use super::token_estimate::{estimate_messages, estimate_tokens};
 
@@ -57,16 +58,23 @@ pub use super::token_estimate::{estimate_messages, estimate_tokens};
 /// 动态内容一律以消息形态进历史（激活 skill = 工具结果消息）。
 #[allow(dead_code)] // 仅测试与文档引用：生产走 assemble_system_prompt_with_memory
 pub fn assemble_system_prompt(skill_catalog: &str) -> String {
-    assemble_system_prompt_with_memory(skill_catalog, "")
+    assemble_system_prompt_with_memory(skill_catalog, "", "")
 }
 
-/// 装配 system prompt：Base（人格）→ Catalog（Skill 目录）→ **记忆区（尾部）**。
+/// 装配 system prompt：Base（人格）→ Catalog（Skill 目录）→ **插件能力** → **记忆区（尾部）**。
 ///
 /// `skill_catalog` 为对话冻结目录文本（见 [`assemble_system_prompt`]）；
+/// `plugin_block` 为「插件提供的能力」正文（`plugins::plugin_capabilities_text`
+/// 的输出，来自冻结时的工具面与技能索引）——**空块时不注册该 section**，
+/// 无插件态的 system prompt 与旧实现逐字节一致；
 /// `memory_block` 为对话冻结快照原文（由命令层经 SnapshotStore 取）；
 /// **空块时不注册记忆 section**——无记忆态输出与旧实现逐字节一致。
 /// 记忆区不做二次改写（四节内容均为存量原文，装配不产生新内容）。
-pub fn assemble_system_prompt_with_memory(skill_catalog: &str, memory_block: &str) -> String {
+pub fn assemble_system_prompt_with_memory(
+    skill_catalog: &str,
+    memory_block: &str,
+    plugin_block: &str,
+) -> String {
     let mut reg = builtin_registry().clone();
     // Catalog 层：Skill 目录（渐进披露——只给 name + description，正文按需
     // activate_skill 加载）。空目录显示（无）。
@@ -80,6 +88,16 @@ pub fn assemble_system_prompt_with_memory(skill_catalog: &str, memory_block: &st
         },
     ))
     .expect("builtin section 注册冲突");
+    // 插件能力：只在真有插件工具/技能时出现。归属只从提示词这一侧表达，
+    // 工具定义本身不加 origin（模型 API 的 schema 结构固定）。
+    if !plugin_block.trim().is_empty() {
+        reg.register_section(PromptSection::new(
+            "prts.plugin-capabilities",
+            ORDER_PLUGIN,
+            format!("## 插件提供的能力\n\n{plugin_block}"),
+        ))
+        .expect("builtin section 注册冲突");
+    }
     // 记忆区（Phase 4 任务二 · 批 1）：冻结快照，置 system 尾部。
     // 空块不注册（无记忆态逐字节兼容）。
     if !memory_block.trim().is_empty() {
@@ -111,20 +129,21 @@ pub fn build_context(
     tool_count: usize,
     skill_catalog: &str,
 ) -> Vec<ChatMessage> {
-    build_context_with_memory(history, tool_count, skill_catalog, "")
+    build_context_with_memory(history, tool_count, skill_catalog, "", "")
 }
 
-/// 同 [`build_context`]，附加冻结记忆区（空块 = 无记忆态）。
+/// 同 [`build_context`]，附加冻结记忆区与插件能力段（空块 = 无对应 section）。
 pub fn build_context_with_memory(
     history: &[ChatMessage],
     _tool_count: usize,
     skill_catalog: &str,
     memory_block: &str,
+    plugin_block: &str,
 ) -> Vec<ChatMessage> {
-    // 系统提示词：人格 + 冻结 Skill 目录 + 记忆区（尾部）
+    // 系统提示词：人格 + 冻结 Skill 目录 + 插件能力 + 记忆区（尾部）
     build_context_with_system(
         history,
-        assemble_system_prompt_with_memory(skill_catalog, memory_block),
+        assemble_system_prompt_with_memory(skill_catalog, memory_block, plugin_block),
     )
 }
 
@@ -223,16 +242,37 @@ mod tests {
     fn memory_block_appended_at_tail_and_empty_is_legacy_identical() {
         let legacy = assemble_system_prompt("");
         // 空块 / 空白块 → 与旧实现逐字节一致（无记忆态兼容）
-        assert_eq!(assemble_system_prompt_with_memory("", ""), legacy);
-        assert_eq!(assemble_system_prompt_with_memory("", "   "), legacy);
+        assert_eq!(assemble_system_prompt_with_memory("", "", ""), legacy);
+        assert_eq!(assemble_system_prompt_with_memory("", "   ", ""), legacy);
         // 非空块 → 追加在 system 尾部（前缀不变）
         let block = "## 记忆\n\n### 关于博士\n博士偏好简洁";
-        let with_mem = assemble_system_prompt_with_memory("", block);
+        let with_mem = assemble_system_prompt_with_memory("", block, "");
         assert!(with_mem.starts_with(&legacy), "记忆区应在尾部（前缀不变）");
         assert!(with_mem.ends_with(block));
         // build_context 同样在 system 头携带记忆区
-        let msgs = build_context_with_memory(&[], 0, "", block);
+        let msgs = build_context_with_memory(&[], 0, "", block, "");
         assert!(msgs[0].content.ends_with(block));
+    }
+
+    #[test]
+    fn plugin_block_sits_between_catalog_and_memory() {
+        let legacy = assemble_system_prompt("");
+        // 空插件段 → 与无插件态逐字节一致
+        assert_eq!(assemble_system_prompt_with_memory("", "", "   "), legacy);
+
+        let catalog = "- 数值计算［内置］：算数";
+        let memory = "## 记忆\n\n### 关于博士\n博士偏好简洁";
+        let plugin = "工具 run_maa_task — MAA 自动化";
+        let prompt = assemble_system_prompt_with_memory(catalog, memory, plugin);
+        assert!(prompt.contains("## Skill 目录"));
+        let catalog_at = prompt.find(catalog).expect("目录段应在");
+        let plugin_at = prompt.find("## 插件提供的能力").expect("插件段应在");
+        let memory_at = prompt.find(memory).expect("记忆段应在");
+        assert!(
+            catalog_at < plugin_at && plugin_at < memory_at,
+            "顺序应为 目录 → 插件能力 → 记忆"
+        );
+        assert!(prompt.contains(plugin));
     }
 
     #[test]

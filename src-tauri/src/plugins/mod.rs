@@ -840,6 +840,49 @@ fn remove_dir_all(path: &Path) -> Result<(), String> {
     }
 }
 
+/// 台账里的 `id → 展示名`；未登记（测试/装配早期）时为空表。
+fn display_names_from_ledger() -> HashMap<String, String> {
+    let Some(ledger) = SKILL_LEDGER.get() else {
+        return HashMap::new();
+    };
+    let guard = ledger
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    guard
+        .list()
+        .into_iter()
+        .map(|record| (record.manifest.id.clone(), record.manifest.name.clone()))
+        .collect()
+}
+
+/// 「插件提供的能力」段正文：只列插件来源的工具与技能，按名字排序。
+///
+/// 归属只从提示词这一侧表达——工具定义本身不加 origin（模型 API 的 schema
+/// 结构固定）。没有任何插件条目时返回空串，装配侧据此跳过整段。
+pub fn plugin_capabilities_text(
+    reg: &ToolRegistry,
+    skills: &[crate::notices::CatalogEntry],
+) -> String {
+    let display_names = display_names_from_ledger();
+    let mut lines: Vec<(String, String)> = Vec::new();
+    for def in reg.list_defs() {
+        let name = def.function.name.clone();
+        if let Some(Origin::Plugin(id)) = reg.origin_of(&name) {
+            let display = display_names.get(&id).cloned().unwrap_or(id);
+            lines.push((name.clone(), format!("工具 {name} — {display}")));
+        }
+    }
+    for entry in skills {
+        if let crate::notices::CatalogOrigin::Plugin { display_name, .. } = &entry.origin {
+            lines.push((
+                entry.name.clone(),
+                format!("技能 {} — {display_name}", entry.name),
+            ));
+        }
+    }
+    lines.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>().join("\n")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1265,6 +1308,36 @@ mod tests {
             second.contains("移除：run_maa_task（MAA 自动化）"),
             "移除项要保留归属：{second}"
         );
+
+        let _ = std::fs::remove_dir_all(&roots.data);
+    }
+
+    #[test]
+    fn plugin_capabilities_text_lists_only_plugin_entries_by_name() {
+        use crate::notices::CatalogEntry;
+
+        let (roots, _services, reg, _config, _ledger) = loaded("capabilities-text");
+        // 宿主工具不该出现在「插件提供的能力」里。
+        reg.register(StubTool::ok("host_tool"))
+            .expect("宿主工具应能注册");
+        reg.register_with_origin(StubTool::ok("plugin_tool"), Origin::Plugin("demo".into()))
+            .expect("插件工具应能注册");
+
+        let skills = vec![
+            CatalogEntry::host("宿主技能", "宿主独有"),
+            CatalogEntry::plugin("插件技能", "插件独有", "demo", "演示插件"),
+        ];
+        let text = plugin_capabilities_text(&reg, &skills);
+        assert_eq!(
+            text,
+            "工具 plugin_tool — demo\n工具 run_maa_task — maa\n技能 插件技能 — 演示插件",
+            "只列插件条目，按名字排序；展示名取不到时退回 id"
+        );
+        assert!(!text.contains("host_tool"), "宿主工具不归插件段");
+
+        // 没有插件条目 → 空串（装配侧据此跳过整段）。
+        let empty = plugin_capabilities_text(&ToolRegistry::new(), &[CatalogEntry::host("A", "a")]);
+        assert_eq!(empty, "");
 
         let _ = std::fs::remove_dir_all(&roots.data);
     }
