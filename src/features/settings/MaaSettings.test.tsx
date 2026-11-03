@@ -238,7 +238,7 @@ describe("MaaSettings（插件设置页）", () => {
     expect(radios[0].checked, "受控：外部没更新就还是官服").toBe(true);
 
     const checks = Array.from(
-      container!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')
+      container!.querySelectorAll<HTMLButtonElement>('[role="switch"]')
     );
     act(() => {
       checks[0].dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -246,24 +246,17 @@ describe("MaaSettings（插件设置页）", () => {
     expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
   });
 
-  it("自动检测复选框：Enter 也可取消", async () => {
+  it("自动检测开关是原生按钮：键盘激活交给浏览器", async () => {
     currentStatus = status();
     const onPatch = vi.fn();
     await render(MAA, false, onPatch);
 
-    const auto = container!.querySelector<HTMLInputElement>(
-      'input[type="checkbox"]'
+    const auto = container!.querySelector<HTMLButtonElement>(
+      '[role="switch"]'
     )!;
+    expect(auto.tagName).toBe("BUTTON");
+    expect(auto.getAttribute("type")).toBe("button");
     auto.focus();
-    act(() => {
-      auto.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        })
-      );
-    });
-    expect(onPatch).toHaveBeenCalledWith({ auto_detect: false }, "自动检测");
+    expect(document.activeElement).toBe(auto);
   });
 });

@@ -21,7 +21,6 @@ import {
   useCallback,
   useEffect,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
@@ -34,7 +33,9 @@ import type {
 import { SettingsRow } from "./ui/SettingsRow";
 import { Select } from "./ui/Select";
 import { SectionHint, SectionWarning, SettingsSection } from "./ui/SettingsSection";
-import choiceStyles from "./ui/choice.module.css";
+import { Button } from "./ui/Button";
+import { ChoiceCard } from "./ui/ChoiceCard";
+import { Switch } from "./ui/Switch";
 import styles from "./MaaSettings.module.css";
 
 export interface MaaSettingsProps {
@@ -135,13 +136,6 @@ export function MaaSettings({
   const auto = maa.auto_detect;
   const selected = pickResolved(status, maa.emulator);
 
-  // 复选框原生只用 Space 切换；额外接受 Enter，方便把它当按钮用的键盘用户。
-  const toggleCheckboxOnEnter = (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      e.currentTarget.click();
-    }
-  };
   /** 自动检测中显示判定值（不可改）；关掉后显示用户自己的值 */
   const shown = (autoValue: string | undefined, own: string) =>
     auto ? (autoValue ?? "") : own;
@@ -152,17 +146,17 @@ export function MaaSettings({
       <SettingsSection title="账号">
         <div className={styles.serverRow}>
           {(Object.keys(SERVER_LABELS) as MaaServer[]).map((value) => (
-            <label key={value} className={styles.serverOption}>
-              <input
-                type="radio"
-                name="maaServer"
-                className={choiceStyles.choice}
-                disabled={locked}
-                checked={maa.server === value}
-                onChange={() => onPatch({ server: value }, "服务器")}
-              />
-              <span className={styles.serverTitle}>{SERVER_LABELS[value]}</span>
-            </label>
+            <ChoiceCard
+              key={value}
+              name="maaServer"
+              title={SERVER_LABELS[value]}
+              description={
+                value === "official" ? "官方服务器账号" : "Bilibili 账号"
+              }
+              checked={maa.server === value}
+              disabled={locked}
+              onSelect={() => onPatch({ server: value }, "服务器")}
+            />
           ))}
         </div>
       </SettingsSection>
@@ -177,9 +171,9 @@ export function MaaSettings({
                 ? statusText(status)
                 : "正在读取状态…"}
           </div>
-          <button className={styles.testButton} disabled={testing} onClick={runTest}>
+          <Button disabled={testing} onClick={runTest}>
             {testing ? "连接中…" : "测试连接"}
-          </button>
+          </Button>
         </div>
         {running && <SectionWarning>MAA 正在运行，暂不可改</SectionWarning>}
         {busy && (
@@ -191,13 +185,11 @@ export function MaaSettings({
           label="自动检测"
           hint="自动识别；关掉后可自己指定"
           control={
-            <input
-              type="checkbox"
-              className={choiceStyles.choice}
+            <Switch
+              label="自动检测"
               disabled={locked}
               checked={auto}
-              onChange={(e) => onPatch({ auto_detect: e.target.checked }, "自动检测")}
-              onKeyDown={toggleCheckboxOnEnter}
+              onChange={(next) => onPatch({ auto_detect: next }, "自动检测")}
             />
           }
         />
@@ -235,13 +227,9 @@ export function MaaSettings({
                   }
                 }}
               />
-              <button
-                className={styles.actionButton}
-                disabled={locked || auto}
-                onClick={onChooseEmulatorDir}
-              >
+              <Button disabled={locked || auto} onClick={onChooseEmulatorDir}>
                 选择
-              </button>
+              </Button>
             </div>
           }
         />
@@ -282,13 +270,9 @@ export function MaaSettings({
                   }
                 }}
               />
-              <button
-                className={styles.actionButton}
-                disabled={locked || auto}
-                onClick={onChooseAdbFile}
-              >
+              <Button disabled={locked || auto} onClick={onChooseAdbFile}>
                 选择
-              </button>
+              </Button>
             </div>
           }
         />
@@ -305,15 +289,13 @@ export function MaaSettings({
               label="截图增强"
               hint="用模拟器自带截图，速度更快"
               control={
-                <input
-                  type="checkbox"
-                  className={choiceStyles.choice}
+                <Switch
+                  label="截图增强"
                   disabled={locked}
                   checked={maa.screenshot_extras}
-                  onChange={(e) =>
-                    onPatch({ screenshot_extras: e.target.checked }, "截图增强")
+                  onChange={(next) =>
+                    onPatch({ screenshot_extras: next }, "截图增强")
                   }
-                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />
@@ -322,15 +304,13 @@ export function MaaSettings({
               label="触控增强"
               hint="支持模拟器开启「应用保活」时使用"
               control={
-                <input
-                  type="checkbox"
-                  className={choiceStyles.choice}
+                <Switch
+                  label="触控增强"
                   disabled={locked}
                   checked={maa.touch_extras}
-                  onChange={(e) =>
-                    onPatch({ touch_extras: e.target.checked }, "触控增强")
+                  onChange={(next) =>
+                    onPatch({ touch_extras: next }, "触控增强")
                   }
-                  onKeyDown={toggleCheckboxOnEnter}
                 />
               }
             />

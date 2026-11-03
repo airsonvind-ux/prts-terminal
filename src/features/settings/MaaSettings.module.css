@@ -1,30 +1,20 @@
 /* 设置页 · "扩展"子页样式（MAA 接入）
    沿用现有页的令牌：--text-1/2/3、--depth-1..4、--radius-sm。
    节间距由 SettingsSection 的 margin-bottom 管，容器不再叠一层 gap。
-   下拉用通用件 ui/Select（原生 <select> 的展开列表改不动），样式在 settings-ui。 */
+   按钮、开关、服务器选择都用 ui/ 下的原子件（几何在 settings-ui），
+   这里只留输入框与两处排布。 */
 
 .container {
   display: flex;
   flex-direction: column;
 }
 
-/* ── 账号：两个选项同行 ── */
+/* ── 账号：两张可选卡片并排 ── */
 
 .serverRow {
-  display: flex;
-  gap: 16px;
-}
-
-.serverOption {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-.serverTitle {
-  font-size: 11px;
-  color: var(--text-1);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
 }
 
 /* ── 状态与动作同一行（这页唯一"活"的东西） ── */
@@ -32,42 +22,17 @@
 .statusRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .statusText {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--text-2);
   word-break: break-all;
-}
-
-.testButton {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 12px;
-  font-family: var(--font-ui);
-  font-size: 11px;
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.testButton:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--depth-4);
-}
-
-.testButton:disabled {
-  color: var(--text-3);
-  cursor: default;
-  opacity: 0.7;
 }
 
 /* ── 路径行：输入框 + 选择按钮 ── */
@@ -75,7 +40,7 @@
 .pathRow {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
 }
 
 .pathRow .input {
@@ -83,22 +48,23 @@
   min-width: 0;
 }
 
-/* ── 文本输入 ── */
+/* ── 文本输入（按钮无边框，输入框保留一道底线，不然分不清能不能打字） ── */
 
 .input {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  height: 26px;
-  padding: 0 8px;
+  height: 24px;
+  padding: 0 7px;
   box-sizing: border-box;
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: var(--fs-body);
   color: var(--text-1);
   background: var(--depth-2);
   border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
   outline: none;
+  transition: border-color 0.12s ease;
 }
 
 .input:focus {
@@ -108,30 +74,4 @@
 .input:disabled {
   color: var(--text-3);
   cursor: not-allowed;
-}
-
-/* ── 选择按钮（与空间页 actionButton 同形） ── */
-
-.actionButton {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-1);
-  background: var(--depth-2);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.actionButton:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--depth-4);
-}
-
-.actionButton:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
