@@ -1,4 +1,4 @@
-//! 插件 manifest：`plugin.json` 的结构、解析与十条校验。
+//! 插件 manifest：`plugin.json` 的结构、解析与十二条校验。
 //!
 //! 校验顺序固定（规格 §5），第一条失败即返回，错误信息带字段名与实际值。
 //! `id` 与目录名不一致只告警不拒绝——目录名是打包细节，`id` 才是契约。
@@ -24,6 +24,10 @@ pub const SUPPORTED_PROTOCOL: u32 = 1;
 /// 校验与单测当默认值，必须与 `host/internal/` 里登记的服务键保持一致。
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KNOWN_CAPABILITIES: [&str; 4] = ["fs.plugin", "fs.temp", "query.call", "maa.bridge"];
+
+/// `entry.args` 的项数上限（M4）。解释器参数是固定的一两串，32 项足够；
+/// 上限只为挡住明显异常的输入，不构成沙箱。
+pub const MAX_ENTRY_ARGS: usize = 32;
 
 /// 插件 manifest（`plugin.json`）。
 ///
@@ -72,6 +76,11 @@ pub struct PluginEntry {
     pub exe: String,
     #[serde(default)]
     pub transport: Option<String>,
+    /// 传给进程的参数（M4）。默认空；不经 shell，不做变量展开。
+    ///
+    /// 解释型语言的入口靠它：`{"exe": "python", "args": ["hello.py"]}`。
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// 插件对宿主的要求。
@@ -127,7 +136,7 @@ pub fn read_manifest(dir: &Path) -> Result<PluginManifest, PluginError> {
     })
 }
 
-/// 十条校验（规格 §5）：按顺序执行，第一条失败即返回。
+/// 十二条校验（规格 §5）：按顺序执行，第一条失败即返回。
 ///
 /// `dir_name` 只用于「id 与目录名不一致」的告警；`seen_ids` 由调用方跨目录
 /// 共享，用于规则 2 的同父目录 id 去重（`load_all` 按目录名排序后逐个传入）。
@@ -178,10 +187,10 @@ pub fn validate_with(
         });
     }
 
-    // 5. process 必须有合法的相对入口
+    // 5. process 必须有合法的入口（目录内相对路径，或按 PATH 解析的裸命令名）
     if manifest.kind == PluginKind::Process {
-        let exe = match manifest.entry.as_ref() {
-            Some(entry) => entry.exe.as_str(),
+        let entry = match manifest.entry.as_ref() {
+            Some(entry) => entry,
             None => {
                 return Err(PluginError::Invalid {
                     field: "entry",
@@ -189,7 +198,8 @@ pub fn validate_with(
                 })
             }
         };
-        check_exe(exe)?;
+        check_exe(&entry.exe)?;
+        check_args(&entry.args)?;
     }
 
     // 6. 协议版本：process 必填且为 1；builtin 可省略，填了也须为 1
@@ -309,6 +319,21 @@ fn is_valid_id(id: &str) -> bool {
 }
 
 /// 规则 5 的 exe 检查：非空、相对路径、不含 `..`、无盘符。
+/// `entry.exe` 是裸命令名吗：不含任何分隔符、非绝对路径、无盘符。
+///
+/// 裸名按 PATH 解析（解释型语言的入口要用它），其余形态一律当相对路径处理，
+/// 必须落在插件目录内。Windows 的 `CreateProcess` 会先在当前目录（插件目录）
+/// 找同名可执行文件，这一点写在手册里，不在这里额外拦。
+pub fn is_bare_exe_name(exe: &str) -> bool {
+    let path = Path::new(exe);
+    !exe.contains('/')
+        && !exe.contains('\\')
+        && !path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir | Component::ParentDir))
+}
+
 fn check_exe(exe: &str) -> Result<(), PluginError> {
     if exe.trim().is_empty() {
         return Err(PluginError::Invalid {
@@ -324,7 +349,7 @@ fn check_exe(exe: &str) -> Result<(), PluginError> {
     {
         return Err(PluginError::Invalid {
             field: "entry.exe",
-            value: format!("{exe}（必须是相对路径）"),
+            value: format!("{exe}（必须是相对路径或裸命令名）"),
         });
     }
     if path
@@ -335,6 +360,28 @@ fn check_exe(exe: &str) -> Result<(), PluginError> {
             field: "entry.exe",
             value: format!("{exe}（不得包含 ..）"),
         });
+    }
+    Ok(())
+}
+
+/// `entry.args` 的边界：元素不得为空串，最多 32 项。
+///
+/// 参数交给插件的解释器自己理解，宿主不展开、不经 shell；这里只挡掉
+/// 会让启动行为含糊的输入（空串在不同解释器里含义不同）。
+fn check_args(args: &[String]) -> Result<(), PluginError> {
+    if args.len() > MAX_ENTRY_ARGS {
+        return Err(PluginError::Invalid {
+            field: "entry.args",
+            value: format!("超过 {} 项", MAX_ENTRY_ARGS),
+        });
+    }
+    for (i, arg) in args.iter().enumerate() {
+        if arg.is_empty() {
+            return Err(PluginError::Invalid {
+                field: "entry.args",
+                value: format!("[{i}] 为空"),
+            });
+        }
     }
     Ok(())
 }
@@ -485,6 +532,52 @@ mod tests {
         let mut ok = process_value();
         ok["entry"]["exe"] = serde_json::json!("bin/maa.exe");
         assert!(check(&ok).is_ok());
+    }
+
+    #[test]
+    fn process_accepts_a_bare_command_name() {
+        // 解释型语言的入口（M4）：裸名按 PATH 解析，参数里给脚本。
+        let mut v = process_value();
+        v["entry"] = serde_json::json!({ "exe": "python", "args": ["hello.py"] });
+        assert!(check(&v).is_ok(), "裸命令名应被接受，got: {v:?}");
+
+        // 带扩展名的裸名同样可以（python.exe / python3）
+        let mut v = process_value();
+        v["entry"] = serde_json::json!({ "exe": "python3", "args": [] });
+        assert!(check(&v).is_ok());
+    }
+
+    #[test]
+    fn process_rejects_bare_names_with_separators_or_escapes() {
+        for bad in ["bin\\python", "bin/python", "..", "./python", "python/../x"] {
+            assert!(!is_bare_exe_name(bad), "{bad:?} 不应被当成裸名");
+        }
+        for good in ["python", "python3", "python.exe", "node"] {
+            assert!(is_bare_exe_name(good), "{good:?} 应被当成裸名");
+        }
+    }
+
+    #[test]
+    fn entry_args_reject_empty_items() {
+        let mut v = process_value();
+        v["entry"] = serde_json::json!({ "exe": "python", "args": ["hello.py", ""] });
+        match check(&v) {
+            Err(PluginError::Invalid { field: "entry.args", value }) => {
+                assert!(value.contains("[1]"), "错误应指出第几项，got: {value}");
+            }
+            other => panic!("空串参数应被拒绝，got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn entry_args_reject_more_than_the_cap() {
+        let mut v = process_value();
+        let args: Vec<String> = (0..=MAX_ENTRY_ARGS).map(|i| format!("--a{i}")).collect();
+        v["entry"] = serde_json::json!({ "exe": "python", "args": args });
+        match check(&v) {
+            Err(PluginError::Invalid { field: "entry.args", .. }) => {}
+            other => panic!("超过上限的参数应被拒绝，got: {other:?}"),
+        }
     }
 
     #[test]

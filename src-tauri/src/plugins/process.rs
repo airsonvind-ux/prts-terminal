@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
@@ -82,19 +82,32 @@ impl ProcessPlugin {
             }
         }
 
-        let exe = plugin_dir.join(&entry.exe);
-        if !exe.is_file() {
+        // 入口的两种形态（M4），按这个顺序判定：
+        //  1. 插件目录里有这个文件（含 `hello.exe` 这种没有分隔符的名字）→ 用它；
+        //  2. 目录里没有、且是不含分隔符的裸名 → 按 PATH 解析（解释型语言靠它，
+        //     例如 {"exe": "python", "args": ["hello.py"]}）；
+        //  3. 其余一律报「入口不存在」。
+        // 顺序不能反：模板里的 `hello.exe` 就是裸名，先查目录才不需要在
+        // 每个模板里凑一个 `./` 前缀。
+        let joined = plugin_dir.join(&entry.exe);
+        let bare = super::manifest::is_bare_exe_name(&entry.exe);
+        let program = if joined.is_file() {
+            joined
+        } else if bare {
+            PathBuf::from(&entry.exe)
+        } else {
             return Err(PluginError::Process {
                 id: id.to_string(),
                 detail: format!(
                     "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
-                    exe.display()
+                    joined.display()
                 ),
             });
-        }
+        };
 
-        let mut command = Command::new(&exe);
+        let mut command = Command::new(&program);
         command
+            .args(&entry.args)
             .current_dir(plugin_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -108,7 +121,7 @@ impl ProcessPlugin {
 
         let mut child = command.spawn().map_err(|error| PluginError::Process {
             id: id.to_string(),
-            detail: format!("起进程失败（{}）：{error}", exe.display()),
+            detail: format!("起进程失败（{}）：{error}", program.display()),
         })?;
 
         let stdin = child.stdin.take().expect("stdin 已设为 piped");
@@ -1035,6 +1048,7 @@ mod tests {
         let entry = PluginEntry {
             exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe",
@@ -1058,7 +1072,8 @@ mod tests {
         let bad = plugin
             .call_tool("nope", json!({}), Duration::from_secs(5))
             .unwrap_err();
-        assert_eq!(bad.code, crate::plugins::rpc::METHOD_NOT_FOUND);
+        // 未知工具名是「参数错误」（M4 起），-32601 只留给未知方法。
+        assert_eq!(bad.code, crate::plugins::rpc::INVALID_PARAMS);
 
         // 只收自己这一个：tests 并行跑，`shutdown_all` 会误杀别人的进程。
         plugin.shutdown();
@@ -1075,6 +1090,7 @@ mod tests {
         let entry = PluginEntry {
             exe: format!("probe_plugin{}", std::env::consts::EXE_SUFFIX),
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let reg = ToolRegistry::new();
         let ledger = ledger_with("probe_kill");
@@ -1104,6 +1120,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe-silent",
@@ -1134,6 +1151,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let plugin = ProcessPlugin::spawn(
             "probe-mismatch",
@@ -1162,6 +1180,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let ledger = ledger_with("probe-crash");
         let plugin = ProcessPlugin::spawn(
@@ -1195,6 +1214,7 @@ mod tests {
         let entry = PluginEntry {
             exe,
             transport: Some("stdio".to_string()),
+            args: Vec::new(),
         };
         let ledger = ledger_with("probe-hang");
         let plugin = ProcessPlugin::spawn(

@@ -24,6 +24,8 @@ pub use agent::{
 };
 pub use app::{commands, config, db_seed, events, workspace};
 pub use plugins::builtin::maa;
+/// 协议门面：独立二进制（校验器、能力 dump）与宿主共用同一套判据。
+pub use plugins::sdk;
 pub use platform::{machine, notices, observability, updater};
 pub use runtime::{approval, exec, exec_settings, path_guard, policy, steer_queue, turn_registry};
 pub use storage::{attachments, credentials, db, session, session_store, settings};
