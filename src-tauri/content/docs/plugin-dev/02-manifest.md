@@ -85,7 +85,7 @@ shell**，不会做变量展开、通配符、管道——`"args": ["a.py", "--f
 | 6 | `process` 必须声明 `protocol` 且等于 1 | 协议版本不匹配 |
 | 7 | `requires.app` 要满足 | 说清要求什么版本、当前是什么版本 |
 | 8 | 每个 capability 都是已知能力 | 指出是哪一条不认识 |
-| 9 | 声明了 `network` 能力就要写 `allowedHosts` | 当前网络能力未开放 |
+| 9 | 声明了 `network` 能力就要写 `allowedHosts` | 这条现在跑不到：`network` 不在能力白名单里，会先在 8 被拒。留着是为网络能力开放后准备 |
 | 10 | `settingsForm` 只能是 `schema` 或 `builtin-page` | 外部插件不用这个字段 |
 | 11 | `entry.args` 元素非空 | `entry.args[2] 为空` |
 | 12 | `entry.args` 不超过 32 项 | `entry.args 超过 32 项` |
