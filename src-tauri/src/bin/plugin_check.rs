@@ -28,8 +28,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use prts_terminal_lib::sdk::{
-    is_valid_tool_name, read_manifest, resolve_program, write_frame, FrameReader, PluginKind,
-    PluginManifest, ProgramResolution, INVALID_PARAMS, SUPPORTED_PROTOCOL,
+    is_valid_tool_name, parse_action, read_manifest, resolve_program, write_frame, ActionProblem,
+    FrameReader, PluginKind, PluginManifest, ProgramResolution, INVALID_PARAMS, MAX_ACTION_CHARS,
+    SUPPORTED_PROTOCOL,
 };
 
 /// 检查项顺序与标签（下标 0 对应编号 1）。
@@ -646,6 +647,39 @@ fn check_handshake(id: usize, manifest: &PluginManifest, frame: &Value) -> Check
                 "parameters 写 JSON Schema：{\"type\": \"object\", \"properties\": {}}",
             );
         }
+        // 调用文案（工具文案规格草案 2 §六）：空串与纯空白算未提供，不报错。
+        if let Some(raw) = tool.get("action") {
+            let Some(text) = raw.as_str() else {
+                return Check::fail(
+                    id,
+                    format!("工具 {name} 的 action 不是字符串"),
+                    "action 写动词短语，例如 \"清点图片\"；不写就把这个字段删掉",
+                );
+            };
+            match parse_action(text) {
+                Ok(_) => {}
+                Err(ActionProblem::TooLong { .. }) => {
+                    // 原文回显到 32 字为止：坏短语本身可能有几百字，别把终端刷掉。
+                    let shown: String = text.chars().take(32).collect();
+                    let more = if text.chars().count() > 32 { "…" } else { "" };
+                    return Check::fail(
+                        id,
+                        ActionProblem::TooLong {
+                            chars: text.chars().count(),
+                        }
+                        .to_string(),
+                        format!("把「{shown}{more}」压成动词短语，最多 {MAX_ACTION_CHARS} 字"),
+                    );
+                }
+                Err(problem) => {
+                    return Check::fail(
+                        id,
+                        problem.to_string(),
+                        "去掉首尾空格；不要用换行、全角空格或零宽字符",
+                    );
+                }
+            }
+        }
     }
 
     Check::pass(
@@ -884,5 +918,73 @@ mod tests {
     fn pass_never_prints_detail_lines() {
         let checks = vec![Check::pass(1, "读到了")];
         assert_eq!(render_text(&checks), "[1] PASS  目录与 plugin.json\n");
+    }
+
+    fn demo_manifest() -> PluginManifest {
+        prts_terminal_lib::sdk::parse_manifest(
+            r#"{"manifestVersion":1,"id":"demo","name":"演示","version":"0.1.1",
+                 "kind":"process","entry":{"exe":"probe.exe"},"activation":[],
+                 "capabilities":[],"contributes":{}}"#,
+        )
+        .expect("样本 manifest 应合法")
+    }
+
+    fn handshake_frame(tool: Value) -> Value {
+        json!({
+            "id": 1,
+            "result": { "protocol": SUPPORTED_PROTOCOL, "capabilities": [], "tools": [tool] }
+        })
+    }
+
+    #[test]
+    fn check_5_accepts_a_well_formed_action() {
+        let frame = handshake_frame(json!({
+            "name": "hello",
+            "parameters": { "type": "object" },
+            "action": "清点图片"
+        }));
+        let check = check_handshake(5, &demo_manifest(), &frame);
+        assert!(matches!(check.status, Status::Pass), "{check:?}");
+    }
+
+    #[test]
+    fn check_5_prints_the_documented_action_failures() {
+        // 超长：原因与修法逐字对齐手册 09（规格 §六 定的两段）。
+        let long = "图".repeat(21);
+        let frame = handshake_frame(json!({
+            "name": "hello",
+            "parameters": { "type": "object" },
+            "action": long
+        }));
+        let check = check_handshake(5, &demo_manifest(), &frame);
+        assert!(matches!(check.status, Status::Fail));
+        assert_eq!(check.detail, "action 超过 16 字（现在 21 字）");
+        assert_eq!(
+            check.fix,
+            "把「图图图图图图图图图图图图图图图图图图图图图」压成动词短语，最多 16 字"
+        );
+
+        // 空白：同一段输出里，修法是另一句。
+        let frame = handshake_frame(json!({
+            "name": "hello",
+            "parameters": { "type": "object" },
+            "action": "清点 图片"
+        }));
+        let check = check_handshake(5, &demo_manifest(), &frame);
+        assert!(matches!(check.status, Status::Fail));
+        assert_eq!(check.detail, "action 含空白或不可见字符");
+        assert_eq!(check.fix, "去掉首尾空格；不要用换行、全角空格或零宽字符");
+    }
+
+    #[test]
+    fn check_5_lets_blank_action_fall_back() {
+        // 空串 = 未提供，走保底文案，不算失败。
+        let frame = handshake_frame(json!({
+            "name": "hello",
+            "parameters": { "type": "object" },
+            "action": ""
+        }));
+        let check = check_handshake(5, &demo_manifest(), &frame);
+        assert!(matches!(check.status, Status::Pass), "{check:?}");
     }
 }
