@@ -88,14 +88,25 @@
   border-bottom-color: var(--accent);
 }
 
-/* 侧区：来源标签 + 移除按钮 */
+/* 侧区：来源胶囊 + 移除按钮 */
 .sourceTag {
-  font-size: 10px;
-  color: var(--text-3);
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  font-size: var(--fs-meta);
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  padding: 1px 6px;
   white-space: nowrap;
+  color: var(--text-2);
+  background: var(--depth-3);
+}
+
+.sourceTagUser {
+  color: var(--accent);
+  background: rgba(74, 171, 234, 0.12);
+}
+
+.sourceTagUntrusted {
+  color: var(--warn);
+  background: rgba(214, 158, 74, 0.12);
 }
 
 .emptyHint {

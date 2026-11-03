@@ -9,7 +9,7 @@
 /* ── 应用：页首落款（图标 / 名称 / 版本同轴居中） ── */
 
 .identitySection {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-4);
 }
 
 .identity {
@@ -24,10 +24,12 @@
   display: block;
   width: 56px;
   height: 56px;
+  /* 图标本身是深底浅线，给一层极淡的呼吸光，避免在 depth-2 上像贴纸 */
+  filter: drop-shadow(0 0 12px rgba(74, 171, 234, 0.18));
 }
 
 .appName {
-  margin-top: 10px;
+  margin-top: var(--space-2);
   font-size: 14px;
   font-weight: 600;
   color: var(--text-1);
@@ -36,8 +38,11 @@
 
 .appVersion {
   margin-top: 2px;
-  font-size: 11px;
-  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
   line-height: 1.4;
 }
 
@@ -60,38 +65,7 @@
 .updateActions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-}
-
-.updateBtn {
-  padding: 3px 9px;
-  border: 1px solid var(--depth-4);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-1);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.updateBtn:hover:not(:disabled) {
-  background: var(--depth-4);
-}
-
-.updateBtn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.updatePrimary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--highlight-ink);
-}
-
-.updatePrimary:hover:not(:disabled) {
-  background: #63b8ef;
-  border-color: #63b8ef;
+  gap: var(--space-1);
 }
 
 .updateBlocker {
@@ -167,31 +141,8 @@
 
 .resourceHint {
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
   line-height: 1.4;
-}
-
-.resourceBtn {
-  flex: none;
-  padding: 4px 8px;
-  border: 1px solid var(--depth-1);
-  border-radius: var(--radius-sm);
-  background: var(--depth-2);
-  color: var(--text-1);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
-}
-
-.resourceBtn:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: var(--depth-4);
-}
-
-.resourceBtn:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 /* 许可证与第三方声明：外层展开后按段折叠，避免整段长文铺满 */
@@ -270,5 +221,5 @@
 
 .licenseLoading {
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
 }

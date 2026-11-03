@@ -121,11 +121,17 @@ export function SettingsSkills({
           <div className={styles.skillList}>
             {skills.map((s) => {
               const isBuiltin = s.source === "builtin";
+              const untrusted = !isBuiltin && s.trust === "untrusted";
               const sourceLabel = isBuiltin
                 ? "内置"
-                : s.trust === "untrusted"
+                : untrusted
                   ? "需确认"
                   : "用户";
+              const sourceClass = isBuiltin
+                ? styles.sourceTag
+                : untrusted
+                  ? `${styles.sourceTag} ${styles.sourceTagUntrusted}`
+                  : `${styles.sourceTag} ${styles.sourceTagUser}`;
               return (
                 <ListRow
                   key={s.name}
@@ -145,9 +151,9 @@ export function SettingsSkills({
                   trailing={
                     <>
                       <span
-                        className={styles.sourceTag}
+                        className={sourceClass}
                         title={
-                          s.trust === "untrusted"
+                          untrusted
                             ? "执行包内脚本时会再次确认"
                             : undefined
                         }

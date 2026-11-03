@@ -163,12 +163,16 @@
 
 .capability {
   display: inline-block;
-  margin: 0 8px 2px 0;
+  margin: 0 6px 2px 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--fs-meta);
   color: var(--text-2);
+  background: var(--depth-3);
 }
 
 .moreButton {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--accent);
   padding: 0;
 }
