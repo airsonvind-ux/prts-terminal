@@ -109,7 +109,8 @@
 .contentBody {
   flex: 1;
   position: relative;
-  padding: 8px;
+  /* 12px：面板 0.86×0.72 后内容区约 268×237，留白与行距同一档 */
+  padding: 12px;
   overflow-y: auto;
   /* 紧凑档滚动条（设置页尺度小于主界面）：视觉 4px，机制见 styles/scrollbar.css */
   --scrollbar-inset: 2px;
