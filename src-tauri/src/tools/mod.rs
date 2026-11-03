@@ -427,6 +427,13 @@ pub struct ToolFacts {
     pub action: Option<String>,
 }
 
+impl ToolFacts {
+    /// 是否插件贡献的工具（事件里的 `pluginTool` 就是它）。
+    pub fn is_plugin(&self) -> bool {
+        matches!(self.origin, Origin::Plugin(_))
+    }
+}
+
 /// 注册表里的一项：工具本体 + 来源。
 struct RegisteredTool {
     /// 共享所有权：`execute` 取到句柄后要立刻放开锁再执行（工具可能回打注册表），
