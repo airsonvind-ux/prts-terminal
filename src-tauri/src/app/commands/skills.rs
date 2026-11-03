@@ -96,11 +96,19 @@ pub fn remove_skill(
 /// 重算技能目录 diff 并记账（best-effort：记账失败仅终端留痕，不改写安装 /
 /// 移除的结果——动作本身已成功，提醒属增量信息）。
 fn diff_skills_now(root: &std::path::Path, ledger: &Arc<Mutex<Notices>>) {
-    let pairs = crate::skills_index::SkillIndex::load(root)
-        .map(|idx| idx.catalog_pairs())
-        .unwrap_or_default();
+    let entries: Vec<crate::notices::CatalogEntry> =
+        crate::skills_index::SkillIndex::load(root)
+            .map(|idx| {
+                idx.catalog_pairs()
+                    .into_iter()
+                    .map(|(name, description)| {
+                        crate::notices::CatalogEntry::host(name, description)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
     match ledger.lock() {
-        Ok(mut l) => l.diff_skill_catalog(&pairs),
+        Ok(mut l) => l.diff_skill_catalog(&entries, None),
         Err(e) => eprintln!("[commands] 技能目录提醒记账失败：{e}"),
     }
 }

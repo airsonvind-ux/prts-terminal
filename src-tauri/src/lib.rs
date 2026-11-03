@@ -518,21 +518,33 @@ pub fn run() {
         // 运行仍按首启处理——空清单不覆盖真实基线）
         match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
             Ok(idx) => {
-                // (name, desc) 对：描述变化也可捕捉（批 3）
-                let pairs = idx.catalog_pairs();
-                ledger.diff_skill_catalog(&pairs);
+                // 条目带来源：M3 修补前索引里只有宿主技能，统一按 Host 记账；
+                // 插件技能接入后由 refresh_catalogs 换成真实来源。
+                let entries: Vec<crate::notices::CatalogEntry> = idx
+                    .catalog_pairs()
+                    .into_iter()
+                    .map(|(name, description)| {
+                        crate::notices::CatalogEntry::host(name, description)
+                    })
+                    .collect();
+                ledger.diff_skill_catalog(&entries, None);
             }
             Err(e) => {
                 eprintln!("[lib] Skill 索引加载失败（Reminder 技能目录差异跳过）：{e}");
             }
         }
-        // 工具目录：register_builtin 之后快照（(name, desc) 对，与技能目录同构）
-        let tool_pairs: Vec<(String, String)> = tool_registry
+        // 工具目录：register_builtin 之后快照（与技能目录同构，条目带来源）
+        let tool_entries: Vec<crate::notices::CatalogEntry> = tool_registry
             .list_defs()
             .iter()
-            .map(|d| (d.function.name.clone(), d.function.description.clone()))
+            .map(|d| {
+                crate::notices::CatalogEntry::host(
+                    d.function.name.clone(),
+                    d.function.description.clone(),
+                )
+            })
             .collect();
-        ledger.diff_tool_catalog(&tool_pairs);
+        ledger.diff_tool_catalog(&tool_entries, None);
     }
 
     // ── 会话存储（对话持久化 · Phase 4：data_dir/sessions/{conversationId}.jsonl
