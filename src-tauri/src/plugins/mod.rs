@@ -27,7 +27,7 @@ use crate::host::{FsService, HostServices, MaaBridgeService, QueryService};
 use crate::policy::Policy;
 use crate::tools::{Origin, Tool, ToolRegistry};
 
-use self::manifest::PluginManifest;
+use self::manifest::{is_bare_exe_name, PluginEntry, PluginManifest};
 
 pub use manifest::PluginKind;
 #[cfg(test)]
@@ -49,7 +49,74 @@ pub mod sdk {
         PLUGIN_FAULT, TIMEOUT,
     };
     pub use super::transport::{write_frame, FrameError, FrameReader, MAX_FRAME_BYTES};
-    pub use super::PluginError;
+    pub use super::process::is_valid_tool_name;
+    pub use super::{resolve_program, ProgramResolution, PluginError};
+
+    /// 宿主当前登记的能力键（D40：白名单由注册表生成，不另抄一份）。
+    ///
+    /// 给 `plugin_check` 用：校验器与宿主必须对同一份列表下结论，否则
+    /// 「本地通过、装进宿主失败」会变成最难查的一类问题。
+    pub fn known_capabilities() -> Vec<&'static str> {
+        let roots = super::PluginRoots::from_config();
+        let (services, _query) = super::default_services(&roots, None);
+        services.keys()
+    }
+}
+
+/// `entry.exe` 解析出来的程序。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramResolution {
+    /// 插件目录里就有这个文件（相对路径，已确认在插件目录内）。
+    InDir(PathBuf),
+    /// 裸命令名，交给 `Command` 按 PATH 解析。
+    OnPath(String),
+}
+
+impl ProgramResolution {
+    /// 写进报错与校验器输出的名字。
+    pub fn display(&self) -> String {
+        match self {
+            Self::InDir(path) => path.display().to_string(),
+            Self::OnPath(name) => name.clone(),
+        }
+    }
+}
+
+/// 把 `entry.exe` 解析成可执行的程序（M4 §3.2 的三级判定）。
+///
+/// 1. 插件目录里有这个文件 → 用它（`hello.exe` 这种裸名走这条）；
+/// 2. 目录里没有、且是不含分隔符的裸名 → 按 PATH 解析（`python` 走这条）；
+/// 3. 其余 → 报「入口不存在」。
+///
+/// 顺序不能反：模板里的 `hello.exe` 是裸名，先查目录才不需要给每个模板加 `./`。
+/// 宿主与 `plugin_check` 共用这一份判据——校验器不许另写一套，否则手册与实现
+/// 会对同一个名字给出两种结论。
+pub fn resolve_program(plugin_dir: &Path, entry: &PluginEntry) -> Result<ProgramResolution, String> {
+    let joined = plugin_dir.join(&entry.exe);
+    if joined.is_file() {
+        // 一级只允许落在插件目录内：`..`/绝对路径/盘符已被校验拦住，
+        // 这里再挡一次符号链接指向目录外的情况（安装管道虽然拒符号链接，
+        // 但 bundled/用户目录里可能有绕过安装管道放进来的东西）。
+        let base = plugin_dir.canonicalize().unwrap_or_else(|_| plugin_dir.to_path_buf());
+        let real = joined.canonicalize().unwrap_or_else(|_| joined.clone());
+        if !real.starts_with(&base) {
+            return Err(format!(
+                "入口指向插件目录之外：{}（解析到 {}）",
+                joined.display(),
+                real.display()
+            ));
+        }
+        return Ok(ProgramResolution::InDir(joined));
+    }
+
+    if is_bare_exe_name(&entry.exe) {
+        return Ok(ProgramResolution::OnPath(entry.exe.clone()));
+    }
+
+    Err(format!(
+        "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
+        joined.display()
+    ))
 }
 
 /// 台账句柄：技能索引靠它把「已加载的插件」翻译成技能根。

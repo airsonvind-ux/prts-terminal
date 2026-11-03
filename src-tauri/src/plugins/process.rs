@@ -82,27 +82,21 @@ impl ProcessPlugin {
             }
         }
 
-        // 入口的两种形态（M4），按这个顺序判定：
+        // 入口的两种形态（M4 §3.2），判据在 `plugins::resolve_program`：
         //  1. 插件目录里有这个文件（含 `hello.exe` 这种没有分隔符的名字）→ 用它；
         //  2. 目录里没有、且是不含分隔符的裸名 → 按 PATH 解析（解释型语言靠它，
         //     例如 {"exe": "python", "args": ["hello.py"]}）；
         //  3. 其余一律报「入口不存在」。
-        // 顺序不能反：模板里的 `hello.exe` 就是裸名，先查目录才不需要在
-        // 每个模板里凑一个 `./` 前缀。
-        let joined = plugin_dir.join(&entry.exe);
-        let bare = super::manifest::is_bare_exe_name(&entry.exe);
-        let program = if joined.is_file() {
-            joined
-        } else if bare {
-            PathBuf::from(&entry.exe)
-        } else {
-            return Err(PluginError::Process {
-                id: id.to_string(),
-                detail: format!(
-                    "入口不存在：{}（检查 plugin.json 的 entry.exe 是否相对插件目录）",
-                    joined.display()
-                ),
-            });
+        // 与 `plugin_check` 共用同一份实现：校验器说「能起」的东西，宿主必须能起。
+        let program = match super::resolve_program(plugin_dir, entry) {
+            Ok(super::ProgramResolution::InDir(path)) => path,
+            Ok(super::ProgramResolution::OnPath(name)) => PathBuf::from(name),
+            Err(detail) => {
+                return Err(PluginError::Process {
+                    id: id.to_string(),
+                    detail,
+                })
+            }
         };
 
         let mut command = Command::new(&program);
@@ -755,7 +749,7 @@ impl ProcessPlugin {
 }
 
 /// 工具名契约：`^[a-z][a-z0-9_]{0,63}$`（D5，长度含首字符 1..=64）。
-fn is_valid_tool_name(name: &str) -> bool {
+pub fn is_valid_tool_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     if bytes.is_empty() || bytes.len() > MAX_TOOL_NAME_LEN {
         return false;
