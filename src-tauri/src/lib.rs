@@ -516,17 +516,10 @@ pub fn run() {
         ledger.sync_machine_snapshots(&maa, &emulator, &game_pc);
         // 技能目录：扫描失败 → 跳过 diff（保留既有基线；首启失败则下次
         // 运行仍按首启处理——空清单不覆盖真实基线）
-        match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
+        match crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots()) {
             Ok(idx) => {
-                // 条目带来源：M3 修补前索引里只有宿主技能，统一按 Host 记账；
-                // 插件技能接入后由 refresh_catalogs 换成真实来源。
-                let entries: Vec<crate::notices::CatalogEntry> = idx
-                    .catalog_pairs()
-                    .into_iter()
-                    .map(|(name, description)| {
-                        crate::notices::CatalogEntry::host(name, description)
-                    })
-                    .collect();
+                // 条目带来源：宿主根排在最前，插件根在提交 3 接进来。
+                let entries: Vec<crate::notices::CatalogEntry> = idx.catalog_entries();
                 ledger.diff_skill_catalog(&entries, None);
             }
             Err(e) => {

@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::notices::{CatalogEntry, CatalogOrigin};
 use crate::skills::trust::{self, SkillTrust};
 use crate::skills::{is_reparse_point, SkillMeta, MAX_SKILL_DESCRIPTION_CHARS};
 
@@ -33,7 +34,39 @@ const MAX_SCAN_ENTRIES: usize = 4096;
 const MAX_SKILL_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_INDEX_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Skill 索引：name → 元数据 + 正文（剥 frontmatter）+ 源文件路径。
+/// 技能根：扫描目录 + 归属（宿主技能根 / 某个插件的 `skills/`）。
+#[derive(Debug, Clone)]
+pub struct SkillRoot {
+    pub path: PathBuf,
+    pub origin: CatalogOrigin,
+}
+
+impl SkillRoot {
+    /// 宿主技能根（`data_dir()/skills`）。
+    pub fn host(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            origin: CatalogOrigin::Host,
+        }
+    }
+
+    /// 插件技能根：`id` 对账用，`display_name` 进提醒文案与提示词。
+    pub fn plugin(
+        path: impl Into<PathBuf>,
+        id: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            origin: CatalogOrigin::Plugin {
+                id: id.into(),
+                display_name: display_name.into(),
+            },
+        }
+    }
+}
+
+/// Skill 索引：name → 元数据 + 正文（剥 frontmatter）+ 源文件路径 + 归属。
 #[derive(Debug)]
 pub struct SkillIndex {
     skills: HashMap<String, SkillMeta>,
@@ -46,25 +79,78 @@ pub struct SkillIndex {
     resource_dirs: HashMap<String, PathBuf>,
     /// name → 包指纹（FNV-1a 64；单文件为文件内容指纹）
     package_hashes: HashMap<String, String>,
+    /// name → 归属（宿主 / 插件）。条目没了就查不到，正因如此差异比对要
+    /// 从基线读归属（见 `notices::catalog_entries_diff`）。
+    origins: HashMap<String, CatalogOrigin>,
+}
+
+/// 多根扫描的累积表：后注册不覆盖先注册（宿主根排在最前，天然宿主优先）。
+#[derive(Default)]
+struct Tables {
+    skills: HashMap<String, SkillMeta>,
+    bodies: HashMap<String, String>,
+    paths: HashMap<String, PathBuf>,
+    trust: HashMap<String, SkillTrust>,
+    resource_dirs: HashMap<String, PathBuf>,
+    package_hashes: HashMap<String, String>,
+    origins: HashMap<String, CatalogOrigin>,
 }
 
 impl SkillIndex {
-    /// 递归扫描 dir 下所有 `.md` 文件（跳过 `_index.md`）建立索引。
+    /// 扫描单个根（宿主技能的既有入口）。
+    pub fn load(dir: &Path) -> Result<Self, String> {
+        Self::load_roots(&[SkillRoot::host(dir)])
+    }
+
+    /// 递归扫描多个根下所有 `.md` 文件（跳过 `_index.md`）建立索引。
+    ///
+    /// 根按传入顺序扫描：先到先得——宿主根排最前，同名插件技能不会顶掉它。
+    /// 一个都不存在 → Err（调用方据此跳过 diff，保留既有基线）。
     ///
     /// - 无 frontmatter / 无 name → `eprintln!` 告警并跳过
     /// - name 重名 → `eprintln!` 告警，保留先注册的
-    /// - dir 不存在或不可读 → Err（描述性信息）
-    pub fn load(dir: &Path) -> Result<Self, String> {
-        if !dir.is_dir() {
-            return Err(format!("Skill 目录不存在或不可读：{}", dir.display()));
+    pub fn load_roots(roots: &[SkillRoot]) -> Result<Self, String> {
+        let existing: Vec<&SkillRoot> = roots.iter().filter(|r| r.path.is_dir()).collect();
+        if existing.is_empty() {
+            let where_ = roots
+                .first()
+                .map(|r| r.path.display().to_string())
+                .unwrap_or_else(|| "（未提供技能根）".to_string());
+            return Err(format!("Skill 目录不存在或不可读：{where_}"));
         }
 
-        let mut skills: HashMap<String, SkillMeta> = HashMap::new();
-        let mut bodies: HashMap<String, String> = HashMap::new();
-        let mut paths: HashMap<String, PathBuf> = HashMap::new();
-        let mut trust: HashMap<String, SkillTrust> = HashMap::new();
-        let mut resource_dirs: HashMap<String, PathBuf> = HashMap::new();
-        let mut package_hashes: HashMap<String, String> = HashMap::new();
+        let mut tables = Tables::default();
+        for root in existing {
+            Self::scan_root(root, &mut tables)?;
+        }
+        Ok(Self {
+            skills: tables.skills,
+            bodies: tables.bodies,
+            paths: tables.paths,
+            trust: tables.trust,
+            resource_dirs: tables.resource_dirs,
+            package_hashes: tables.package_hashes,
+            origins: tables.origins,
+        })
+    }
+
+    /// 降级空索引（空表）：索引加载失败时使用，激活恒未命中。
+    pub fn empty() -> Self {
+        Self {
+            skills: HashMap::new(),
+            bodies: HashMap::new(),
+            paths: HashMap::new(),
+            trust: HashMap::new(),
+            resource_dirs: HashMap::new(),
+            package_hashes: HashMap::new(),
+            origins: HashMap::new(),
+        }
+    }
+
+    /// 扫描一个技能根，把条目并入累积表（后注册不覆盖先注册）。
+    fn scan_root(root: &SkillRoot, tables: &mut Tables) -> Result<(), String> {
+        let dir = root.path.as_path();
+        let origin = &root.origin;
 
         // 队列式遍历（避免递归深度问题）；read_dir 迭代顺序 OS 依赖：
         // 每层先收集为 Vec、按 file_name() 排序再处理（目录与文件统一按名
@@ -78,15 +164,7 @@ impl SkillIndex {
             // 单元收录，不再下钻——其 references 等资源不产生独立条目。
             if d.as_path() != dir {
                 if let Some(skill_md) = regular_skill_md(&d)? {
-                    register_skill(
-                        &mut skills,
-                        &mut bodies,
-                        &mut paths,
-                        &mut trust,
-                        &mut resource_dirs,
-                        &mut package_hashes,
-                        &skill_md,
-                    )?;
+                    register_skill(tables, &skill_md, origin)?;
                     continue;
                 }
             }
@@ -158,38 +236,10 @@ impl SkillIndex {
                 }
                 index_bytes += meta.len();
 
-                register_skill(
-                    &mut skills,
-                    &mut bodies,
-                    &mut paths,
-                    &mut trust,
-                    &mut resource_dirs,
-                    &mut package_hashes,
-                    &path,
-                )?;
+                register_skill(tables, &path, origin)?;
             }
         }
-
-        Ok(Self {
-            skills,
-            bodies,
-            paths,
-            trust,
-            resource_dirs,
-            package_hashes,
-        })
-    }
-
-    /// 降级空索引（空表）：索引加载失败时使用，激活恒未命中。
-    pub fn empty() -> Self {
-        Self {
-            skills: HashMap::new(),
-            bodies: HashMap::new(),
-            paths: HashMap::new(),
-            trust: HashMap::new(),
-            resource_dirs: HashMap::new(),
-            package_hashes: HashMap::new(),
-        }
+        Ok(())
     }
 
     /// 按 name 查元数据。
@@ -276,6 +326,29 @@ impl SkillIndex {
             })
             .collect()
     }
+
+    /// 目录条目（带归属）：提醒 diff 用它区分宿主与插件（M3 修补）。
+    ///
+    /// 归属只对本索引扫过的根有效；查不到（理论上不会发生）按宿主处理，
+    /// 宁可少写归属也不编造来源。
+    pub fn catalog_entries(&self) -> Vec<CatalogEntry> {
+        self.names()
+            .into_iter()
+            .map(|name| {
+                let desc = self
+                    .skills
+                    .get(name)
+                    .map(|m| catalog_description(&m.description))
+                    .unwrap_or_default();
+                let origin = self.origins.get(name).cloned().unwrap_or_default();
+                CatalogEntry {
+                    name: name.to_string(),
+                    description: desc,
+                    origin,
+                }
+            })
+            .collect()
+    }
 }
 
 /// 目录描述：压成单行，超过上限时截断并加省略号。
@@ -315,15 +388,10 @@ fn regular_skill_md(dir: &Path) -> Result<Option<PathBuf>, String> {
 }
 
 /// 读取并注册一个技能文件（解析失败 → 告警跳过；重名 → 告警保留先注册的）。
-#[allow(clippy::too_many_arguments)] // 索引各表一一对应，拆结构会扩大改动面
 fn register_skill(
-    skills: &mut HashMap<String, SkillMeta>,
-    bodies: &mut HashMap<String, String>,
-    paths: &mut HashMap<String, PathBuf>,
-    trust_map: &mut HashMap<String, SkillTrust>,
-    resource_dirs: &mut HashMap<String, PathBuf>,
-    package_hashes: &mut HashMap<String, String>,
+    tables: &mut Tables,
     path: &Path,
+    origin: &CatalogOrigin,
 ) -> Result<(), String> {
     // 调用方已做上限检查；这里再守一次，避免未来新增调用点绕过。
     let meta = std::fs::symlink_metadata(path)
@@ -340,7 +408,7 @@ fn register_skill(
         eprintln!("[skills] 跳过 frontmatter 无效的 Skill：{}", path.display());
         return Ok(());
     };
-    if skills.contains_key(&meta.name) {
+    if tables.skills.contains_key(&meta.name) {
         eprintln!(
             "[skills] 重名 Skill 已忽略（保留先注册的）：{}",
             path.display()
@@ -372,14 +440,15 @@ fn register_skill(
             (SkillTrust::Untrusted, dir, String::new())
         }
     };
-    skills.insert(name.clone(), meta);
-    bodies.insert(name.clone(), body);
-    paths.insert(name.clone(), path.to_path_buf());
-    trust_map.insert(name.clone(), trust);
+    tables.skills.insert(name.clone(), meta);
+    tables.bodies.insert(name.clone(), body);
+    tables.paths.insert(name.clone(), path.to_path_buf());
+    tables.trust.insert(name.clone(), trust);
     if let Some(dir) = resource_dir {
-        resource_dirs.insert(name.clone(), dir);
+        tables.resource_dirs.insert(name.clone(), dir);
     }
-    package_hashes.insert(name, package_hash);
+    tables.package_hashes.insert(name.clone(), package_hash);
+    tables.origins.insert(name, origin.clone());
     Ok(())
 }
 
@@ -609,6 +678,54 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn load_roots_keeps_host_entries_first_and_tags_plugin_origin() {
+        let host = unique_temp_dir("roots-host");
+        let plugin = unique_temp_dir("roots-plugin");
+        std::fs::write(
+            host.join("alpha.md"),
+            "---\nname: 同名技能\ndescription: 宿主版本\n---",
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("alpha.md"),
+            "---\nname: 同名技能\ndescription: 插件版本\n---",
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("beta.md"),
+            "---\nname: 插件技能\ndescription: 插件独有\n---",
+        )
+        .unwrap();
+
+        let idx = SkillIndex::load_roots(&[
+            SkillRoot::host(&host),
+            SkillRoot::plugin(&plugin, "demo", "演示插件"),
+        ])
+        .unwrap();
+
+        // 同名时宿主在先，插件条目被忽略（先注册者赢）
+        assert_eq!(idx.resolve("同名技能").unwrap().description, "宿主版本");
+        assert_eq!(idx.resolve("插件技能").unwrap().description, "插件独有");
+
+        let entries = idx.catalog_entries();
+        let by_name: std::collections::HashMap<_, _> = entries
+            .iter()
+            .map(|e| (e.name.as_str(), &e.origin))
+            .collect();
+        assert_eq!(by_name.get("同名技能").copied(), Some(&CatalogOrigin::Host));
+        assert_eq!(
+            by_name.get("插件技能").copied(),
+            Some(&CatalogOrigin::Plugin {
+                id: "demo".into(),
+                display_name: "演示插件".into(),
+            })
+        );
+
+        let _ = std::fs::remove_dir_all(&host);
+        let _ = std::fs::remove_dir_all(&plugin);
     }
 
     #[test]

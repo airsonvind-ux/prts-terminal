@@ -161,6 +161,19 @@ impl PluginRoots {
     }
 }
 
+/// 技能索引的根列表：宿主根在前，插件根按 id 排序在其后。
+///
+/// 索引是「先注册者赢」，宿主根排第一即宿主优先。插件根只含**已启用且加载
+/// 成功**的插件（停用插件的技能不该出现在目录里）；技能目录默认是插件目录下
+/// 的 `skills/`，`contributes.skills` 只作声明、目录为准。
+///
+/// 提交 2 只返回宿主根（多根能力先上，接线在提交 3）。
+pub fn skill_roots() -> Vec<crate::skills_index::SkillRoot> {
+    vec![crate::skills_index::SkillRoot::host(
+        crate::skills_index::skills_dir(),
+    )]
+}
+
 /// 构造 M2a 登记的四条服务，返回注册表与 `query.call` 的绑定句柄。
 ///
 /// `query.call` 需要工具注册表，而注册表要等 `load_all` 跑完才定型，所以这里

@@ -107,10 +107,11 @@ pub async fn compact_conversation(
     };
     // 技能目录冻结快照（批 2）：压缩读旧快照——请求须复用主请求真前缀。
     let skill_catalog = {
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
-            .ok();
+        let live =
+            crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+                .map(|idx| idx.catalog_text())
+                .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+                .ok();
         let mut snaps = skills_snapshot_store
             .lock()
             .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
@@ -225,10 +226,11 @@ pub async fn compact_conversation(
     result.map(|o| {
         // 批 4 · 压缩并更新：摘要成功（含降级规则产出——上下文同样被替换）→
         // 以活体重刷两份冻结快照（有差才写；best-effort，失败不改变压缩结果）。
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
-            .ok();
+        let live =
+            crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+                .map(|idx| idx.catalog_text())
+                .map_err(|e| eprintln!("[commands] 技能目录加载失败（压缩后不刷新技能快照）：{e}"))
+                .ok();
         let live_tools = tools.list_defs();
         refresh_frozen_snapshots(
             &request.conversation_id,

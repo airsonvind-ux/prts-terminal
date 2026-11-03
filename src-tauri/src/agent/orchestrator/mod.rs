@@ -320,7 +320,7 @@ pub async fn process_with_log(
     // **仅供激活工具与展示（保持活体）**；system 的 Catalog 用对话冻结目录文本。
     // 加载失败降级为空索引（激活工具恒未命中），不阻断本轮处理。
     let skill_index = Arc::new(
-        match crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir()) {
+        match crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots()) {
             Ok(idx) => idx,
             Err(e) => {
                 eprintln!("[orchestrator] Skill 索引加载失败（Skill 目录将为空）：{e}");

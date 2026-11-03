@@ -366,10 +366,11 @@ pub async fn agent_process(
     // ── 技能目录冻结快照（批 2）：与记忆区同点位、同 key ──
     // 首见冻结（活体目录文本 → sidecar）；活体不可读时不冻结（下轮重试）。
     let skill_catalog = {
-        let live = crate::skills_index::SkillIndex::load(&crate::skills_index::skills_dir())
-            .map(|idx| idx.catalog_text())
-            .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
-            .ok();
+        let live =
+            crate::skills_index::SkillIndex::load_roots(&crate::plugins::skill_roots())
+                .map(|idx| idx.catalog_text())
+                .map_err(|e| eprintln!("[commands] 技能目录加载失败（本次不冻结）：{e}"))
+                .ok();
         let mut snaps = skills_snapshot_store
             .lock()
             .map_err(|e| format!("技能快照存储锁获取失败: {e}"))?;
