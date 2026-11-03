@@ -42,6 +42,10 @@ function formatBytes(bytes: number): string {
 interface SettingsPluginsProps {
   list: PluginList;
   busy: boolean;
+  /** 有对话在处理：收权（停用 / 卸载 / 重试）一律置灰（M3 修补 §十一） */
+  locked: boolean;
+  /** 置灰的原因，悬停时说明 */
+  lockedHint: string;
   preview: PluginPreview | null;
   installing: boolean;
   error: string | null;
@@ -58,6 +62,8 @@ interface SettingsPluginsProps {
 export function SettingsPlugins({
   list,
   busy,
+  locked,
+  lockedHint,
   preview,
   installing,
   error,
@@ -240,7 +246,8 @@ export function SettingsPlugins({
                 <button
                   type="button"
                   className={styles.primaryButton}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  title={locked ? lockedHint : undefined}
                   onClick={() => {
                     setConfirming(null);
                     onUninstall(plugin.id, deleteData);
@@ -290,7 +297,8 @@ export function SettingsPlugins({
                 <button
                   type="button"
                   className={styles.actionButton}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  title={locked ? lockedHint : undefined}
                   onClick={() => onRetry(plugin.id)}
                 >
                   重试
@@ -300,7 +308,8 @@ export function SettingsPlugins({
                 <button
                   type="button"
                   className={styles.actionButton}
-                  disabled={busy}
+                  disabled={busy || locked}
+                  title={locked ? lockedHint : undefined}
                   onClick={() => {
                     setConfirming(plugin.id);
                     setDeleteData(false);
@@ -313,7 +322,11 @@ export function SettingsPlugins({
                 type="checkbox"
                 aria-label={`启用 ${plugin.name}`}
                 checked={plugin.state !== "disabled"}
-                disabled={busy}
+                // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
+                disabled={busy || (locked && plugin.state !== "disabled")}
+                title={
+                  locked && plugin.state !== "disabled" ? lockedHint : undefined
+                }
                 onChange={(e) => onSetEnabled(plugin.id, e.target.checked)}
                 onKeyDown={toggleOnEnter}
               />

@@ -14,6 +14,8 @@ export interface PluginTab {
   switchable: boolean;
   enabled?: boolean;
   busy?: boolean;
+  /** 收权被闸住时（对话处理中）悬停说明 */
+  disabledReason?: string;
   onToggle?: (next: boolean) => void;
 }
 
@@ -51,7 +53,10 @@ export function PluginTabBar({ tabs, active, onSelect }: PluginTabBarProps) {
               {tab.label}
             </button>
             {tab.switchable && (
-              <span className={styles.tabSwitch}>
+              <span
+                className={styles.tabSwitch}
+                title={tab.busy ? tab.disabledReason : undefined}
+              >
                 <input
                   type="checkbox"
                   aria-label={`启用 ${tab.label}`}

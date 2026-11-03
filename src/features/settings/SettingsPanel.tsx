@@ -220,6 +220,7 @@ export function SettingsPanel() {
                 onChooseEmulatorDir: handleChooseEmulatorDir,
                 onChooseAdbFile: handleChooseAdbFile,
               }}
+              turnBusy={settingsBusy}
             />
           )}
           {activeTab === "app" && (

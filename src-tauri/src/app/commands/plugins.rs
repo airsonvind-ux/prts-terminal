@@ -108,6 +108,21 @@ fn plugin_name(ledger: &Arc<Mutex<PluginRegistry>>, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
+/// 收权类操作（停用 / 卸载 / 重试）的并发闸：有前台轮在跑就拒绝。
+///
+/// 收权会撕掉别人正在用的东西——停用 MAA 会连桥一起收，正在跑的长任务永远
+/// 等不到结果。给权（启用 / 安装）不设闸：它们不杀任何东西，也不影响当前轮
+/// （前缀已冻结）。
+fn ensure_no_active_turn(turns: &TurnRegistry, action: &str) -> Result<(), String> {
+    if turns.active_count() > 0 {
+        Err(format!(
+            "对话处理中，{action}会打断正在执行的任务；等这一轮结束再试"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// 「安装文件夹」按钮：选一个目录，交给 `preview_plugin_install` 做预览。
 ///
 /// 与设置页其它选择器同构：`run_on_main_thread` 弹窗，oneshot 桥回 async 命令；
@@ -135,17 +150,20 @@ pub async fn set_plugin_enabled(
     services: State<'_, Arc<HostServices>>,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
     notices: State<'_, Arc<Mutex<Notices>>>,
+    turn_registry: State<'_, Arc<TurnRegistry>>,
 ) -> Result<PluginList, String> {
     let reg = Arc::clone(&reg);
     let config = Arc::clone(&config);
     let services = Arc::clone(&services);
     let ledger = Arc::clone(&ledger);
     let notices = Arc::clone(&notices);
+    let turns = Arc::clone(&turn_registry);
     tauri::async_runtime::spawn_blocking(move || {
         let name = plugin_name(&ledger, &id);
         if enabled {
             crate::plugins::enable_plugin(&id, &reg, &config, &services, &ledger)?;
         } else {
+            ensure_no_active_turn(&turns, "停用")?;
             crate::plugins::disable_plugin(&id, &reg, &config, &services, &ledger)?;
         }
         let context = format!(
@@ -223,14 +241,17 @@ pub async fn uninstall_plugin(
     reg: State<'_, Arc<ToolRegistry>>,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
     notices: State<'_, Arc<Mutex<Notices>>>,
+    turn_registry: State<'_, Arc<TurnRegistry>>,
 ) -> Result<PluginList, String> {
     let roots = Arc::clone(&roots);
     let config = Arc::clone(&config);
     let reg = Arc::clone(&reg);
     let ledger = Arc::clone(&ledger);
     let notices = Arc::clone(&notices);
+    let turns = Arc::clone(&turn_registry);
     tauri::async_runtime::spawn_blocking(move || {
         let name = plugin_name(&ledger, &id);
+        ensure_no_active_turn(&turns, "卸载")?;
         crate::plugins::uninstall_plugin(&id, delete_data, &roots, &config, &reg, &ledger)?;
         let context = format!("插件 {name} 已卸载");
         crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));
@@ -244,9 +265,12 @@ pub async fn uninstall_plugin(
 pub async fn retry_plugin(
     id: String,
     ledger: State<'_, Arc<Mutex<PluginRegistry>>>,
+    turn_registry: State<'_, Arc<TurnRegistry>>,
 ) -> Result<PluginList, String> {
     let ledger = Arc::clone(&ledger);
+    let turns = Arc::clone(&turn_registry);
     tauri::async_runtime::spawn_blocking(move || {
+        ensure_no_active_turn(&turns, "重试")?;
         crate::plugins::retry_plugin(&id, &ledger)?;
         Ok(list_from_ledger(&ledger))
     })
@@ -276,8 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_rows_show_tools_and_abnormal_rows_do_not() {
-        let loaded = view_of(&record("maa", PluginState::Loaded, &["run_maa_task"]));
+    fn loaded_rows_show_tools_and_abnormal_rows_do_not() {        let loaded = view_of(&record("maa", PluginState::Loaded, &["run_maa_task"]));
         assert_eq!(loaded.state, "loaded");
         assert_eq!(loaded.tool_count, Some(1));
         assert!(loaded.has_settings_page, "maa 有设置页");
@@ -331,5 +354,24 @@ mod tests {
         assert!(row.get("toolCount").is_some(), "前端读 toolCount");
         assert!(row.get("hasSettingsPage").is_some());
         assert!(value["unregistered"][0].get("dirName").is_some());
+    }
+
+    #[test]
+    fn taking_away_is_refused_while_a_turn_runs() {
+        let turns = TurnRegistry::new();
+        assert!(ensure_no_active_turn(&turns, "停用").is_ok(), "空闲时可收权");
+
+        let _signal = turns.register("session", "conversation");
+        assert_eq!(turns.active_count(), 1);
+
+        let refused = ensure_no_active_turn(&turns, "停用").expect_err("处理中应拒绝");
+        assert!(
+            refused.contains("停用会打断正在执行的任务") && refused.contains("等这一轮结束再试"),
+            "文案要说明原因与动作：{refused}"
+        );
+        assert!(
+            ensure_no_active_turn(&turns, "卸载").is_err(),
+            "卸载同属收权，也要拒"
+        );
     }
 }

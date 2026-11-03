@@ -19,7 +19,19 @@ import styles from "./SettingsPlugins.module.css";
 export interface PluginSettingsHostProps {
   /** 内置插件设置页要用的设置与回调（Panel 的单漏斗，原样转交） */
   maaProps: MaaSettingsProps;
+  /**
+   * 有对话正在处理（M3 修补 §十一）。
+   *
+   * 收权（停用 / 卸载 / 重试）会撕掉别人正在用的东西——停用 MAA 会把正在跑的
+   * 任务连桥一起收掉，调用永远等不到结果；给权（启用 / 安装）只是多一个当前轮
+   * 用不到的选项，不设闸。闸在后端，这里只负责别让用户白点。
+   */
+  turnBusy: boolean;
 }
+
+/** 收权被闸住时给用户的解释：说清原因与动作。 */
+export const TURN_BUSY_HINT =
+  "对话处理中，停用会打断正在执行的任务；等这一轮结束再试";
 
 /** 有设置页的插件：id → 组件。加一个插件就在这里加一行。 */
 const SETTINGS_PAGES: Partial<
@@ -34,7 +46,10 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function PluginSettingsHost({ maaProps }: PluginSettingsHostProps) {
+export function PluginSettingsHost({
+  maaProps,
+  turnBusy,
+}: PluginSettingsHostProps) {
   const [list, setList] = useState<PluginList>(EMPTY);
   const [active, setActive] = useState("manage");
   const [preview, setPreview] = useState<PluginPreview | null>(null);
@@ -99,7 +114,9 @@ export function PluginSettingsHost({ maaProps }: PluginSettingsHostProps) {
         label: plugin.name,
         switchable: true,
         enabled: plugin.state !== "disabled",
-        busy,
+        // 关掉 = 收权，处理中要闸住；打开 = 给权，随时可以。
+        busy: busy || (turnBusy && plugin.state !== "disabled"),
+        disabledReason: TURN_BUSY_HINT,
         onToggle: (next: boolean) =>
           void run(() =>
             invoke<PluginList>("set_plugin_enabled", {
@@ -109,7 +126,7 @@ export function PluginSettingsHost({ maaProps }: PluginSettingsHostProps) {
           ),
       }));
     return [manage, ...pages];
-  }, [list, busy, run]);
+  }, [list, busy, run, turnBusy]);
 
   // 插件被卸载（或没有设置页）时，当前页回退到管理页——不留一个空壳。
   const activePage = SETTINGS_PAGES[active];
@@ -123,11 +140,13 @@ export function PluginSettingsHost({ maaProps }: PluginSettingsHostProps) {
       />
 
       {activePage ? (
-        activePage({ maaProps })
+        activePage({ maaProps, turnBusy })
       ) : (
         <SettingsPlugins
           list={list}
           busy={busy}
+          locked={turnBusy}
+          lockedHint={TURN_BUSY_HINT}
           preview={preview}
           installing={busy && preview !== null}
           error={error}
