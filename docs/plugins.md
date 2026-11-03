@@ -95,7 +95,11 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 | `shutdown` | `{}` | 任意 JSON（之后进程应退出） |
 | `cancel` | `{id}`（通知，无应答） | — |
 
-`tools` 的每一项是 `{name, description, parameters, timeoutMs?}`，`timeoutMs` 缺省 60000。
+`tools` 的每一项是 `{name, action?, description, parameters, timeoutMs?}`：
+
+- `action` 是对话里显示的动词短语（1–16 字、不含任何空白；宿主拼「PRTS正在…」
+  「…完成」「…失败」），缺省时回落到「调用插件工具：<完整工具名>」；
+- `timeoutMs` 缺省 60000。
 `initialize` 是工具面的**唯一来源**；它回报的 `capabilities` 只作诊断，不参与授权。
 
 ### 插件 → 宿主

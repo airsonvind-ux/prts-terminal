@@ -20,7 +20,8 @@ plugin_check .
 
 ## 改哪里
 
-- `TOOLS`：工具面。宿主只看这里的 `name` / `description` / `parameters`；
+- `TOOLS`：工具面。宿主看这里的 `name` / `action` / `description` / `parameters`；
+  `action` 是对话里那句「PRTS正在…」的动词短语（1–16 字、不含空白），可省略；
 - `handle_tool`：实现。返回字符串会直接显示在对话里；返回 dict 会被格式化成 JSON。
 
 工具名会加上 `<插件 id>_` 前缀，所以这里的 `hello` 在宿主里叫
