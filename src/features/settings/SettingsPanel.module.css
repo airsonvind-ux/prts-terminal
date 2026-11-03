@@ -34,7 +34,8 @@
 /* ── 左侧导航 ── */
 
 .sidebar {
-  width: 52px;
+  /* 56px：两字标签左对齐 + 8px 内缩 + 2px 选中竖条，留一点呼吸但不吃内容宽度 */
+  width: 56px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -50,7 +51,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
-  padding: 6px 6px 4px;
+  padding: 6px 8px 4px;
   margin-bottom: 2px;
 }
 
@@ -66,14 +67,14 @@
   font-size: 11px;
   font-family: var(--font-ui);
   color: var(--text-2);
-  padding: 5px 6px;
+  padding: 5px 8px;
   cursor: pointer;
   border: 0;
   border-left: 2px solid transparent;
   background: transparent;
   transition: color 0.12s ease, background 0.12s ease, border-left-color 0.15s ease;
   white-space: nowrap;
-  text-align: center;
+  text-align: left;
   box-sizing: border-box;
 }
 
@@ -88,9 +89,9 @@
   background: var(--depth-4);
 }
 
-/* 分组空隙（应用 | 对话与上下文 | 信息与扩展）：只加 4px，不做分隔线 */
+/* 分组空隙（应用 | 对话与上下文 | 信息与扩展）：8px，不做分隔线 */
 .navItemBreak {
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 /* ── 右侧内容 ── */
