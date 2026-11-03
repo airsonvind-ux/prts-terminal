@@ -79,10 +79,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 1. 保留段起点（轮边界对齐）与 noop 预判（非错误，info toast）──
     const retainedFrom = computeRetainedFrom(conv.turns);
     if (retainedFrom === 0) {
-      showToast(
-        "暂时不用压缩：这段对话都还在最近保留的部分里，压了也省不出多少空间",
-        { kind: "info" }
-      );
+      showToast("内容还不够，暂时不用压缩", { kind: "info" });
       return;
     }
     // 链式折叠起点 = 上次压缩边界（2026-09-25 裁决）：已折叠原文不回灌——
@@ -97,14 +94,10 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
       foldedTurns.length < NOOP_MIN_FOLD_TURNS ||
       foldEstimate < NOOP_MIN_FOLD_TOKENS
     ) {
-      // 用「几轮」而不是 token：用户能数的是轮数，token 数对他们没有意义。
-      const howMany = foldedTurns.length;
       showToast(
         conv.compaction
-          ? `暂时不用压缩：上次压缩之后只聊了 ${howMany} 轮，再聊几轮再压更划算`
-          : howMany <= 1
-            ? "暂时不用压缩：能折起来的只有最开头那一轮，太少了"
-            : `暂时不用压缩：能折起来的只有最开头 ${howMany} 轮，太少了`,
+          ? "上次压缩后新增的内容还不够，暂时不用压缩"
+          : "内容还不够，暂时不用压缩",
         { kind: "info" }
       );
       return;
@@ -113,7 +106,7 @@ export const useCompactionStore = create<CompactionStore>((set, get) => ({
     // ── 2. 折叠区派生态（error 等结构事件已过滤；链式：旧摘要代表已折叠区）──
     const folded = deriveMessages(foldedTurns);
     if (folded.length === 0) {
-      showToast("暂时不用压缩：折叠区里没有可折叠的对话内容", { kind: "info" });
+      showToast("没有可压缩的内容", { kind: "info" });
       return;
     }
     const payload = conv.compaction
