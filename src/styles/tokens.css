@@ -32,11 +32,11 @@
   /* T1: 正文，标题、按钮、用户气泡 */
   --text-1: #c8cdd0;
 
-  /* T2: 次级，折叠按钮、副标题、说明 */
-  --text-2: #8a949a;
+  /* T2: 次级，说明文字、副标题（对 depth-2 约 5.2:1，过 WCAG 正文线） */
+  --text-2: #9aa4aa;
 
-  /* T3: 辅助，placeholder、时间戳、禁用态 */
-  --text-3: #5d656a;
+  /* T3: 辅助，placeholder、时间戳、id、禁用态（约 3.2:1，只给非必要信息） */
+  --text-3: #6d767b;
 
   /* ── 功能色 ── */
 
@@ -81,6 +81,26 @@
   /* ── 排版 ── */
 
   --font-ui: "Microsoft YaHei", sans-serif;
+  /* 等宽字体：路径、版本号、读数（Windows 上 Cascadia 未必在，Consolas 兜底） */
+  --font-mono: "Cascadia Code", Consolas, "Courier New", monospace;
+
+  /*
+   * 设置页字号阶梯（2026-11 UI 优化）：
+   *   title 12 —— 页标题、小节标题、列表主行
+   *   body  11 —— 正文、说明文字（中文说明一律这一档，不用 10px）
+   *   meta  10 —— 短标签、数字、id、时间戳（不承载长句）
+   * 数字统一 tabular-nums，等宽读数才不会被位数带着跳。
+   */
+  --fs-title: 12px;
+  --fs-body: 11px;
+  --fs-meta: 10px;
+
+  /* 间距基准 4：设置页只用这五档 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
 
   --text-sm: 12px;
   --text-md: 14px;

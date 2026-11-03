@@ -232,6 +232,7 @@ export function SettingsPanel() {
           )}
           {activeTab === "app" && (
             <SettingsApp
+              meta={appMeta}
               alwaysOnTop={settings.window.always_on_top}
               onSetAlwaysOnTop={handleSetAlwaysOnTop}
             />
