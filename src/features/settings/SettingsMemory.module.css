@@ -208,15 +208,35 @@
   gap: var(--space-2);
 }
 
-/* ── 经历之下的动作行（上面一道细线分隔，不再叠说明文字） ── */
+/* ── 经历之下的功能行：左边一行说"做什么"，右边是它的按钮 ──
+   四个动作挤成一排时，用户读到的是"四个按钮"而不是"三件事"。
+   拆成行之后，一行一件事，按钮从属于它左边的标签。 */
 
-.bottomRow {
+.actionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--depth-1);
+}
+
+.actionRow {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--depth-1);
+  min-height: 24px;
+}
+
+.actionLabel {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+  color: var(--text-2);
+}
+
+.actionRow .actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
 /* ── 页内确认条（替代遮罩 modal：清除经历记忆） ── */

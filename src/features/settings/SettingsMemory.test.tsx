@@ -144,8 +144,12 @@ async function flush(): Promise<void> {
 }
 
 function findButton(text: string): HTMLButtonElement | undefined {
-  return [...container.querySelectorAll("button")].find((b) =>
-    (b.textContent ?? "").includes(text)
+  // 按钮的可见文案可能很短（「查看」「清除」），完整动作名在 aria-label 上，
+  // 所以两处都匹配：测试读的是"这个动作"，不是"这几个字"。
+  return [...container.querySelectorAll("button")].find(
+    (b) =>
+      (b.textContent ?? "").includes(text) ||
+      (b.getAttribute("aria-label") ?? "").includes(text)
   );
 }
 

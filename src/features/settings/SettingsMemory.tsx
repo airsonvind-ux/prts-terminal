@@ -3,9 +3,11 @@
 // 结构：
 //  - 成长：2 列卡片（关于博士居首，默认露出 4 个，其余收进「全部 N 个」）
 //    + [新建专题]；点击卡片 → 二级视图（阅读/编辑）。
-//  - 经历：三个读数（经历条目 / 近期 / 长期梗概）+ [查看当下记忆]／[整理当下记忆]；
-//    下面一道细线之后是 [查看全部记忆]／[清除经历记忆]，
-//    清除确认从遮罩 modal 改成页内确认条（与插件卸载同一套语言）。
+//  - 经历：三个读数（经历条目 / 近期 / 长期梗概）+ 三条功能行
+//    （当前对话 → 查看／整理；所有记忆 → 查看；清除记忆 → 清除）。
+//    四个动作原来挤成一排，读到的只是"四个按钮"；现在一行一件事，
+//    按钮从属于左边的标签。清除确认从遮罩 modal 改成页内确认条
+//    （与插件卸载同一套语言）。
 //
 // 二级视图＝设置内容区内的替换视图（见 SettingsMemoryViews.tsx），不用整窗浮层。
 // 写类操作（新建/编辑/删除/整理/清除/长期记忆保存）在对话进行中禁用（沿用设置锁
@@ -204,35 +206,56 @@ export function SettingsMemory({ busy }: SettingsMemoryProps) {
                 title={overview.previous || "还没有长期梗概"}
               />
             </div>
-            <div className={styles.actions}>
-              <Button onClick={() => setView({ kind: "compiled" })}>
-                查看当下记忆
-              </Button>
-              <Button
-                onClick={() => void tidy()}
-                disabled={busy || tidying}
-              >
-                {tidying ? "整理中…" : "整理当下记忆"}
-              </Button>
+            {/* 四个动作各自成行：一行一件事，按钮从属于左边的标签。
+                挤成一排时，读到的只是"四个按钮"，看不出它们分别管什么。 */}
+            <div className={styles.actionList}>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>当前对话</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="查看当下记忆"
+                    onClick={() => setView({ kind: "compiled" })}
+                  >
+                    查看
+                  </Button>
+                  <Button
+                    aria-label="整理当下记忆"
+                    onClick={() => void tidy()}
+                    disabled={busy || tidying}
+                  >
+                    {tidying ? "整理中…" : "整理"}
+                  </Button>
+                </div>
+              </div>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>所有记忆</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="查看全部记忆"
+                    onClick={() => setView({ kind: "library" })}
+                  >
+                    查看
+                  </Button>
+                </div>
+              </div>
+              <div className={styles.actionRow}>
+                <span className={styles.actionLabel}>清除记忆</span>
+                <div className={styles.actions}>
+                  <Button
+                    aria-label="清除经历记忆"
+                    variant="danger"
+                    onClick={() => {
+                      if (guard()) setConfirmClear(true);
+                    }}
+                    disabled={busy}
+                  >
+                    清除
+                  </Button>
+                </div>
+              </div>
             </div>
-            {tidyMsg && <p className={styles.tidyMsg}>{tidyMsg}</p>}
 
-            {/* 经历之外还有一份按日期编排的记忆库；清除只作用于经历。
-                不再叠标题 + 说明 + 尾注三行文字——按钮名字自己说清楚了。 */}
-            <div className={styles.bottomRow}>
-              <Button onClick={() => setView({ kind: "library" })}>
-                查看全部记忆
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  if (guard()) setConfirmClear(true);
-                }}
-                disabled={busy}
-              >
-                清除经历记忆
-              </Button>
-            </div>
+            {tidyMsg && <p className={styles.tidyMsg}>{tidyMsg}</p>}
 
             {confirmClear && (
               <div

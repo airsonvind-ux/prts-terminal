@@ -84,9 +84,11 @@
   font-family: var(--font-ui);
   font-size: 11px;
   line-height: 1;
-  color: var(--text-2);
-  background: transparent;
-  border: 1px solid transparent;
+  color: var(--text-1);
+  /* 静止态就要看得出是按钮：一层比面板深一点的底 + 一道细边。
+     全透明、只在悬停时出现底色的写法，在密集的页里会被当成普通文字。 */
+  background: var(--depth-2);
+  border: 1px solid var(--depth-1);
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
@@ -101,33 +103,37 @@
 .button:disabled {
   color: var(--text-3);
   background: transparent;
+  border-color: var(--depth-1);
   cursor: not-allowed;
 }
 
-/* plain：无描边，悬停才出现底 */
+/* plain：默认形态，悬停时抬高一级 */
 .buttonPlain:hover:not(:disabled) {
   color: var(--text-1);
   background: var(--depth-4);
+  border-color: var(--depth-4);
 }
 
-/* primary：accent 描边，主动作 */
+/* primary：accent 描边 + 淡底，主动作 */
 .buttonPrimary {
   color: var(--accent);
+  background: rgba(74, 171, 234, 0.1);
   border-color: var(--accent);
 }
 
 .buttonPrimary:hover:not(:disabled) {
-  background: var(--depth-4);
+  background: rgba(74, 171, 234, 0.18);
 }
 
-/* danger：红字，破坏性确认 */
+/* danger：红字，破坏性动作；悬停才染红边 */
 .buttonDanger {
   color: var(--danger);
 }
 
 .buttonDanger:hover:not(:disabled) {
   color: var(--danger-hover);
-  background: var(--depth-4);
+  background: rgba(201, 83, 71, 0.12);
+  border-color: var(--danger);
 }
 
 /* icon：方形，只放图标；几何固定 22×22，不吃 padding */
@@ -135,12 +141,13 @@
   width: 22px;
   height: 22px;
   padding: 0;
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
 .buttonIcon:hover:not(:disabled) {
   color: var(--text-1);
   background: var(--depth-4);
+  border-color: var(--depth-4);
 }
 
 /* ── ListRow（主行 + 副行 + 右侧槽位） ── */
