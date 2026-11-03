@@ -10,6 +10,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 |---|---|
 | `content/plugins/<id>/plugin.json`（开发）/ `resources/plugins/<id>/plugin.json`（发布） | 随包插件 |
 | `<data_dir>/plugins/<id>/plugin.json` | 用户插件（后扫描，与随包同名时随包优先） |
+| `<插件目录>/skills/` | 插件自带的技能（停用即不进索引，见第七节） |
 | `<data_dir>/plugin-data/<id>/` | 插件的私有数据（`fs.plugin`，卸载时按勾选删） |
 | `<data_dir>/plugin-temp/<id>/` | 插件的临时文件（`fs.temp`，应用退出时整个 `plugin-temp` 清空） |
 | `<data_dir>/plugin-tmp/` | 安装暂存区（预览时拷进来的目录；启动时整个清空） |
@@ -32,7 +33,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
   "requires": { "app": ">=0.1.1" },
   "capabilities": ["maa.bridge"],
   "activation": ["onStartup"],
-  "contributes": { "skills": [], "settingsForm": "builtin-page", "assets": [] }
+  "contributes": { "skills": ["MAA 任务"], "settingsForm": "builtin-page", "assets": [] }
 }
 ```
 
@@ -46,7 +47,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 | `requires.app` | 否 | 宿主版本要求（semver 范围），不满足则整插件失败 |
 | `capabilities` | 否 | 要用的服务键，见下表；未登记的键会让插件加载失败 |
 | `activation` | 否 | 预留（目前只支持 `onStartup`） |
-| `contributes` | 否 | `settingsForm` 取 `schema` / `builtin-page`；目前只实现后者（内置插件用宿主原生页） |
+| `contributes` | 否 | `settingsForm` 取 `schema` / `builtin-page`；目前只实现后者（内置插件用宿主原生页）。`skills` 只作声明，实际以插件目录下的 `skills/` 为准 |
 
 命名约定：内置插件沿用原有工具名，`process` 插件的工具一律带 `<id>_` 前缀。
 
@@ -134,7 +135,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 
 - **停用**：摘掉工具并写墓碑，正在跑的对话里再调用会得到
   `插件 <名字> 已停用`（而不是「工具不存在」）；process 插件按 id 收进程，内置 MAA 同时关桥。
-  提示语是「停用后新对话生效」。
+  该插件的技能不再进索引（新对话生效）。提示语是「停用后新对话生效」。
 - **启用**：按记录里的原目录重新安装一次（目录名可以和 id 不同），工具回来，状态回 `Loaded`。
 - **安装**（M3 只支持文件夹，zip 请先解压）：选目录或拖到安装区 → 复制到 `plugin-tmp/<token>/`
   → 读 `plugin.json` 走完整校验 → 预览卡片 → 确认后 `rename` 原子落位
@@ -150,7 +151,23 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 日志都走 stderr：宿主侧带 `[plugins]` 前缀，插件转写带 `[plugin <id>]` 前缀。目前还没有日志器
 （D28），所以这些行只出现在控制台。
 
-## 七、命令（前端 ↔ 后端）
+## 七、技能与提示词归属
+
+插件可以带技能：放在插件目录下的 `skills/<技能目录>/SKILL.md`。索引的根是「宿主技能根 +
+已启用插件的 `skills/`」，宿主根排第一，因此同名时宿主优先；插件之间按 id 排序，先到先得。
+`contributes.skills` 只用来声明，声明了但目录里没有只会在 stderr 留一行告警，不影响加载。
+
+- 停用插件后，它的技能不再进索引——**新对话**看不到；正在进行的对话沿用冻结快照。
+- system prompt 的 Skill 目录按来源分组：宿主条目在前、格式不变；插件条目在名字后补
+  「（插件展示名）」。
+- 存在插件工具或插件技能时，system prompt 多一节「插件提供的能力」，逐行
+  `工具 <name> — <插件名>` / `技能 <name> — <插件名>`，按名字排序；没有插件条目时这一节
+  完全不出现，无插件态的提示词逐字节不变。
+- 工具与技能目录的提醒（`tool_catalog` / `skill_catalog`）带归属：插件条目显示为
+  `名称（插件名）`，移除项从基线读归属；启停/安装/卸载时提醒首行会写一句上下文
+  （如「插件 MAA 自动化 已停用」）。
+
+## 八、命令（前端 ↔ 后端）
 
 | 命令 | 参数 | 返回 |
 |---|---|---|
@@ -165,7 +182,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 除 `list_plugins` 外全部是 `async` 并经 `spawn_blocking` 执行，磁盘操作不占主线程。
 `PluginList = { plugins: PluginView[], unregistered: {dirName, reason}[] }`。
 
-## 八、版本
+## 九、版本
 
 `protocol` 目前是 `1`。加字段属于兼容变更；删字段、改语义要升 `protocol`，`requires.protocol`
 不匹配的插件会被拒绝加载并指出收到的值。
