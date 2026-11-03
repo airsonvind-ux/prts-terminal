@@ -21,6 +21,11 @@ interface ListRowProps {
   trailing?: ReactNode;
   /** 给了就可进入（详情/展开）；缺省是只读行 */
   onActivate?: () => void;
+  /**
+   * 行内自带可点区域（例如整段标题是链接）时的行级悬停反馈。
+   * 与 onActivate 的区别：不挂 role/tabIndex，键盘焦点仍落在行内真正的链接上。
+   */
+  hoverable?: boolean;
   /** danger = 副行变红并截断（异常原因） */
   tone?: "default" | "danger";
   /** 左侧状态点；缺省不画 */
@@ -44,6 +49,7 @@ export function ListRow({
   subtitle,
   trailing,
   onActivate,
+  hoverable = false,
   tone = "default",
   dot,
   muted = false,
@@ -63,6 +69,7 @@ export function ListRow({
   const className = [
     styles.listRow,
     interactive ? styles.listRowInteractive : "",
+    hoverable && !interactive ? styles.listRowHoverable : "",
     muted ? styles.listRowMuted : "",
     disabled ? styles.listRowDisabled : "",
   ]

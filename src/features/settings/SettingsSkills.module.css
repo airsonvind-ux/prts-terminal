@@ -70,6 +70,24 @@
   gap: 2px;
 }
 
+/* 技能名是打开源 md 的入口：悬停时名称转 accent + 下划线，配合整行抬起，
+   让「这一条可以点开」在鼠标移上去之前就看得出来（行本身也给了 pointer）。 */
+.skillLink {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.skillName {
+  border-bottom: 1px solid transparent;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.skillLink:hover .skillName,
+.skillLink:focus-visible .skillName {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
 /* 侧区：来源标签 + 移除按钮 */
 .sourceTag {
   font-size: 10px;

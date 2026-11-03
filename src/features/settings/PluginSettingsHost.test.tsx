@@ -289,7 +289,7 @@ describe("PluginSettingsHost（扩展页）", () => {
     });
 
     await renderHost();
-    await act(async () => buttonNamed("＋")?.click());
+    await act(async () => buttonNamed("安装")?.click());
     expect(title()).toBe("安装插件");
 
     // 选择文件夹 → 后端返回预览

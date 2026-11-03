@@ -37,6 +37,44 @@ export interface PluginSettingsHostProps {
 export const TURN_BUSY_HINT =
   "对话处理中，停用会打断正在执行的任务；等这一轮结束再试";
 
+// 页头图标：12px 线性图标（stroke 1.5，随字色）。不用「＋ / ⟳」字符——
+// 字形随字体走，尺寸与基线对不齐，22px 的方框里看着像随手敲的。
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+      <path
+        d="M8 3.25v9.5M3.25 8h9.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+      <path
+        d="M13 8a5 5 0 1 1-1.46-3.54"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path
+        d="M12.9 2.6v2.9H10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** 有设置页的插件：id → 组件。加一个插件就在这里加一行。 */
 const SETTINGS_PAGES: Partial<
   Record<string, (props: PluginSettingsHostProps) => ReactNode>
@@ -152,6 +190,7 @@ export function PluginSettingsHost({
             <span className={styles.pageTitle}>扩展</span>
             <span className={styles.pageSpacer} />
             <Button
+              variant="primary"
               aria-label="安装插件"
               title="安装插件"
               disabled={busy}
@@ -161,15 +200,17 @@ export function PluginSettingsHost({
                 setView({ kind: "install" });
               }}
             >
-              ＋
+              <PlusIcon />
+              安装
             </Button>
             <Button
+              variant="icon"
               aria-label="刷新"
               title="刷新"
               disabled={busy}
               onClick={refresh}
             >
-              ⟳
+              <RefreshIcon />
             </Button>
           </>
         ) : (

@@ -157,6 +157,16 @@
   outline-offset: -1px;
 }
 
+/* 行内自带链接（技能行）：整行随悬停轻微抬起，提示「这一条可以打开」。
+   焦点不落在这里——键盘用户走行内 FileLink 自己的 role=button。 */
+.listRowHoverable {
+  cursor: pointer;
+}
+
+.listRowHoverable:hover {
+  background: var(--depth-4);
+}
+
 .listRowMuted {
   color: var(--text-3);
 }

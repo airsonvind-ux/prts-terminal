@@ -129,13 +129,15 @@ export function SettingsSkills({
               return (
                 <ListRow
                   key={s.name}
+                  hoverable
                   title={
                     <FileLink
+                      className={styles.skillLink}
                       path={s.filePath}
                       successHint={`已打开「${s.name}」`}
                       title={s.description}
                     >
-                      {s.name}
+                      <span className={styles.skillName}>{s.name}</span>
                     </FileLink>
                   }
                   subtitle={s.description}
