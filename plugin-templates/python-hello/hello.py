@@ -16,7 +16,7 @@ PROTOCOL = 1
 TOOLS = [
     {
         "name": "hello",
-        "action": "和人打招呼",
+        "action": "打招呼",
         "description": "向一个人打招呼（示例工具）",
         "parameters": {
             "type": "object",

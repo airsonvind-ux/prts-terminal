@@ -69,7 +69,7 @@ fn main() -> std::process::ExitCode {
 fn tools() -> Value {
     json!([{
         "name": "hello",
-        "action": "和人打招呼",
+        "action": "打招呼",
         "description": "向一个人打招呼（示例工具）",
         "parameters": {
             "type": "object",
