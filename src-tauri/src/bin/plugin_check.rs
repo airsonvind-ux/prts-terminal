@@ -533,7 +533,8 @@ fn run(dir: &Path, target: &str, json: bool) -> Vec<Check> {
     }
 
     // ── 7. shutdown 收场 ──────────────────────────────────
-    let shutdown = json!({ "jsonrpc": "2.0", "method": "shutdown" });
+    // 与宿主一致：`shutdown` 是带 id 的请求（进程收到后回一帧再退出）。
+    let shutdown = json!({ "jsonrpc": "2.0", "id": 3, "method": "shutdown", "params": {} });
     if let Err(error) = session.send(&shutdown) {
         checks.push(Check::fail(
             7,
