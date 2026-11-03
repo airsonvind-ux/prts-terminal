@@ -88,6 +88,11 @@
   background: var(--depth-4);
 }
 
+/* 分组空隙（应用 | 对话与上下文 | 信息与扩展）：只加 4px，不做分隔线 */
+.navItemBreak {
+  margin-top: 4px;
+}
+
 /* ── 右侧内容 ── */
 
 .content {
@@ -98,7 +103,7 @@
 }
 
 .contentTitle {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-1);
   padding: 6px 10px;

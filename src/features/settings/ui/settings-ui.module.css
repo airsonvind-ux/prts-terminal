@@ -1,8 +1,9 @@
 /* 设置页通用组件样式（Section / Row / Note / Warning） */
 
 /* ── Section（节标题统一规范：所有设置页共用） ──
- * 小标题：600 字重、字号大于正文（正文 11px → 标题 12px）、与内容明确间距、
- * 无装饰线（层级由字号/间距承载）；节间大间距分隔（section margin-bottom）。 */
+ * 小标题：10px、字距 .08em、--text-3（层级交给页头，节标题只做分隔）；
+ * 无装饰线；节间大间距分隔（section margin-bottom）。
+ * 中文没有大小写，所以不用 text-transform：大写对 CJK 是空操作。 */
 
 .section {
   margin-bottom: 16px;
@@ -13,9 +14,10 @@
 }
 
 .sectionTitle {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
-  color: var(--text-1);
+  letter-spacing: 0.08em;
+  color: var(--text-3);
   margin: 0 0 8px;
 }
 
@@ -48,11 +50,172 @@
 .sectionWarning {
   font-size: 11px;
   line-height: 1.55;
-  color: #e6cf9a;
+  color: var(--warn);
   background: var(--depth-4);
   border: 1px solid var(--warn);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
+}
+
+/* ── Button（plain / primary / danger） ── */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.button:disabled {
+  color: var(--text-3);
+  background: transparent;
+  cursor: not-allowed;
+}
+
+/* plain：无描边，悬停才出现底 */
+.buttonPlain:hover:not(:disabled) {
+  color: var(--text-1);
+  background: var(--depth-4);
+}
+
+/* primary：accent 描边，主动作 */
+.buttonPrimary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  background: var(--depth-4);
+}
+
+/* danger：红字，破坏性确认 */
+.buttonDanger {
+  color: var(--danger);
+}
+
+.buttonDanger:hover:not(:disabled) {
+  color: var(--danger-hover);
+  background: var(--depth-4);
+}
+
+/* ── ListRow（主行 + 副行 + 右侧槽位） ── */
+
+.listRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+}
+
+.listRowInteractive {
+  cursor: pointer;
+}
+
+.listRowInteractive:hover {
+  background: var(--depth-4);
+}
+
+.listRowInteractive:active {
+  background: var(--depth-3, var(--depth-4));
+}
+
+.listRowInteractive:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.listRowMuted {
+  color: var(--text-3);
+}
+
+.listRowDisabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.listRowDot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.listRowDotOk {
+  background: var(--ok);
+}
+
+.listRowDotBad {
+  background: var(--danger);
+}
+
+.listRowDotIdle {
+  background: var(--text-3);
+}
+
+.listRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.listRowTitle {
+  font-size: 11px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listRowMuted .listRowTitle {
+  color: var(--text-3);
+}
+
+.listRowSub {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listRowSubDanger {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--danger);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listRowTrailing {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 /* ── 自绘下拉（原生 <select> 的展开列表是系统绘制的，改不动，所以自绘） ── */

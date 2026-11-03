@@ -75,6 +75,9 @@
   --danger: #c95347;
   --danger-hover: #d9685b;
 
+  /* 正常色（状态点：插件已加载、清单项可用——低饱和绿，只用于小面积） */
+  --ok: #5c9e78;
+
   /* ── 排版 ── */
 
   --font-ui: "Microsoft YaHei", sans-serif;

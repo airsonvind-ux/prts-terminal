@@ -138,7 +138,7 @@ export function SettingsPanel() {
               }
               className={`${styles.navItem} ${
                 activeTab === tab.key ? styles.navItemActive : ""
-              }`}
+              } ${"breakBefore" in tab && tab.breakBefore ? styles.navItemBreak : ""}`}
               onClick={() => switchTab(tab.key)}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
