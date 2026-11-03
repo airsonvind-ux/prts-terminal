@@ -108,11 +108,11 @@
   cursor: not-allowed;
 }
 
-/* plain：默认形态，悬停时再亮一档（D5） */
+/* plain：默认形态；悬停时底亮一档（D4→D5）、字亮一档（T1→T0）、边也提上来 */
 .buttonPlain:hover:not(:disabled) {
-  color: var(--text-1);
+  color: var(--text-0);
   background: var(--depth-5);
-  border-color: var(--depth-5);
+  border-color: var(--text-3);
 }
 
 /* primary：accent 描边 + 淡底，主动作 */
@@ -123,7 +123,8 @@
 }
 
 .buttonPrimary:hover:not(:disabled) {
-  background: rgba(74, 171, 234, 0.16);
+  color: var(--text-0);
+  background: rgba(74, 171, 234, 0.2);
   border-color: var(--accent);
 }
 
@@ -136,7 +137,7 @@
 
 .buttonDanger:hover:not(:disabled) {
   color: var(--danger-hover);
-  background: rgba(201, 83, 71, 0.16);
+  background: rgba(201, 83, 71, 0.18);
   border-color: var(--danger);
 }
 
@@ -149,9 +150,9 @@
 }
 
 .buttonIcon:hover:not(:disabled) {
-  color: var(--text-1);
+  color: var(--text-0);
   background: var(--depth-5);
-  border-color: var(--depth-5);
+  border-color: var(--text-3);
 }
 
 /* ── ListRow（主行 + 副行 + 右侧槽位） ── */
