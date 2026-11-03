@@ -85,10 +85,11 @@
   font-size: 11px;
   line-height: 1;
   color: var(--text-1);
-  /* 静止态看得出是按钮，但别抢戏：用一层很淡的白色提亮（不是比面板更深的底，
-     那会让按钮像面板上挖的洞），边也只比底亮一点点。 */
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 静止态看得出是按钮，但别抢戏：直接用调色板里的 D4（比面板 D3 亮一档），
+     不用白色叠出来的中性灰——那层灰和这套偏冷的蓝灰不在一族里，
+     放在面板上会显得"脏"。 */
+  background: var(--depth-4);
+  border: 1px solid var(--depth-4);
   border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
@@ -103,15 +104,15 @@
 .button:disabled {
   color: var(--text-3);
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.05);
+  border-color: var(--depth-4);
   cursor: not-allowed;
 }
 
-/* plain：默认形态，悬停时再亮一档 */
+/* plain：默认形态，悬停时再亮一档（D5） */
 .buttonPlain:hover:not(:disabled) {
   color: var(--text-1);
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: var(--depth-5);
+  border-color: var(--depth-5);
 }
 
 /* primary：accent 描边 + 淡底，主动作 */
@@ -126,16 +127,16 @@
   border-color: var(--accent);
 }
 
-/* danger：红字，破坏性动作；悬停才染红边 */
+/* danger：红字，破坏性动作；底仍用调色板的 D4，只有悬停才染红 */
 .buttonDanger {
   color: var(--danger);
-  background: rgba(201, 83, 71, 0.07);
-  border-color: rgba(201, 83, 71, 0.3);
+  background: var(--depth-4);
+  border-color: var(--depth-4);
 }
 
 .buttonDanger:hover:not(:disabled) {
   color: var(--danger-hover);
-  background: rgba(201, 83, 71, 0.14);
+  background: rgba(201, 83, 71, 0.16);
   border-color: var(--danger);
 }
 
@@ -149,8 +150,8 @@
 
 .buttonIcon:hover:not(:disabled) {
   color: var(--text-1);
-  background: rgba(255, 255, 255, 0.09);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: var(--depth-5);
+  border-color: var(--depth-5);
 }
 
 /* ── ListRow（主行 + 副行 + 右侧槽位） ── */
