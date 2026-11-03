@@ -62,6 +62,8 @@ pub struct PluginToolSpec {
     pub description: String,
     pub parameters: Value,
     pub timeout: Duration,
+    /// 调用文案里的动词短语；`None` = 未提供，走前端保底。
+    pub action: Option<String>,
 }
 
 impl ProcessPlugin {
@@ -623,6 +625,7 @@ pub struct PluginTool {
     description: String,
     parameters: Value,
     timeout: Duration,
+    action: Option<String>,
 }
 
 impl PluginTool {
@@ -635,6 +638,7 @@ impl PluginTool {
             description: spec.description,
             parameters: spec.parameters,
             timeout: spec.timeout,
+            action: spec.action,
         }
     }
 }
@@ -654,6 +658,10 @@ impl Tool for PluginTool {
 
     fn timeout(&self) -> Option<Duration> {
         Some(self.timeout)
+    }
+
+    fn action(&self) -> Option<&str> {
+        self.action.as_deref()
     }
 
     fn execute(&self, _ctx: &ToolContext, params: &str) -> Result<ToolOutput, ToolError> {
@@ -795,11 +803,26 @@ fn parse_tools(plugin_id: &str, value: &Value) -> Result<Vec<PluginToolSpec>, Pl
             .filter(|millis| *millis > 0)
             .map(Duration::from_millis)
             .unwrap_or(DEFAULT_TOOL_TIMEOUT);
+        // 文案不合格就整插件失败：模型看的是「PRTS正在{短语}...」，
+        // 放过一条超长/带空白的短语，坏的是用户每一轮的对话卡片。
+        let action = match item.get("action").and_then(Value::as_str) {
+            Some(raw) => match super::parse_action(raw) {
+                Ok(action) => action,
+                Err(problem) => {
+                    return Err(PluginError::Process {
+                        id: plugin_id.to_string(),
+                        detail: format!("工具 {name} 的 {problem}"),
+                    })
+                }
+            },
+            None => None,
+        };
         specs.push(PluginToolSpec {
             name,
             description,
             parameters,
             timeout,
+            action,
         });
     }
     Ok(specs)
@@ -966,6 +989,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(specs[0].timeout, Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn parse_tools_carries_the_declared_action() {
+        let specs = parse_tools(
+            "probe",
+            &json!([{ "name": "echo", "parameters": {}, "action": "清点图片" }]),
+        )
+        .unwrap();
+        assert_eq!(specs[0].action.as_deref(), Some("清点图片"));
+
+        // 缺失 / 空串 = 未提供，不报错。
+        let specs = parse_tools(
+            "probe",
+            &json!([
+                { "name": "a", "parameters": {} },
+                { "name": "b", "parameters": {}, "action": "" }
+            ]),
+        )
+        .unwrap();
+        assert_eq!(specs[0].action, None);
+        assert_eq!(specs[1].action, None);
+    }
+
+    #[test]
+    fn parse_tools_rejects_a_bad_action_and_names_the_tool() {
+        // 不合格的短语会让整个插件失败：报错要带工具名，作者才知道改哪一条。
+        let error = parse_tools(
+            "probe",
+            &json!([{ "name": "echo", "parameters": {}, "action": "清点 图片" }]),
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("echo"), "要指出是哪个工具：{text}");
+        assert!(text.contains("action 含空白或不可见字符"), "{text}");
+
+        let long = "图".repeat(17);
+        let error = parse_tools(
+            "probe",
+            &json!([{ "name": "echo", "parameters": {}, "action": long }]),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("action 超过 16 字（现在 17 字）"),
+            "{error}"
+        );
     }
 
     #[test]

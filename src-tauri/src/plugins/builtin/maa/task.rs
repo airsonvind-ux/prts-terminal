@@ -30,6 +30,13 @@ impl Tool for MaaTaskTool {
         "run_maa_task"
     }
 
+    /// 调用文案：MAA 是内置插件，但用户看到的卡片与外部插件工具同一套模板
+    /// （「PRTS正在执行MAA任务...」），所以走同一条 `Tool::action` 通路，
+    /// 不再依赖前端按工具名硬编码。
+    fn action(&self) -> Option<&str> {
+        Some("执行MAA任务")
+    }
+
     fn description(&self) -> &str {
         concat!(
             "在本机《明日方舟》中，通过 MAA 执行游戏操作：刷关、公招、基建、领奖、肉鸽、抄作业、识别等。仅支持模拟器。\n",
@@ -1219,6 +1226,15 @@ mod tests {
         let description = MaaTaskTool.description();
         assert!(!description.contains("screenshot"), "{description}");
         assert!(!description.contains("截图"), "{description}");
+    }
+
+    #[test]
+    fn action_is_a_short_verb_phrase_the_host_will_wrap() {
+        // 前端拼成「PRTS正在执行MAA任务...」：短语自己不带 PRTS/正在/完成。
+        let action = MaaTaskTool.action().expect("内置插件工具也要给文案");
+        assert_eq!(action, "执行MAA任务");
+        assert!(!action.contains("PRTS") && !action.contains("正在"));
+        assert!(action.chars().count() <= 16, "{action}");
     }
 
     #[test]
