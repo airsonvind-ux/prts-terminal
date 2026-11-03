@@ -390,6 +390,35 @@ describe("SettingsMemory（结构定稿）", () => {
     expect(calls[0][1]).toMatchObject({ text: "新长期" });
   });
 
+  it("当前记忆的结构：近期经历按日期成组、长期梗概的编辑按钮在标题行", async () => {
+    render();
+    await flush();
+    clickText("管理当前记忆");
+    await flush();
+    const text = container.textContent ?? "";
+    expect(text).toContain("2026-09-16");
+    expect(text).toContain("2026-09-15");
+    // 日期头新在前
+    expect(text.indexOf("2026-09-16")).toBeLessThan(text.indexOf("2026-09-15"));
+    // 「编辑」在长期梗概的标题行里，而不是跟在正文尾巴上
+    const editBtn = findButton("编辑")!;
+    expect(editBtn.parentElement?.textContent).toContain("长期梗概");
+  });
+
+  it("长期梗概超长时只给四行预览，可展开全文再收起", async () => {
+    const long = "长期梗概的一段".repeat(40);
+    overviewOverride = { ...OVERVIEW, previous: long };
+    render();
+    await flush();
+    clickText("管理当前记忆");
+    await flush();
+    expect(findButton("展开全文")).toBeTruthy();
+    clickText("展开全文");
+    expect(findButton("收起")).toBeTruthy();
+    clickText("收起");
+    expect(findButton("展开全文")).toBeTruthy();
+  });
+
   it("查看全部记忆：按日期分组（新在前）、默认只标题、点开看内容；无来源与标签", async () => {
     render();
     await flush();

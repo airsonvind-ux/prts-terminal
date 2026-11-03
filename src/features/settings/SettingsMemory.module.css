@@ -141,6 +141,9 @@
   resize: none;
   overflow: hidden;
   line-height: 1.5;
+  /* 长文编辑时封顶：超出在框内滚动，而不是把整页顶下去 */
+  max-height: 40vh;
+  overflow-y: auto;
 }
 
 .formMeta {
@@ -525,4 +528,110 @@
   gap: 6px;
   padding: 8px 10px;
   border-top: 1px solid var(--depth-1);
+}
+
+/* ── 当前记忆：三块卡片 ──
+   一块一件事（近期经历 / 长期梗概 / 整理），标题行右侧放这块唯一的动作，
+   这样"编辑""整理"不必跟在正文尾巴上，长文也不会把按钮顶到屏幕外。 */
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--depth-3);
+  border-radius: var(--radius-md);
+}
+
+.blockHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 20px;
+}
+
+.blockTitle {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.blockSpacer {
+  flex: 1;
+}
+
+.blockMeta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.blockButton {
+  margin-left: 2px;
+}
+
+.blockHint {
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.blockActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+/* 近期经历沿用「记忆库」的条目壳：同一套边框、圆角、日期头；
+   区别只是这里只有 5 条，不需要折叠，正文直接铺开。 */
+.entryHeadStatic {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+}
+
+.recentTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-1);
+  word-break: break-word;
+}
+
+/* 长期梗概的阅读态：四行封顶 + 渐隐，长文默认不占满整页 */
+.prePreview {
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
+}
+
+.prePreviewOpen {
+  display: block;
+  -webkit-line-clamp: unset;
+  mask-image: none;
+}
+
+.linkButton {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
 }
