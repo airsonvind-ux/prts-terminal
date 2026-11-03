@@ -3,8 +3,12 @@
 // 2026-09 拆分：技能节迁往「技能」页——工作空间与技能是不同来源的对象，
 // 且目录树需要整列宽度。
 //
+// 2026-11 UI 优化：路径不再和按钮挤在同一行（264px 宽，长路径必被按钮切碎）。
+// 改成「小标签 → 等宽路径块 → 操作行」三层：路径块独占一行、可省略、悬停看全，
+// 操作行三个等权按钮左对齐，不再有靠右悬空的单个按钮。
+//
 // 工作空间节：路径**只读显示**（显示**解析后**的生效路径；用默认工作区时附
-// 「默认」标记）+ 「选择目录」按钮 → 系统目录选择器（choose_workspace_directory）
+// 「默认」标记）+ 「选择目录」→ 系统目录选择器（choose_workspace_directory）
 // → 选定即存；非默认时另有「恢复默认」→ 写空串 = 回到默认工作区（后端
 // `config::default_workspace_path`——空值不是「无工作目录」）。改动**即时生效**
 // （后端工作根是共享句柄，见 `crate::workspace`），故 hint 不再提「重启生效」。
@@ -15,6 +19,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
 import { SettingsSection, SectionWarning } from "./ui/SettingsSection";
+import { Button } from "./ui/Button";
 import { WorkspaceTree } from "./WorkspaceTree";
 import styles from "./SettingsSpace.module.css";
 
@@ -56,49 +61,48 @@ export function SettingsSpace({
         {busy && (
           <SectionWarning>对话处理中，工作空间路径暂不可改</SectionWarning>
         )}
-        {/* 多行排布：label / 路径行（路径 + 选择目录）/ 打开行 / hint */}
-        <div className={styles.wsLabel}>路径</div>
-        <div className={styles.wsPathRow}>
-          <div
-            className={workspaceRoot ? styles.wsValue : styles.wsValueEmpty}
-            title={workspaceRoot || undefined}
+        <span className={styles.pathLabel}>路径</span>
+        <div
+          className={styles.pathBlock}
+          title={workspaceRoot || undefined}
+        >
+          <span
+            className={[styles.pathValue, workspaceRoot ? "" : styles.pathEmpty]
+              .filter(Boolean)
+              .join(" ")}
           >
             {workspaceRoot || "—"}
-            {isDefault && workspaceRoot && (
-              <span className={styles.wsBadge}>默认</span>
-            )}
-          </div>
-          <button
-            className={styles.actionButton}
+          </span>
+          {isDefault && workspaceRoot && (
+            <span className={styles.badge}>默认</span>
+          )}
+        </div>
+        <div className={styles.actions}>
+          <Button
             onClick={onChooseWorkspace}
             disabled={busy}
             title="选择一个目录作为工作空间根"
           >
             选择目录
-          </button>
-        </div>
-        <div className={styles.wsActions}>
-          <button
-            className={styles.actionButton}
+          </Button>
+          <Button
             onClick={openInExplorer}
             disabled={!workspaceRoot}
             title="在系统资源管理器中打开工作目录"
-            aria-label="在系统资源管理器中打开工作目录"
           >
             在资源管理器中打开
-          </button>
+          </Button>
           {!isDefault && (
-            <button
-              className={styles.actionButton}
+            <Button
               onClick={onResetWorkspace}
               disabled={busy}
               title="改回默认工作目录"
             >
               恢复默认
-            </button>
+            </Button>
           )}
         </div>
-        <p className={styles.wsHint}>文件与命令操作的工作根目录</p>
+        <p className={styles.hint}>文件与命令操作的工作根目录</p>
       </SettingsSection>
 
       <SettingsSection title="目录结构">
