@@ -139,8 +139,9 @@ describe("过程卡 · 单卡顺序行", () => {
     expect(text).toContain("思考与工具");
     expect(text).toContain("✓ 完成");
     expect(text).toContain("1 调用");
-    // 收起态不写思考段数（规格 §四：标题只写「思考」）
-    expect(text).not.toContain("思考 1 段");
+    // 数量信息齐全：思考段数 + 调用次数（规格 §四：收起态摘要只列非零项）
+    expect(text).toContain("思考 1 段");
+    expect(text).toContain("思考 1 段 · 1 调用");
     // 展开前看不到行内容
     expect(text).not.toContain("PRTS查询数据库完成");
   });

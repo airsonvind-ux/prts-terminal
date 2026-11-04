@@ -1,8 +1,7 @@
 // 过程卡（消息流重构 · 面板卡）
 //
 // 一张卡、一个标题行、展开后按到达顺序逐行。标题行是唯一的收起态内容：
-// 箭头 + 「思考与工具」+ 状态 + 右侧用量。展开后思考是卡内第二层（默认收起），
-// 工具行按到达顺序混排。
+// 箭头 + 「思考与工具」+ 状态 + 右侧数量（思考几段、调用几次、耗时）。
 //
 // 行文案沿用原来的措辞（PRTS正在… / …完成 / …失败：摘要），状态改由左侧圆点
 // 承载：完成绿、进行中金并呼吸、失败红。耗时只在拿得到到达时刻时显示——
@@ -54,10 +53,13 @@ export function ProcessCard({ block, interactive, className, onToggle }: Props) 
   const running = block.open && interactive;
   const failures = block.summary.failures;
   const elapsed = formatElapsed(block.startedAt, block.endedAt);
-  const usage =
-    block.summary.calls > 0
-      ? `${block.summary.calls} 调用${elapsed ? ` · ${elapsed}` : ""}`
-      : null;
+  // 收起态的数量信息：思考几段、调用几次、耗时多久。只列非零项——
+  // 纯思考的卡不再只剩一句「✓ 完成」，失败项数由左侧状态位承担。
+  const usageParts: string[] = [];
+  if (block.summary.reasoning > 0) usageParts.push(`思考 ${block.summary.reasoning} 段`);
+  if (block.summary.calls > 0) usageParts.push(`${block.summary.calls} 调用`);
+  if (elapsed) usageParts.push(elapsed);
+  const usage = usageParts.length > 0 ? usageParts.join(" · ") : null;
 
   // 归档轮里没等到结果的调用 / 没闭合的思考 = 这一轮被打断了。
   // 进行中的轮次不判这个：那时「还没回来」本来就是常态，标题写进行中。
