@@ -1,8 +1,9 @@
 // src/toolDisplay.ts
 // 工具显示短语派生 —— 纯函数，无 React 依赖
 //
-// 职责：把工具名映射为面向用户的"核心短语"，供 EventBadge 拼装
-// 三态文案（进行中/完成/失败）。粗粒度分类映射，不暴露工具内部细节。
+// 职责：把工具名映射为面向用户的"核心短语"，供消息流拼装
+// 三态文案（进行中/完成/失败）；以及审批出卡族的类别短语。
+// 粗粒度分类映射，不暴露工具内部细节。
 //
 // 映射策略：精确表（在册工具）优先 → 前缀兜底（未来新增工具自动归类）→ 最终兜底。
 // 在册工具清单见 src-tauri/src/tools/mod.rs register_builtin。
@@ -68,4 +69,30 @@ export function toolAction(toolName: string): string {
     if (toolName.startsWith(prefix)) return phrase;
   }
   return FALLBACK_PHRASE;
+}
+
+// ── 出卡族类别短语（M3-A 地域性信任门 · 设计 §9 定稿） ──
+// reason 码（ruleId 通道）↔ 短语一一对应；确认卡类别行直接回答"为什么问"。
+// crit-* 不产生 request（恒拦直接拒绝，无确认卡）故无条目；ruleId 为 null
+// 或未收录（region-in/system-query 等区内放行族在询问模式下弹卡、未来新增
+// 码）→ 不渲染类别行，也不显示任何"高危"字样（高危徽章已废除）。
+
+const RULE_ID_PHRASES: Record<string, string> = {
+  "region-external": "修改工作目录外的文件或目录",
+  "run-external-program": "运行工作目录外的程序或脚本",
+  "delete-always-ask": "删除文件或目录（任何位置都需要你确认）",
+  "code-exec": "执行代码片段",
+  "network-op": "访问网络或下载内容",
+  "install-op": "安装或卸载软件",
+  "process-control": "终止进程",
+  "config-op": "修改系统网络配置",
+  "git-undo": "修改仓库历史（可能丢弃更改）",
+  "unanalyzable-syntax": "组合命令：无法判断具体内容",
+  "skill-package-script": "Skill 包内的脚本",
+  "skill-untrusted-active": "不可信 Skill 相关命令",
+};
+
+/** ruleId → 类别短语；null/未收录 → undefined（不渲染类别行） */
+export function categoryPhrase(ruleId: string | null): string | undefined {
+  return ruleId ? RULE_ID_PHRASES[ruleId] : undefined;
 }

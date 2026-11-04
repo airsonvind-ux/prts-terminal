@@ -1,6 +1,6 @@
 import type { MoodEvent, MoodIntensity, ToolDisplay } from "../../types";
 import { FileLink } from "../../shared/ui/FileLink";
-import styles from "./EventBadge.module.css";
+import styles from "./eventDisplay.module.css";
 
 // ── 情绪描述表（MOOD v2）：没有心声时的旁白兜底 ──
 

@@ -84,7 +84,7 @@ export function appendCurrentEventImpl(
 
   if (event.type === "assistant/chunk") {
     // 高频增量：进入 33ms 批量缓冲（窗口内累积，flush 时一次性追加）。
-    // text / reasoning 两种 kind 均缓冲——EventBadge 的推理累积与
+    // text / reasoning 两种 kind 均缓冲——过程卡的推理累积与
     // deriveTextSegments 的文本累积都只读 currentEvents，序列不变。
     if (event.kind === "text") {
       // 情绪标签扫描（MOOD v2）：展示层剥离整行标签与心声，块以

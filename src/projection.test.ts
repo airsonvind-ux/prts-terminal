@@ -280,7 +280,7 @@ describe("deriveAssistantFromEvents", () => {
     expect(proj.reasoningContent).toBe("");
   });
 
-  it("推理-only 轮：content 空但存在（reasoning 由 EventBadge 展示）", () => {
+  it("推理-only 轮：content 空但存在（reasoning 由过程卡展示）", () => {
     const events: SessionEvent[] = [
       user("s1", "分析"),
       reasoningChunk("s1", "思考中"),

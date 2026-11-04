@@ -19,9 +19,8 @@ import {
 } from "../../stores/useProcessingStore";
 import { useUpdaterStore } from "../../stores/useUpdaterStore";
 import { showToast } from "../../stores/useToastStore";
-import { toolAction } from "../../toolDisplay";
+import { categoryPhrase, toolAction } from "../../toolDisplay";
 import { callPhrase } from "./eventSlots";
-import { categoryPhrase } from "./EventBadge";
 import { NoticeDock, UpdateDock } from "./UpdateDock";
 import styles from "./ActionDock.module.css";
 

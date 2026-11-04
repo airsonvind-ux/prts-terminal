@@ -65,8 +65,21 @@ function reasoning(text: string): SessionEvent {
   return { type: "assistant/chunk", sessionId: S, kind: "reasoning", content: text };
 }
 
-function call(callId: string, toolName: string, action?: string): SessionEvent {
-  return { type: "tool/call", sessionId: S, callId, toolName, params: "{}", ...(action ? { action } : {}) };
+function call(
+  callId: string,
+  toolName: string,
+  action?: string,
+  display?: { text?: string; link?: { kind: "file" | "url"; target: string; label: string }; full?: string }
+): SessionEvent {
+  return {
+    type: "tool/call",
+    sessionId: S,
+    callId,
+    toolName,
+    params: "{}",
+    ...(action ? { action } : {}),
+    ...(display ? { display } : {}),
+  };
 }
 
 function result(
@@ -359,5 +372,67 @@ describe("过程卡 · 外部来源与失败行", () => {
     expect(text.className).toContain("lineText");
     // 省略只在视觉层：全文仍在文本节点里
     expect(view.text()).toContain("无法找到路径");
+  });
+});
+
+// ── 展示切片（从 EventBadge.test 迁移：渲染函数还在 eventDisplay.tsx） ──
+
+describe("过程卡 · 展示切片", () => {
+  const fileDisplay = {
+    link: { kind: "file" as const, target: "C:/ws/notes/a.md", label: "a.md" },
+  };
+
+  it("查询类展示「短语：对象」，有展示信息就不补「...」", () => {
+    const view = render([call("c1", "query_enemy", undefined, { text: "源石虫" })], true);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS正在查询数据库：源石虫");
+    expect(view.text()).not.toContain("查询数据库...");
+  });
+
+  it("无展示信息：保留「...」尾缀", () => {
+    const view = render([call("c1", "echo")], true);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS正在处理...");
+  });
+
+  it("展示文本超长截断，悬停 title 看全文", () => {
+    const long = "甲".repeat(120);
+    const view = render([call("c1", "query_enemy", undefined, { text: long, full: long })], true);
+    view.clickHeader();
+    const span = Array.from(view.container.querySelectorAll("span")).find(
+      (el) => el.getAttribute("title") === long
+    ) as HTMLElement | undefined;
+    expect(span).toBeTruthy();
+    expect(span!.textContent!.length).toBeLessThan(long.length);
+    expect(span!.textContent!.endsWith("…")).toBe(true);
+  });
+
+  it("文件链接三态均保留；点击走 open_path", async () => {
+    const running = render([call("c1", "read_file", undefined, fileDisplay)], true);
+    running.clickHeader();
+    expect(running.text()).toContain("PRTS正在阅读");
+    expect(running.text()).toContain("a.md");
+
+    const failed = render(
+      [call("c1", "read_file", undefined, fileDisplay), result("c1", "read_file", false, "文件不存在")],
+      true
+    );
+    failed.clickHeader();
+    expect(failed.text()).toContain("PRTS阅读失败：文件不存在");
+    expect(failed.text()).toContain("a.md");
+
+    const invokeMock = (
+      globalThis as unknown as {
+        __invokeMock: { mockClear(): void; mock: { calls: unknown[][] } };
+      }
+    ).__invokeMock;
+    invokeMock.mockClear();
+    const link = Array.from(failed.container.querySelectorAll('[role="button"]')).find(
+      (el) => el.textContent === "a.md"
+    ) as HTMLElement;
+    expect(link).toBeTruthy();
+    act(() => link.click());
+    await Promise.resolve();
+    expect(invokeMock.mock.calls.some((c) => c[0] === "open_path")).toBe(true);
   });
 });

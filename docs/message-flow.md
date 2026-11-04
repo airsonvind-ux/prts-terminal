@@ -4,7 +4,7 @@
 
 实现分两半：`src/features/chat/blocks.ts` 的纯函数 `splitTurn(events)` 负责切块；`messageItems.ts` 把块逐个翻成列表条目（一块一条，id 用轮标签 + 轮内序号），`MessageRow` 按条目渲染。过程卡只渲染卡，文本只渲染文本，交错顺序就是条目顺序。
 
-`EventBadge` 的经典形态（思考区 / 工具区 / 情绪区）已不再被消息流使用：过程卡与情绪卡各自成型，经典形态只剩 `categoryPhrase` 与它自己的测试还在引用，待决定去留。
+`EventBadge`（旧的思考区 / 工具区 / 情绪区三段折叠）已在过程卡与情绪卡成型后拆除：它的两条断言（审批四态、外部来源、失败省略、悬空态）迁进了 `ProcessCard.test.tsx`，`categoryPhrase` 搬到了 `src/toolDisplay.ts`。
 
 ## 块
 
@@ -68,7 +68,6 @@ type Block =
 ## 测试
 
 - `blocks.test.ts`：切分器纯函数——文本切点、视图切点、连续工具合成一卡、reset 撤回、无 chunk 回退、稳定 id、5000 chunk 基准；
-- `ProcessCard.test.tsx`：单卡摘要、失败项数、按到达顺序混排、审批强制展开、情绪独立；
+- `ProcessCard.test.tsx`：单卡摘要、失败项数、按到达顺序混排、审批四态、外部来源、失败省略、悬空态、情绪独立；
 - `messageFlow.test.tsx`：状态矩阵——流式中 / 完成 / 含失败 / 等待审批 / 中止 / 归档回放；
-- `MoodCard.test.tsx`：心声优先、旁白兜底、四色相；
-- `EventBadge.test.tsx`：既有 classic 形态，现在只剩它自己还在用。
+- `MoodCard.test.tsx`：心声优先、旁白兜底、四色相。

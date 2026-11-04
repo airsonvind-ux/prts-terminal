@@ -2,7 +2,7 @@
 // hasPendingApproval 纯函数测试：设置入口收窄的判据。
 //
 // 口径：任一处理中快照里存在未配对的 tool/approval-request（有 request 无 result）
-// 即视为有待审批。与 EventBadge 的配对规则同源（callId 精确配对）。
+// 即视为有待审批。与过程卡的行配对规则同源（callId 精确配对）。
 
 import { describe, it, expect } from "vitest";
 import { hasPendingApproval } from "../useProcessingStore";
