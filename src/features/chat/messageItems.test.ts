@@ -143,6 +143,56 @@ describe("buildArchivedItems · 归档展示清洗", () => {
       ],
     });
   });
+
+  it("草案 3 归档：情绪块在正文之前，正文原样保留", () => {
+    const turn = [
+      user("测试"),
+      {
+        type: "mood/event",
+        sessionId: "s1",
+        mood: "高兴",
+        tint: "高兴",
+        text: "对上了，就是这张。",
+        intensity: 2,
+      } as SessionEvent,
+      chunk("这张图好认。\n剩下的也看完了。"),
+    ];
+
+    const items = buildArchivedItems([turn], false, undefined);
+    expect(
+      items.map((item) => (item.type === "message" ? `message:${item.role}` : item.type))
+    ).toEqual(["message:user", "mood", "message:assistant"]);
+    expect(items[1]).toMatchObject({
+      type: "mood",
+      events: [{ type: "mood/event", text: "对上了，就是这张。", intensity: 2 }],
+    });
+    expect(items[2]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      segments: [{ content: "这张图好认。\n剩下的也看完了。", transition: false }],
+    });
+  });
+
+  it("旧归档只有 mood + intensity 时回放：正文完整、情绪块照旧", () => {
+    const turn = [
+      user("测试"),
+      { type: "mood/event", sessionId: "s1", mood: "沮丧", intensity: 1 } as SessionEvent,
+      chunk("没赶上。\n下一轮再来。"),
+    ];
+
+    const items = buildArchivedItems([turn], false, undefined);
+    expect(
+      items.map((item) => (item.type === "message" ? `message:${item.role}` : item.type))
+    ).toEqual(["message:user", "mood", "message:assistant"]);
+    expect(items[1]).toMatchObject({
+      type: "mood",
+      events: [{ type: "mood/event", mood: "沮丧", intensity: 1 }],
+    });
+    expect(items[2]).toMatchObject({
+      type: "message",
+      segments: [{ content: "没赶上。\n下一轮再来。", transition: false }],
+    });
+  });
 });
 
 describe("buildArchivedItems · 错误轮", () => {
