@@ -3,13 +3,14 @@
 // 一张卡、一行摘要、展开后按到达顺序逐行：思考行与工具行混排，不再分
 // 「思考过程」「工具调用」两个可折叠区（那是两层折叠）。
 //
-// 行渲染沿用 EventBadge 的文案与配色：工具行的三态（进行中 / 完成 / 失败）、
+// 行渲染沿用原来的行样式与文案：工具行的三态（进行中 / 完成 / 失败）、
 // 审批等待行、外部资料来源标签都从 ToolSlot 取，不另造一套。
 // 审批按钮不在这里——产品界面的确认/拒绝在输入框上方的 Action Dock，
-// 卡内只显示「等待确认」这一行（MessageRow 传 showApprovalControls={false}）。
+// 卡内只显示「等待确认」这一行。
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { hasDisplay, renderDisplaySuffix } from "./eventDisplay";
+import { buildToolSlots } from "./eventSlots";
 import type { ToolSlot } from "./eventSlots";
 import type { Block, CardSummary } from "./blocks";
 import styles from "./EventBadge.module.css";
@@ -27,15 +28,21 @@ export function summaryText(summary: CardSummary): string {
 
 interface Props {
   block: CardBlock;
-  /** callId → 槽位（来自 buildToolSlots，含文案短语、display、来源、审批态） */
-  slots: Map<string, ToolSlot>;
   /** 进行中轮次（currentEvents）：等待审批时强制展开 */
   interactive: boolean;
+  /** 列表行样式（外边距、滚动锚点） */
+  className?: string;
   /** 展开/收起：列表据此停止自动跟底 */
   onToggle?: () => void;
 }
 
-export function ProcessCard({ block, slots, interactive, onToggle }: Props) {
+export function ProcessCard({ block, interactive, className, onToggle }: Props) {
+  // 槽位（短语、display、来源、审批态）由本卡自己的事件切片算：
+  // 卡与卡之间不共享，呼叫配对也只可能发生在同一张卡里。
+  const slots = useMemo(
+    () => new Map(buildToolSlots(block.events).map((slot) => [slot.callId, slot])),
+    [block.events]
+  );
   const [open, setOpen] = useState(false);
   const waiting = interactive && block.rows.some(
     (row) => row.kind === "tool" && row.approval === "pending" && row.status === "running"
@@ -47,7 +54,13 @@ export function ProcessCard({ block, slots, interactive, onToggle }: Props) {
   ) || (block.rows.some((row) => row.kind === "reasoning") && block.rows.length > 0 && interactive);
 
   return (
-    <div className={styles.flowCard} data-block-id={block.id} data-process-card>
+    <div
+      className={
+        className ? `${styles.flowCard} ${className}` : styles.flowCard
+      }
+      data-block-id={block.id}
+      data-process-card
+    >
       <button
         type="button"
         className={styles.flowHeader}

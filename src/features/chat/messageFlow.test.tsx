@@ -8,7 +8,8 @@
 import { describe, expect, it, afterEach } from "vitest";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
-import { EventBadge } from "./EventBadge";
+import { MessageRow } from "./MessageRow";
+import { buildArchivedItems, buildLiveItems } from "./messageItems";
 import type { SessionEvent } from "../../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -30,17 +31,19 @@ afterEach(() => {
 });
 
 function render(events: SessionEvent[], interactive: boolean) {
+  const items = interactive
+    ? buildLiveItems(events, undefined, false)
+    : buildArchivedItems([events], false, undefined);
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   act(() => {
     root.render(
-      React.createElement(EventBadge, {
-        events,
-        interactive,
-        showApprovalControls: false,
-        variant: "flow",
-      })
+      React.createElement(
+        "div",
+        null,
+        items.map((item) => React.createElement(MessageRow, { key: item.id, item }))
+      )
     );
   });
   mounted.push({ container, root });

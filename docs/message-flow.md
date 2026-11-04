@@ -2,7 +2,9 @@
 
 聊天区的显示不是「一轮 = 一个气泡 + 一张卡」，而是一串有序列的块。模型在一次回答里可能先说话、再调工具、再说一句、再调工具，显示层按到达顺序把这些片段切开，用户看到的就是它们真实的先后。
 
-实现分两半：`src/features/chat/blocks.ts` 的纯函数 `splitTurn(events)` 负责切块，`ProcessCard` / `MessageRow` / `MessageList` 负责画。
+实现分两半：`src/features/chat/blocks.ts` 的纯函数 `splitTurn(events)` 负责切块；`messageItems.ts` 把块逐个翻成列表条目（一块一条，id 用轮标签 + 轮内序号），`MessageRow` 按条目渲染。过程卡只渲染卡，文本只渲染文本，交错顺序就是条目顺序。
+
+`EventBadge` 的经典形态（思考区 / 工具区 / 情绪区）只剩情绪卡在用；过程卡不再借用它。
 
 ## 块
 
