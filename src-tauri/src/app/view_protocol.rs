@@ -80,7 +80,45 @@ fn serve(path: &str) -> Result<(&'static str, Vec<u8>), String> {
     let absolute = crate::storage::views::resolve_session_path(conversation_id, relative)?;
     let path = std::path::Path::new(&absolute);
     let bytes = std::fs::read(path).map_err(|_| "视图文件读不到".to_string())?;
-    Ok((mime_of(path), bytes))
+    let mime = mime_of(path);
+    if mime.starts_with("text/html") {
+        return Ok((mime, with_view_chrome(&bytes)));
+    }
+    Ok((mime, bytes))
+}
+
+/// 宿主给沙箱文档补的一层「壳」样式。
+///
+/// 跨源 iframe 的滚动条没法从父页面改，而 WebView2 的默认滚动条是浅色实心条，
+/// 压在深色视图上非常刺眼。作者自己的样式写在后面，会正常覆盖这些默认值。
+const VIEW_CHROME_CSS: &str = concat!(
+    "html{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}",
+    "::-webkit-scrollbar{width:8px;height:8px}",
+    "::-webkit-scrollbar-track{background:transparent}",
+    "::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:4px}",
+    "::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.26)}",
+);
+
+/// 把 `VIEW_CHROME_CSS` 插进作者 HTML 的 `<head>` 开头；没有 head 就插在
+/// doctype 之后，再没有就直接前置（仍在文档最前面，不影响渲染）。
+fn with_view_chrome(html: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(html);
+    let style = format!("<style data-prts-view-chrome>{VIEW_CHROME_CSS}</style>");
+    let lower = text.to_ascii_lowercase();
+    let insert_at = lower
+        .find("<head")
+        .and_then(|start| lower[start..].find('>').map(|offset| start + offset + 1))
+        .or_else(|| {
+            lower
+                .find("<!doctype")
+                .and_then(|start| lower[start..].find('>').map(|offset| start + offset + 1))
+        })
+        .unwrap_or(0);
+    let mut out = String::with_capacity(text.len() + style.len());
+    out.push_str(&text[..insert_at]);
+    out.push_str(&style);
+    out.push_str(&text[insert_at..]);
+    out.into_bytes()
 }
 
 fn mime_of(path: &std::path::Path) -> &'static str {
@@ -135,6 +173,21 @@ mod tests {
             "占位页要通知宿主，卡片才能收掉展开"
         );
         assert!(!html.contains("os error"), "不把系统错误原文吐给用户");
+    }
+
+    #[test]
+    fn view_chrome_goes_into_the_document_head() {
+        let with_head = with_view_chrome(
+            b"<!doctype html><html><head><title>x</title></head><body>hi</body></html>",
+        );
+        let text = String::from_utf8_lossy(&with_head);
+        let style_at = text.find("data-prts-view-chrome").expect("注入了样式");
+        assert!(style_at > text.find("<head>").unwrap(), "在 head 之内");
+        assert!(style_at < text.find("<title>").unwrap(), "尽量靠前，作者样式可覆盖");
+        assert!(text.contains("::-webkit-scrollbar"), "带滚动条样式");
+
+        let no_head = String::from_utf8_lossy(&with_view_chrome(b"<!doctype html><p>hi</p>")).into_owned();
+        assert!(no_head.starts_with("<!doctype html><style"), "没有 head 时插在 doctype 之后");
     }
 
     #[test]

@@ -126,8 +126,10 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  /* 蒙版只负责把注意力压到面板上，不必压成全黑——0.45 已经足够分出层级。 */
-  background: rgb(0 0 0 / 0.45);
+  /* 不再压一块黑底：深色界面上整屏半透明黑会糊成一块黑板。
+     只做轻微压暗 + 背景虚化，把注意力交给面板本身。 */
+  background: rgb(10 12 16 / 0.22);
+  backdrop-filter: blur(6px);
 }
 
 .panel {
@@ -140,6 +142,8 @@
   border: 1px solid var(--depth-0);
   border-radius: 10px;
   background: var(--depth-1);
+  /* 没有黑底之后，靠阴影把面板从背景里抬起来。 */
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
 }
 
 .panelHeader {
