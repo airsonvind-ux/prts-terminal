@@ -1,23 +1,29 @@
 // src/moodTag.ts
-// 情绪标签解析器（MOOD v2）
+// 情绪标签解析器（MOOD 草案 3）
 //
-// 标签格式：`【mood:偏向(:强度)】心声`，一整行一个块，必须写在正文最前。
-//   【mood:高兴:2】终于对上了，这张图比看上去好认。
-//   【mood:不耐烦】三格都不确定，走错一步就得多耗两点行动力。
-//   【mood:高兴:3】
+// 标签格式：`【mood:偏向(:强度)(:心声)】`，写在正文最前。
+//   【mood:高兴】                        没有强度、没有心声
+//   【mood:高兴:2】                      只有强度
+//   【mood:高兴:2:终于对上了，这张图好认。】  强度 + 心声
+//   【mood:不耐烦:还没完，先别催。】        自由偏向（无强度）+ 心声
+//
+// 括号内按冒号分字段：偏向 / 可选强度 / 可选心声。
+//   第 2 字段是数字 1–3 → 强度，其后（第 3 段起）是心声；
+//   不是数字 → 没有强度，第 2 段起就是心声。
+// 心声里可以有冒号，只要不含 `】`。
 //
 // 两条通道拆开：
 //   - 偏向：自由词。三个已知词（及近义词）归一后驱动体态动画；其余只决定色相。
-//   - 心声：`】` 之后到行尾的全部文字，可省略（省略时展示层回落到旁白）。
+//   - 心声：括号内的那句话，可省略（省略时展示层回落到旁白）。
 //
-// 边界（按顺序取，取到即停）：
-//   1. 换行：块到此为止，之后的文字仍是正文；
-//   2. 首个句末标点且累计 ≤ 40 字：整段没换行时心声只取第一句，其余归正文；
-//   3. 累计超 40 字仍无边界：判为写错，只剥标签，该行文字全部归正文；
-//   4. 流结束仍在 pending：整段按正文放行（不吞内容）。
+// 为什么心声在括号内：括号外永远是正文。否则「有没有写心声」只能靠
+// 「标签后到行尾还有没有字」去猜，旧对话里标签后的正文会被当成心声吞掉。
+//
+// 终止：括号闭合即块结束；未闭合时流式扣留，遇换行或超界整段放行当正文，
+// 绝不吞内容。只认段首，代码块与举例上下文不误伤。
 //
 // 失败一律向「保留内容」倒：任何判定不清的情况，文字都回到正文，不静默吞掉。
-// 展示层剥离（chunk 的 content），模型原文留在 rawContent 里，下一轮上下文
+// 展示层剥离的是 chunk 的 content，模型原文留在 rawContent 里，下一轮上下文
 // 里模型仍看得到自己写过的 MOOD。
 
 import type { Mood, MoodIntensity } from "./types";
@@ -49,11 +55,8 @@ export const MOOD_SYNONYMS: Readonly<Record<string, KnownMood>> = {
 /** 每段只在前多少个字符内寻找标签（覆盖短开场白，避免整段误伤） */
 const WINDOW_CHARS = 120;
 
-/** 标签头部（`【mood:` 到 `】`）最长长度；超界未闭合 → 放行 */
-const MAX_HEADER_CHARS = 40;
-
-/** 心声长度上限（提示词要求）；超过判为写错或展示层截断 */
-export const MAX_VOICE_CHARS = 40;
+/** 括号内容的最长长度；超界仍未闭合 → 当正文放行，不无限扣留 */
+const MAX_TAG_CHARS = 200;
 
 /** 明显在“讲解/举例”的词语：命中时不把标签当控制语法 */
 const META_WORDS =
@@ -62,8 +65,7 @@ const META_WORDS =
 /** 标签开头（不要求闭合）：方括号/中文方括号 + mood + 冒号 */
 const TAG_OPEN_RE = /(?:\[|【)\s*mood\s*[:：]/gi;
 
-/** 心声的次边界：句末标点 */
-const SENTENCE_END = /[。！？…；!?;]/;
+const SEPARATOR_RE = /[:：]/;
 
 // ── 类型 ──
 
@@ -73,7 +75,7 @@ export interface MoodScan {
   mood: KnownMood | null;
   /** 偏向原词（决定色相）；null = 这一块根本没认出来 */
   tint: string | null;
-  /** 心声；null = 没写（展示层回落旁白） */
+  /** 心声（括号内那句话）；null = 没写（展示层回落旁白） */
   voice: string | null;
   /** 强度档位（0 = 省略；1–3 有效） */
   intensity: MoodIntensity;
@@ -109,27 +111,44 @@ const scannerStates = new Map<string, TagScannerState>();
 
 // ── 头部解析 ──
 
-interface Header {
+export interface Header {
   mood: KnownMood | null;
   tint: string;
   intensity: MoodIntensity;
+  voice: string | null;
 }
 
 /**
- * 解析 `】` 内的头部：`偏向` 或 `偏向:强度`。
+ * 解析 `】` 内的字段：`偏向`、可选`强度`、可选`心声`。
  * 空偏向 → null（调用方只剥标签、不产块）。
- * 强度非法（0、4+、非整数、非数字）→ 0。
+ * 强度非法（0、4+、非整数、非数字）→ 0，此时该字段被当作心声。
  */
 export function parseMoodHeader(raw: string): Header | null {
-  const parts = raw.split(/[:：]/);
-  const bias = parts[0].trim();
+  const firstSep = raw.search(SEPARATOR_RE);
+  const bias = (firstSep === -1 ? raw : raw.slice(0, firstSep)).trim();
   if (!bias) return null;
+
   let intensity: MoodIntensity = 0;
-  if (parts.length > 1) {
-    const n = Number(parts[1].trim());
-    if (Number.isInteger(n) && n >= 1 && n <= 3) intensity = n as MoodIntensity;
+  let voice: string | null = null;
+
+  if (firstSep !== -1) {
+    const rest = raw.slice(firstSep + 1);
+    const secondSep = rest.search(SEPARATOR_RE);
+    const head = (secondSep === -1 ? rest : rest.slice(0, secondSep)).trim();
+
+    if (/^\d+$/.test(head)) {
+      // 纯数字才是强度位；越界（0、4+）按无强度处理，且不把它当心声
+      const n = Number(head);
+      intensity = n >= 1 && n <= 3 ? (n as MoodIntensity) : 0;
+      const tail = secondSep === -1 ? "" : rest.slice(secondSep + 1).trim();
+      voice = tail || null;
+    } else {
+      // 第 2 段不是强度 → 从这一段起全是心声（可含冒号）
+      voice = rest.trim() || null;
+    }
   }
-  return { mood: MOOD_SYNONYMS[bias] ?? null, tint: bias, intensity };
+
+  return { mood: MOOD_SYNONYMS[bias] ?? null, tint: bias, intensity, voice };
 }
 
 // ── 块求值 ──
@@ -147,7 +166,7 @@ type Outcome =
       voice: null;
       intensity: 0;
     }
-  /** 认出了块：标签剥离，body 是块之后余下的正文 */
+  /** 认出了块：标签剥离，body 是括号之后的正文 */
   | {
       kind: "block";
       body: string;
@@ -183,7 +202,7 @@ function block(
 
 /** 在 pending[from..] 中找闭合括号；跨行或超界 → null */
 function findClose(pending: string, from: number): number | null {
-  const limit = Math.min(pending.length, from + MAX_HEADER_CHARS);
+  const limit = Math.min(pending.length, from + MAX_TAG_CHARS);
   for (let i = from; i < limit; i++) {
     const ch = pending[i];
     if (ch === "\n") return null;
@@ -192,24 +211,20 @@ function findClose(pending: string, from: number): number | null {
   return null;
 }
 
-/** 行首标签之前那一行留下的换行：块自成一行，别在正文末尾留空行 */
-function trimLineBreak(prefix: string): string {
-  return prefix.endsWith("\n") ? prefix.slice(0, -1) : prefix;
-}
-
-/** 心声判读：空 → null；超 40 字 → null（判写错，文字归正文） */
-function voiceOf(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.length > MAX_VOICE_CHARS) return null;
-  return trimmed;
+/**
+ * 括号之后的正文：去掉标签与正文之间的排版空白。
+ * 标签独占一行时，`】` 后面那个换行属于标签自己的行尾，不该在正文里留空行；
+ * 但再往后的空行是作者的排版，保留。
+ */
+function bodyAfterTag(rest: string): string {
+  return rest.replace(/^[ \t]*(?:\r?\n)?/, "");
 }
 
 /**
  * 求值一个从标签开头起、尚未定界的文本。
  *
- * eof = true 表示调用方拿到的是完整文本（归档剥离）：没有换行时，
- * 文本末尾就是行尾，心声按整段余下文字取。
- * eof = false 是流式场景：没有边界就继续扣留。
+ * eof = true 表示调用方拿到的是完整文本（归档剥离）；
+ * eof = false 是流式场景：括号没闭合就继续扣留。
  */
 function evaluateLine(pending: string, eof: boolean): Outcome {
   TAG_OPEN_RE.lastIndex = 0;
@@ -226,59 +241,19 @@ function evaluateLine(pending: string, eof: boolean): Outcome {
 
   // 没有闭合：未写完 / 跨行 / 超界 → 放行当正文
   if (close === null) {
-    if (eof || pending.includes("\n") || pending.length - headerEnd > MAX_HEADER_CHARS) {
+    if (eof || pending.includes("\n") || pending.length - headerEnd > MAX_TAG_CHARS) {
       return body(pending, pending);
     }
     return hold(pending);
   }
 
   const header = parseMoodHeader(pending.slice(headerEnd, close));
-  const rest = pending.slice(close + 1);
+  const rest = bodyAfterTag(pending.slice(close + 1));
 
-  // 空偏向：只剥标签，行内余下文字归正文
+  // 空偏向：只剥标签，括号后的正文照旧
   if (!header) return block(null, null, rest, pending);
 
-  const nl = rest.indexOf("\n");
-  if (nl !== -1) {
-    const line = rest.slice(0, nl);
-    const voice = voiceOf(line);
-    // 换行定界但心声超长：判写错，只剥标签，该行文字全部归正文
-    return block(header, voice, voice === null && line.trim() ? line + rest.slice(nl) : rest.slice(nl + 1), pending);
-  }
-
-  // 次边界：首个句末标点，且落在 40 字之内
-  const punct = rest.search(SENTENCE_END);
-  const sentenceEnd = punct !== -1 && punct + 1 <= MAX_VOICE_CHARS ? punct : -1;
-
-  if (eof) {
-    if (sentenceEnd !== -1) {
-      return block(
-        header,
-        voiceOf(rest.slice(0, sentenceEnd + 1)),
-        rest.slice(sentenceEnd + 1),
-        pending
-      );
-    }
-    // 无换行、无标点的长句：判写错，文字完整保留
-    if (rest.length > MAX_VOICE_CHARS) return block(header, null, rest, pending);
-    return block(header, voiceOf(rest), "", pending);
-  }
-
-  // 流式：等换行到达再落位（避免卡片出现又变形）；只有累计超限时才
-  // 退而用句末标点补救，连标点都没有就判写错、整行归正文。
-  if (rest.length > MAX_VOICE_CHARS) {
-    if (sentenceEnd !== -1) {
-      return block(
-        header,
-        voiceOf(rest.slice(0, sentenceEnd + 1)),
-        rest.slice(sentenceEnd + 1),
-        pending
-      );
-    }
-    return block(header, null, rest, pending);
-  }
-
-  return hold(pending);
+  return block(header, header.voice, rest, pending);
 }
 
 // ── 上下文判定（代码 / 举例 / 段首） ──
@@ -320,7 +295,7 @@ function isControlCandidate(prefix: string): boolean {
 
 /** 是否是 mood 标签开头的一个“尚未完整”的前缀（用于跨 chunk 扣留） */
 function isPotentialTagPrefix(text: string): boolean {
-  if (text.length > MAX_HEADER_CHARS + 1) return false;
+  if (text.length > MAX_TAG_CHARS + 1) return false;
   if (!text.startsWith("[") && !text.startsWith("【")) return false;
   const rest = text.slice(1);
   const end = rest.search(/[\]】\n]/);
@@ -354,9 +329,7 @@ function findPartialPrefix(text: string): number | null {
 // ── 一次性剥离（归档路径） ──
 
 /** 在一次性文本中定位第一个控制标签 */
-function locateControlTag(
-  text: string
-): { start: number } | null {
+function locateControlTag(text: string): { start: number } | null {
   const limit = Math.min(text.length, WINDOW_CHARS);
   let from = 0;
 
@@ -376,8 +349,8 @@ function locateControlTag(
 }
 
 /**
- * 一次性剥离（assistant/message、归档文本路径）：找到段首控制块并整行剥离。
- * 块之后的行内余文留在正文里；没有闭合/认不出 → 原样返回。
+ * 一次性剥离（assistant/message、归档文本路径）：找到段首控制块并整块剥离。
+ * 括号之后全是正文；没有闭合/认不出 → 原样返回。
  */
 export function stripTagFromText(text: string): ScanResult {
   const hit = locateControlTag(text);
@@ -394,7 +367,7 @@ export function stripTagFromText(text: string): ScanResult {
   const header = outcome.kind === "block" ? outcome.header : null;
 
   return {
-    text: trimLineBreak(prefix) + (outcome.kind === "block" ? outcome.body : ""),
+    text: prefix + (outcome.kind === "block" ? outcome.body : ""),
     rawText: text,
     mood: header?.mood ?? null,
     tint: header?.tint ?? null,
@@ -418,7 +391,7 @@ function toScanResult(outcome: Outcome, prefix: string, raw: string): ScanResult
     return { text: prefix + outcome.text, rawText: raw, ...NO_MOOD };
   }
   return {
-    text: trimLineBreak(prefix) + outcome.body,
+    text: prefix + outcome.body,
     rawText: raw,
     mood: outcome.header?.mood ?? null,
     tint: outcome.header?.tint ?? null,

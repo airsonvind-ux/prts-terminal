@@ -1,15 +1,16 @@
 // src/moodTag.test.ts
-// 情绪标签解析器测试（MOOD v2）
+// 情绪标签解析器测试（MOOD 草案 3）
 //
 // 覆盖：
 //   1. 头部格式变体（方括号、全角冒号、空格大小写）
-//   2. 整行块语义：`】` 之后到行尾是心声，不进正文
-//   3. 自由偏向：已知词归一、近义词命中、未知词只定色相
-//   4. 只认段首、一行只处理第一个；代码与举例上下文不误伤
-//   5. 四层终止边界：换行 / 句末标点 / 超 40 判写错 / 流结束按正文
-//   6. 跨 chunk 半标签扣留
-//   7. stripTagFromText 一次性剥离（归档路径）
-//   8. releasePending / rearmScanner 生命周期
+//   2. 括号内分字段：偏向 / 可选强度 / 可选心声；心声可含冒号
+//   3. 括号外永远是正文：标签后接正文不再被吞
+//   4. 自由偏向：已知词归一、近义词命中、未知词只定色相
+//   5. 只认段首、一行只处理第一个；代码与举例上下文不误伤
+//   6. 未闭合的边界：跨行 / 超界 / 流结束，一律放行当正文
+//   7. 跨 chunk 半标签扣留
+//   8. stripTagFromText 一次性剥离（归档路径）
+//   9. releasePending / rearmScanner 生命周期
 
 import { describe, it, expect, beforeEach } from "vitest";
 import {
@@ -29,25 +30,24 @@ beforeEach(() => resetScanners());
 // ═══════════════════════════════════════════════
 
 describe("头部格式变体", () => {
-  it("中文方括号 + 半角冒号", () => {
+  it("中文方括号 + 半角冒号，括号外是正文", () => {
     const r = scanTextChunk("s1", "【mood:高兴】好的，博士。\n");
     expect(r.mood).toBe("高兴");
     expect(r.tint).toBe("高兴");
-    expect(r.voice).toBe("好的，博士。");
-    expect(r.text).toBe("");
+    expect(r.voice).toBeNull();
+    expect(r.text).toBe("好的，博士。\n");
   });
 
   it("ASCII 方括号 + 半角冒号", () => {
     const r = scanTextChunk("s1", "[mood:困惑]我查一下。\n");
     expect(r.mood).toBe("困惑");
-    expect(r.voice).toBe("我查一下。");
-    expect(r.text).toBe("");
+    expect(r.text).toBe("我查一下。\n");
   });
 
   it("全角冒号、大小写与空格混合", () => {
     const r = scanTextChunk("s1", "[ MOOD ： 沮丧 ] 算了。\n");
     expect(r.mood).toBe("沮丧");
-    expect(r.voice).toBe("算了。");
+    expect(r.text).toBe("算了。\n");
   });
 
   it("空偏向 → 只剥标签，余文归正文", () => {
@@ -59,33 +59,75 @@ describe("头部格式变体", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 2：整行块语义
+// 场景 2：括号内分字段
 // ═══════════════════════════════════════════════
 
-describe("整行块语义", () => {
-  it("心声省略（标签后直接换行）→ 正文另起", () => {
-    const r = scanTextChunk("s1", "【mood:高兴】\n正文");
+describe("括号内分字段", () => {
+  it("两段：偏向 + 心声", () => {
+    const r = scanTextChunk("s1", "【mood:不耐烦:还没完，先别催。】\n");
+    expect(r.mood).toBeNull();
+    expect(r.tint).toBe("不耐烦");
+    expect(r.intensity).toBe(0);
+    expect(r.voice).toBe("还没完，先别催。");
+    expect(r.text).toBe("");
+  });
+
+  it("三段：偏向 + 强度 + 心声", () => {
+    const r = scanTextChunk("s1", "【mood:高兴:3:终于对上了，这张图好认。】");
     expect(r.mood).toBe("高兴");
-    expect(r.voice).toBeNull();
+    expect(r.intensity).toBe(3);
+    expect(r.voice).toBe("终于对上了，这张图好认。");
+    expect(r.text).toBe("");
+  });
+
+  it("心声里可以带冒号", () => {
+    const r = scanTextChunk("s1", "【mood:好奇:这层的构造：有点眼熟】正文");
+    expect(r.tint).toBe("好奇");
+    expect(r.voice).toBe("这层的构造：有点眼熟");
     expect(r.text).toBe("正文");
   });
 
-  it("心声到行尾为止，换行后的文字是正文", () => {
-    const r = scanTextChunk("s1", "【mood:警惕】门外有动静。\n我们走。");
-    expect(r.tint).toBe("警惕");
-    expect(r.voice).toBe("门外有动静。");
-    expect(r.text).toBe("我们走。");
+  it("心声可以省略", () => {
+    expect(scanTextChunk("s1", "【mood:高兴:2】\n").voice).toBeNull();
+    expect(scanTextChunk("s1", "【mood:高兴】\n").voice).toBeNull();
   });
 
-  it("心声里的句号不结束块（换行优先）", () => {
-    const r = scanTextChunk("s1", "【mood:高兴】终于对上了。这张图好认。\n后面是正文。");
-    expect(r.voice).toBe("终于对上了。这张图好认。");
-    expect(r.text).toBe("后面是正文。");
+  it("空心声（只有冒号）算没写", () => {
+    expect(scanTextChunk("s1", "【mood:高兴:】\n").voice).toBeNull();
   });
 });
 
 // ═══════════════════════════════════════════════
-// 场景 3：自由偏向
+// 场景 3：括号外永远是正文
+// ═══════════════════════════════════════════════
+
+describe("括号外永远是正文", () => {
+  it("标签后紧跟正文 → 正文保留，不被当心声", () => {
+    const r = scanTextChunk("s1", "【mood:高兴】好的，博士。");
+    expect(r.mood).toBe("高兴");
+    expect(r.voice).toBeNull();
+    expect(r.text).toBe("好的，博士。");
+  });
+
+  it("标签独占一行 → 那个换行归标签，不留空行", () => {
+    const r = scanTextChunk("s1", "【mood:高兴】\n正文");
+    expect(r.text).toBe("正文");
+  });
+
+  it("标签行之后还有空行 → 空行是作者排版，保留", () => {
+    const r = stripTagFromText("【mood：高兴】\n\n正文");
+    expect(r.text).toBe("\n正文");
+  });
+
+  it("标签后面接多行正文 → 全部保留", () => {
+    const r = scanTextChunk("s1", "【mood:警惕】门外有动静。\n我们走。");
+    expect(r.voice).toBeNull();
+    expect(r.text).toBe("门外有动静。\n我们走。");
+  });
+});
+
+// ═══════════════════════════════════════════════
+// 场景 4：自由偏向
 // ═══════════════════════════════════════════════
 
 describe("自由偏向", () => {
@@ -93,19 +135,23 @@ describe("自由偏向", () => {
     const r = scanTextChunk("s1", "【mood:不耐烦】三格都不确定。\n");
     expect(r.mood).toBeNull();
     expect(r.tint).toBe("不耐烦");
-    expect(r.voice).toBe("三格都不确定。");
+    expect(r.text).toBe("三格都不确定。\n");
   });
 
   it("近义词归一：开心 → 高兴", () => {
     expect(scanTextChunk("s1", "【mood:开心】好啊。\n").mood).toBe("高兴");
   });
 
+  it("近义词归一：兴奋 → 高兴", () => {
+    expect(scanTextChunk("s1", "【mood:兴奋】好耶。\n").mood).toBe("高兴");
+  });
+
   it("近义词归一：想不通 → 困惑", () => {
     expect(scanTextChunk("s1", "【mood:想不通】再算一遍。\n").mood).toBe("困惑");
   });
 
-  it("近义词归一：失落 → 沮丧", () => {
-    expect(scanTextChunk("s1", "【mood:失落】没赶上。\n").mood).toBe("沮丧");
+  it("近义词归一：郁闷 → 沮丧", () => {
+    expect(scanTextChunk("s1", "【mood:郁闷】没赶上。\n").mood).toBe("沮丧");
   });
 
   it("色相保留原词而不是归一后的词", () => {
@@ -116,7 +162,7 @@ describe("自由偏向", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 4：段首与上下文
+// 场景 5：段首与上下文
 // ═══════════════════════════════════════════════
 
 describe("只认段首", () => {
@@ -129,14 +175,13 @@ describe("只认段首", () => {
   it("上一行有正文、标签在新行行首 → 识别", () => {
     const r = scanTextChunk("s1", "博士，晚上好。\n【mood:困惑】我查一下。\n");
     expect(r.mood).toBe("困惑");
-    expect(r.text).toBe("博士，晚上好。");
-    expect(r.voice).toBe("我查一下。");
+    expect(r.text).toBe("博士，晚上好。\n我查一下。\n");
   });
 
   it("行首允许缩进", () => {
     const r = scanTextChunk("s1", "  【mood:高兴】嗯。\n");
     expect(r.mood).toBe("高兴");
-    expect(r.voice).toBe("嗯。");
+    expect(r.text.trim()).toBe("嗯。");
   });
 
   it("识别区（前 120 字）之外不处理", () => {
@@ -176,44 +221,15 @@ describe("只认段首", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 5：终止边界
+// 场景 6：未闭合的边界
 // ═══════════════════════════════════════════════
 
-describe("终止边界", () => {
-  it("没有换行时，首个句末标点即块尾，其余归正文（流结束/归档）", () => {
-    const r = stripTagFromText("【mood:高兴】太好了。我们开始吧。");
-    expect(r.mood).toBe("高兴");
-    expect(r.voice).toBe("太好了。");
-    expect(r.text).toBe("我们开始吧。");
-  });
-
-  it("流式没有换行时先不落位，等换行再定界", () => {
-    const r = scanTextChunk("s1", "【mood:高兴】太好了。我们开始吧。");
-    expect(r.mood).toBeNull();
-    expect(r.text).toBe("");
-    const done = scanTextChunk("s1", "\n正文");
-    expect(done.voice).toBe("太好了。我们开始吧。");
-    expect(done.text).toBe("正文");
-  });
-
-  it("换行定界且心声超 40 字 → 判写错，只剥标签、文字归正文", () => {
-    const long = "嗯".repeat(45) + "。";
-    const r = scanTextChunk("s1", "【mood:高兴】" + long + "\n短正文");
-    expect(r.voice).toBeNull();
-    expect(r.text).toBe(long + "\n短正文");
-  });
-
-  it("流式累计超 40 字仍无边界 → 判写错，只剥标签、文字全归正文", () => {
-    const long = "嗯".repeat(45);
-    const r = scanTextChunk("s1", "【mood:高兴】" + long);
-    expect(r.mood).toBe("高兴");
-    expect(r.voice).toBeNull();
-    expect(r.text).toBe(long);
-  });
-
-  it("流结束仍在 pending → 整段按正文放行", () => {
+describe("未闭合的边界", () => {
+  it("流式未闭合 → 先扣留，闭合后立即落位（不等换行）", () => {
     expect(scanTextChunk("s1", "【mood:高").text).toBe("");
-    expect(releasePending("s1")).toBe("【mood:高");
+    const r = scanTextChunk("s1", "兴】太好了。\n");
+    expect(r.mood).toBe("高兴");
+    expect(r.text).toBe("太好了。\n");
   });
 
   it("未闭合时遇到换行 → 当正文放行", () => {
@@ -222,16 +238,21 @@ describe("终止边界", () => {
     expect(r.text).toBe("【mood:高兴\n继续");
   });
 
-  it("头部超 40 字未闭合 → 当正文放行", () => {
-    const text = "【mood:" + "a".repeat(45);
+  it("括号超界仍未闭合 → 当正文放行", () => {
+    const text = "【mood:" + "a".repeat(210);
     const r = scanTextChunk("s1", text);
     expect(r.mood).toBeNull();
     expect(r.text).toBe(text);
   });
+
+  it("流结束仍在 pending → 整段按正文放行", () => {
+    expect(scanTextChunk("s1", "【mood:高").text).toBe("");
+    expect(releasePending("s1")).toBe("【mood:高");
+  });
 });
 
 // ═══════════════════════════════════════════════
-// 场景 6：跨 chunk 切断
+// 场景 7：跨 chunk 切断
 // ═══════════════════════════════════════════════
 
 describe("跨 chunk 切断（pending 扣留）", () => {
@@ -239,14 +260,12 @@ describe("跨 chunk 切断（pending 扣留）", () => {
     expect(scanTextChunk("s1", "【mood:高").text).toBe("");
     const r = scanTextChunk("s1", "兴】收到。\n");
     expect(r.mood).toBe("高兴");
-    expect(r.voice).toBe("收到。");
-    expect(r.text).toBe("");
+    expect(r.text).toBe("收到。\n");
   });
 
-  it("心声跨 chunk 累积到行尾", () => {
-    expect(scanTextChunk("s1", "【mood:困惑】我").text).toBe("");
-    expect(scanTextChunk("s1", "查一下。").text).toBe("");
-    const r = scanTextChunk("s1", "\n正文");
+  it("心声在括号内被切开", () => {
+    expect(scanTextChunk("s1", "【mood:困惑:我").text).toBe("");
+    const r = scanTextChunk("s1", "查一下。】正文");
     expect(r.voice).toBe("我查一下。");
     expect(r.text).toBe("正文");
   });
@@ -256,7 +275,7 @@ describe("跨 chunk 切断（pending 扣留）", () => {
     expect(scanTextChunk("s1", "od:沮").text).toBe("");
     const r = scanTextChunk("s1", "丧】嗯。\n");
     expect(r.mood).toBe("沮丧");
-    expect(r.voice).toBe("嗯。");
+    expect(r.text).toBe("嗯。\n");
   });
 
   it("非 mood 前缀（【moodx）直接放行", () => {
@@ -265,24 +284,25 @@ describe("跨 chunk 切断（pending 扣留）", () => {
     expect(r.text).toBe("【moodx 不是标签。");
   });
 
-  it("标签后紧跟正文的 chunk 一次性求值", () => {
-    const r = scanTextChunk("s1", "【mood:高兴】嗯。\n");
+  it("标签与正文同 chunk 一次性求值", () => {
+    const r = scanTextChunk("s1", "【mood:高兴:2:嗯。】正文\n");
     expect(r.mood).toBe("高兴");
+    expect(r.intensity).toBe(2);
     expect(r.voice).toBe("嗯。");
-    expect(r.text).toBe("");
+    expect(r.text).toBe("正文\n");
   });
 });
 
 // ═══════════════════════════════════════════════
-// 场景 7：stripTagFromText（归档一次性剥离）
+// 场景 8：stripTagFromText（归档一次性剥离）
 // ═══════════════════════════════════════════════
 
 describe("stripTagFromText 一次性剥离", () => {
-  it("整行成块：心声剥离，正文保留", () => {
+  it("只剥括号，括号后的正文原样保留", () => {
     const r = stripTagFromText("【mood:困惑】我查一下。\n正文第一行");
     expect(r.mood).toBe("困惑");
-    expect(r.voice).toBe("我查一下。");
-    expect(r.text).toBe("正文第一行");
+    expect(r.voice).toBeNull();
+    expect(r.text).toBe("我查一下。\n正文第一行");
   });
 
   it("没有心声只剥标签", () => {
@@ -326,37 +346,50 @@ describe("stripTagFromText 一次性剥离", () => {
   });
 
   it("rawText 保留原文", () => {
-    const raw = "【mood:沮丧】没赶上。\n再试一次。";
+    const raw = "【mood:沮丧:没赶上。】\n再试一次。";
     expect(stripTagFromText(raw).rawText).toBe(raw);
+  });
+
+  it("旧归档（心声在括号外）读回时正文完整", () => {
+    const r = stripTagFromText("【mood:沮丧】没赶上。\n再试一次。");
+    expect(r.mood).toBe("沮丧");
+    expect(r.voice).toBeNull();
+    expect(r.text).toBe("没赶上。\n再试一次。");
   });
 });
 
 // ═══════════════════════════════════════════════
-// 场景 8：强度
+// 场景 9：强度
 // ═══════════════════════════════════════════════
 
 describe("强度档位", () => {
   it("标签带强度", () => {
-    const r = scanTextChunk("s1", "【mood:高兴:2】好啊。\n");
+    const r = scanTextChunk("s1", "【mood:高兴:2】\n");
     expect(r.mood).toBe("高兴");
     expect(r.intensity).toBe(2);
-    expect(r.voice).toBe("好啊。");
   });
 
   it("省略强度 → 0", () => {
-    expect(scanTextChunk("s1", "【mood:高兴】嗯。\n").intensity).toBe(0);
+    expect(scanTextChunk("s1", "【mood:高兴】\n").intensity).toBe(0);
   });
 
-  it("非法强度 → 0", () => {
+  it("非法强度 → 0，且不作为心声", () => {
     expect(parseMoodHeader("高兴:0")?.intensity).toBe(0);
+    expect(parseMoodHeader("高兴:0")?.voice).toBeNull();
     expect(parseMoodHeader("高兴:4")?.intensity).toBe(0);
-    expect(parseMoodHeader("高兴:x")?.intensity).toBe(0);
     expect(parseMoodHeader("高兴:2")?.intensity).toBe(2);
   });
 
+  it("非数字第 2 段是心声，不是强度", () => {
+    const h = parseMoodHeader("高兴:终于对上了");
+    expect(h?.intensity).toBe(0);
+    expect(h?.voice).toBe("终于对上了");
+  });
+
   it("全角冒号分隔强度", () => {
-    const r = scanTextChunk("s1", "【mood:高兴：3】内容\n");
+    const r = scanTextChunk("s1", "【mood:高兴：3:内容】\n");
     expect(r.intensity).toBe(3);
+    expect(r.voice).toBe("内容");
   });
 
   it("空偏向 → parseMoodHeader 返回 null", () => {
@@ -366,7 +399,7 @@ describe("强度档位", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 9：生命周期
+// 场景 10：生命周期
 // ═══════════════════════════════════════════════
 
 describe("生命周期", () => {
