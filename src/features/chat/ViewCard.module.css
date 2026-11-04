@@ -126,10 +126,10 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  /* 不再压一块黑底：深色界面上整屏半透明黑会糊成一块黑板。
-     只做轻微压暗 + 背景虚化，把注意力交给面板本身。 */
-  background: rgb(10 12 16 / 0.22);
-  backdrop-filter: blur(6px);
+  /* 不加任何底色：展开只是把这张卡片放大，不是进一个模态。
+     整屏铺一层灰会让界面像被蒙住；层级由面板自己的阴影表达。
+     这一层仍然存在，只为了接住「点面板外关闭」。 */
+  background: transparent;
 }
 
 .panel {

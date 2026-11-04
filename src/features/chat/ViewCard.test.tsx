@@ -98,6 +98,26 @@ describe("ViewCard · html", () => {
     expect(container.querySelector("[data-view-frame-large]")).toBeNull();
   });
 
+  it("点面板外或按 Esc 收起浮层", async () => {
+    const container = render({ kind: "html", title: "地图", path: "views/v1.html" });
+    await flush();
+    const expand = () =>
+      [...container.querySelectorAll("button")].find((b) => b.textContent === "展开")!;
+    act(() => expand().click());
+    const overlay = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(overlay).not.toBeNull();
+
+    act(() => overlay.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.body.querySelector("[data-view-frame-large]")).toBeNull();
+
+    act(() => expand().click());
+    expect(document.body.querySelector("[data-view-frame-large]")).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(document.body.querySelector("[data-view-frame-large]")).toBeNull();
+  });
+
   it("标题过长时仍留在标题行（不换行截断由样式负责）", async () => {
     const longTitle = "很长的标题".repeat(20);
     const container = render({ kind: "html", title: longTitle, path: "views/v1.html" });

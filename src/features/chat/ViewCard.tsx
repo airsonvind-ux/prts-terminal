@@ -202,6 +202,16 @@ export function ViewCard({
     if (unavailable) setExpanded(false);
   }, [unavailable]);
 
+  // 展开态的两种退出：点面板外、按 Esc。
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded]);
+
   return (
     <section className={styles.card} data-view-card data-view-kind={view.kind}>
       <header className={styles.header}>
@@ -258,7 +268,14 @@ export function ViewCard({
         createPortal(
           // 挂到 body：消息行在滚动容器里，祖先的 transform/contain 会把
           // position:fixed 变成相对祖先定位，浮层顶部就被裁掉了。
-          <div className={styles.overlay} role="dialog" aria-label={view.title}>
+          <div
+            className={styles.overlay}
+            role="dialog"
+            aria-label={view.title}
+            onClick={(event) => {
+              if (event.target === event.currentTarget) setExpanded(false);
+            }}
+          >
             <div className={styles.panel}>
               <header className={styles.panelHeader}>
                 <span className={styles.title}>{view.title}</span>
