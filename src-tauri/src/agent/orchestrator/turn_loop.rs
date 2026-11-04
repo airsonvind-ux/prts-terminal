@@ -33,7 +33,8 @@ pub(super) async fn dispatch_turn_with_memory(
     let mut ctx = match db {
         Some(ref db) => ToolContext::with_db(Arc::clone(db)),
         None => ToolContext::new(),
-    };
+    }
+    .with_conversation_id(session_id);
     ctx.skill_index = Some(Arc::clone(skill_index));
     ctx.abort = Some(abort.clone());
     // Arc 共享：流式回调（'static）需持有 Registry/ToolContext 以在 tool/call

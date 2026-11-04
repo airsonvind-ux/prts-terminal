@@ -23,7 +23,10 @@ use super::rpc::{self, Pending, RpcError, RpcResult};
 use super::transport::{write_frame, FrameReader};
 use super::PluginError;
 use crate::host::{HostError, PluginCtx};
-use crate::tools::{Tool, ToolContext, ToolError, ToolOutput, ToolRegistry};
+use crate::tools::{
+    Tool, ToolContext, ToolError, ToolOutput, ToolRegistry, ToolView, ToolViewKind,
+    MAX_VIEW_HTML_BYTES, MAX_VIEW_TITLE_CHARS, VIEW_HEIGHT_MAX, VIEW_HEIGHT_MIN,
+};
 
 /// 握手超时（规格 §5）。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -681,20 +684,254 @@ impl Tool for PluginTool {
                 ))
             })?;
 
-        Ok(render_output(result))
+        render_output(result, &self.launcher.plugin_dir)
     }
 }
 
-/// 插件返回值 → 结构化输出。字符串直接当展示文本，其余走 pretty JSON。
-fn render_output(value: Value) -> ToolOutput {
-    match &value {
-        Value::String(text) => ToolOutput::json(value.clone(), text.clone()),
-        _ => {
-            let summary = serde_json::to_string_pretty(&value)
-                .unwrap_or_else(|_| value.to_string());
-            ToolOutput::json(value, summary)
+/// 插件返回结果的契约问题（视图接口规格 §二）。
+///
+/// 独立成一类而不是直接拼字符串，是为了让 `plugin_check --call` 也能复用同一套
+/// 判据与同一份文案——校验器和宿主必须对同一个返回值下同一个结论。
+#[derive(Debug, Clone, PartialEq)]
+pub enum ViewIssue {
+    /// 对象形态却没有 `content`。
+    MissingContent,
+    /// `content` 是空串或只有空白。
+    EmptyContent,
+    /// `result` 既不是字符串也不是对象。
+    NotAnObject,
+    /// `kind` 不是 html / image / doc。
+    UnknownKind(String),
+    /// `view` 不是对象。
+    ViewNotObject,
+    /// 缺 `title` 或为空。
+    MissingTitle,
+    /// `title` 超过 60 字。
+    TitleTooLong { chars: usize },
+    /// html 视图缺 `html` 字段。
+    MissingHtml,
+    /// image/doc 缺 `path`。
+    MissingPath,
+    /// image/doc 的 `path` 越出插件目录。
+    PathEscapes { path: String },
+    /// image/doc 的 `path` 在插件目录里不存在。
+    PathMissing { path: String },
+    /// doc 缺 `mime`。
+    MissingMime,
+}
+
+impl std::fmt::Display for ViewIssue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingContent => f.write_str(
+                "对象结果缺少 content（字符串以外必须给 {content, view?}，content 不能省）",
+            ),
+            Self::EmptyContent => f.write_str("content 是空的：模型只看 content，视图不能代替文字"),
+            Self::NotAnObject => {
+                f.write_str("结果既不是字符串也不是对象（只支持这两种形态）")
+            }
+            Self::UnknownKind(kind) => {
+                write!(f, "view.kind 只能是 html / image / doc，收到「{kind}」")
+            }
+            Self::ViewNotObject => f.write_str("view 必须是对象"),
+            Self::MissingTitle => f.write_str("view.title 必填，且不能为空"),
+            Self::TitleTooLong { chars } => {
+                write!(f, "view.title 超过 {MAX_VIEW_TITLE_CHARS} 字（现在 {chars} 字）")
+            }
+            Self::MissingHtml => f.write_str("html 视图缺少 html 字段"),
+            Self::MissingPath => f.write_str("image / doc 视图缺少 path"),
+            Self::PathEscapes { path } => {
+                write!(f, "view.path 越出插件目录：{path}")
+            }
+            Self::PathMissing { path } => write!(f, "view.path 指向的文件不存在：{path}"),
+            Self::MissingMime => f.write_str("doc 视图缺少 mime"),
         }
     }
+}
+
+impl std::error::Error for ViewIssue {}
+
+/// 一份合法结果拆出来的两部分：进上下文的文字、进画面的视图。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedResult {
+    pub content: String,
+    /// `None` = 没有视图，或 html 超限被降级。
+    pub view: Option<ToolView>,
+    /// html 超限降级：`content` 末尾已追加说明。
+    pub degraded: bool,
+}
+
+/// 插件返回值 → 结构化输出。
+///
+/// 契约（视图接口规格 §二）：字符串等价于 `{content}`；对象必须给非空
+/// `content`，`view` 可选。对象缺 `content` **判错而不是回落到 JSON**——
+/// 否则整个对象会被 pretty 打印进上下文，`view` 就从后门进了模型视野。
+pub fn render_output(value: Value, plugin_dir: &Path) -> Result<ToolOutput, ToolError> {
+    let parsed = parse_result(&value, plugin_dir)
+        .map_err(|issue| ToolError::Execution(format!("插件返回的结果不合法（-32602）：{issue}")))?;
+    let mut output = ToolOutput::json(value, parsed.content);
+    output.view = parsed.view;
+    Ok(output)
+}
+
+/// 校验并拆解插件返回值（`plugin_check --call` 与宿主共用这一份判据）。
+pub fn parse_result(value: &Value, plugin_dir: &Path) -> Result<ParsedResult, ViewIssue> {
+    match value {
+        Value::String(text) => Ok(ParsedResult {
+            content: text.clone(),
+            view: None,
+            degraded: false,
+        }),
+        Value::Object(map) => {
+            let content = match map.get("content") {
+                Some(Value::String(text)) if !text.trim().is_empty() => text.clone(),
+                Some(Value::String(_)) => return Err(ViewIssue::EmptyContent),
+                _ => return Err(ViewIssue::MissingContent),
+            };
+            let view = match map.get("view") {
+                None | Some(Value::Null) => None,
+                Some(view) => match parse_view(view, &content, plugin_dir)? {
+                    ParsedView::Keep(view) => Some(view),
+                    ParsedView::Degraded(degraded) => {
+                        return Ok(ParsedResult {
+                            content: degraded,
+                            view: None,
+                            degraded: true,
+                        })
+                    }
+                },
+            };
+            Ok(ParsedResult {
+                content,
+                view,
+                degraded: false,
+            })
+        }
+        _ => Err(ViewIssue::NotAnObject),
+    }
+}
+
+/// 视图解析的两种归宿：照用、超限降级（丢弃视图，`content` 追加说明）。
+enum ParsedView {
+    Keep(ToolView),
+    Degraded(String),
+}
+
+fn parse_view(view: &Value, content: &str, plugin_dir: &Path) -> Result<ParsedView, ViewIssue> {
+    let object = view.as_object().ok_or(ViewIssue::ViewNotObject)?;
+    let kind = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let title = object
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or(ViewIssue::MissingTitle)?
+        .to_string();
+    let chars = title.chars().count();
+    if chars > MAX_VIEW_TITLE_CHARS {
+        return Err(ViewIssue::TitleTooLong { chars });
+    }
+    let height = object
+        .get("height")
+        .and_then(Value::as_f64)
+        .map(|raw| raw.round().clamp(VIEW_HEIGHT_MIN as f64, VIEW_HEIGHT_MAX as f64) as u16);
+
+    match kind {
+        "html" => {
+            let html = object
+                .get("html")
+                .and_then(Value::as_str)
+                .ok_or(ViewIssue::MissingHtml)?;
+            if html.len() > MAX_VIEW_HTML_BYTES {
+                let mut degraded = content.to_string();
+                degraded.push_str("\n\n视图内容超过上限，只保留文字");
+                return Ok(ParsedView::Degraded(degraded));
+            }
+            Ok(ParsedView::Keep(ToolView {
+                kind: ToolViewKind::Html,
+                title,
+                height,
+                html: Some(html.to_string()),
+                source: None,
+                mime: None,
+            }))
+        }
+        "image" => {
+            let path = object
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+                .ok_or(ViewIssue::MissingPath)?;
+            let source = resolve_inside(plugin_dir, path)?;
+            Ok(ParsedView::Keep(ToolView {
+                kind: ToolViewKind::Image,
+                title,
+                height,
+                html: None,
+                source: Some(source),
+                mime: None,
+            }))
+        }
+        "doc" => {
+            let path = object
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|path| !path.trim().is_empty())
+                .ok_or(ViewIssue::MissingPath)?;
+            let mime = object
+                .get("mime")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|mime| !mime.is_empty())
+                .ok_or(ViewIssue::MissingMime)?
+                .to_string();
+            let source = resolve_inside(plugin_dir, path)?;
+            Ok(ParsedView::Keep(ToolView {
+                kind: ToolViewKind::Doc,
+                title,
+                height,
+                html: None,
+                source: Some(source),
+                mime: Some(mime),
+            }))
+        }
+        other => Err(ViewIssue::UnknownKind(other.to_string())),
+    }
+}
+
+/// 把 view 里的相对路径解析成插件目录内的绝对路径（canonicalize 后比对前缀，
+/// 与 `host::internal::fs::ensure_within` 同一套判据）。
+fn resolve_inside(plugin_dir: &Path, relative: &str) -> Result<PathBuf, ViewIssue> {
+    // 先做词法判断：绝对路径、`..`、盘符一律视为越界——即使目标恰好不存在，
+    // 也该报「越界」而不是「不存在」，否则插件收到的报错会指错方向。
+    let rel = Path::new(relative);
+    if rel.is_absolute()
+        || rel
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
+    {
+        return Err(ViewIssue::PathEscapes {
+            path: relative.to_string(),
+        });
+    }
+    let candidate = plugin_dir.join(rel);
+    let root = plugin_dir
+        .canonicalize()
+        .map_err(|_| ViewIssue::PathMissing {
+            path: relative.to_string(),
+        })?;
+    let resolved = candidate.canonicalize().map_err(|_| ViewIssue::PathMissing {
+        path: relative.to_string(),
+    })?;
+    if !resolved.starts_with(&root) {
+        return Err(ViewIssue::PathEscapes {
+            path: relative.to_string(),
+        });
+    }
+    Ok(resolved)
 }
 
 /// 安装一个 process 插件：拉起 → 握手 → 按前缀注册工具。
@@ -1037,12 +1274,152 @@ mod tests {
         );
     }
 
+    /// 视图接口规格 §二：字符串保持旧语义，对象必须给非空 content。
     #[test]
-    fn render_output_prefers_strings_as_summary() {
-        let output = render_output(json!("你好"));
+    fn render_output_requires_content_for_objects() {
+        let dir = scratch_dir("render-basic");
+
+        let output = render_output(json!("你好"), &dir).unwrap();
         assert_eq!(output.summary, "你好");
-        let output = render_output(json!({ "a": 1 }));
-        assert!(output.summary.contains("\"a\""));
+        assert!(output.view.is_none());
+
+        let output = render_output(
+            json!({
+                "content": "正文",
+                "view": { "kind": "html", "html": "<p>hi</p>", "title": "标题", "height": 148 }
+            }),
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(output.summary, "正文", "summary 只能是 content，不能是对象本身");
+        let view = output.view.expect("应当带视图");
+        assert_eq!(view.kind, ToolViewKind::Html);
+        assert_eq!(view.title, "标题");
+        assert_eq!(view.height_px(), 148);
+        assert_eq!(view.html.as_deref(), Some("<p>hi</p>"));
+
+        // 缺 content → 判错，绝不回落到 pretty JSON（那是 view 的后门）。
+        let error = render_output(json!({ "a": 1 }), &dir).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("-32602"), "got: {text}");
+        assert!(text.contains("缺少 content"), "got: {text}");
+        assert!(!text.contains("\"a\""), "不能把对象本身塞进文案：{text}");
+
+        let error = render_output(json!({ "content": "   " }), &dir).unwrap_err();
+        assert!(error.to_string().contains("content 是空的"), "got: {error}");
+
+        let error = render_output(json!([1, 2]), &dir).unwrap_err();
+        assert!(error.to_string().contains("既不是字符串也不是对象"), "got: {error}");
+    }
+
+    #[test]
+    fn render_output_validates_title_and_height() {
+        let dir = scratch_dir("render-title");
+
+        let error = render_output(json!({ "content": "x", "view": { "kind": "html", "html": "<p/>" } }), &dir)
+            .unwrap_err();
+        assert!(error.to_string().contains("view.title 必填"), "got: {error}");
+
+        let long = "标".repeat(61);
+        let error = render_output(
+            json!({ "content": "x", "view": { "kind": "html", "html": "<p/>", "title": long } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("超过 60 字"), "got: {error}");
+
+        let error = render_output(json!({ "content": "x", "view": { "kind": "png", "title": "t" } }), &dir)
+            .unwrap_err();
+        assert!(error.to_string().contains("html / image / doc"), "got: {error}");
+
+        // 高度越界夹取到 40–160，缺省 120。
+        let low = render_output(
+            json!({ "content": "x", "view": { "kind": "html", "html": "<p/>", "title": "t", "height": 10 } }),
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(low.view.unwrap().height_px(), VIEW_HEIGHT_MIN);
+        let high = render_output(
+            json!({ "content": "x", "view": { "kind": "html", "html": "<p/>", "title": "t", "height": 999 } }),
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(high.view.unwrap().height_px(), VIEW_HEIGHT_MAX);
+        let none = render_output(
+            json!({ "content": "x", "view": { "kind": "html", "html": "<p/>", "title": "t" } }),
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(none.view.unwrap().height_px(), 120);
+    }
+
+    /// html 超限不判错：丢视图、留文字，并追加一句给人看的说明。
+    #[test]
+    fn oversized_html_degrades_to_text() {
+        let dir = scratch_dir("render-big");
+        let html = "a".repeat(MAX_VIEW_HTML_BYTES + 1);
+        let output = render_output(
+            json!({ "content": "正文", "view": { "kind": "html", "html": html, "title": "t" } }),
+            &dir,
+        )
+        .unwrap();
+        assert!(output.view.is_none());
+        assert!(output.summary.starts_with("正文"));
+        assert!(output.summary.contains("视图内容超过上限，只保留文字"));
+    }
+
+    #[test]
+    fn image_and_doc_paths_stay_inside_the_plugin_dir() {
+        let dir = scratch_dir("render-path");
+        let image = dir.join("shot.png");
+        std::fs::write(&image, b"png").unwrap();
+
+        let output = render_output(
+            json!({ "content": "看图", "view": { "kind": "image", "path": "shot.png", "title": "截图" } }),
+            &dir,
+        )
+        .unwrap();
+        let view = output.view.unwrap();
+        assert_eq!(view.kind, ToolViewKind::Image);
+        assert_eq!(view.source.as_deref(), Some(image.canonicalize().unwrap().as_path()));
+
+        let error = render_output(
+            json!({ "content": "越界", "view": { "kind": "image", "path": "../secret.txt", "title": "t" } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("越出插件目录"), "got: {error}");
+
+        let error = render_output(
+            json!({ "content": "没有", "view": { "kind": "image", "path": "nope.png", "title": "t" } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("不存在"), "got: {error}");
+
+        let error = render_output(
+            json!({ "content": "文档", "view": { "kind": "doc", "path": "shot.png", "title": "t" } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("缺少 mime"), "got: {error}");
+
+        let output = render_output(
+            json!({ "content": "文档", "view": { "kind": "doc", "path": "shot.png", "mime": "image/png", "title": "t" } }),
+            &dir,
+        )
+        .unwrap();
+        let view = output.view.unwrap();
+        assert_eq!(view.kind, ToolViewKind::Doc);
+        assert_eq!(view.mime.as_deref(), Some("image/png"));
+    }
+
+    /// 每个用例一个独立目录，避免并行测试互相踩文件。
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("prts-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     /// 探针二进制的目录。`cargo test` 会先编译 bin，找不到就跳过（不装 flaky 用例）。

@@ -100,6 +100,9 @@ pub struct ToolContext {
     /// 本轮激活过的不可信 Skill（R-29）：命令不显式引用包路径时的兜底判据。
     /// 跨轮随 ToolContext 重置。
     pub(crate) active_untrusted_skill: Mutex<Option<String>>,
+    /// 当前会话 id（视图落盘定位用）。`turn_loop` 构造 ctx 时注入；
+    /// Mock/独立直调场景为 None，此时带视图的工具结果不落盘。
+    pub(crate) conversation_id: Option<String>,
 }
 
 impl ToolContext {
@@ -110,6 +113,7 @@ impl ToolContext {
             abort: None,
             taint: Arc::new(crate::runtime::taint::TaintState::default()),
             active_untrusted_skill: Mutex::new(None),
+            conversation_id: None,
         }
     }
 
@@ -121,7 +125,21 @@ impl ToolContext {
             abort: None,
             taint: Arc::new(crate::runtime::taint::TaintState::default()),
             active_untrusted_skill: Mutex::new(None),
+            conversation_id: None,
         }
+    }
+
+    /// 注入会话 id（视图落盘的目录定位；由 `turn_loop` 在生产路径上调用）。
+    pub fn with_conversation_id(mut self, conversation_id: impl Into<String>) -> Self {
+        self.conversation_id = Some(conversation_id.into());
+        self
+    }
+
+    /// 当前会话 id（无则 None）。
+    // 视图落盘那一步（`tool_loop`）才会读它；这一步先把通道铺好。
+    #[allow(dead_code)]
+    pub(crate) fn conversation_id(&self) -> Option<&str> {
+        self.conversation_id.as_deref()
     }
 
     /// 本轮来源状态（只读观察；写入由 orchestrator 在执行成功后做）。
@@ -256,6 +274,62 @@ impl ToolProvenance {
     }
 }
 
+// ═══════════════════════════════════════════════════════
+// ToolView —— 工具结果的呈现载荷（视图接口）
+// ═══════════════════════════════════════════════════════
+
+/// html 视图的字节上限：UTF-8 **字节**，不是字符数（规格 §二）。
+pub const MAX_VIEW_HTML_BYTES: usize = 64 * 1024;
+/// 视图标题的字数上限。
+pub const MAX_VIEW_TITLE_CHARS: usize = 60;
+/// 对话内高度区间：宿主按 `clamp(height, 40, 160)` 使用（规格 §二）。
+pub const VIEW_HEIGHT_MIN: u16 = 40;
+pub const VIEW_HEIGHT_MAX: u16 = 160;
+
+/// 视图的三种形态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolViewKind {
+    /// 自包含页面，宿主写盘后在沙箱 iframe 里渲染。
+    Html,
+    /// 一张图，宿主复制到会话目录后显示。
+    Image,
+    /// 大文件，按需用系统默认程序打开。
+    Doc,
+}
+
+/// 工具视图：随工具结果回到宿主的画面载荷。
+///
+/// 与 `summary` 的分工是硬边界：`summary` 进模型上下文，`view` 不进。
+/// 这里存渲染需要的东西——html 在落盘前是内联页面，image/doc 是**已校验
+/// 在插件目录内**的绝对路径；落盘与路径改写由调度层（`tool_loop`）完成。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolView {
+    pub kind: ToolViewKind,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u16>,
+    /// html 视图的内联页面（落盘后事件里只存相对路径，不存本体）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
+    /// image/doc 的来源文件（绝对路径，已确认在插件目录内）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<std::path::PathBuf>,
+    /// doc 的 MIME（只用于决定打开方式）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+impl ToolView {
+    /// 对话内使用的高度：缺省 120px，越界按 40–160 夹取。
+    pub fn height_px(&self) -> u16 {
+        self.height
+            .unwrap_or(120)
+            .clamp(VIEW_HEIGHT_MIN, VIEW_HEIGHT_MAX)
+    }
+}
+
 /// 工具执行输出。
 ///
 /// `provenance` 为结果来源（R-02a）：`external` 表示外部资料，不具本地知识库/
@@ -270,6 +344,9 @@ pub struct ToolOutput {
     pub canonical: serde_json::Value,
     /// 渲染后的展示文本（presentation），LLM 与前端可见。
     pub summary: String,
+    /// 工具结果的视图（可选）。**不进模型上下文**；落盘与路径改写由调度层做。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<ToolView>,
     /// 工具要交给模型的图片（本地路径）。中枢会另起一条 user 消息送出——
     /// 工具结果本身只带文本，图片得走消息附件的现成物化通路。
     /// 纯内部通道，不序列化（前端与日志不消费；用户侧的图由工具自己的
@@ -289,6 +366,7 @@ impl ToolOutput {
         Self {
             canonical: serde_json::json!({ "text": summary }),
             summary,
+            view: None,
             provenance: None,
             images: Vec::new(),
             skill_events: Vec::new(),
@@ -300,10 +378,17 @@ impl ToolOutput {
         Self {
             canonical,
             summary: summary.into(),
+            view: None,
             provenance: None,
             images: Vec::new(),
             skill_events: Vec::new(),
         }
+    }
+
+    /// 附加视图（不进模型上下文）。
+    pub fn with_view(mut self, view: ToolView) -> Self {
+        self.view = Some(view);
+        self
     }
 
     /// 附加结果来源（外部资料等）。
