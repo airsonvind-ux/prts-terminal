@@ -52,7 +52,7 @@ fn main() -> std::process::ExitCode {
                 let name = params.get("name").and_then(Value::as_str).unwrap_or("");
                 let args = params.get("args").cloned().unwrap_or(Value::Null);
                 match handle_tool(name, &args) {
-                    Some(text) => reply(&mut output, &id, Value::String(text)),
+                    Some(result) => reply(&mut output, &id, result),
                     // 工具名不认识按参数错处理（-32602），-32601 只留给方法不认识。
                     None => reply_error(&mut output, &id, -32602, &format!("没有这个工具：{name}")),
                 }
@@ -67,21 +67,35 @@ fn main() -> std::process::ExitCode {
 
 /// 工具面：这一份就是宿主看到的全部。
 fn tools() -> Value {
-    json!([{
-        "name": "hello",
-        "action": "打招呼",
-        "description": "向一个人打招呼（示例工具）",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": { "type": "string", "description": "要打招呼的人，默认「世界」" }
-            },
-            "required": []
+    json!([
+        {
+            "name": "hello",
+            "action": "打招呼",
+            "description": "向一个人打招呼（示例工具）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "要打招呼的人，默认「世界」" }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "show_card",
+            "action": "画一张卡",
+            "description": "返回一张 HTML 小卡片（示例视图：文字进上下文，卡片给人看）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "卡片正文，默认「你好」" }
+                },
+                "required": []
+            }
         }
-    }])
+    ])
 }
 
-fn handle_tool(name: &str, args: &Value) -> Option<String> {
+fn handle_tool(name: &str, args: &Value) -> Option<Value> {
     match name {
         "hello" => {
             let who = args
@@ -89,7 +103,26 @@ fn handle_tool(name: &str, args: &Value) -> Option<String> {
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())
                 .unwrap_or("世界");
-            Some(format!("你好，{who}！"))
+            Some(Value::String(format!("你好，{who}！")))
+        }
+        "show_card" => {
+            let text = args
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .unwrap_or("你好");
+            // 对象形态：content 给模型读，view 给人看（不进上下文）。
+            Some(json!({
+                "content": format!("已经画好卡片：{text}"),
+                "view": {
+                    "kind": "html",
+                    "title": "示例卡片",
+                    "height": 80,
+                    "html": format!(
+                        "<div style=\"font:14px/1.6 sans-serif;color:#e8e8e8;background:#1c1f24;padding:10px 12px;border-radius:8px\">{text}</div>"
+                    )
+                }
+            }))
         }
         _ => None,
     }
