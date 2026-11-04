@@ -287,6 +287,10 @@ pub enum SessionEvent {    /// turn 开始：一次 agent_process 处理周期
         /// 补一条带图 user 消息——与轮内内存形态同源，故跟轮可重建。
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<crate::attachments::Attachment>,
+        /// 工具视图引用（M4）：会话目录内的相对路径 + 元信息，不含内容本体。
+        /// 旧归档没有该字段（None），前端按「无视图」处理。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<crate::storage::views::ToolResultView>,
     },
 
     /// 请求头快照：渲染后的 system prompt + 工具 schema。
@@ -513,6 +517,7 @@ impl SessionEvent {
             ok,
             provenance: None,
             attachments: Vec::new(),
+            view: None,
         }
     }
 
@@ -543,6 +548,7 @@ impl SessionEvent {
             ok,
             provenance: None,
             attachments,
+            view: None,
         }
     }
 
@@ -553,6 +559,14 @@ impl SessionEvent {
         } = &mut self
         {
             *slot = provenance;
+        }
+        self
+    }
+
+    /// 附加视图引用（落盘后由调度层调用；失败或缺会话时为 None）。
+    pub fn with_view(mut self, view: Option<crate::storage::views::ToolResultView>) -> Self {
+        if let Self::ToolResult { view: slot, .. } = &mut self {
+            *slot = view;
         }
         self
     }
@@ -1389,6 +1403,32 @@ mod tests {
                 assert!(action.is_none());
                 assert!(!plugin_tool);
             }
+            other => panic!("事件类型不对：{other:?}"),
+        }
+    }
+
+    /// 视图随 tool/result 落账：只存相对路径与元信息，不存页面本体。
+    #[test]
+    fn tool_result_carries_view_reference_not_content() {
+        let saved = crate::storage::views::ToolResultView {
+            kind: crate::tools::ToolViewKind::Html,
+            title: "地图".into(),
+            height: Some(140),
+            path: "views/c1.html".into(),
+            mime: None,
+        };
+        let ev = SessionEvent::tool_result("s1", "c1", Some("map"), "已生成地图", true)
+            .with_view(Some(saved));
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"view\":{"), "got {json}");
+        assert!(json.contains("\"path\":\"views/c1.html\""), "got {json}");
+        assert!(!json.contains("<html"), "不应把页面本体写进事件：{json}");
+
+        // 旧归档没有 view：读回 None，前端按「无视图」渲染。
+        let old = r#"{"type":"tool/result","sessionId":"s1","callId":"c1","toolName":"read_file","summary":"ok","ok":true}"#;
+        let event: SessionEvent = serde_json::from_str(old).expect("旧归档应能反序列化");
+        match event {
+            SessionEvent::ToolResult { view, .. } => assert!(view.is_none()),
             other => panic!("事件类型不对：{other:?}"),
         }
     }

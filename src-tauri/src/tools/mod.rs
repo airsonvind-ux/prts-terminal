@@ -328,6 +328,50 @@ impl ToolView {
             .unwrap_or(120)
             .clamp(VIEW_HEIGHT_MIN, VIEW_HEIGHT_MAX)
     }
+
+    /// html 视图：内联页面，落盘后事件里只留相对路径。
+    pub fn html(title: impl Into<String>, html: impl Into<String>, height: Option<u16>) -> Self {
+        Self {
+            kind: ToolViewKind::Html,
+            title: title.into(),
+            height,
+            html: Some(html.into()),
+            source: None,
+            mime: None,
+        }
+    }
+
+    /// 图片视图：来源是插件目录内的文件，落盘时复制。
+    pub fn image(
+        title: impl Into<String>,
+        source: impl Into<std::path::PathBuf>,
+        height: Option<u16>,
+    ) -> Self {
+        Self {
+            kind: ToolViewKind::Image,
+            title: title.into(),
+            height,
+            html: None,
+            source: Some(source.into()),
+            mime: None,
+        }
+    }
+
+    /// 文档视图：带 MIME，打开时交给系统默认程序。
+    pub fn doc(
+        title: impl Into<String>,
+        source: impl Into<std::path::PathBuf>,
+        mime: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ToolViewKind::Doc,
+            title: title.into(),
+            height: None,
+            html: None,
+            source: Some(source.into()),
+            mime: Some(mime.into()),
+        }
+    }
 }
 
 /// 工具执行输出。
