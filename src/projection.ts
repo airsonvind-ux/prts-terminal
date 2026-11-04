@@ -328,12 +328,12 @@ export interface TextSegment {
  * 从单轮事件序列派生 assistant 文本段（分段回溯弱化）。
  *
  * 文本段性质由「闭合方式」决定：
- * - 归档轮（存在 assistant/message）：取最后一个 assistant/message，
- *   内容非空 → 单段 transition=false；空 → null。
- *   归档后过渡文本消失（由 assistant/message 最终文本替换，既定行为）。
- * - 流式中：assistant/chunk(kind=text) 累积到当前段；tool/call 到达时
- *   若当前段非空 → 回溯标记 transition=true、push 进结果并开新段
- *   （新段 transition=false）；遍历结束把最后未闭合段 push（transition=false）。
+ * - 本轮有 text chunk（归档轮与流式轮都算）→ 从 chunk 累积：`tool/call`
+ *   到达时若当前段非空 → 回溯标记 transition=true、push 进结果并开新段；
+ *   遍历结束把最后未闭合段 push（transition=false）。归档后过程文本保留，
+ *   与流式中同构。
+ * - 本轮没有任何 text chunk（早于 chunk 记录的旧会话）→ 回退到最后一个
+ *   `assistant/message`：内容非空 → 单段 transition=false；空 → null。
  * - 总内容为空 → null。
  */
 export function deriveTextSegments(
@@ -342,15 +342,29 @@ export function deriveTextSegments(
   // 最后一次撤回之后才是有效输出。
   const start = lastResetIndex(events);
 
-  // 归档轮：assistant/message 是权威聚合 → 单段正常显示
-  for (let i = events.length - 1; i >= start; i--) {
-    const e = events[i];
-    if (e.type === "assistant/message") {
-      if (e.content.length === 0) return null;
-      return [{ content: e.content, transition: false }];
+  // 本轮有没有 text chunk：有就走 chunk 重建（归档与流式同构，过程文本保留）；
+  // 没有（早于 chunk 记录的旧会话）才回退到 assistant/message 聚合。
+  const hasTextChunk = events.some(
+    (e, i) =>
+      i >= start &&
+      e.type === "assistant/chunk" &&
+      e.kind === "text" &&
+      e.content.length > 0
+  );
+
+  if (!hasTextChunk) {
+    // 旧归档：assistant/message 是权威聚合 → 单段正常显示
+    for (let i = events.length - 1; i >= start; i--) {
+      const e = events[i];
+      if (e.type === "assistant/message") {
+        if (e.content.length === 0) return null;
+        return [{ content: e.content, transition: false }];
+      }
     }
   }
-  // 流式中：chunks 累积；tool/call 回溯闭合当前段（空段不产生）
+
+  // chunks 累积；tool/call 回溯闭合当前段（空段不产生）。
+  // 最后一段是最终文本（transition=false），其前的段是被工具调用闭合的过程文本。
   const segments: TextSegment[] = [];
   let buf = "";
   for (let i = start; i < events.length; i++) {

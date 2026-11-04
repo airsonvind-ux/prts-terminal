@@ -236,12 +236,18 @@
  * 段级应用：assistant 气泡内逐段渲染，被 tool/call 闭合的过渡段
  * （transition=true）加本 class 弱化；最终未闭合段与归档后最终文本
  * 正常显示（整个气泡不再统一弱化）。
- * 用 opacity 而非 color：Markdown 内 strong/code/标题有固定色，
- * 只有 opacity 能对整块（含表格/代码）一致弱化。 */
+ *
+ * 用色阶不用 opacity：opacity 0.55 会把正文对比度压到 3:1 以下。
+ * Markdown 内的 strong/code/标题自带颜色，所以额外把它们拉回继承色，
+ * 否则同一个过渡段里正文变灰、代码块还是原色，看起来像两块内容。 */
 
 .streaming {
-  opacity: 0.55;
-  transition: opacity 0.2s ease;
+  color: var(--text-2);
+  transition: color 0.2s ease;
+}
+
+.streaming :where(strong, em, h1, h2, h3, h4, h5, h6, code, th, td) {
+  color: inherit;
 }
 
 /* 光标保持不弱化——"正在输出"的指示需保持清晰；
