@@ -175,10 +175,12 @@ describe("过程卡 · 单卡顺序行", () => {
       result("c1", "query_enemy"),
       { type: "mood/event", sessionId: S, mood: "高兴", intensity: 2 },
     ]);
-    // 一张过程卡 + 一张情绪卡（情绪卡仍走既有情绪区）
+    // 一张过程卡 + 一张情绪卡（情绪卡是独立块，不进卡内）
     expect(view.headers()).toHaveLength(1);
-    const moodToggle = view.container.querySelectorAll('[data-event-kind="mood"]');
-    expect(moodToggle).toHaveLength(1);
+    const moodCard = view.container.querySelectorAll("[data-mood-card]");
+    expect(moodCard).toHaveLength(1);
+    // 没有心声时回落到旁白
+    expect(moodCard[0].textContent).toContain("PRTS 高兴坏了");
     // 情绪内容不出现在过程卡摘要里
     expect(view.text()).toContain("思考与工具");
     expect(view.text()).toContain("1 调用");

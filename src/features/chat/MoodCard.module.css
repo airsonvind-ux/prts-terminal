@@ -1,0 +1,25 @@
+/* 情绪卡（MOOD v2）
+ *
+ * 独立块、无边框、无头部、不可折叠：只有一条 2px 短竖线 + 正文。
+ * 竖线与文字同色，颜色由 --mood-hue 注入（三个已知偏向各一色，
+ * 自由偏向取中性色）。正体，不做斜体，也不做透明度弱化——
+ * 心声是正文级内容，不是旁注。
+ */
+
+.mood {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 6px 2px;
+}
+
+.line {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--mood-hue);
+  color: var(--mood-hue);
+  font-size: var(--text-sm);
+  font-style: normal;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}

@@ -1,8 +1,8 @@
 import { memo, useState } from "react";
 import type { DisplayItem } from "./messageItems";
 import { AttachmentStrip } from "./AttachmentStrip";
-import { EventBadge } from "./EventBadge";
 import { Markdown } from "./Markdown";
+import { MoodCard } from "./MoodCard";
 import { ProcessCard } from "./ProcessCard";
 import { WelcomeMark } from "./WelcomeMark";
 import styles from "./MessageList.module.css";
@@ -119,13 +119,9 @@ export const MessageRow = memo(function MessageRow({
       return null;
     case "mood":
       return (
-        <EventBadge
-          events={item.events}
-          interactive={item.interactive}
-          showApprovalControls={false}
-          className={styles.row}
-          onToggle={onCardToggle}
-        />
+        <div className={styles.row} data-mood-row>
+          <MoodCard events={item.events} />
+        </div>
       );
     case "message":
       if (item.role === "assistant") {
