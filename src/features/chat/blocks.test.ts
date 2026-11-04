@@ -96,7 +96,13 @@ describe("splitTurn · 切点", () => {
     if (first.kind !== "text") throw new Error("第一块应是文本");
     expect(first.transition).toBe(true);
     if (second.kind !== "card") throw new Error("第二块应是过程卡");
-    expect(second.summary).toEqual({ reasoning: 0, calls: 1, failures: 0 });
+    expect(second.summary).toEqual({
+      reasoning: 0,
+      calls: 1,
+      failures: 0,
+      danglingCalls: 0,
+      reasoningDangling: false,
+    });
   });
 
   it("轮尾文本不弱化", () => {
@@ -119,7 +125,13 @@ describe("splitTurn · 切点", () => {
     expect(blocks).toHaveLength(1);
     const card = blocks[0];
     if (card.kind !== "card") throw new Error("应是过程卡");
-    expect(card.summary).toEqual({ reasoning: 0, calls: 3, failures: 1 });
+    expect(card.summary).toEqual({
+      reasoning: 0,
+      calls: 3,
+      failures: 1,
+      danglingCalls: 0,
+      reasoningDangling: false,
+    });
     expect(card.rows).toHaveLength(3);
   });
 
@@ -234,6 +246,46 @@ describe("splitTurn · 形状", () => {
     const card = splitTurn(events)[0];
     if (card.kind !== "card") throw new Error("应是过程卡");
     expect(card.events).toEqual(events);
+  });
+});
+
+describe("splitTurn · 被打断的轮（悬空项）", () => {
+  it("调用发出后没有结果：danglingCalls 记 1，行停在 running", () => {
+    const blocks = splitTurn([reasoning("先查一下"), call("c1")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    expect(card.summary.danglingCalls).toBe(1);
+    expect(card.rows[card.rows.length - 1]).toMatchObject({ kind: "tool", status: "running" });
+  });
+
+  it("多个悬空调用按个数计", () => {
+    const blocks = splitTurn([call("c1"), call("c2")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    expect(card.summary.danglingCalls).toBe(2);
+  });
+
+  it("末尾思考没写完：reasoningDangling 为真", () => {
+    const blocks = splitTurn([call("c1"), result("c1"), reasoning("还没想完")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    expect(card.summary.reasoningDangling).toBe(true);
+    expect(card.summary.danglingCalls).toBe(0);
+  });
+
+  it("正常收尾的轮两项都为 0 / false", () => {
+    const blocks = splitTurn([reasoning("想"), call("c1"), result("c1"), text("好了")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    expect(card.summary.danglingCalls).toBe(0);
+    expect(card.summary.reasoningDangling).toBe(false);
+  });
+
+  it("旧归档（无 chunk）也数悬空调用", () => {
+    const blocks = splitTurn([call("c1"), message("被中断前的最后一句话")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    expect(card.summary.danglingCalls).toBe(1);
   });
 });
 

@@ -168,7 +168,7 @@ function appendTurnItems(
     const visibleEvents = err ? seg.events.slice(0, errIndex) : seg.events;
 
     const segIsStreaming = isStreaming && i === lastAssistantIdx && !err;
-    const blocks = cleanTextBlocks(splitTurn(visibleEvents, i), visibleEvents);
+    const blocks = cleanTextBlocks(splitTurn(visibleEvents, i, segIsStreaming), visibleEvents);
 
     // 光标只落在轮尾那一段文本上：后面还有卡时，说明模型已经去调工具了，
     // 此刻「正在打字」的是卡（摘要行的进行中），不是上面的文本。

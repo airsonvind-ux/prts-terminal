@@ -78,6 +78,11 @@
   color: var(--danger);
 }
 
+/* 归档轮里被打断的那一轮：没有「进行中」的呼吸，只是停在半路 */
+.statusIncomplete {
+  color: var(--text-3);
+}
+
 .usage {
   flex: none;
   margin-left: auto;
@@ -151,6 +156,13 @@
   color: #c98080;
 }
 
+/* 失败摘要常常是一整段 stderr：视觉上收一行，悬停看全文 */
+.lineFailed .lineText {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .lineText {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -168,6 +180,11 @@
 .dotRunning {
   background: #d7a94e;
   animation: dotBreathe 1.4s ease-in-out infinite;
+}
+
+/* 归档轮的悬空行：仍是金色（没结果），但不再呼吸 */
+.dotStill {
+  animation: none;
 }
 
 .dotFailed {

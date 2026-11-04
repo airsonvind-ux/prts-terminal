@@ -59,6 +59,15 @@ export function ProcessCard({ block, interactive, className, onToggle }: Props) 
       ? `${block.summary.calls} 调用${elapsed ? ` · ${elapsed}` : ""}`
       : null;
 
+  // 归档轮里没等到结果的调用 / 没闭合的思考 = 这一轮被打断了。
+  // 进行中的轮次不判这个：那时「还没回来」本来就是常态，标题写进行中。
+  const danglingCalls = block.summary.danglingCalls;
+  const incomplete = !running && (danglingCalls > 0 || block.summary.reasoningDangling);
+  const incompleteText =
+    danglingCalls > 0
+      ? `· 工具调用未完成${danglingCalls > 1 ? `（${danglingCalls} 项）` : ""}`
+      : "· 思考未完成";
+
   return (
     <section
       className={className ? `${styles.card} ${className}` : styles.card}
@@ -95,7 +104,13 @@ export function ProcessCard({ block, interactive, className, onToggle }: Props) 
               {failures > 0 ? " · " : ""}· 进行中
             </span>
           )}
-          {!running && failures === 0 && (
+          {incomplete && (
+            <span className={styles.statusIncomplete}>
+              {failures > 0 ? " · " : ""}
+              {incompleteText}
+            </span>
+          )}
+          {!running && !incomplete && failures === 0 && (
             <span className={styles.statusDone}>✓ 完成</span>
           )}
         </span>
@@ -225,10 +240,13 @@ function ToolLine({
     return (
       <div
         className={`${styles.line} ${styles.lineFailed}`}
-        title={row.approval === "rejected" ? undefined : summary}
+        data-failed-line
       >
         <span className={`${styles.dot} ${styles.dotFailed}`} aria-hidden />
-        <span className={styles.lineText}>
+        <span
+          className={styles.lineText}
+          title={row.approval === "rejected" ? undefined : summary}
+        >
           {text}
           {row.approval === "rejected" ? null : renderDisplaySuffix(display, true)}
         </span>
@@ -271,10 +289,19 @@ function ToolLine({
 
   return (
     <div className={styles.line}>
-      <span className={`${styles.dot} ${styles.dotRunning}`} aria-hidden />
+      <span
+        className={`${styles.dot} ${styles.dotRunning}${interactive ? "" : ` ${styles.dotStill}`}`}
+        aria-hidden
+      />
       <span className={styles.lineText}>
-        {`PRTS正在${phrase}`}
-        {hasDisplay(display) ? renderDisplaySuffix(display, false) : "..."}
+        {row.approval === "pending" && !interactive
+          ? `PRTS正在${phrase}...（等待确认）`
+          : `PRTS正在${phrase}`}
+        {row.approval === "pending" && !interactive
+          ? null
+          : hasDisplay(display)
+            ? renderDisplaySuffix(display, false)
+            : "..."}
         {row.approval === "approved" ? "（已确认）" : ""}
       </span>
       {provenanceTag}

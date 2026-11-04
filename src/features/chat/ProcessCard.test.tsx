@@ -69,8 +69,53 @@ function call(callId: string, toolName: string, action?: string): SessionEvent {
   return { type: "tool/call", sessionId: S, callId, toolName, params: "{}", ...(action ? { action } : {}) };
 }
 
-function result(callId: string, toolName: string, ok = true, summary = "完成"): SessionEvent {
-  return { type: "tool/result", sessionId: S, callId, toolName, ok, summary };
+function result(
+  callId: string,
+  toolName: string,
+  ok = true,
+  summary = "完成",
+  provenance?: { trust: "external"; source: string; version?: string }
+): SessionEvent {
+  return {
+    type: "tool/result",
+    sessionId: S,
+    callId,
+    toolName,
+    ok,
+    summary,
+    ...(provenance ? { provenance } : {}),
+  };
+}
+
+function approvalRequest(callId: string, command = "Get-Process"): SessionEvent {
+  return {
+    type: "tool/approval-request",
+    sessionId: S,
+    callId,
+    command,
+    risk: "low",
+    mode: "ask",
+    ruleId: null,
+    privilege: "restricted",
+    justification: null,
+  };
+}
+
+function approvalResult(
+  callId: string,
+  decision: "approved" | "rejected" | "blocked"
+): SessionEvent {
+  return {
+    type: "tool/approval-result",
+    sessionId: S,
+    callId,
+    decision,
+    risk: "low",
+    mode: "ask",
+    ruleId: null,
+    reason: "user",
+    privilege: "restricted",
+  };
 }
 
 describe("过程卡 · 单卡顺序行", () => {
@@ -184,5 +229,135 @@ describe("过程卡 · 单卡顺序行", () => {
     // 情绪内容不出现在过程卡摘要里
     expect(view.text()).toContain("思考与工具");
     expect(view.text()).toContain("1 调用");
+  });
+});
+
+// ── 中止留下的悬空项：归档回放必须看得见 ──────────────────────────
+
+describe("过程卡 · 未完成态", () => {
+  it("归档轮里没有结果的调用：标题写「工具调用未完成」", () => {
+    const view = render([reasoning("先查一下"), call("c1", "run_command")]);
+    expect(view.text()).toContain("工具调用未完成");
+    expect(view.text()).not.toContain("✓ 完成");
+    expect(view.text()).not.toContain("· 进行中");
+  });
+
+  it("多个悬空调用带项数", () => {
+    const view = render([call("c1", "run_command"), call("c2", "query_enemy")]);
+    expect(view.text()).toContain("工具调用未完成（2 项）");
+  });
+
+  it("末尾思考没写完：标题写「思考未完成」", () => {
+    const view = render([
+      call("c1", "query_enemy"),
+      result("c1", "query_enemy"),
+      reasoning("还没想完"),
+    ]);
+    expect(view.text()).toContain("思考未完成");
+  });
+
+  it("展开后悬空行仍按进行中样式显示，但圆点不呼吸", () => {
+    const view = render([call("c1", "run_command")]);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS正在执行命令");
+    const dot = Array.from(view.container.querySelectorAll("span")).find((s) =>
+      s.className.includes("dotRunning")
+    );
+    expect(dot).toBeTruthy();
+    expect(dot!.className).toContain("dotStill");
+  });
+
+  it("进行中的轮次不显示未完成（那时还没回来是常态）", () => {
+    const view = render([call("c1", "run_command")], true);
+    expect(view.text()).toContain("· 进行中");
+    expect(view.text()).not.toContain("未完成");
+  });
+});
+
+// ── 审批四态（从 EventBadge.test 迁移：按钮在 Action Dock，卡内只有行） ──
+
+describe("过程卡 · 审批四态", () => {
+  it("等待确认：强制展开 + 只读提示", () => {
+    const view = render([call("c1", "run_command"), approvalRequest("c1")], true);
+    expect(view.text()).toContain("PRTS 正在等待你确认执行命令");
+    expect(view.text()).toContain("请在输入框上方处理");
+    // 卡内只有卡头一个按钮；确认/拒绝按钮在 Action Dock
+    expect(view.container.querySelectorAll("button")).toHaveLength(1);
+  });
+
+  it("已确认：行文案带「已确认」", () => {
+    const view = render(
+      [call("c1", "run_command"), approvalRequest("c1"), approvalResult("c1", "approved")],
+      true
+    );
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS正在执行命令...（已确认）");
+  });
+
+  it("已拒绝：按失败行渲染", () => {
+    const view = render(
+      [call("c1", "run_command"), approvalRequest("c1"), approvalResult("c1", "rejected")],
+      true
+    );
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS执行命令失败：已拒绝该命令执行");
+  });
+
+  it("被拦截（blocked）同样按已拒绝渲染", () => {
+    const view = render(
+      [call("c1", "run_command"), approvalRequest("c1"), approvalResult("c1", "blocked")],
+      true
+    );
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS执行命令失败：已拒绝该命令执行");
+  });
+
+  it("归档轮等待过的调用：显示「（等待确认）」且不算进行中", () => {
+    const view = render([call("c1", "run_command"), approvalRequest("c1")]);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS正在执行命令...（等待确认）");
+    expect(view.text()).toContain("工具调用未完成");
+  });
+});
+
+// ── 外部资料标签与失败行展示（从 EventBadge.test 迁移） ──────────────
+
+describe("过程卡 · 外部来源与失败行", () => {
+  it("external provenance 显示中性「外部」标签，title 带来源", () => {
+    const view = render([
+      call("c1", "web_fetch"),
+      result("c1", "web_fetch", true, "外部正文", {
+        trust: "external",
+        source: "example.com/docs",
+      }),
+    ]);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS浏览网页完成");
+    const tag = Array.from(view.container.querySelectorAll("span")).find(
+      (el) => el.textContent === "外部"
+    );
+    expect(tag).toBeTruthy();
+    expect(tag!.getAttribute("title")).toContain("example.com/docs");
+  });
+
+  it("没有 provenance 的旧结果不显示外部标签", () => {
+    const view = render([call("c1", "web_fetch"), result("c1", "web_fetch")]);
+    view.clickHeader();
+    expect(view.text()).toContain("PRTS浏览网页完成");
+    expect(view.text()).not.toContain("外部");
+  });
+
+  it("失败摘要单行省略，悬停 title 看全文", () => {
+    const summary =
+      "命令执行失败（退出码 1）：[stderr]\nSet-Content : 无法找到路径「C:\\x」";
+    const view = render([call("c1", "run_command"), result("c1", "run_command", false, summary)]);
+    view.clickHeader();
+    const line = view.container.querySelector("[data-failed-line]");
+    expect(line).toBeTruthy();
+    const text = line!.querySelector("span:nth-child(2)") as HTMLElement;
+    expect(text.getAttribute("title")).toBe(summary);
+    expect(text.className).toContain("lineText");
+    // 省略只在视觉层：全文仍在文本节点里
+    expect(view.text()).toContain("无法找到路径");
   });
 });

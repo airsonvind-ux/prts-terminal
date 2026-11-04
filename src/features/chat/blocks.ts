@@ -53,6 +53,14 @@ export interface CardSummary {
   calls: number;
   /** 失败项数（status = failed） */
   failures: number;
+  /**
+   * 悬空的调用数：发出了 `tool/call` 却没有配对 `tool/result`。
+   * 进程被杀、崩溃、会话被清理都会留下这种行——归档回放里它不能看起来
+   * 和正常完成的一轮一样。
+   */
+  danglingCalls: number;
+  /** 轮末还有未闭合的思考：模型写到一半被打断 */
+  reasoningDangling: boolean;
 }
 
 export type Block =
@@ -141,10 +149,11 @@ function cardWindow(events: SessionEvent[]): {
   return { startedAt, endedAt };
 }
 
-function summarize(rows: ProcessRow[]): CardSummary {
+function summarize(rows: ProcessRow[], reasoningDangling = false): CardSummary {
   let reasoning = 0;
   let calls = 0;
   let failures = 0;
+  let danglingCalls = 0;
   for (const row of rows) {
     if (row.kind === "reasoning") {
       reasoning += 1;
@@ -152,8 +161,10 @@ function summarize(rows: ProcessRow[]): CardSummary {
     }
     calls += 1;
     if (row.status === "failed") failures += 1;
+    // 没有 result 的行停在 running：这就是中止留下的悬空项
+    if (row.status === "running") danglingCalls += 1;
   }
-  return { reasoning, calls, failures };
+  return { reasoning, calls, failures, danglingCalls, reasoningDangling };
 }
 
 /**
@@ -167,24 +178,35 @@ function legacyBlocks(events: SessionEvent[], turnIndex: number): Block[] {
   const rows: ProcessRow[] = [];
   const cardEvents: SessionEvent[] = [];
 
+  const findRow = (callId: string) =>
+    rows.find(
+      (candidate): candidate is Extract<ProcessRow, { kind: "tool" }> =>
+        candidate.kind === "tool" && candidate.callId === callId
+    );
+
   for (const event of events) {
     if (event.type === "tool/call") {
       rows.push(toolRowOf(event));
       cardEvents.push(event);
     } else if (event.type === "tool/result") {
       cardEvents.push(event);
-      const row = rows.find(
-        (candidate): candidate is Extract<ProcessRow, { kind: "tool" }> =>
-          candidate.kind === "tool" && candidate.callId === event.callId
-      );
+      const row = findRow(event.callId);
       if (row) {
         row.status = event.ok ? "ok" : "failed";
         row.summary = event.summary;
       }
     } else if (event.type === "tool/approval-request") {
+      // 旧归档也要留得住审批历史：没有这两行，被拦下/被拒绝的调用会显示成
+      // 一次普通的悬空调用，看不出当时在等人。
       cardEvents.push(event);
+      const row = findRow(event.callId);
+      if (row) row.approval = "pending";
     } else if (event.type === "tool/approval-result") {
       cardEvents.push(event);
+      const row = findRow(event.callId);
+      if (row) {
+        row.approval = event.decision === "approved" ? "approved" : "rejected";
+      }
     }
   }
 
@@ -221,10 +243,12 @@ function legacyBlocks(events: SessionEvent[], turnIndex: number): Block[] {
  *
  * @param events 单轮事件（顺序即到达顺序）
  * @param turnIndex 轮序号，只用于生成稳定块 id（`t0-b1`）
+ * @param streaming 该段是否还在流式输出。流式段不用旧会话回退：第一句还没
+ *   说、只发了工具调用时，回退路径会把正在跑的卡画成「未完成」的归档卡。
  */
-export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
+export function splitTurn(events: SessionEvent[], turnIndex = 0, streaming = false): Block[] {
   const visible = events.slice(lastResetIndex(events));
-  if (!hasChunk(visible)) return legacyBlocks(visible, turnIndex);
+  if (!streaming && !hasChunk(visible)) return legacyBlocks(visible, turnIndex);
 
   const blocks: Block[] = [];
   let rows: ProcessRow[] = [];
@@ -244,14 +268,16 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
     reasoning = "";
   };
 
-  const closeCard = (open = false): void => {
+  const closeCard = (open = false, reasoningDangling = false): void => {
+    // 轮末未闭合的思考也要算进摘要，先记下来再 flush
+    const dangling = reasoningDangling && reasoning.trim().length > 0;
     flushReasoning();
     if (rows.length === 0) return;
     blocks.push({
       kind: "card",
       id: nextId(),
       rows,
-      summary: summarize(rows),
+      summary: summarize(rows, dangling),
       events: cardEvents,
       open,
       ...cardWindow(cardEvents),
@@ -351,7 +377,8 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
 
   // 轮次边界：收尾。文本块在轮尾闭合 = 最终文本（不弱化）；
   // 还挂着的那张卡是「流式中最后一张」，标 open 让标题行显示进行中。
-  closeCard(true);
+  // 末尾仍在累积的思考是「没写完」：记进摘要，归档回放里才看得见。
+  closeCard(true, true);
   closeText(false);
   return blocks;
 }
