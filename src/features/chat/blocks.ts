@@ -21,6 +21,7 @@ import type {
   ToolDisplay,
   ToolResultEvent,
 } from "../../types";
+import { eventTime } from "./eventTiming";
 
 /** 过程卡内的一行。 */
 export type ProcessRow =
@@ -39,6 +40,9 @@ export type ProcessRow =
       summary?: string;
       /** 审批态：等待确认 / 已确认 / 已拒绝 */
       approval?: "pending" | "approved" | "rejected";
+      /** 事件到达时刻（实时轮才有；工具行右侧耗时用） */
+      startedAt?: number;
+      endedAt?: number;
     };
 
 /** 收起态摘要的计数。 */
@@ -58,10 +62,18 @@ export type Block =
       rows: ProcessRow[];
       summary: CardSummary;
       /**
-       * 原始事件切片。第 2 步复用 EventBadge 的行渲染时直接喂给它，
-       * 避免为「工具行」重新实现一遍槽位/审批配对。
+       * 原始事件切片。卡内的工具槽位（短语、来源、审批态）由卡自己算，
+       * 卡与卡之间不共享配对状态。
        */
       events: SessionEvent[];
+      /**
+       * 收尾时这张卡仍在累积（流式中的最后一张卡）。
+       * 标题行据此在「· 进行中」与「✓ 完成」之间切换；归档轮的卡一律为 false。
+       */
+      open: boolean;
+      /** 首末事件的到达时刻（实时轮才有；标题行右侧耗时用） */
+      startedAt?: number;
+      endedAt?: number;
     }
   | { kind: "text"; id: string; content: string; transition: boolean }
   // ② 步（工具视图接口）填形状；本步渲染层跳过
@@ -109,7 +121,24 @@ function toolRowOf(call: ToolCallEvent): ProcessRow {
     pluginTool: call.pluginTool === true,
     display: call.display,
     status: "running",
+    startedAt: eventTime(call),
   };
+}
+
+/** 卡的首末到达时刻（事件没有时刻时返回空对象，展示层就不显示耗时）。 */
+function cardWindow(events: SessionEvent[]): {
+  startedAt?: number;
+  endedAt?: number;
+} {
+  let startedAt: number | undefined;
+  let endedAt: number | undefined;
+  for (const event of events) {
+    const at = eventTime(event);
+    if (at === undefined) continue;
+    if (startedAt === undefined) startedAt = at;
+    endedAt = at;
+  }
+  return { startedAt, endedAt };
 }
 
 function summarize(rows: ProcessRow[]): CardSummary {
@@ -166,6 +195,8 @@ function legacyBlocks(events: SessionEvent[], turnIndex: number): Block[] {
       rows,
       summary: summarize(rows),
       events: cardEvents,
+      open: false,
+      ...cardWindow(cardEvents),
     });
   }
 
@@ -213,7 +244,7 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
     reasoning = "";
   };
 
-  const closeCard = (): void => {
+  const closeCard = (open = false): void => {
     flushReasoning();
     if (rows.length === 0) return;
     blocks.push({
@@ -222,6 +253,8 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
       rows,
       summary: summarize(rows),
       events: cardEvents,
+      open,
+      ...cardWindow(cardEvents),
     });
     rows = [];
     cardEvents = [];
@@ -268,6 +301,7 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
         if (row) {
           row.status = event.ok ? "ok" : "failed";
           row.summary = event.summary;
+          row.endedAt = eventTime(event);
         }
         // 视图随结果到达：结果行留在本卡，卡就此闭合，视图紧随其后
         if (viewOf(event) !== undefined) {
@@ -315,8 +349,9 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0): Block[] {
     }
   }
 
-  // 轮次边界：收尾。文本块在轮尾闭合 = 最终文本（不弱化）。
-  closeCard();
+  // 轮次边界：收尾。文本块在轮尾闭合 = 最终文本（不弱化）；
+  // 还挂着的那张卡是「流式中最后一张」，标 open 让标题行显示进行中。
+  closeCard(true);
   closeText(false);
   return blocks;
 }

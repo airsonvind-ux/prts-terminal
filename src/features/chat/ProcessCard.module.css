@@ -1,0 +1,243 @@
+/* 过程卡（消息流重构 · 面板卡方案 A）
+ *
+ * 一张卡 = 独立底板 + 1px 边框 + 10px 圆角。底比正文深一档（正文在 D2，
+ * 卡用 D1），边框用 D0，于是卡在对话流里是「凹下去的一块」，而不是
+ * 又一层浮起来的面板——收起态只占一行，不该抢正文的注意力。
+ *
+ * 标题行三段：左（箭头 + 标题）、中（状态）、右（用量，margin-left:auto）。
+ * 展开体里思考是第二层：更小的箭头、次级色、左侧 2px 细线，默认收起。
+ * 工具行等宽字体、圆点状态、右侧耗时；耗时只在该行拿得到到达时刻时出现。
+ */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0;
+  background: var(--depth-1);
+  border: 1px solid var(--depth-0);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 5px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.header:hover {
+  background: var(--depth-2);
+}
+
+.arrow {
+  flex: none;
+  display: inline-block;
+  width: 8px;
+  color: var(--text-3);
+  font-size: 8px;
+  line-height: 1;
+  text-align: center;
+  transition: transform 0.15s ease;
+}
+
+.arrowOpen {
+  transform: rotate(90deg);
+}
+
+.title {
+  color: var(--text-1);
+}
+
+.status {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+
+.statusDone {
+  color: var(--text-3);
+}
+
+.statusRunning {
+  color: var(--accent);
+  animation: statusBreathe 1.8s ease-in-out infinite;
+}
+
+.statusFailed {
+  color: var(--danger);
+}
+
+.usage {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 9px 8px;
+}
+
+/* ── 思考：卡内第二层，默认收起 ───────────────────────────────── */
+
+.reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reasoningToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.reasoningToggle:hover {
+  color: var(--text-2);
+}
+
+.reasoningBody {
+  margin: 1px 0 2px 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--depth-3);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── 工具行 ─────────────────────────────────────────────────── */
+
+.line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.lineFailed {
+  color: #c98080;
+}
+
+.lineText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  transform: translateY(-1px);
+}
+
+.dotRunning {
+  background: #d7a94e;
+  animation: dotBreathe 1.4s ease-in-out infinite;
+}
+
+.dotFailed {
+  background: var(--danger);
+}
+
+.lineTime {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.approvalNote {
+  margin: 0 0 1px 12px;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.provenanceTag {
+  flex: none;
+  padding: 0 3px;
+  border: 1px solid var(--depth-3);
+  border-radius: 3px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+.cursor {
+  display: inline-block;
+  flex: none;
+  width: 5px;
+  height: 12px;
+  margin-left: 2px;
+  background: var(--text-2);
+  vertical-align: -2px;
+  animation: blink 0.8s step-end infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes dotBreathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes statusBreathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}

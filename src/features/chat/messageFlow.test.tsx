@@ -68,22 +68,23 @@ function result(callId: string, toolName: string, ok = true, summary = "完成")
 }
 
 describe("消息流状态矩阵", () => {
-  it("流式中：末行未配对 → 摘要行标进行中", () => {
+  it("流式中：末行未配对 → 标题行标进行中", () => {
     const view = render([reasoning("正在想"), call("c1", "query_enemy")], true);
     expect(view.text()).toContain("· 进行中");
-    expect(view.text()).toContain("调用 1 次");
+    expect(view.text()).toContain("1 调用");
   });
 
-  it("完成：配对齐全 → 摘要行不再标进行中", () => {
+  it("完成：配对齐全 → 标题行标完成，不再标进行中", () => {
     const view = render(
       [reasoning("想"), call("c1", "query_enemy"), result("c1", "query_enemy")],
       false
     );
     expect(view.text()).not.toContain("· 进行中");
-    expect(view.text()).toContain("思考 1 段 · 调用 1 次");
+    expect(view.text()).toContain("✓ 完成");
+    expect(view.text()).toContain("1 调用");
   });
 
-  it("含失败：摘要行标出失败项数并带 ⚠", () => {
+  it("含失败：标题行标出失败项数并带 aria-label", () => {
     const view = render(
       [
         reasoning("先查"),
@@ -94,7 +95,8 @@ describe("消息流状态矩阵", () => {
       ],
       false
     );
-    expect(view.text()).toContain("调用 2 次 · 1 项失败");
+    expect(view.text()).toContain("2 调用");
+    expect(view.text()).toContain("1 项失败");
     expect(
       view.container.querySelector('[aria-label="有失败项"]')
     ).not.toBeNull();
@@ -135,7 +137,7 @@ describe("消息流状态矩阵", () => {
       ],
       false
     );
-    expect(view.text()).toContain("思考 1 段 · 调用 1 次");
+    expect(view.text()).toContain("✓ 完成");
     expect(view.cardCount()).toBe(1);
   });
 
@@ -147,7 +149,7 @@ describe("消息流状态矩阵", () => {
     ];
     const view = render(events, false);
     expect(view.cardCount()).toBe(1);
-    expect(view.text()).toContain("思考 1 段 · 调用 1 次");
+    expect(view.text()).toContain("1 调用");
     expect(view.text()).not.toContain("PRTS查询数据库完成");
     const header = view.container.querySelector<HTMLButtonElement>(
       '[data-event-kind="card"]'
