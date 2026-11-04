@@ -743,6 +743,8 @@ pub fn run() {
             commands::count_unreadable_sessions,
             commands::get_conversation,
             commands::session_file_abs_path,
+            commands::view_origin,
+            commands::view_prompt,
             commands::append_turn,
             commands::update_conversation_meta,
             commands::generate_conversation_title,

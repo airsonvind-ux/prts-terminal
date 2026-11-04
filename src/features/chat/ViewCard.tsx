@@ -10,25 +10,23 @@
 // 路径在事件里是相对的（`views/<file>`），绝对路径经 session_file_abs_path
 // 换算一次并缓存——一张视图一辈子只换一次。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
+import { draftKeyFor, useComposerDraftStore } from "../../stores/useComposerDraftStore";
 import type { ToolResultView } from "../../types";
+import {
+  createViewRateLimiter,
+  getViewOrigin,
+  parseViewMessage,
+  VIEW_TEXT_LIMIT,
+  viewUrl,
+  withViewSource,
+  type ViewMessage,
+} from "./viewBridge";
 import styles from "./ViewCard.module.css";
 
-/** 视图文档的源。Windows 的 WebView2 把自定义协议映射成 http://<scheme>.localhost。 */
-const VIEW_ORIGIN = navigator.userAgent.includes("Windows")
-  ? "http://prts-view.localhost"
-  : "prts-view://localhost";
-
-/** 拼沙箱文档 URL：会话 id 与路径都按段转义，避免 `..` 之类的东西变形。 */
-export function viewUrl(conversationId: string, relative: string): string {
-  const encoded = relative
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `${VIEW_ORIGIN}/${encodeURIComponent(conversationId)}/${encoded}`;
-}
+/** 视图文档的源由 Rust 给（Windows 是 http://prts-view.localhost），见 viewBridge。 */
 
 const absPathCache = new Map<string, Promise<string>>();
 
@@ -60,6 +58,22 @@ export function ViewCard({
   const [expanded, setExpanded] = useState(false);
   const [absPath, setAbsPath] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
+  const [origin, setOrigin] = useState<string | null>(null);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const largeFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const limiterRef = useRef<(() => boolean) | null>(null);
+  if (!limiterRef.current) limiterRef.current = createViewRateLimiter();
+
+  useEffect(() => {
+    if (view.kind !== "html") return;
+    let alive = true;
+    void getViewOrigin().then((value) => {
+      if (alive) setOrigin(value.origin);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [view.kind]);
 
   useEffect(() => {
     if (view.kind === "html") return;
@@ -76,7 +90,67 @@ export function ViewCard({
     };
   }, [conversationId, view.kind, view.path]);
 
-  const src = view.kind === "html" ? viewUrl(conversationId, view.path) : null;
+  // 沙箱文档发回来的动作。校验只认「来自这张视图的两个 iframe」：
+  // 沙箱是不透明源，event.origin 恒为 "null"，白名单会把消息全拒掉。
+  useEffect(() => {
+    if (view.kind !== "html") return;
+    const handle = (message: ViewMessage) => {
+      if (!limiterRef.current?.()) {
+        showToast("这块视图操作太频繁，稍等一下", { kind: "warning" });
+        return;
+      }
+      if (message.type === "local") return;
+      if (message.type === "toast") {
+        const text = message.text?.trim();
+        if (text) showToast(text, { kind: "info" });
+        return;
+      }
+      if (message.type === "prompt") {
+        void submitPrompt(message.text ?? "");
+        return;
+      }
+      // call：需要有一条脱离模型、但仍进同一轮的执行通道，单独一步做。
+      showToast("这块视图还不支持直接调用工具", { kind: "warning" });
+    };
+    const onMessage = (event: MessageEvent) => {
+      const windows = [
+        frameRef.current?.contentWindow ?? null,
+        largeFrameRef.current?.contentWindow ?? null,
+      ];
+      if (!windows.some((win) => win !== null && win === event.source)) return;
+      const message = parseViewMessage(event.data);
+      if (message) handle(message);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+
+    async function submitPrompt(text: string): Promise<void> {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (trimmed.length > VIEW_TEXT_LIMIT) {
+        showToast(`这条交互太长了（上限 ${VIEW_TEXT_LIMIT} 字）`, { kind: "warning" });
+        return;
+      }
+      const prefixed = withViewSource(view.title, trimmed);
+      try {
+        const outcome = await invoke<{ delivered: boolean }>("view_prompt", {
+          conversationId,
+          text: prefixed,
+        });
+        if (outcome?.delivered) return;
+        const key = draftKeyFor(conversationId);
+        const existing = useComposerDraftStore.getState().textByKey[key] ?? "";
+        useComposerDraftStore
+          .getState()
+          .setText(key, existing ? `${existing}\n${prefixed}` : prefixed);
+        showToast("已填进输入框，发送与否由你定", { kind: "info" });
+      } catch (err) {
+        showToast(String(err), { kind: "warning", dedupeKey: "view-prompt-failed" });
+      }
+    }
+  }, [view.kind, view.title, conversationId]);
+
+  const src = view.kind === "html" && origin ? viewUrl(origin, conversationId, view.path) : null;
   const imageSrc =
     view.kind === "image" && absPath ? safeAssetUrl(absPath) : null;
   const unavailable = missing || (view.kind === "image" && !imageSrc && absPath !== null);
@@ -99,6 +173,7 @@ export function ViewCard({
         <p className={styles.missing}>这块视图已不可用</p>
       ) : view.kind === "html" && src ? (
         <iframe
+          ref={frameRef}
           className={styles.frame}
           style={{ height: viewHeightPx(view) }}
           src={src}
@@ -106,6 +181,8 @@ export function ViewCard({
           title={view.title}
           data-view-frame
         />
+      ) : view.kind === "html" ? (
+        <p className={styles.missing}>视图加载中…</p>
       ) : view.kind === "image" && imageSrc ? (
         <img
           className={styles.image}
@@ -143,6 +220,7 @@ export function ViewCard({
             </header>
             {view.kind === "html" && src ? (
               <iframe
+                ref={largeFrameRef}
                 className={styles.frameLarge}
                 src={src}
                 sandbox="allow-scripts"

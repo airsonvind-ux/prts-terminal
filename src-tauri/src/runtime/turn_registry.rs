@@ -235,6 +235,18 @@ impl TurnRegistry {
         signal
     }
 
+    /// 该对话正在跑的（非后台）turn 的 session_id。
+    ///
+    /// 视图交互（`prompt` / `call`）只知道对话 id，插话队列按 session_id 分区，
+    /// 拿这条桥接。后台 turn（记忆管线）不算——它不消费插话。
+    pub fn active_session_for(&self, conversation_id: &str) -> Option<String> {
+        let turns = self.turns.lock().unwrap();
+        turns
+            .iter()
+            .find(|(_, turn)| !turn.background && turn.conversation_id == conversation_id)
+            .map(|(session_id, _)| session_id.clone())
+    }
+
     /// 注销一个活动 turn（命令层 process 返回后无条件执行——busy 释放点）。
     ///
     /// 无此 session 时幂等（no-op）。
@@ -320,6 +332,23 @@ mod tests {
     use std::time::Duration;
 
     // ── TurnRegistry ──
+
+    #[test]
+    fn active_session_lookup_skips_background_turns() {
+        let reg = TurnRegistry::new();
+        assert_eq!(reg.active_session_for("conv-1"), None);
+        let _background = reg.register_background("bg-1", "conv-1");
+        assert_eq!(
+            reg.active_session_for("conv-1"),
+            None,
+            "记忆管线这类后台 turn 不消费插话，不能当成可投递的轮次"
+        );
+        let _foreground = reg.register("s-1", "conv-1");
+        assert_eq!(reg.active_session_for("conv-1").as_deref(), Some("s-1"));
+        assert_eq!(reg.active_session_for("conv-2"), None);
+        reg.unregister("s-1");
+        assert_eq!(reg.active_session_for("conv-1"), None);
+    }
 
     #[test]
     fn shutdown_gate_is_idempotent() {
