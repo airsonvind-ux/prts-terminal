@@ -31,15 +31,23 @@ pub(super) async fn dispatch_turn_with_memory(
     // 工具只读，零拷贝）；
     // abort 注入（M3-B：run_command execute 读 ctx.abort → RunOptions.cancel）。
     // 视图落盘要用**会话 id**（跨轮稳定），而调度循环只有每轮新生成的
-    // sessionId；轮次开始时由命令层登记映射，这里查不到就回退 sessionId
-    // （测试与旧前端不带 conversationId 的情形）。
-    let conversation_id =
-        crate::runtime::conversation_scope::of(session_id).unwrap_or_else(|| session_id.to_string());
+    // sessionId；映射由命令层在轮次开始时登记。
+    //
+    // 查不到映射时**不带** conversation_id：视图不落盘、工具结果退回纯文本。
+    // 绝不回退到 sessionId——那会把视图写进每轮一换的目录，前端按会话 id
+    // 读不到，症状与 2026-11-05 那次「会话目录不可用」一模一样，而且只在
+    // 日志里留一行。宁可这一次没有图，也不让错误目录再悄悄产生。
+    let conversation_id = crate::runtime::conversation_scope::of(session_id);
+    if conversation_id.is_none() {
+        debug!("session_id" => session_id, "action" => "conversation_scope_missing");
+    }
     let mut ctx = match db {
         Some(ref db) => ToolContext::with_db(Arc::clone(db)),
         None => ToolContext::new(),
+    };
+    if let Some(conversation_id) = conversation_id {
+        ctx = ctx.with_conversation_id(conversation_id);
     }
-    .with_conversation_id(conversation_id);
     ctx.skill_index = Some(Arc::clone(skill_index));
     ctx.abort = Some(abort.clone());
     // Arc 共享：流式回调（'static）需持有 Registry/ToolContext 以在 tool/call

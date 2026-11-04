@@ -659,20 +659,32 @@ pub(super) fn execute_tools_and_append_with_blocks(
                     .map(|p| crate::attachments::reference_existing(std::path::Path::new(p)))
                     .collect();
                 // 视图：落盘进会话目录，事件里只留相对路径。没有会话 id
-                // （Mock/直调）或落盘失败时不带视图——正文照常回传模型。
-                let result_view = output.view.as_ref().and_then(|view| {
-                    let conversation_id = ctx.conversation_id()?;
-                    match crate::storage::views::save_view(conversation_id, &tc.id, view) {
-                        Ok(saved) => Some(saved),
-                        Err(err) => {
+                // （Mock/直调，或命令层漏登记）或落盘失败时不带视图——
+                // 正文照常回传模型，且**不能**退回到 sessionId 拼路径。
+                let result_view = match output.view.as_ref() {
+                    None => None,
+                    Some(view) => match ctx.conversation_id() {
+                        None => {
                             eprintln!(
-                                "[views] 视图落盘失败（call_id={}）：{err}",
+                                "[views] 本轮没有会话 id，视图未落盘、只回传正文（call_id={}）",
                                 tc.id
                             );
                             None
                         }
-                    }
-                });
+                        Some(conversation_id) => {
+                            match crate::storage::views::save_view(conversation_id, &tc.id, view) {
+                                Ok(saved) => Some(saved),
+                                Err(err) => {
+                                    eprintln!(
+                                        "[views] 视图落盘失败（call_id={}）：{err}",
+                                        tc.id
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                    },
+                };
                 // 双写：IPC tool/result + log tool/result（presentation 用 summary）
                 if image_attachments.is_empty() {
                     sink.emit(
