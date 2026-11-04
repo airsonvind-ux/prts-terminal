@@ -5,7 +5,8 @@
  * 又一层浮起来的面板——收起态只占一行，不该抢正文的注意力。
  *
  * 标题行三段：左（箭头 + 标题）、中（状态）、右（用量，margin-left:auto）。
- * 展开体里思考是第二层：更小的箭头、次级色、左侧 2px 细线，默认收起。
+ * 展开体里思考与工具共用一套行骨架（圆点 + 一句 PRTS 的话），思考那段
+ * 可再展开看原文，默认收起；思考文案跟着流式状态走「正在思考」/「思考了一阵」。
  * 工具行等宽字体、圆点状态、右侧耗时；耗时只在该行拿得到到达时刻时出现。
  */
 
@@ -109,22 +110,21 @@
 }
 
 .reasoningToggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  width: 100%;
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--text-3);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  line-height: 1.5;
   text-align: left;
   cursor: pointer;
 }
 
 .reasoningToggle:hover {
-  color: var(--text-2);
+  color: var(--text-1);
+}
+
+/* 展开箭头靠右收口，和工具行右侧的耗时占同一个位置 */
+.reasoningArrow {
+  margin-left: auto;
 }
 
 .reasoningBody {

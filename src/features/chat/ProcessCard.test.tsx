@@ -146,16 +146,17 @@ describe("过程卡 · 单卡顺序行", () => {
     expect(text).not.toContain("PRTS查询数据库完成");
   });
 
-  it("失败项数在收起态就标出来", () => {
+  it("失败项数在收起态就标出来，但不掩盖「完成了」", () => {
     const view = render([
       reasoning("先查"),
       call("c1", "query_enemy"),
       result("c1", "query_enemy", false, "数据库不可用"),
     ]);
-    expect(view.text()).toContain("1 项失败");
-    expect(view.text()).toContain("✕");
-    expect(view.text()).not.toContain("0 项失败");
-    expect(view.text()).not.toContain("✓ 完成");
+    const text = view.text();
+    // 失败是补充说明，不是结论：先写完成，再写含几项失败
+    expect(text).toContain("完成（含 1 项失败）");
+    expect(text).not.toContain("✕");
+    expect(text).not.toContain("0 项失败");
   });
 
   it("展开后按到达顺序混排：思考块在工具行之前，思考块默认收起", () => {
@@ -172,6 +173,25 @@ describe("过程卡 · 单卡顺序行", () => {
     const text = view.text();
     expect(text.indexOf("第一段思考")).toBeGreaterThan(-1);
     expect(text.indexOf("第一段思考")).toBeLessThan(text.indexOf("PRTS查询数据库完成"));
+  });
+
+  it("思考行与工具行同一套语域：生成中说「正在思考」，结束后说「思考了一阵」", () => {
+    const live = render([reasoning("还在想")], true);
+    live.clickHeader();
+    expect(live.text()).toContain("PRTS正在思考...");
+
+    const done = render([reasoning("想完了")]);
+    done.clickHeader();
+    expect(done.text()).toContain("PRTS思考了一阵");
+    expect(done.text()).not.toContain("PRTS正在思考");
+  });
+
+  it("进行中的卡有失败时先写进行中，再把失败数放进括号", () => {
+    const view = render(
+      [call("c1", "query_enemy"), result("c1", "query_enemy", false, "数据库不可用")],
+      true
+    );
+    expect(view.text()).toContain("进行中（含 1 项失败）");
   });
 
   it("连续两次调用合成一张卡，用量写调用 2 次", () => {

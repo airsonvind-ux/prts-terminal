@@ -4,8 +4,9 @@
 // 箭头 + 「思考与工具」+ 状态 + 右侧数量（思考几段、调用几次、耗时）。
 //
 // 行文案沿用原来的措辞（PRTS正在… / …完成 / …失败：摘要），状态改由左侧圆点
-// 承载：完成绿、进行中金并呼吸、失败红。耗时只在拿得到到达时刻时显示——
-// 归档事件没有时间戳，那一侧就留空，不猜一个数出来。
+// 承载：完成绿、进行中金并呼吸、失败红。思考行和工具行同一套骨架，只是点开
+// 才显示原文。耗时只在拿得到到达时刻时显示——归档事件没有时间戳，那一侧
+// 就留空，不猜一个数出来。
 //
 // 审批按钮不在这里：确认/拒绝在输入框上方的 Action Dock，卡内只显示等待行。
 // 等待审批时这一张卡强制展开（逐卡判断，不是全局布尔）。
@@ -95,25 +96,25 @@ export function ProcessCard({ block, interactive, className, onToggle }: Props) 
           ▸
         </span>
         <span className={styles.title}>思考与工具</span>
+        {/* 状态先说这一轮怎么了，失败项数放在括号里补充：
+            「完成（含 2 项失败）」而不是光秃秃的「✕ 2 项失败」——后者读起来
+            像是这轮只调了两次、而且两次都失败了。 */}
         <span className={styles.status}>
+          <span
+            className={
+              running
+                ? styles.statusRunning
+                : incomplete
+                  ? styles.statusIncomplete
+                  : styles.statusDone
+            }
+          >
+            {running ? "· 进行中" : incomplete ? incompleteText : "✓ 完成"}
+          </span>
           {failures > 0 && (
             <span className={styles.statusFailed} aria-label="有失败项">
-              ✕ {failures} 项失败
+              （含 {failures} 项失败）
             </span>
-          )}
-          {running && (
-            <span className={styles.statusRunning}>
-              {failures > 0 ? " · " : ""}· 进行中
-            </span>
-          )}
-          {incomplete && (
-            <span className={styles.statusIncomplete}>
-              {failures > 0 ? " · " : ""}
-              {incompleteText}
-            </span>
-          )}
-          {!running && !incomplete && failures === 0 && (
-            <span className={styles.statusDone}>✓ 完成</span>
           )}
         </span>
         {usage && <span className={styles.usage}>{usage}</span>}
@@ -154,6 +155,7 @@ function renderRows(
         <ReasoningRun
           key={`reasoning-${key++}`}
           text={text}
+          streaming={running && index === rows.length}
           cursor={running && index === rows.length}
         />
       );
@@ -177,25 +179,43 @@ function renderRows(
 
 // ── 思考子块：卡内第二层，默认收起 ──────────────────────────────────
 
-function ReasoningRun({ text, cursor }: { text: string; cursor: boolean }) {
+function ReasoningRun({
+  text,
+  streaming,
+  cursor,
+}: {
+  text: string;
+  /** 这段思考还在生成：文案用「正在」，圆点呼吸 */
+  streaming: boolean;
+  cursor: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  // 与工具行同一套骨架：圆点 + 一句 PRTS 的话 + 右侧展开箭头。
+  // 之前这里只有一个孤零零的「思考」，跟下面「PRTS查询干员完成」不在
+  // 同一个语域里，读的人分不清它是标题还是状态。
   return (
     <div className={styles.reasoning}>
       <button
         type="button"
-        className={styles.reasoningToggle}
+        className={`${styles.line} ${styles.reasoningToggle}`}
         data-event-kind="reasoning"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
         <span
-          className={`${styles.arrow} ${open ? styles.arrowOpen : ""}`}
+          className={`${styles.dot} ${streaming ? styles.dotRunning : styles.dotDone}`}
+          aria-hidden
+        />
+        <span className={styles.lineText}>
+          {streaming ? "PRTS正在思考..." : "PRTS思考了一阵"}
+        </span>
+        {cursor && <span className={styles.cursor} />}
+        <span
+          className={`${styles.arrow} ${styles.reasoningArrow} ${open ? styles.arrowOpen : ""}`}
           aria-hidden
         >
           ▸
         </span>
-        思考
-        {cursor && <span className={styles.cursor} />}
       </button>
       {open && <div className={styles.reasoningBody}>{text}</div>}
     </div>
