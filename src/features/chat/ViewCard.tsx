@@ -19,6 +19,7 @@ import type { ToolResultView } from "../../types";
 import {
   createViewRateLimiter,
   getViewOrigin,
+  isUnavailableMessage,
   parseViewMessage,
   VIEW_TEXT_LIMIT,
   viewUrl,
@@ -118,6 +119,11 @@ export function ViewCard({
         largeFrameRef.current?.contentWindow ?? null,
       ];
       if (!windows.some((win) => win !== null && win === event.source)) return;
+      // 协议占位页在加载时发来的「读不到」：卡片退化成占位，并收掉展开。
+      if (isUnavailableMessage(event.data)) {
+        setMissing(true);
+        return;
+      }
       const message = parseViewMessage(event.data);
       if (message) handle(message);
     };
@@ -191,18 +197,25 @@ export function ViewCard({
     view.kind === "image" && absPath ? safeAssetUrl(absPath) : null;
   const unavailable = missing || (view.kind === "image" && !imageSrc && absPath !== null);
 
+  // 视图读不到时把浮层收掉：空面板配一整块蒙版比不展开更难看。
+  useEffect(() => {
+    if (unavailable) setExpanded(false);
+  }, [unavailable]);
+
   return (
     <section className={styles.card} data-view-card data-view-kind={view.kind}>
       <header className={styles.header}>
         <span className={styles.title}>{view.title}</span>
-        <button
-          type="button"
-          className={styles.expand}
-          onClick={() => setExpanded(true)}
-          aria-label="展开视图"
-        >
-          展开
-        </button>
+        {!unavailable && (
+          <button
+            type="button"
+            className={styles.expand}
+            onClick={() => setExpanded(true)}
+            aria-label="展开视图"
+          >
+            展开
+          </button>
+        )}
       </header>
 
       {unavailable ? (

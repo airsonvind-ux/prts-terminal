@@ -59,6 +59,16 @@ export interface ViewMessage {
   args?: unknown;
 }
 
+/**
+ * 宿主自己发的「这张视图读不到」通知（由协议占位页在加载时发出）。
+ * 它不是作者能用的原语，单独判定——收到后卡片退化为占位，且不再提供展开。
+ */
+export function isUnavailableMessage(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const raw = data as Record<string, unknown>;
+  return raw.source === VIEW_MESSAGE_SOURCE && raw.type === "view-unavailable";
+}
+
 /** 解析并校验沙箱发来的消息；不是本协议的载荷一律返回 null。 */
 export function parseViewMessage(data: unknown): ViewMessage | null {
   if (!data || typeof data !== "object") return null;

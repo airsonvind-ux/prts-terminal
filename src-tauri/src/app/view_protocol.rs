@@ -51,6 +51,9 @@ pub fn handle<R: Runtime>(
 }
 
 /// 读不到视图时给用户看的中性占位（沙箱内只有内联样式可用）。
+///
+/// 同时向宿主发一条 `view-unavailable`：卡片据此退化成占位并收掉「展开」，
+/// 否则用户点开的是一个空面板，背后压着一整块黑蒙版。
 fn placeholder_html() -> String {
     concat!(
         "<!doctype html><meta charset=\"utf-8\">",
@@ -59,7 +62,8 @@ fn placeholder_html() -> String {
         "body{display:flex;align-items:center;justify-content:center;",
         "font:14px/1.6 system-ui,'Microsoft YaHei',sans-serif;color:#8b939d}",
         "</style>",
-        "<body>这块视图已不可用</body>"
+        "<body>这块视图已不可用</body>",
+        "<script>parent.postMessage({source:'prts-view',type:'view-unavailable'},'*')</script>"
     )
     .to_string()
 }
@@ -126,6 +130,10 @@ mod tests {
         assert!(html.starts_with("<!doctype html>"), "是一个完整文档");
         assert!(html.contains("这块视图已不可用"));
         assert!(html.contains("color:#8b939d"), "字色取次级正文色");
+        assert!(
+            html.contains("view-unavailable"),
+            "占位页要通知宿主，卡片才能收掉展开"
+        );
         assert!(!html.contains("os error"), "不把系统错误原文吐给用户");
     }
 

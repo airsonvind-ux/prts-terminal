@@ -126,7 +126,8 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgb(0 0 0 / 0.55);
+  /* 蒙版只负责把注意力压到面板上，不必压成全黑——0.45 已经足够分出层级。 */
+  background: rgb(0 0 0 / 0.45);
 }
 
 .panel {

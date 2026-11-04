@@ -242,4 +242,18 @@ describe("ViewCard · doc 与缺失", () => {
     await flush();
     expect(container.textContent).toContain("这块视图已不可用");
   });
+
+  it("html 读不到时由占位页通知，卡片退化且不再提供展开", async () => {
+    const container = render({ kind: "html", title: "地图", path: "views/gone.html" });
+    await flush();
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "展开")).toBe(true);
+
+    const frame = container.querySelector<HTMLIFrameElement>("[data-view-frame]")!;
+    post(frame.contentWindow, { source: "prts-view", type: "view-unavailable" });
+    await flush();
+
+    expect(container.textContent).toContain("这块视图已不可用");
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "展开")).toBe(false);
+    expect(document.body.querySelector("[data-view-frame-large]")).toBeNull();
+  });
 });
