@@ -76,7 +76,7 @@ host → platform / storage
 会话日志是事实来源，IPC 是给前端的投影缓存。
 
 - `assistant/chunk`、`tool/call`、`tool/result`、`step/end`、`turn/end` 属于持久事实
-- `assistant/chunk.content` 是展示文本（回复开头那一行 MOOD 块已整行剥离，含偏向与心声）；`rawContent` 是模型原文，历史派生优先用它
+- `assistant/chunk.content` 是展示文本（只剥掉 `【mood:偏向(:强度)(:心声)】` 这一块，括号外正文原样保留）；`rawContent` 是模型原文，历史派生优先用它
 - `phase` 是纯 UI 信号，不写入日志
 - `step/end` 必须同时写日志和推 IPC；只写日志会让前端的上下文指示器停在上一轮
 - 前端不得自行推断“后端一定已经收到/处理了某个事件”

@@ -2,7 +2,7 @@ import type { MoodEvent, MoodIntensity, ToolDisplay } from "../../types";
 import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./eventDisplay.module.css";
 
-// ── 情绪描述表（MOOD v2）：没有心声时的旁白兜底 ──
+// ── 情绪描述表（MOOD 草案 3）：没有心声时的旁白兜底 ──
 
 const MOOD_DESCRIPTIONS: Record<
   "高兴" | "困惑" | "沮丧",

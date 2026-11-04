@@ -87,8 +87,8 @@ export function appendCurrentEventImpl(
     // text / reasoning 两种 kind 均缓冲——过程卡的推理累积与
     // deriveTextSegments 的文本累积都只读 currentEvents，序列不变。
     if (event.kind === "text") {
-      // 情绪标签扫描（MOOD v2）：展示层剥离整行标签与心声，块以
-      // `mood/event` 先落位；rawContent 保留模型原文，供下一轮历史使用。
+      // 情绪标签扫描（MOOD 草案 3）：只剥括号那一块，括号外正文照常
+      // 入列；块以 `mood/event` 先落位，rawContent 保留模型原文。
       const rawContent = event.content;
       const scan = scanTextChunk(event.sessionId, rawContent);
       if (scan.tint !== null) {

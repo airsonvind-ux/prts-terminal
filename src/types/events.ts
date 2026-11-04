@@ -227,11 +227,11 @@ export interface ToolDisplay {
 }
 
 /**
- * 情绪事件（MOOD v2）：标签匹配时由前端投影层产出。
+ * 情绪事件（MOOD 草案 3）：标签匹配时由前端投影层产出。
  *
  * 偏向与心声拆成两条通道：`mood` 只在偏向归一成三个已知词之一时有值（驱动
- * 体态动画），`tint` 保留偏向原词（决定色相），`text` 是心声。旧归档只有
- * `mood` + `intensity`，读回时缺 `tint`/`text`，渲染回落旁白。
+ * 体态动画），`tint` 保留偏向原词（决定色相），`text` 是写在括号里的心声。
+ * 旧归档只有 `mood` + `intensity`，读回时缺 `tint`/`text`，渲染回落旁白。
  */
 export interface MoodEvent {
   type: "mood/event";
