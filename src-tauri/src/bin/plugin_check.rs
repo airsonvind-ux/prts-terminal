@@ -28,9 +28,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use prts_terminal_lib::sdk::{
-    is_valid_tool_name, parse_action, read_manifest, resolve_program, write_frame, ActionProblem,
-    FrameReader, PluginKind, PluginManifest, ProgramResolution, INVALID_PARAMS, MAX_ACTION_CHARS,
-    SUPPORTED_PROTOCOL,
+    is_valid_tool_name, parse_action, parse_result, read_manifest, resolve_program, write_frame,
+    ActionProblem, FrameReader, PluginKind, PluginManifest, ProgramResolution, ToolViewKind,
+    INVALID_PARAMS, MAX_ACTION_CHARS, SUPPORTED_PROTOCOL,
 };
 
 /// 检查项顺序与标签（下标 0 对应编号 1）。
@@ -147,6 +147,14 @@ impl Check {
     }
 }
 
+/// 带一个值的开关：解析目标目录时要连同它的值一起跳过。
+const VALUE_FLAGS: [&str; 3] = ["--call", "--args", "--render-view"];
+
+fn value_of(args: &[String], name: &str) -> Option<String> {
+    let index = args.iter().position(|arg| arg == name)?;
+    args.get(index + 1).cloned()
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -157,10 +165,25 @@ fn main() -> ExitCode {
 
     let json = args.iter().any(|arg| arg == "--json");
     let dump = args.iter().any(|arg| arg == "--dump-capabilities");
-    let target = args
-        .iter()
-        .find(|arg| !arg.starts_with("--"))
-        .cloned();
+
+    // 目标目录 = 第一个既不是开关、也不是开关取值的参数。
+    let mut target: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if VALUE_FLAGS.contains(&arg.as_str()) {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--") {
+            index += 1;
+            continue;
+        }
+        if target.is_none() {
+            target = Some(arg.clone());
+        }
+        index += 1;
+    }
 
     if dump {
         return dump_capabilities(json);
@@ -168,10 +191,29 @@ fn main() -> ExitCode {
 
     let Some(target) = target else {
         eprintln!("用法：plugin_check <插件目录> [--json] [--dump-capabilities]");
+        eprintln!("      plugin_check <插件目录> --call <工具名> [--args '<JSON>'] [--render-view <输出.html>]");
         return ExitCode::from(2);
     };
 
     let path = PathBuf::from(&target);
+
+    // 单次调用模式：不跑八项检查，只验证「真调一次工具」的结果形状。
+    if let Some(tool) = value_of(&args, "--call") {
+        let raw_args = value_of(&args, "--args");
+        let call_args = match raw_args.as_deref() {
+            None | Some("") => json!({}),
+            Some(raw) => match serde_json::from_str::<Value>(raw) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("--args 不是合法 JSON：{error}");
+                    return ExitCode::from(2);
+                }
+            },
+        };
+        let render_view = value_of(&args, "--render-view").map(PathBuf::from);
+        return run_call(&path, &target, &tool, call_args, render_view);
+    }
+
     let checks = run(&path, &target, json);
 
     if json {
@@ -191,9 +233,13 @@ fn print_help() {
     println!("plugin_check —— PRTS 插件目录的离线校验");
     println!();
     println!("用法：plugin_check <插件目录> [--json] [--dump-capabilities]");
+    println!("      plugin_check <插件目录> --call <工具名> [--args '<JSON>'] [--render-view <输出.html>]");
     println!();
     println!("  --json               以 JSON 输出检查结果");
     println!("  --dump-capabilities  打印宿主当前的能力表（JSON），供生成手册用");
+    println!("  --call <工具名>       真调一次工具，按宿主规则校验返回的 content / view");
+    println!("  --args '<JSON>'      给 --call 的参数，缺省 {{}}");
+    println!("  --render-view <文件>  把 html 视图写成一个可单独打开的外壳页面");
     println!();
     println!("退出码：0 全部通过或跳过；1 有失败项；2 参数错误。");
 }
@@ -268,6 +314,174 @@ fn print_json(target: &str, checks: &[Check]) {
     match serde_json::to_string_pretty(&document) {
         Ok(text) => println!("{text}"),
         Err(error) => eprintln!("序列化结果失败：{error}"),
+    }
+}
+
+/// 单次调用模式（`--call`）：真调一次工具，用宿主同一套规则校验返回。
+///
+/// 与八项检查分开跑：检查项的编号是定死的（手册 09 引用那些原文），
+/// 真调用属于「看结果」，不该占用检查编号。
+fn run_call(
+    dir: &Path,
+    target: &str,
+    tool: &str,
+    args: Value,
+    render_view: Option<PathBuf>,
+) -> ExitCode {
+    let manifest = match read_manifest(dir) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("{target}: 读 plugin.json 失败：{error}");
+            return ExitCode::from(1);
+        }
+    };
+    let Some(entry) = manifest.entry.as_ref() else {
+        eprintln!("{target}: process 插件没有 entry，无法调用");
+        return ExitCode::from(1);
+    };
+    let program = match resolve_program(dir, entry) {
+        Ok(ProgramResolution::InDir(path)) => path,
+        Ok(ProgramResolution::OnPath(name)) => match which_on_path(&name) {
+            Some(found) => found,
+            None => {
+                eprintln!(
+                    "{target}: 插件目录里没有 {}，PATH 里也找不到 {name}",
+                    entry.exe
+                );
+                return ExitCode::from(1);
+            }
+        },
+        Err(detail) => {
+            eprintln!("{target}: entry.exe 解析失败：{detail}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut session = match Session::start(&program, &entry.args, dir) {
+        Ok(session) => session,
+        Err(error) => {
+            eprintln!("{target}: 启动插件进程失败：{error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let handshake = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocol": SUPPORTED_PROTOCOL,
+            "hostVersion": env!("CARGO_PKG_VERSION"),
+            "pluginId": manifest.id,
+        },
+    });
+    if let Err(failure) = session.request(&handshake, 1, FIRST_FRAME) {
+        eprintln!("{target}: initialize 失败：{}", failure_text(&failure));
+        return ExitCode::from(1);
+    }
+
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tool.call",
+        "params": { "name": tool, "args": args, "deadlineMs": 30_000 },
+    });
+    let frame = match session.request(&call, 2, CALL_TIMEOUT) {
+        Ok(frame) => frame,
+        Err(failure) => {
+            eprintln!("{target}: 调用 {tool} 失败：{}", failure_text(&failure));
+            return ExitCode::from(1);
+        }
+    };
+    if let Some(error) = frame.get("error") {
+        let code = error
+            .get("code")
+            .and_then(Value::as_i64)
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let message = error.get("message").and_then(Value::as_str).unwrap_or("");
+        eprintln!("{target}: 工具 {tool} 返回错误 {code} {message}");
+        return ExitCode::from(1);
+    }
+
+    let result = frame.get("result").cloned().unwrap_or(Value::Null);
+    let parsed = match parse_result(&result, dir) {
+        Ok(parsed) => parsed,
+        Err(issue) => {
+            eprintln!("{target}: 工具 {tool} 的结果不合法（-32602）：{issue}");
+            return ExitCode::from(1);
+        }
+    };
+
+    println!("工具 {tool} 调用成功");
+    println!("── content ──");
+    println!("{}", parsed.content);
+    if parsed.degraded {
+        println!("（视图内容超过 64 KiB，宿主会把它降级成纯文字）");
+    }
+
+    match parsed.view.as_ref() {
+        None => println!("（没有视图）"),
+        Some(view) => {
+            println!(
+                "── view ──\nkind={:?} title={} height={}px",
+                view.kind,
+                view.title,
+                view.height_px()
+            );
+            match view.kind {
+                ToolViewKind::Html => {
+                    let html = view.html.as_deref().unwrap_or("");
+                    if let Some(path) = render_view.as_deref() {
+                        let written = build_shell(html, &view.title)
+                            .and_then(|document| std::fs::write(path, document).map_err(|e| e.to_string()));
+                        match written {
+                            Ok(()) => println!("已写出预览：{}", path.display()),
+                            Err(error) => {
+                                eprintln!("写预览文件失败：{error}");
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                }
+                ToolViewKind::Image | ToolViewKind::Doc => {
+                    if let Some(source) = view.source.as_ref() {
+                        println!("来源文件：{}", source.display());
+                    }
+                    if render_view.is_some() {
+                        println!("（image/doc 视图没有可内联的 HTML，未写预览）");
+                    }
+                }
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+/// 把 html 视图套进宿主同款外壳：iframe + `sandbox="allow-scripts"`，内容走 srcdoc。
+///
+/// 外壳本身不承载脚本，只给预览页一个与宿主一致的隔离边界（`srcdoc` 在沙箱里
+/// 同样是不透明源，与协议响应的 CSP 等效）。
+fn build_shell(html: &str, title: &str) -> Result<String, String> {
+    let escaped = html
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let title = title
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    Ok(format!(
+        "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>{title}</title>\n<style>html,body{{margin:0;background:#111}}iframe{{width:100%;height:100vh;border:0;display:block}}</style>\n</head><body>\n<iframe sandbox=\"allow-scripts\" srcdoc=\"{escaped}\"></iframe>\n</body></html>\n"
+    ))
+}
+
+fn failure_text(failure: &Failure) -> String {
+    match failure {
+        Failure::Timeout => "在时限内没有读到应答帧".to_string(),
+        Failure::Broken(detail) => format!("stdout 上出现了非帧内容：{detail}"),
+        Failure::Exited => "进程退出了".to_string(),
     }
 }
 
@@ -986,5 +1200,46 @@ mod tests {
         }));
         let check = check_handshake(5, &demo_manifest(), &frame);
         assert!(matches!(check.status, Status::Pass), "{check:?}");
+    }
+
+    /// 预览外壳必须保留沙箱属性，且把视图内容转义成属性值。
+    #[test]
+    fn render_view_shell_escapes_content_and_keeps_the_sandbox() {
+        let shell = build_shell(r#"<p class="x">a & b</p>"#, "标题 <x>").unwrap();
+        assert!(shell.contains(r#"<iframe sandbox="allow-scripts""#), "{shell}");
+        assert!(shell.contains("&lt;p class=&quot;x&quot;&gt;a &amp; b&lt;/p&gt;"), "{shell}");
+        assert!(shell.contains("<title>标题 &lt;x&gt;</title>"), "{shell}");
+        // 内容只能出现在 srcdoc 里，不能变成外壳自己的节点。
+        assert!(!shell.contains("<p class="), "{shell}");
+    }
+
+    /// `--call` 的取值不能被当成插件目录。
+    #[test]
+    fn value_flags_do_not_swallow_the_target() {
+        let args = [
+            "--call".to_string(),
+            "hello".to_string(),
+            "some/plugin".to_string(),
+            "--args".to_string(),
+            "{}".to_string(),
+        ];
+        let mut target: Option<String> = None;
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            if VALUE_FLAGS.contains(&arg.as_str()) {
+                index += 2;
+                continue;
+            }
+            if arg.starts_with("--") {
+                index += 1;
+                continue;
+            }
+            if target.is_none() {
+                target = Some(arg.clone());
+            }
+            index += 1;
+        }
+        assert_eq!(target.as_deref(), Some("some/plugin"));
     }
 }

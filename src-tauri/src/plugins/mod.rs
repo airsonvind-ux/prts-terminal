@@ -50,6 +50,11 @@ pub mod sdk {
     };
     pub use super::transport::{write_frame, FrameError, FrameReader, MAX_FRAME_BYTES};
     pub use super::process::is_valid_tool_name;
+    // 校验器要按宿主同一套规则读工具结果（content 不能省、视图大小与路径），
+    // 因此把 `parse_result` 摆到门面上——它只描述协议，不含宿主实现。
+    pub use super::process::{parse_result, ParsedResult, ViewIssue};
+    // 视图的三种 kind 属于协议（作者要按它写 view），校验器也要按它分支。
+    pub use crate::tools::ToolViewKind;
     pub use super::{
         parse_action, resolve_program, ActionProblem, ProgramResolution, PluginError,
         MAX_ACTION_CHARS,
