@@ -290,3 +290,61 @@
   opacity: 0.55;
   cursor: default;
 }
+
+/* ── 消息流形态（第 2 步）：单卡 + 摘要行 + 顺序行 ──
+ * 与 classic 的「思考区 / 工具区两段折叠」不同，这里一张卡只有一个折叠头，
+ * 展开后按到达顺序混排。配色与行样式复用上面那套。 */
+
+.flowCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0;
+}
+
+.flowHeader {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+
+.flowHeader:hover {
+  color: var(--text-1);
+}
+
+.flowBody {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 4px 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--depth-0);
+}
+
+.flowReasoning {
+  margin: 0;
+  padding: 4px 6px;
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-ui);
+}
+
+/* 摘要行里的失败标记：与 classic 的「⚠ 工具调用完成（含失败）」同色系，
+ * 只是压成一个符号，不给摘要行再加长文案。 */
+.flowFailMark {
+  color: #c98080;
+  margin-left: 2px;
+}
+

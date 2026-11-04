@@ -109,6 +109,7 @@ export const MessageRow = memo(function MessageRow({
           events={item.events}
           interactive={item.interactive}
           showApprovalControls={false}
+          variant="flow"
           className={styles.row}
           onToggle={onCardToggle}
         />

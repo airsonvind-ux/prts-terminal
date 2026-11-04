@@ -36,6 +36,8 @@ import type {
 } from "../../types";
 import { describeMood, hasDisplay, renderDisplaySuffix } from "./eventDisplay";
 import { buildToolSlots, type ToolSlot } from "./eventSlots";
+import { splitTurn, type Block } from "./blocks";
+import { ProcessCard } from "./ProcessCard";
 import styles from "./EventBadge.module.css";
 
 // ── 审批类型（M3-A） ──
@@ -89,6 +91,13 @@ interface Props {
    * 产品界面传 false：交互按钮只在 Action Dock，消息流保留只读记录。
    */
   showApprovalControls?: boolean;
+  /**
+   * 渲染形态：
+   * - `classic`（默认）：思考区 / 工具区分两段折叠，既有测试与独立用法用它；
+   * - `flow`：单卡 + 摘要行 + 按到达顺序混排的行（消息流重构第 2 步）。
+   * 行渲染是同一份文案与配色，只有外层结构不同。
+   */
+  variant?: "classic" | "flow";
 }
 
 export function EventBadge({
@@ -96,6 +105,7 @@ export function EventBadge({
   interactive = false,
   className,
   showApprovalControls = true,
+  variant = "classic",
   onToggle,
 }: Props) {
   // ── 推理内容提取：assistant/chunk(Reasoning) 累积 ──
@@ -203,6 +213,52 @@ export function EventBadge({
   const [toolsOpen, setToolsOpen] = useState(false);
   const [moodOpen, setMoodOpen] = useState(false);
   const toolsOpenEffective = toolsOpen || hasApprovalActive;
+
+  // ── 消息流形态（第 2 步）：切成有序列块，每张过程卡单独折叠 ──
+  // 文本块不在这里渲染（现役路径仍由 MessageRow 的 assistant 气泡承担，
+  // 第 3 步切归档文本时才接过来）；视图块第 ② 步填形状前先跳过。
+  const flowBlocks = useMemo(
+    () => (variant === "flow" ? splitTurn(events) : []),
+    [variant, events]
+  );
+
+  if (variant === "flow") {
+    const slotsById = new Map(toolSlots.map((slot) => [slot.callId, slot]));
+    const cards = flowBlocks.filter(
+      (b): b is Extract<Block, { kind: "card" }> => b.kind === "card"
+    );
+    const moods = flowBlocks.filter(
+      (b): b is Extract<Block, { kind: "mood" }> => b.kind === "mood"
+    );
+    if (cards.length === 0 && moods.length === 0) return null;
+    return (
+      <div
+        className={className ? `${styles.badge} ${className}` : styles.badge}
+        data-event-badge={interactive ? "live" : "archived"}
+        data-variant="flow"
+      >
+        {cards.map((card) => (
+          <ProcessCard
+            key={card.id}
+            block={card}
+            slots={slotsById}
+            interactive={interactive}
+            onToggle={onToggle}
+          />
+        ))}
+        {moods.map((mood) => (
+          // 情绪卡独立成块：复用既有情绪区（独立样式、独立展开）
+          <EventBadge
+            key={mood.id}
+            events={mood.events}
+            interactive={interactive}
+            showApprovalControls={showApprovalControls}
+            onToggle={onToggle}
+          />
+        ))}
+      </div>
+    );
+  }
 
   // ── 空守卫 ──
   if (!reasoningText && !hasTools && moodEvents.length === 0) return null;
