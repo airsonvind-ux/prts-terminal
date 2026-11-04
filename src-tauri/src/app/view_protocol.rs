@@ -34,10 +34,34 @@ pub fn handle<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         let response = match serve(&path) {
             Ok((mime, bytes)) => build(StatusCode::OK, mime, bytes),
-            Err(detail) => build(StatusCode::NOT_FOUND, "text/plain; charset=utf-8", detail.into_bytes()),
+            // 错误不能把系统原文（「会话目录不可用: os error 2」）当正文吐回去：
+            // iframe 会把它当内容渲染出来，用户以为那是插件输出的卡片。
+            // 这里统一换成一段中性占位，详细原因留给后端日志。
+            Err(detail) => {
+                eprintln!("[views] 视图读取失败（{path}）：{detail}");
+                build(
+                    StatusCode::NOT_FOUND,
+                    "text/html; charset=utf-8",
+                    placeholder_html().into_bytes(),
+                )
+            }
         };
         responder.respond(response);
     });
+}
+
+/// 读不到视图时给用户看的中性占位（沙箱内只有内联样式可用）。
+fn placeholder_html() -> String {
+    concat!(
+        "<!doctype html><meta charset=\"utf-8\">",
+        "<style>",
+        "html,body{margin:0;height:100%;background:transparent}",
+        "body{display:flex;align-items:center;justify-content:center;",
+        "font:14px/1.6 system-ui,'Microsoft YaHei',sans-serif;color:#8b939d}",
+        "</style>",
+        "<body>这块视图已不可用</body>"
+    )
+    .to_string()
 }
 
 /// 只服务 `session-files/<会话id>/views/**`；其它路径一律当成不存在。
@@ -94,6 +118,15 @@ mod tests {
         assert_eq!(serve("/").unwrap_err(), "视图不存在");
         // 会话 id 带 `..`：存储层的词法校验拒绝，不落到文件系统。
         assert!(serve("/../views/x.html").is_err());
+    }
+
+    #[test]
+    fn missing_view_gets_a_neutral_placeholder() {
+        let html = placeholder_html();
+        assert!(html.starts_with("<!doctype html>"), "是一个完整文档");
+        assert!(html.contains("这块视图已不可用"));
+        assert!(html.contains("color:#8b939d"), "字色取次级正文色");
+        assert!(!html.contains("os error"), "不把系统错误原文吐给用户");
     }
 
     #[test]

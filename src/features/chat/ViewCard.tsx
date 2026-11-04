@@ -11,6 +11,7 @@
 // 换算一次并缓存——一张视图一辈子只换一次。
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { showToast } from "../../stores/useToastStore";
 import { draftKeyFor, useComposerDraftStore } from "../../stores/useComposerDraftStore";
@@ -240,36 +241,40 @@ export function ViewCard({
         <p className={styles.missing}>视图加载中…</p>
       )}
 
-      {expanded && (
-        <div className={styles.overlay} role="dialog" aria-label={view.title}>
-          <div className={styles.panel}>
-            <header className={styles.panelHeader}>
-              <span className={styles.title}>{view.title}</span>
-              <button
-                type="button"
-                className={styles.expand}
-                onClick={() => setExpanded(false)}
-              >
-                关闭
-              </button>
-            </header>
-            {view.kind === "html" && src ? (
-              <iframe
-                ref={largeFrameRef}
-                className={styles.frameLarge}
-                src={src}
-                sandbox="allow-scripts"
-                title={view.title}
-                data-view-frame-large
-              />
-            ) : imageSrc ? (
-              <img className={styles.imageLarge} src={imageSrc} alt={view.title} />
-            ) : (
-              <p className={styles.missing}>这块视图已不可用</p>
-            )}
-          </div>
-        </div>
-      )}
+      {expanded &&
+        createPortal(
+          // 挂到 body：消息行在滚动容器里，祖先的 transform/contain 会把
+          // position:fixed 变成相对祖先定位，浮层顶部就被裁掉了。
+          <div className={styles.overlay} role="dialog" aria-label={view.title}>
+            <div className={styles.panel}>
+              <header className={styles.panelHeader}>
+                <span className={styles.title}>{view.title}</span>
+                <button
+                  type="button"
+                  className={styles.expand}
+                  onClick={() => setExpanded(false)}
+                >
+                  关闭
+                </button>
+              </header>
+              {view.kind === "html" && src ? (
+                <iframe
+                  ref={largeFrameRef}
+                  className={styles.frameLarge}
+                  src={src}
+                  sandbox="allow-scripts"
+                  title={view.title}
+                  data-view-frame-large
+                />
+              ) : imageSrc ? (
+                <img className={styles.imageLarge} src={imageSrc} alt={view.title} />
+              ) : (
+                <p className={styles.missing}>这块视图已不可用</p>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
     </section>
   );
 }

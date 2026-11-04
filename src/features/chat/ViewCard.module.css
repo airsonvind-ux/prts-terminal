@@ -111,8 +111,10 @@
   padding: 12px 8px;
   border-radius: 6px;
   background: var(--depth-2);
-  color: var(--text-3);
-  font-size: var(--fs-meta);
+  /* 占位是「确定没有内容」，不是次要信息：用正文级字色与字号，
+     否则在深色底上会读不清（--text-3 是给真正可省略的元信息用的）。 */
+  color: var(--text-2);
+  font-size: var(--fs-body);
   text-align: center;
 }
 

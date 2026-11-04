@@ -91,9 +91,11 @@ describe("ViewCard · html", () => {
     await flush();
     const expand = [...container.querySelectorAll("button")].find((b) => b.textContent === "展开")!;
     act(() => expand.click());
-    const large = container.querySelector("[data-view-frame-large]")!;
+    // 浮层走 portal 挂到 body：消息行在滚动容器里，挂在行内会被祖先裁掉。
+    const large = document.body.querySelector("[data-view-frame-large]")!;
     expect(large).not.toBeNull();
     expect(large.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(container.querySelector("[data-view-frame-large]")).toBeNull();
   });
 
   it("标题过长时仍留在标题行（不换行截断由样式负责）", async () => {

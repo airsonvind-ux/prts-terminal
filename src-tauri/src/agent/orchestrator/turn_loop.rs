@@ -30,11 +30,16 @@ pub(super) async fn dispatch_turn_with_memory(
     // Skill 索引注入（Arc::clone 共享 process 的 turn 级快照，索引小、
     // 工具只读，零拷贝）；
     // abort 注入（M3-B：run_command execute 读 ctx.abort → RunOptions.cancel）。
+    // 视图落盘要用**会话 id**（跨轮稳定），而调度循环只有每轮新生成的
+    // sessionId；轮次开始时由命令层登记映射，这里查不到就回退 sessionId
+    // （测试与旧前端不带 conversationId 的情形）。
+    let conversation_id =
+        crate::runtime::conversation_scope::of(session_id).unwrap_or_else(|| session_id.to_string());
     let mut ctx = match db {
         Some(ref db) => ToolContext::with_db(Arc::clone(db)),
         None => ToolContext::new(),
     }
-    .with_conversation_id(session_id);
+    .with_conversation_id(conversation_id);
     ctx.skill_index = Some(Arc::clone(skill_index));
     ctx.abort = Some(abort.clone());
     // Arc 共享：流式回调（'static）需持有 Registry/ToolContext 以在 tool/call
