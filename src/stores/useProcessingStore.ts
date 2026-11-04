@@ -190,7 +190,7 @@ export function isProcessingBusy(state: { processing: Record<string, ProcessingS
  * 「有待审批」口径（设置入口收窄用）：任一处理中快照里存在**未配对**的
  * `tool/approval-request`（有 request 无 result）即为有待审批。
  *
- * 与 EventBadge 的配对规则同源（callId 精确配对）。设置遮罩真正会盖住的只有
+ * 与过程卡的行配对规则同源（callId 精确配对）。设置遮罩真正会盖住的只有
  * 审批确认卡，而不是“任何对话在跑”——后者让长对话里只能干等。
  */
 export function hasPendingApproval(state: {

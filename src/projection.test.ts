@@ -280,7 +280,7 @@ describe("deriveAssistantFromEvents", () => {
     expect(proj.reasoningContent).toBe("");
   });
 
-  it("推理-only 轮：content 空但存在（reasoning 由 EventBadge 展示）", () => {
+  it("推理-only 轮：content 空但存在（reasoning 由过程卡展示）", () => {
     const events: SessionEvent[] = [
       user("s1", "分析"),
       reasoningChunk("s1", "思考中"),
@@ -298,13 +298,27 @@ describe("deriveAssistantFromEvents", () => {
 // ═══════════════════════════════════════════════
 
 describe("deriveTextSegments", () => {
-  it("归档轮：assistant/message → 单段 transition=false（过渡文本被最终文本替换）", () => {
+  it("归档轮有 chunk：过程文本保留，与流式同构（工具前弱化、工具后正常）", () => {
     const events: SessionEvent[] = [
       user("s1", "查敌人"),
       textChunk("s1", "我来查一下"),
       toolCall("s1", "c1", "query_enemy", "{}"),
       toolResult("s1", "c1", "结果"),
       textChunk("s1", "最终回答"),
+      assistantMessage("s1", "最终回答", null),
+      turnEnd("s1"),
+    ];
+    expect(deriveTextSegments(events)).toEqual([
+      { content: "我来查一下", transition: true },
+      { content: "最终回答", transition: false },
+    ]);
+  });
+
+  it("旧归档（无 text chunk）：回退到 assistant/message 单段", () => {
+    const events: SessionEvent[] = [
+      user("s1", "查敌人"),
+      toolCall("s1", "c1", "query_enemy", "{}"),
+      toolResult("s1", "c1", "结果"),
       assistantMessage("s1", "最终回答", null),
       turnEnd("s1"),
     ];

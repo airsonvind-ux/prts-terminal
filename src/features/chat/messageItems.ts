@@ -1,32 +1,45 @@
 import type { Attachment, CompactionMeta, SessionEvent } from "../../types";
 import {
-  deriveTextSegments,
   isErrorOnlyTurn,
-  isMetaEvent,
   splitTurnByUserBoundary,
   stripReminderBlock,
 } from "../../projection";
 import type { TextSegment } from "../../projection";
 import { stripTagFromText } from "../../moodTag";
+import { splitTurn } from "./blocks";
+import type { Block } from "./blocks";
 
 // ── 展示项类型 ──
+//
+// 一轮回答在界面上按块排列：文本块一个条目、过程卡一个条目、视图一个条目、
+// 情绪卡一个条目。切分规则在 blocks.ts，这里只负责把块翻成「一行及其身份」。
+
+/** 过程卡块（切分器产出的 card 块的别名）。 */
+export type ProcessBlock = Extract<Block, { kind: "card" }>;
 
 export type DisplayItem =
-  | { type: "message"; role: "user" | "error" | "aborted" | "aborting" | "truncated" | "stagnated" | "incomplete"; content: string; attachments?: Attachment[] }
+  | { type: "message"; id: string; role: "user" | "error" | "aborted" | "aborting" | "truncated" | "stagnated" | "incomplete"; content: string; attachments?: Attachment[] }
   | {
       type: "message";
+      id: string;
       role: "assistant";
       segments: TextSegment[];
       isStreaming: boolean;
     }
-  | { type: "events"; events: SessionEvent[]; interactive: boolean }
-  | { type: "welcome" }
+  // 一张过程卡（思考行 + 工具行按到达顺序）
+  | { type: "process"; id: string; block: ProcessBlock; interactive: boolean }
+  // 工具结果携带的前端卡片；形状由插件侧填
+  | { type: "view"; id: string; view: unknown }
+  // 情绪卡独立成块
+  | { type: "mood"; id: string; events: SessionEvent[]; interactive: boolean }
+  | { type: "welcome"; id: string }
   // 首部连续错误轮的折叠记录（数据保留；首次正常轮后只显露一条摘要）
-  | { type: "preflight"; count: number; errors: string[] }
-  // 插话 pending（待注入气泡；点击取消）
-  | { type: "pending"; id: string; text: string }
+  | { type: "preflight"; id: string; count: number; errors: string[] }
+  // 插话 pending（待注入气泡；点击取消）。key 用 `pending-` 前缀，
+  // 取消回调仍然要原来的条目 id，所以单独存 entryId。
+  | { type: "pending"; id: string; entryId: string; text: string }
   // 模块 D：压缩点本地提示卡（非 LLM 消息——derive/展示派生忽略，仅列表呈现）
-  | { type: "compaction"; summary: string; foldedCount: number };
+  | { type: "compaction"; id: string; summary: string; foldedCount: number };
 
 /** 错误轮是否已经有用户看见过的半截输出（正文、推理、工具调用或结果）。 */
 function hasInterruptedOutput(events: SessionEvent[]): boolean {
@@ -41,27 +54,90 @@ function hasInterruptedOutput(events: SessionEvent[]): boolean {
 }
 
 /**
+ * 文本块清洗：剥掉展示副本里的 mood 标签；标了情绪但事件流里没有
+ * `mood/event` 时，在该文本**之前**补一张情绪卡（只影响展示，不改事件）。
+ *
+ * 情绪标签只认段首，所以它说的是「接下来这段正文的心境」——卡要放在正文
+ * 前面，放在后面会让整段回复的心绪垫在末尾（新版面的实际症状）。
+ */
+function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
+  const out: Block[] = [];
+  let hasMood = blocks.some((block) => block.kind === "mood");
+  const sessionId = events[0]?.sessionId ?? "";
+  for (const block of blocks) {
+    if (block.kind !== "text") {
+      out.push(block);
+      continue;
+    }
+    const parsed = stripTagFromText(block.content);
+    if (parsed.tint !== null && !hasMood) {
+      out.push({
+        kind: "mood",
+        id: `${block.id}-mood`,
+        events: [
+          {
+            type: "mood/event",
+            sessionId,
+            ...(parsed.mood ? { mood: parsed.mood } : {}),
+            tint: parsed.tint,
+            ...(parsed.voice ? { text: parsed.voice } : {}),
+            intensity: parsed.intensity,
+          },
+        ],
+      });
+      hasMood = true;
+    }
+    if (parsed.text.length > 0) out.push({ ...block, content: parsed.text });
+  }
+  return out;
+}
+
+/** 轮内条目序号：同一轮的多段（插话）共用一个前缀，序号递增保证 key 唯一。 */
+function makeIdFactory(prefix: string): () => string {
+  let n = 0;
+  return () => `${prefix}-${n++}`;
+}
+
+/**
+ * 归档轮的身份标签。
+ *
+ * 列表 key 用条目 id，不能用数组下标：中间插入一个视图块会让后面所有行重挂，
+ * 用户正展开的卡会自己收起来。轮次标签在首见时分配、按事件数组身份记忆，
+ * 因此归档缓存的条目 id 跨刷新稳定。
+ */
+let nextTurnTag = 1;
+const turnTags = new WeakMap<SessionEvent[], string>();
+
+function turnTag(events: SessionEvent[]): string {
+  let tag = turnTags.get(events);
+  if (!tag) {
+    tag = `a${nextTurnTag++}`;
+    turnTags.set(events, tag);
+  }
+  return tag;
+}
+
+/**
  * 将一组轮次事件追加为展示项（按消息边界切分——插话设计定稿）。
  *
  * 轮内注入后一轮可含多问答段：
  * - user/message 各成用户气泡（不再是整轮只取第一条）；
- * - assistant 段独立闭合：段内 meta（推理/工具卡）→ 段文本（段内最后一个
- *   assistant/message 为权威聚合；无则从 chunks 累积 + tool/call 回溯分段）；
+ * - assistant 段独立闭合：段内事件先经 `splitTurn` 切成块（文本 / 过程卡 /
+ *   视图 / 情绪），再按块序逐个出条目——交错顺序就是模型真实的到达顺序；
  * - error → 先展示错误前已经产生的输出，再显示“回答未完成”标记和错误气泡；
  *   错误之后的内容不渲染。
  * - turn/aborted 轮中止标记 → 全部段渲染后轮尾追加（不占段）。
  * - turn/truncated 轮截断标记 → 全部段渲染后轮尾追加（不占段）。
  * - turn/stagnated 轮停滞标记 → 全部段渲染后轮尾追加（不占段）。
- *
- * 单段轮（现状形态）渲染序列与历史完全一致：user 气泡 → 事件卡 → assistant
- * 气泡（cursor/interactive 仅在正在流的末段）。
  */
 function appendTurnItems(
   items: DisplayItem[],
   events: SessionEvent[],
-  isStreaming: boolean
+  isStreaming: boolean,
+  prefix: string
 ): void {
   const segments = splitTurnByUserBoundary(events);
+  const nextId = makeIdFactory(prefix);
 
   // 末段 assistant（正在流的段）才携带 streaming 光标 / 审批交互；
   // 其后的段（注入的下一条 user 及其回答）接管 streaming 态。
@@ -80,6 +156,7 @@ function appendTurnItems(
       // 防未来后端回传 user/message 后块漏到用户可见界面）
       items.push({
         type: "message",
+        id: nextId(),
         role: "user",
         content: stripReminderBlock(seg.content),
         attachments: seg.attachments,
@@ -93,50 +170,47 @@ function appendTurnItems(
     const err = errEvent?.type === "error" ? errEvent : undefined;
     const visibleEvents = err ? seg.events.slice(0, errIndex) : seg.events;
 
-    const meta = visibleEvents.filter(isMetaEvent);
-
     const segIsStreaming = isStreaming && i === lastAssistantIdx && !err;
-    // 展示层兜底：归档轮/恢复历史里的 assistant/message 是模型原文，
-    // 可能仍带 mood 标签（流式扫描器已在 live 路径剥离）。这里只清洗
-    // 展示副本，不改事件/历史原文；如果原始事件里没有 mood/event，
-    // 再从标签补一条展示用情绪事件，避免只藏标签、不落情绪卡。
-    let sourcedMood: Extract<SessionEvent, { type: "mood/event" }> | null = null;
-    const textSegments = deriveTextSegments(visibleEvents)
-      ?.map((seg) => {
-        const parsed = stripTagFromText(seg.content);
-        if (parsed.mood && !sourcedMood) {
-          sourcedMood = {
-            type: "mood/event",
-            sessionId: visibleEvents[0]?.sessionId ?? "",
-            mood: parsed.mood,
-            intensity: parsed.intensity,
-          };
-        }
-        return { ...seg, content: parsed.text };
-      })
-      .filter((seg) => seg.content.length > 0);
+    const blocks = cleanTextBlocks(splitTurn(visibleEvents, i, segIsStreaming), visibleEvents);
 
-    const displayMeta =
-      sourcedMood && !meta.some((e) => e.type === "mood/event")
-        ? [...meta, sourcedMood]
-        : meta;
-    if (displayMeta.length > 0) {
-      // interactive = 进行中轮（currentEvents）才允许审批按钮渲染；
-      // 归档重放（turns）不渲染交互。仅末段可能在流。
-      items.push({
-        type: "events",
-        events: displayMeta,
-        interactive: isStreaming && i === lastAssistantIdx,
-      });
-    }
+    // 光标只落在轮尾那一段文本上：后面还有卡时，说明模型已经去调工具了，
+    // 此刻「正在打字」的是卡（摘要行的进行中），不是上面的文本。
+    const lastTextId =
+      blocks.length > 0 && blocks[blocks.length - 1].kind === "text"
+        ? blocks[blocks.length - 1].id
+        : null;
 
-    if (textSegments && textSegments.length > 0) {
-      items.push({
-        type: "message",
-        role: "assistant",
-        segments: textSegments,
-        isStreaming: segIsStreaming,
-      });
+    for (const block of blocks) {
+      switch (block.kind) {
+        case "card":
+          items.push({
+            type: "process",
+            id: nextId(),
+            block,
+            interactive: isStreaming && i === lastAssistantIdx,
+          });
+          break;
+        case "text":
+          items.push({
+            type: "message",
+            id: nextId(),
+            role: "assistant",
+            segments: [{ content: block.content, transition: block.transition }],
+            isStreaming: segIsStreaming && block.id === lastTextId,
+          });
+          break;
+        case "view":
+          items.push({ type: "view", id: nextId(), view: block.view });
+          break;
+        case "mood":
+          items.push({
+            type: "mood",
+            id: nextId(),
+            events: block.events,
+            interactive: isStreaming && i === lastAssistantIdx,
+          });
+          break;
+      }
     }
 
     if (err) {
@@ -144,22 +218,34 @@ function appendTurnItems(
       if (hasInterruptedOutput(visibleEvents)) {
         items.push({
           type: "message",
+          id: nextId(),
           role: "incomplete",
           content: "回答未完成",
         });
       }
-      items.push({ type: "message", role: "error", content: err.message });
+      items.push({
+        type: "message",
+        id: nextId(),
+        role: "error",
+        content: err.message,
+      });
       return;
     }
   }
 
   // M3-B：轮尾中止标记（半截 chunk 已在上述分支照常展示；标记只追加轮尾）
   if (events.some((e) => e.type === "turn/aborted")) {
-    items.push({ type: "message", role: "aborted", content: "该轮已中止" });
+    items.push({
+      type: "message",
+      id: nextId(),
+      role: "aborted",
+      content: "该轮已中止",
+    });
   }
   if (events.some((e) => e.type === "turn/truncated")) {
     items.push({
       type: "message",
+      id: nextId(),
       role: "truncated",
       content: "回答未完整（达到长度上限）",
     });
@@ -167,6 +253,7 @@ function appendTurnItems(
   if (events.some((e) => e.type === "turn/stagnated")) {
     items.push({
       type: "message",
+      id: nextId(),
       role: "stagnated",
       content: "工具调用停滞，本轮已终止",
     });
@@ -177,7 +264,7 @@ function appendTurnItems(
  * 单轮归档展示项缓存（键 = 该轮事件数组的身份）。
  *
  * 归档轮次的 events 数组在 store 中身份稳定（归档只 push/替换外层数组），
- * 因此一次投影可长期复用：流式刷新期间不再重算整段历史的文本聚合。
+ * 因此一次投影可长期复用：流式刷新期间不再重算整段历史的块切分。
  */
 const turnItemsCache = new WeakMap<SessionEvent[], DisplayItem[]>();
 
@@ -186,7 +273,7 @@ function archivedItemsForTurn(events: SessionEvent[]): DisplayItem[] {
   const cached = turnItemsCache.get(events);
   if (cached) return cached;
   const items: DisplayItem[] = [];
-  appendTurnItems(items, events, false);
+  appendTurnItems(items, events, false, turnTag(events));
   turnItemsCache.set(events, items);
   return items;
 }
@@ -215,13 +302,14 @@ export function buildArchivedItems(
   showWelcome: boolean,
   compaction: CompactionMeta | undefined
 ): DisplayItem[] {
-  if (showWelcome) return [{ type: "welcome" }];
+  if (showWelcome) return [{ type: "welcome", id: "welcome" }];
 
   const items: DisplayItem[] = [];
   const preflight = leadingErrorSummary(turns);
   if (preflight) {
     items.push({
       type: "preflight",
+      id: "preflight",
       count: preflight.count,
       errors: preflight.errors,
     });
@@ -233,6 +321,7 @@ export function buildArchivedItems(
     if (compaction && compaction.retainedFrom > 0 && i === compaction.retainedFrom) {
       items.push({
         type: "compaction",
+        id: "compaction",
         summary: compaction.summary,
         foldedCount: compaction.retainedFrom,
       });
@@ -249,6 +338,7 @@ export function buildArchivedItems(
   ) {
     items.push({
       type: "compaction",
+      id: "compaction-tail",
       summary: compaction.summary,
       foldedCount: compaction.retainedFrom,
     });
@@ -264,17 +354,27 @@ export function buildLiveItems(
 ): DisplayItem[] {
   const items: DisplayItem[] = [];
   if (currentEvents.length > 0) {
-    appendTurnItems(items, currentEvents, true);
+    appendTurnItems(items, currentEvents, true, "live");
   }
   // 插话 pending：追加在对话底部（当前输出段之后；未注入前一直是最后一条）
   if (pending && pending.length > 0) {
     for (const p of pending) {
-      items.push({ type: "pending", id: p.id, text: p.text });
+      items.push({
+        type: "pending",
+        id: `pending-${p.id}`,
+        entryId: p.id,
+        text: p.text,
+      });
     }
   }
   // 中止已发出、轮未收尾：轮尾一条「正在中止…」（收尾后由 turn/aborted 标记接替）
   if (aborting) {
-    items.push({ type: "message", role: "aborting", content: "正在中止…" });
+    items.push({
+      type: "message",
+      id: "aborting",
+      role: "aborting",
+      content: "正在中止…",
+    });
   }
   return items;
 }

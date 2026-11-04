@@ -80,11 +80,14 @@ export function useMessageScroll({
    * 钳位/锚定（浏览器行为），不是用户。 */
   const observedScrollHeightRef = useRef<number | null>(null);
 
-  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。 */
+  /* 钉底原语：直接写 scrollTop = scrollHeight（浏览器自行钳到最大）。
+   * 顺手记下此刻的内容高度——紧随其后的滚动事件（值被浏览器延迟派发）
+   * 要拿它判断「这几十像素是内容长高了，还是用户自己滑上去了」。 */
   const pinNow = useCallback(() => {
     const el = listRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    observedScrollHeightRef.current = el.scrollHeight;
   }, []);
 
   /** 回到最新（“回到底部”按钮）：恢复跟随 + 瞬时落底。 */
@@ -236,10 +239,15 @@ export function useMessageScroll({
       return;
     }
     if (windowResizingRef.current) return;
-    // 内容尺寸刚变过 ⇒ 钳位/锚定引起的滚动（浏览器行为），不算用户意图
+    // 内容尺寸刚变过 ⇒ 钳位/锚定引起的滚动（浏览器行为），不算用户意图。
+    // 滚动事件是延迟派发的：钉底那一刻的高度（pinNow 记的 observed）与此刻
+    // 不一致，说明是内容在长高。想跟底就再压一次底；已经上滑就按兵不动。
     const observed = observedScrollHeightRef.current;
     observedScrollHeightRef.current = el.scrollHeight;
-    if (observed !== null && Math.abs(el.scrollHeight - observed) > 0.5) return;
+    if (observed !== null && Math.abs(el.scrollHeight - observed) > 0.5) {
+      if (!userScrolledUpRef.current) pinNow();
+      return;
+    }
     // 缩放基准/视口尺寸变了 ⇒ 缩放引起的重排
     const face = readFaceSize();
     const faceChanged =
@@ -252,7 +260,7 @@ export function useMessageScroll({
       return;
     }
     setStick(false);
-  }, [armResizeGuard, refreshBelow, setStick]);
+  }, [armResizeGuard, pinNow, refreshBelow, setStick]);
 
   /*
    * 用户意图（手势）：向上滚轮 → 立即停止跟随。
@@ -364,18 +372,39 @@ export function useMessageScroll({
   }, [pinNow, armResizeGuard, captureAnchor, refreshBelow, restoreAnchor]);
 
   /*
-   * 内容尺寸观测（2026-10-08 补）。
+   * 内容尺寸观测（2026-10-08 补，2026-11-04 加跟底重钉）。
    *
    * 内容在滚动容器内部变高/变矮时不会产生滚动事件；ResizeObserver 观测的是
-   * 容器自身，items 也没变。用 MutationObserver 补这个信号。
+   * 容器自身，items 也没变时上面的钉底副作用不会触发。用 MutationObserver
+   * 补这个信号：想跟底就把新增内容压回底，已经上滑只更新按钮。
    */
   useEffect(() => {
     const el = listRef.current;
     if (!el || typeof MutationObserver !== "function") return;
-    const mo = new MutationObserver(() => refreshBelow());
-    mo.observe(el, { childList: true, subtree: true, characterData: true });
-    return () => mo.disconnect();
-  }, [refreshBelow]);
+    let raf = 0;
+    const mo = new MutationObserver(() => {
+      // 按钮判据（几何事实）要立即对齐：内容缩回后即使不钉底，按钮也得马上灭。
+      refreshBelow();
+      if (userScrolledUpRef.current || raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (userScrolledUpRef.current) return;
+        pinNow();
+        setMoreBelow(false);
+      });
+    });
+    mo.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["style"],
+    });
+    return () => {
+      cancelAnimationFrame(raf);
+      mo.disconnect();
+    };
+  }, [pinNow, refreshBelow]);
 
   return {
     listRef,

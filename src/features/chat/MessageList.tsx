@@ -99,14 +99,18 @@ export function MessageList({
         data-message-list
         data-following={following ? "true" : undefined}
       >
-        {items.map((item, i) => (
-          // 回调只传给 pending 行：归档行拿到恒为 undefined 的稳定属性，
+        {items.map((item) => (
+          // 回调只传给 pending / 可折叠行：归档行拿到恒为 undefined 的稳定属性，
           // 不会因为 ChatView 里 handleCancelSteer 换引用而整段重渲染
           <MessageRow
-            key={i}
+            key={item.id}
             item={item}
             onCancelPending={item.type === "pending" ? onCancelPending : undefined}
-            onCardToggle={item.type === "events" ? pinAfterToggle : undefined}
+            onCardToggle={
+              item.type === "process" || item.type === "mood"
+                ? pinAfterToggle
+                : undefined
+            }
           />
         ))}
       </div>

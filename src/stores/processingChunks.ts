@@ -7,6 +7,7 @@
 // 避免 processingChunks ↔ useProcessingStore 的循环依赖。
 
 import type { AssistantChunkEvent, SessionEvent } from "../types";
+import { stampEvent } from "../features/chat/eventTiming";
 
 const PENDING_FLUSH_MS = 33;
 
@@ -87,6 +88,7 @@ function scheduleFlush(sessionId: string): void {
  * 事件顺序不变，且无需额外等待 timer。
  */
 export function appendImmediate(event: SessionEvent): void {
+  stampEvent(event);
   flushPending(event.sessionId);
   sink?.appendOne(event);
 }
@@ -101,6 +103,7 @@ export function clearChunkBuffer(sessionId: string): void {
 
 /** 把一条 assistant/chunk 事件推入该 session 的 33ms 节流缓冲 */
 export function pushChunk(event: AssistantChunkEvent): void {
+  stampEvent(event);
   let buf = chunkBuffers.get(event.sessionId);
   if (!buf) {
     buf = { events: [], lastFlush: Date.now(), timer: null };

@@ -49,6 +49,18 @@
   margin-top: 8px;
 }
 
+/*
+ * 条目一律不参与 flex 压缩（2026-11，过程卡塌成一条线的根因）：
+ * 列表是 flex 列 + overflow-y: auto，条目默认 flex-shrink: 1。内容超过视口时，
+ * flex 会先把「可压缩的条目」压扁，剩下的才溢出滚动。过程卡带 overflow: hidden，
+ * 按规范它的自动最小尺寸是 0——于是全场只有卡片能被压到 2px（上下边框），
+ * 长对话里就成了「本该有卡的位置一条黑线」；正文气泡最小尺寸等于内容高度，
+ * 情绪卡是带文字的普通块，都不会塌。这里统一钉成 flex: none，高度只由内容决定。
+ */
+.list > * {
+  flex: none;
+}
+
 /* ── 回到底部悬浮按钮（外观与位置照参考界面：圆形、水平居中、浮在输入区上方）──
  * 尺寸随界面缩放：--face-size × 0.1（240 基准 → 24px；360 时 = 参考界面的 36px）；
  * 图标 × 0.05（360 时 = 参考界面的 18px）。默认半透明，悬停不透明并锁 accent 边。 */
@@ -236,12 +248,18 @@
  * 段级应用：assistant 气泡内逐段渲染，被 tool/call 闭合的过渡段
  * （transition=true）加本 class 弱化；最终未闭合段与归档后最终文本
  * 正常显示（整个气泡不再统一弱化）。
- * 用 opacity 而非 color：Markdown 内 strong/code/标题有固定色，
- * 只有 opacity 能对整块（含表格/代码）一致弱化。 */
+ *
+ * 用色阶不用 opacity：opacity 0.55 会把正文对比度压到 3:1 以下。
+ * Markdown 内的 strong/code/标题自带颜色，所以额外把它们拉回继承色，
+ * 否则同一个过渡段里正文变灰、代码块还是原色，看起来像两块内容。 */
 
 .streaming {
-  opacity: 0.55;
-  transition: opacity 0.2s ease;
+  color: var(--text-2);
+  transition: color 0.2s ease;
+}
+
+.streaming :where(strong, em, h1, h2, h3, h4, h5, h6, code, th, td) {
+  color: inherit;
 }
 
 /* 光标保持不弱化——"正在输出"的指示需保持清晰；

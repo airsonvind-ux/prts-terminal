@@ -1,8 +1,9 @@
 import { memo, useState } from "react";
 import type { DisplayItem } from "./messageItems";
 import { AttachmentStrip } from "./AttachmentStrip";
-import { EventBadge } from "./EventBadge";
 import { Markdown } from "./Markdown";
+import { MoodCard } from "./MoodCard";
+import { ProcessCard } from "./ProcessCard";
 import { WelcomeMark } from "./WelcomeMark";
 import styles from "./MessageList.module.css";
 
@@ -103,15 +104,24 @@ export const MessageRow = memo(function MessageRow({
           <WelcomeMark />
         </div>
       );
-    case "events":
+    case "process":
       return (
-        <EventBadge
-          events={item.events}
+        <ProcessCard
+          block={item.block}
           interactive={item.interactive}
-          showApprovalControls={false}
           className={styles.row}
           onToggle={onCardToggle}
         />
+      );
+    case "view":
+      // 视图形状由工具结果定义（② 步接入）；形状定下来之前先不占位，
+      // 免得渲染出一块空白。
+      return null;
+    case "mood":
+      return (
+        <div className={styles.row} data-mood-row>
+          <MoodCard events={item.events} />
+        </div>
       );
     case "message":
       if (item.role === "assistant") {
@@ -179,7 +189,7 @@ export const MessageRow = memo(function MessageRow({
           className={`${styles.steerPending} ${styles.row}`}
           title="点击取消"
           data-steer-pending
-          onClick={() => onCancelPending?.(item.id)}
+          onClick={() => onCancelPending?.(item.entryId)}
         >
           {item.text}
         </button>

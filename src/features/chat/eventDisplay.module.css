@@ -1,0 +1,11 @@
+/* src/features/chat/eventDisplay.module.css
+   展示切片（工具卡片「对什么做」）的样式。
+   从 EventBadge.module.css 拆出来：EventBadge 退役后这里只剩渲染函数还在用。 */
+
+.displayLink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}

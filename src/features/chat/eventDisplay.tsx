@@ -1,8 +1,8 @@
 import type { MoodEvent, MoodIntensity, ToolDisplay } from "../../types";
 import { FileLink } from "../../shared/ui/FileLink";
-import styles from "./EventBadge.module.css";
+import styles from "./eventDisplay.module.css";
 
-// ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案 ──
+// ── 情绪描述表（MOOD 草案 3）：没有心声时的旁白兜底 ──
 
 const MOOD_DESCRIPTIONS: Record<
   "高兴" | "困惑" | "沮丧",
@@ -28,8 +28,62 @@ const MOOD_DESCRIPTIONS: Record<
   ],
 };
 
-/** 情绪事件 → 描述文本（intensity 由解析钳位在 0~3，索引安全） */
+/** 未知偏向（没有动作的那一类）的旁白兜底 */
+const NEUTRAL_DESCRIPTION = "PRTS 没说什么，安静地待着";
+
+// ── 情绪卡配色（效价/唤醒两轴，不再一个情绪一个色相） ──
+//
+// 每档给两组颜色：竖线用主色，文字用同色系提亮两档。强度只调竖线明度
+// （弱 −6%、中不变、强 +6%），色相恒定——颜色只强化，不承担信息。
+
+type Triple = [number, number, number];
+
+const MOOD_PALETTE: Record<"高兴" | "困惑" | "沮丧", { line: Triple; text: Triple }> = {
+  高兴: { line: [20, 46, 53], text: [20, 40, 74] },
+  困惑: { line: [160, 26, 46], text: [160, 22, 72] },
+  沮丧: { line: [215, 28, 48], text: [215, 28, 70] },
+};
+
+/** 自由偏向与旧事件的中性色：不参与运动，也就不参与情绪色相 */
+const FREE_PALETTE: { line: Triple; text: Triple } = {
+  line: [210, 10, 40],
+  text: [210, 8, 58],
+};
+
+function cssColor([h, s, l]: Triple): string {
+  return `hsl(${h} ${s}% ${l}%)`;
+}
+
+/** 强度对竖线明度的偏移：1 弱 / 2 中 / 3 强 */
+const LINE_LIGHTNESS_OFFSET: Record<0 | 1 | 2 | 3, number> = {
+  0: 0,
+  1: -6,
+  2: 0,
+  3: 6,
+};
+
+/** 强度档位文案（只在卡面出现，不进事件） */
+export function intensityLabel(intensity: number): string | null {
+  if (intensity === 1) return "弱";
+  if (intensity === 2) return "中";
+  if (intensity === 3) return "强";
+  return null;
+}
+
+/** 情绪事件 → 竖线 / 文字两色 */
+export function moodColors(ev: MoodEvent): { line: string; text: string } {
+  const palette = ev.mood ? MOOD_PALETTE[ev.mood] : FREE_PALETTE;
+  const [h, s, l] = palette.line;
+  const offset = LINE_LIGHTNESS_OFFSET[(ev.intensity ?? 0) as 0 | 1 | 2 | 3] ?? 0;
+  return {
+    line: cssColor([h, s, Math.min(70, Math.max(28, l + offset))]),
+    text: cssColor(palette.text),
+  };
+}
+
+/** 情绪事件 → 旁白文本（缺心声时兜底；intensity 已钳位在 0~3） */
 export function describeMood(ev: MoodEvent): string {
+  if (!ev.mood) return NEUTRAL_DESCRIPTION;
   const idx: MoodIntensity = ev.intensity as MoodIntensity;
   return MOOD_DESCRIPTIONS[ev.mood][idx];
 }

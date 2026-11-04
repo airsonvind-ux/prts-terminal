@@ -29,6 +29,47 @@ function assistantMessage(content: string): SessionEvent {
   };
 }
 
+describe("buildArchivedItems · 交错顺序", () => {
+  it("文本、过程卡、文本按到达顺序出条目，不再整段先卡后文", () => {
+    const items = buildArchivedItems(
+      [
+        [
+          user("查一下"),
+          chunk("我先查一下。"),
+          {
+            type: "tool/call",
+            sessionId: "s1",
+            callId: "c1",
+            toolName: "query_enemy",
+            params: "{}",
+          },
+          {
+            type: "tool/result",
+            sessionId: "s1",
+            callId: "c1",
+            toolName: "query_enemy",
+            ok: true,
+            summary: "找到 2 条",
+          },
+          chunk("查到了，共 2 条。"),
+        ],
+      ],
+      false,
+      undefined
+    );
+
+    expect(
+      items.map((item) => (item.type === "message" ? item.role : item.type))
+    ).toEqual(["user", "assistant", "process", "assistant"]);
+    expect(items[1]).toMatchObject({
+      segments: [{ content: "我先查一下。", transition: true }],
+    });
+    expect(items[3]).toMatchObject({
+      segments: [{ content: "查到了，共 2 条。", transition: false }],
+    });
+  });
+});
+
 describe("buildArchivedItems · 压缩卡", () => {
   it("全部折叠时在列表末尾补卡，点击分界有落点", () => {
     const items = buildArchivedItems(
@@ -37,7 +78,7 @@ describe("buildArchivedItems · 压缩卡", () => {
       { retainedFrom: 2, summary: "摘要", tokensBefore: 100, at: 1 }
     );
 
-    expect(items[items.length - 1]).toEqual({
+    expect(items[items.length - 1]).toMatchObject({
       type: "compaction",
       summary: "摘要",
       foldedCount: 2,
@@ -52,7 +93,7 @@ describe("buildArchivedItems · 压缩卡", () => {
       { retainedFrom: 3, summary: "摘要", tokensBefore: 100, at: 1 }
     );
 
-    expect(items[items.length - 1]).toEqual({
+    expect(items[items.length - 1]).toMatchObject({
       type: "compaction",
       summary: "摘要",
       foldedCount: 3,
@@ -85,20 +126,71 @@ describe("buildArchivedItems · 归档展示清洗", () => {
     expect(assistant).toMatchObject({
       type: "message",
       role: "assistant",
-      segments: [{ content: "\n\n正文", transition: false }],
+      segments: [{ content: "\n正文", transition: false }],
     });
     expect((turn[1] as { content: string }).content).toBe("【mood:困惑】\n\n正文");
 
-    const events = items.find((item) => item.type === "events");
-    expect(events).toMatchObject({
-      type: "events",
+    const mood = items.find((item) => item.type === "mood");
+    expect(mood).toMatchObject({
+      type: "mood",
       events: [
         {
           type: "mood/event",
           mood: "困惑",
+          tint: "困惑",
           intensity: 0,
         },
       ],
+    });
+  });
+
+  it("草案 3 归档：情绪块在正文之前，正文原样保留", () => {
+    const turn = [
+      user("测试"),
+      {
+        type: "mood/event",
+        sessionId: "s1",
+        mood: "高兴",
+        tint: "高兴",
+        text: "对上了，就是这张。",
+        intensity: 2,
+      } as SessionEvent,
+      chunk("这张图好认。\n剩下的也看完了。"),
+    ];
+
+    const items = buildArchivedItems([turn], false, undefined);
+    expect(
+      items.map((item) => (item.type === "message" ? `message:${item.role}` : item.type))
+    ).toEqual(["message:user", "mood", "message:assistant"]);
+    expect(items[1]).toMatchObject({
+      type: "mood",
+      events: [{ type: "mood/event", text: "对上了，就是这张。", intensity: 2 }],
+    });
+    expect(items[2]).toMatchObject({
+      type: "message",
+      role: "assistant",
+      segments: [{ content: "这张图好认。\n剩下的也看完了。", transition: false }],
+    });
+  });
+
+  it("旧归档只有 mood + intensity 时回放：正文完整、情绪块照旧", () => {
+    const turn = [
+      user("测试"),
+      { type: "mood/event", sessionId: "s1", mood: "沮丧", intensity: 1 } as SessionEvent,
+      chunk("没赶上。\n下一轮再来。"),
+    ];
+
+    const items = buildArchivedItems([turn], false, undefined);
+    expect(
+      items.map((item) => (item.type === "message" ? `message:${item.role}` : item.type))
+    ).toEqual(["message:user", "mood", "message:assistant"]);
+    expect(items[1]).toMatchObject({
+      type: "mood",
+      events: [{ type: "mood/event", mood: "沮丧", intensity: 1 }],
+    });
+    expect(items[2]).toMatchObject({
+      type: "message",
+      segments: [{ content: "没赶上。\n下一轮再来。", transition: false }],
     });
   });
 });
@@ -111,7 +203,7 @@ describe("buildArchivedItems · 错误轮", () => {
       undefined
     );
 
-    const visible = items.filter((item) => item.type !== "events");
+    const visible = items.filter((item) => item.type !== "mood");
     expect(
       visible.map((item) => (item.type === "message" ? item.role : item.type))
     ).toEqual(["user", "assistant", "incomplete", "error"]);
