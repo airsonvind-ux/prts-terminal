@@ -1,4 +1,4 @@
-import type { Attachment, CompactionMeta, SessionEvent } from "../../types";
+import type { Attachment, CompactionMeta, SessionEvent, ToolResultView } from "../../types";
 import {
   isErrorOnlyTurn,
   splitTurnByUserBoundary,
@@ -28,8 +28,8 @@ export type DisplayItem =
     }
   // 一张过程卡（思考行 + 工具行按到达顺序）
   | { type: "process"; id: string; block: ProcessBlock; interactive: boolean }
-  // 工具结果携带的前端卡片；形状由插件侧填
-  | { type: "view"; id: string; view: unknown }
+  // 工具结果携带的前端卡片
+  | { type: "view"; id: string; view: ToolResultView }
   // 情绪卡独立成块
   | { type: "mood"; id: string; events: SessionEvent[]; interactive: boolean }
   | { type: "welcome"; id: string }

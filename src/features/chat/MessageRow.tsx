@@ -4,6 +4,7 @@ import { AttachmentStrip } from "./AttachmentStrip";
 import { Markdown } from "./Markdown";
 import { MoodCard } from "./MoodCard";
 import { ProcessCard } from "./ProcessCard";
+import { ViewCard } from "./ViewCard";
 import { WelcomeMark } from "./WelcomeMark";
 import styles from "./MessageList.module.css";
 
@@ -89,10 +90,13 @@ function PreflightNotice({
  */
 export const MessageRow = memo(function MessageRow({
   item,
+  conversationId,
   onCancelPending,
   onCardToggle,
 }: {
   item: DisplayItem;
+  /** 视图卡要按会话目录换算绝对路径；测试里可以不传 */
+  conversationId?: string;
   onCancelPending?: (entryId: string) => void;
   /** 展开/收起事件卡：列表据此停止自动跟底，固定阅读位置 */
   onCardToggle?: () => void;
@@ -114,9 +118,12 @@ export const MessageRow = memo(function MessageRow({
         />
       );
     case "view":
-      // 视图形状由工具结果定义（② 步接入）；形状定下来之前先不占位，
-      // 免得渲染出一块空白。
-      return null;
+      // 视图随 tool/result 到达，独立于过程卡；没有会话 id 就画不出文件。
+      return (
+        <div className={styles.row} data-view-row>
+          <ViewCard view={item.view} conversationId={conversationId ?? ""} />
+        </div>
+      );
     case "mood":
       return (
         <div className={styles.row} data-mood-row>
