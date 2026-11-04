@@ -55,7 +55,10 @@ function hasInterruptedOutput(events: SessionEvent[]): boolean {
 
 /**
  * 文本块清洗：剥掉展示副本里的 mood 标签；标了情绪但事件流里没有
- * `mood/event` 时，紧跟着该文本补一张情绪卡（只影响展示，不改事件）。
+ * `mood/event` 时，在该文本**之前**补一张情绪卡（只影响展示，不改事件）。
+ *
+ * 情绪标签只认段首，所以它说的是「接下来这段正文的心境」——卡要放在正文
+ * 前面，放在后面会让整段回复的心绪垫在末尾（新版面的实际症状）。
  */
 function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
   const out: Block[] = [];
@@ -67,7 +70,6 @@ function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
       continue;
     }
     const parsed = stripTagFromText(block.content);
-    if (parsed.text.length > 0) out.push({ ...block, content: parsed.text });
     if (parsed.tint !== null && !hasMood) {
       out.push({
         kind: "mood",
@@ -85,6 +87,7 @@ function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
       });
       hasMood = true;
     }
+    if (parsed.text.length > 0) out.push({ ...block, content: parsed.text });
   }
   return out;
 }
