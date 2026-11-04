@@ -1,25 +1,45 @@
-/* 情绪卡（MOOD v2）
+/* 情绪卡（情绪系统草案 3）
  *
- * 独立块、无边框、无头部、不可折叠：只有一条 2px 短竖线 + 正文。
- * 竖线与文字同色，颜色由 --mood-hue 注入（三个已知偏向各一色，
- * 自由偏向取中性色）。正体，不做斜体，也不做透明度弱化——
- * 心声是正文级内容，不是旁注。
+ * 独立块、无边框、无头部、不可折叠：2px 竖线 + 一行正文。
+ * 竖线 --mood-line 按效价/唤醒取值，文字 --mood-text 是它的提亮档；
+ * 强度只改竖线明度（由 eventDisplay.moodColors 算好注入），不改色相。
+ * 正体，不做斜体，也不做透明度弱化——心声是正文级内容，不是旁注。
  */
 
 .mood {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   margin: 6px 0 6px 2px;
 }
 
 .line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
   padding-left: 10px;
-  border-left: 2px solid var(--mood-hue);
-  color: var(--mood-hue);
+  border-left: 2px solid var(--mood-line);
+  color: var(--mood-text);
   font-size: var(--text-sm);
   font-style: normal;
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+
+/* 偏向词：竖线同色，压住一档字重感 */
+.bias {
+  flex: none;
+  color: var(--mood-line);
+  letter-spacing: 0.02em;
+}
+
+.strength {
+  color: var(--mood-text);
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.voice {
+  min-width: 0;
 }

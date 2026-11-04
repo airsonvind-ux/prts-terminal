@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-// 情绪卡（MOOD v2）渲染测试
+// 情绪卡（情绪系统草案 3）渲染测试
 //
-// 三件事必须钉住：有心声就显示心声、没有就回落到旁白、颜色跟随偏向色相。
-// 旧归档只有 mood + intensity，没有 tint/text，走的也是这两条路径。
+// 要钉住的四件事：偏向词 + 强度前缀、有心声显示心声、没有就回落旁白、
+// 两轴配色（竖线 / 文字）与「强度只改竖线明度」。旧归档只有 mood +
+// intensity，走的是偏向词 + 旁白这条路径。
 
 import { afterEach, describe, expect, it } from "vitest";
 import React, { act } from "react";
@@ -37,47 +38,65 @@ function render(events: SessionEvent[]) {
     root.render(React.createElement(MoodCard, { events }));
   });
   mounted.push({ container, root });
+  const line = () => container.querySelector<HTMLElement>("[data-mood-card] p");
   return {
     container,
-    text: () => container.textContent ?? "",
-    hue: () => {
-      const line = container.querySelector<HTMLElement>("[data-mood-card] p");
-      return line?.style.getPropertyValue("--mood-hue") ?? null;
-    },
+    line,
+    bias: () => container.querySelector<HTMLElement>("[data-mood-bias]")?.textContent ?? null,
+    voice: () => container.querySelector<HTMLElement>("[data-mood-voice]")?.textContent ?? null,
+    varOf: (name: string) => line()?.style.getPropertyValue(name) ?? null,
   };
 }
 
 describe("MoodCard", () => {
-  it("有心声就显示心声，不显示旁白", () => {
+  it("偏向词与强度在左，心声在右", () => {
     const view = render([
-      mood({ mood: "高兴", intensity: 2, text: "对上了，就是这张。" }),
+      mood({ mood: "高兴", tint: "高兴", intensity: 2, text: "对上了，就是这张。" }),
     ]);
-    expect(view.text()).toBe("对上了，就是这张。");
-    expect(view.text()).not.toContain("PRTS");
+    expect(view.bias()).toBe("高兴 · 中");
+    expect(view.voice()).toBe("对上了，就是这张。");
   });
 
-  it("没有心声回落到旁白（旧归档、模型没写心声）", () => {
-    const view = render([mood({ mood: "沮丧", intensity: 1 })]);
-    expect(view.text()).toBe("PRTS 有些沮丧，沉下去就不想动");
+  it("没有强度时不写「· 弱/中/强」", () => {
+    const view = render([mood({ tint: "好奇", intensity: 0, text: "这层构造有点眼熟。" })]);
+    expect(view.bias()).toBe("好奇");
+    expect(view.voice()).toBe("这层构造有点眼熟。");
   });
 
-  it("未知偏向只定色相，旁白走中性兜底", () => {
+  it("自由偏向保留原词做标签，文字色走中性", () => {
     const view = render([mood({ tint: "警惕", intensity: 0 })]);
-    expect(view.text()).toBe("PRTS 没说什么，安静地待着");
-    expect(view.hue()).toBe("#7f8794");
+    expect(view.bias()).toBe("警惕");
+    expect(view.voice()).toBe("PRTS 没说什么，安静地待着");
+    expect(view.varOf("--mood-line")).toBe("hsl(210 10% 40%)");
+    expect(view.varOf("--mood-text")).toBe("hsl(210 8% 58%)");
   });
 
-  it("三个已知偏向各有色相", () => {
-    const cases: Array<[string, string]> = [
-      ["高兴", "#d7a94e"],
-      ["困惑", "#6f7c8c"],
-      ["沮丧", "#5f6f95"],
+  it("旧归档只有 mood 时，偏向词取 mood、旁白按强度取档", () => {
+    const view = render([mood({ mood: "沮丧", intensity: 1 })]);
+    expect(view.bias()).toBe("沮丧 · 弱");
+    expect(view.voice()).toBe("PRTS 有些沮丧，沉下去就不想动");
+  });
+
+  it("三个已知偏向各有竖线 / 文字两色", () => {
+    const cases: Array<[string, string, string]> = [
+      ["高兴", "hsl(20 46% 53%)", "hsl(20 40% 74%)"],
+      ["困惑", "hsl(160 26% 46%)", "hsl(160 22% 72%)"],
+      ["沮丧", "hsl(215 28% 48%)", "hsl(215 28% 70%)"],
     ];
-    for (const [name, hue] of cases) {
+    for (const [name, line, text] of cases) {
       const view = render([mood({ mood: name, intensity: 0 })]);
-      expect(view.hue()).toBe(hue);
+      expect(view.varOf("--mood-line")).toBe(line);
+      expect(view.varOf("--mood-text")).toBe(text);
       act(() => mounted.pop()!.root.unmount());
     }
+  });
+
+  it("强度只改竖线明度，不改色相与文字色", () => {
+    const weak = render([mood({ mood: "高兴", intensity: 1 })]);
+    const strong = render([mood({ mood: "高兴", intensity: 3 })]);
+    expect(weak.varOf("--mood-line")).toBe("hsl(20 46% 47%)");
+    expect(strong.varOf("--mood-line")).toBe("hsl(20 46% 59%)");
+    expect(weak.varOf("--mood-text")).toBe(strong.varOf("--mood-text"));
   });
 
   it("没有情绪事件时不渲染空壳", () => {

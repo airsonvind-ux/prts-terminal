@@ -31,18 +31,54 @@ const MOOD_DESCRIPTIONS: Record<
 /** 未知偏向（没有动作的那一类）的旁白兜底 */
 const NEUTRAL_DESCRIPTION = "PRTS 没说什么，安静地待着";
 
-/** 四色相：三个已知偏向各一色，自由偏向一律中性 */
-const MOOD_HUES: Record<"高兴" | "困惑" | "沮丧", string> = {
-  高兴: "#d7a94e",
-  困惑: "#6f7c8c",
-  沮丧: "#5f6f95",
+// ── 情绪卡配色（效价/唤醒两轴，不再一个情绪一个色相） ──
+//
+// 每档给两组颜色：竖线用主色，文字用同色系提亮两档。强度只调竖线明度
+// （弱 −6%、中不变、强 +6%），色相恒定——颜色只强化，不承担信息。
+
+type Triple = [number, number, number];
+
+const MOOD_PALETTE: Record<"高兴" | "困惑" | "沮丧", { line: Triple; text: Triple }> = {
+  高兴: { line: [20, 46, 53], text: [20, 40, 74] },
+  困惑: { line: [160, 26, 46], text: [160, 22, 72] },
+  沮丧: { line: [215, 28, 48], text: [215, 28, 70] },
 };
 
-const NEUTRAL_HUE = "#7f8794";
+/** 自由偏向与旧事件的中性色：不参与运动，也就不参与情绪色相 */
+const FREE_PALETTE: { line: Triple; text: Triple } = {
+  line: [210, 10, 40],
+  text: [210, 8, 58],
+};
 
-/** 情绪事件 → 色相（卡片竖线与文字同色） */
-export function moodHue(ev: MoodEvent): string {
-  return ev.mood ? MOOD_HUES[ev.mood] : NEUTRAL_HUE;
+function cssColor([h, s, l]: Triple): string {
+  return `hsl(${h} ${s}% ${l}%)`;
+}
+
+/** 强度对竖线明度的偏移：1 弱 / 2 中 / 3 强 */
+const LINE_LIGHTNESS_OFFSET: Record<0 | 1 | 2 | 3, number> = {
+  0: 0,
+  1: -6,
+  2: 0,
+  3: 6,
+};
+
+/** 强度档位文案（只在卡面出现，不进事件） */
+export function intensityLabel(intensity: number): string | null {
+  if (intensity === 1) return "弱";
+  if (intensity === 2) return "中";
+  if (intensity === 3) return "强";
+  return null;
+}
+
+/** 情绪事件 → 竖线 / 文字两色 */
+export function moodColors(ev: MoodEvent): { line: string; text: string } {
+  const palette = ev.mood ? MOOD_PALETTE[ev.mood] : FREE_PALETTE;
+  const [h, s, l] = palette.line;
+  const offset = LINE_LIGHTNESS_OFFSET[(ev.intensity ?? 0) as 0 | 1 | 2 | 3] ?? 0;
+  return {
+    line: cssColor([h, s, Math.min(70, Math.max(28, l + offset))]),
+    text: cssColor(palette.text),
+  };
 }
 
 /** 情绪事件 → 旁白文本（缺心声时兜底；intensity 已钳位在 0~3） */
