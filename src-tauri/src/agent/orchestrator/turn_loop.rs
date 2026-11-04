@@ -66,6 +66,62 @@ pub(super) async fn dispatch_turn_with_memory(
             }
         }
 
+        // ── 视图调用领取（步边界，插话之后）──
+        // 视图的 `call` 只能调自己插件的工具（命令层已校验），不进审批链；
+        // 每步领一条，事件与上下文都带「由视图发起」——用户手打的字先于
+        // 后台视图的点击，这条顺序不能反。
+        // 失败也补一条 tool/result：悬空的 tool/call 会被画成「未完成」，
+        // 用户分不清是工具失败还是清理不彻底。
+        if !abort.is_aborted() {
+            if let Some(call) = crate::runtime::view_calls::queue().take_next(session_id) {
+                let facts = tools.facts_of(&call.tool);
+                let display = tools.display_for(&call.tool, &call.args, &tool_ctx);
+                sink.emit(SessionEvent::tool_call_by_view(
+                    session_id,
+                    &call.id,
+                    &call.tool,
+                    &call.args,
+                    display,
+                    facts.as_ref(),
+                    &call.view_title,
+                ));
+                let (ok, summary) = match tools.execute(&call.tool, &tool_ctx, &call.args) {
+                    Ok(output) => (true, output.summary.clone()),
+                    Err(err) => (false, err.to_string()),
+                };
+                sink.emit(SessionEvent::tool_result(
+                    session_id,
+                    &call.id,
+                    Some(&call.tool),
+                    &summary,
+                    ok,
+                ));
+                messages.push(ChatMessage::assistant_with_tools(
+                    String::new(),
+                    vec![crate::llm::ToolCall {
+                        id: call.id.clone(),
+                        call_type: "function".into(),
+                        function: crate::llm::ToolCallFunction {
+                            name: call.tool.clone(),
+                            arguments: call.args.clone(),
+                        },
+                    }],
+                    None,
+                ));
+                messages.push(ChatMessage::tool_result_with_status(
+                    &call.id,
+                    format!("（由视图《{}》发起）{summary}", call.view_title),
+                    ok,
+                ));
+                debug!(
+                    "step" => step,
+                    "action" => "view_call_executed",
+                    "tool" => call.tool.as_str(),
+                    "ok" => ok
+                );
+            }
+        }
+
         // 前缀由命令层冻结后传入（批 5）：整个对话内逐字节不变；
         // 仍按 step 重写 messages[0] 保持不变量（首条恒为 system），
         // push_header 去重后不追加（prompt 无变化）

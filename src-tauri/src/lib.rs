@@ -745,6 +745,7 @@ pub fn run() {
             commands::session_file_abs_path,
             commands::view_origin,
             commands::view_prompt,
+            commands::view_call_tool,
             commands::append_turn,
             commands::update_conversation_meta,
             commands::generate_conversation_title,

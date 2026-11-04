@@ -126,6 +126,7 @@ const __defaultInvokeImpl = (cmd: string) => {
     });
   }
   if (cmd === "view_prompt") return Promise.resolve({ delivered: true });
+  if (cmd === "view_call_tool") return Promise.resolve({ delivered: true });
   // open_path（资源文件打开）与目录选择器默认静默/取消
   if (cmd === "open_path") return Promise.resolve(undefined);
   if (cmd === "choose_workspace_directory") return Promise.resolve(null);

@@ -25,6 +25,11 @@ function result(callId: string, ok = true, summary = "ok"): SessionEvent {
   return { type: "tool/result", sessionId: S, callId, toolName: "echo", summary, ok };
 }
 
+/** 视图发起的调用：事件里带 byView。 */
+function viewCall(callId: string, byView: string): SessionEvent {
+  return { type: "tool/call", sessionId: S, callId, toolName: "echo", params: "{}", byView };
+}
+
 function viewResult(callId: string, view: unknown): SessionEvent {
   return {
     type: "tool/result",
@@ -87,6 +92,23 @@ function mood(): SessionEvent {
 function kinds(blocks: Block[]): string[] {
   return blocks.map((b) => b.kind);
 }
+
+describe("splitTurn · 视图发起的调用", () => {
+  it("行上带 byView，模型发起的行不带", () => {
+    const blocks = splitTurn([viewCall("c1", "地图"), result("c1")]);
+    const card = blocks[0];
+    if (card.kind !== "card") throw new Error("应是过程卡");
+    const row = card.rows[0];
+    if (row.kind !== "tool") throw new Error("应是工具行");
+    expect(row.byView).toBe("地图");
+
+    const plain = splitTurn([call("c2"), result("c2")])[0];
+    if (plain.kind !== "card") throw new Error("应是过程卡");
+    const plainRow = plain.rows[0];
+    if (plainRow.kind !== "tool") throw new Error("应是工具行");
+    expect(plainRow.byView).toBeUndefined();
+  });
+});
 
 describe("splitTurn · 切点", () => {
   it("文本之后来了工具调用：文本块在前、过程卡在后，文本是过程文本", () => {

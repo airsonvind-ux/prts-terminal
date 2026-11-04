@@ -109,8 +109,7 @@ export function ViewCard({
         void submitPrompt(message.text ?? "");
         return;
       }
-      // call：需要有一条脱离模型、但仍进同一轮的执行通道，单独一步做。
-      showToast("这块视图还不支持直接调用工具", { kind: "warning" });
+      void submitCall(message.tool ?? "", message.args);
     };
     const onMessage = (event: MessageEvent) => {
       const windows = [
@@ -147,6 +146,42 @@ export function ViewCard({
       } catch (err) {
         showToast(String(err), { kind: "warning", dedupeKey: "view-prompt-failed" });
       }
+    }
+
+    // 视图的 call：后端校验「只能调自己插件的工具」，并在该轮的下一个
+    // 步边界执行；没有进行中的轮次时不替用户发起，退化成输入框草稿。
+    async function submitCall(tool: string, args: unknown): Promise<void> {
+      const name = tool.trim();
+      if (!name) {
+        showToast("这块视图没有说明要调用哪个工具", { kind: "warning" });
+        return;
+      }
+      const serialized =
+        typeof args === "string" ? args : JSON.stringify(args ?? {});
+      try {
+        const outcome = await invoke<{ delivered: boolean }>("view_call_tool", {
+          request: {
+            conversationId,
+            tool: name,
+            args: serialized,
+            viewTitle: view.title,
+          },
+        });
+        if (outcome?.delivered) {
+          showToast(`已提交 ${name}，下一个步边界执行`, { kind: "info" });
+          return;
+        }
+      } catch (err) {
+        showToast(String(err), { kind: "warning", dedupeKey: "view-call-failed" });
+        return;
+      }
+      const key = draftKeyFor(conversationId);
+      const existing = useComposerDraftStore.getState().textByKey[key] ?? "";
+      const line = `请调用工具 ${name} ${serialized}`;
+      useComposerDraftStore
+        .getState()
+        .setText(key, existing ? `${existing}\n${line}` : line);
+      showToast("没有进行中的对话，已把调用填进输入框", { kind: "info" });
     }
   }, [view.kind, view.title, conversationId]);
 

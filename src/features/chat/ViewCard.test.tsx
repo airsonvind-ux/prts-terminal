@@ -168,6 +168,50 @@ describe("ViewCard · 沙箱消息", () => {
     const prompts = invokeMock.mock.calls.filter((call) => call[0] === "view_prompt");
     expect(prompts.length).toBe(0);
   });
+
+  it("call 交给后端排队，带上来源视图标题", async () => {
+    const container = render({ kind: "html", title: "地图", path: "views/v1.html" });
+    await flush();
+    const frame = container.querySelector<HTMLIFrameElement>("[data-view-frame]")!;
+    post(frame.contentWindow, {
+      source: "prts-view",
+      type: "call",
+      tool: "pic_catalog_list_images",
+      args: { limit: 3 },
+    });
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("view_call_tool", {
+      request: {
+        conversationId: "c1",
+        tool: "pic_catalog_list_images",
+        args: JSON.stringify({ limit: 3 }),
+        viewTitle: "地图",
+      },
+    });
+  });
+
+  it("没有进行中的轮次时 call 落进输入框，不替用户发起", async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "view_origin") {
+        return Promise.resolve({ scheme: "prts-view", host: "prts-view.localhost", origin });
+      }
+      if (cmd === "view_call_tool") return Promise.resolve({ delivered: false });
+      return Promise.resolve(undefined);
+    });
+    const container = render({ kind: "html", title: "地图", path: "views/v1.html" });
+    await flush();
+    const frame = container.querySelector<HTMLIFrameElement>("[data-view-frame]")!;
+    post(frame.contentWindow, {
+      source: "prts-view",
+      type: "call",
+      tool: "pic_catalog_list_images",
+      args: {},
+    });
+    await flush();
+    expect(useComposerDraftStore.getState().textByKey.c1).toContain(
+      "请调用工具 pic_catalog_list_images"
+    );
+  });
 });
 
 describe("ViewCard · doc 与缺失", () => {

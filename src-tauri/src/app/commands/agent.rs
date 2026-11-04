@@ -73,6 +73,9 @@ struct TurnGuard {
 impl Drop for TurnGuard {
     fn drop(&mut self) {
         self.registry.unregister_if(&self.session_id, &self.signal);
+        // 轮次收尾丢弃还没领取的视图调用：来源视图随这一轮结束，不能在
+        // 下一轮里突然执行一条「由视图发起」的调用。
+        crate::runtime::view_calls::queue().clear(&self.session_id);
     }
 }
 

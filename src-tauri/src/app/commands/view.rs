@@ -48,6 +48,52 @@ pub struct ViewPromptOutcome {
     pub delivered: bool,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewCallRequest {
+    pub conversation_id: String,
+    /// 视图想调的插件工具名。
+    pub tool: String,
+    /// 参数原样透传（JSON 文本或空）。
+    #[serde(default)]
+    pub args: String,
+    /// 来源视图标题，事件与上下文里都会标出来。
+    pub view_title: String,
+}
+
+/// 视图发起的 `call`：只接受该插件自己注册的工具，进队列由当前轮次执行。
+///
+/// 插件工具不经过审批链（审批保护的是宿主自有危险工具），所以这里不需要
+/// 走 `ApprovalRegistry`；但来源校验必须做——视图不能让宿主去调别的插件的
+/// 工具，也不能调宿主工具。
+#[tauri::command]
+pub fn view_call_tool(
+    turn_registry: State<'_, Arc<TurnRegistry>>,
+    tools: State<'_, Arc<crate::tools::ToolRegistry>>,
+    request: ViewCallRequest,
+) -> Result<ViewPromptOutcome, String> {
+    let tool = request.tool.trim();
+    if tool.is_empty() {
+        return Err("视图没有说要调用哪个工具".into());
+    }
+    let facts = tools
+        .facts_of(tool)
+        .ok_or_else(|| format!("工具 {tool} 不在注册表里（插件可能已停用）"))?;
+    if !matches!(facts.origin, crate::tools::Origin::Plugin(_)) {
+        return Err(format!("视图只能调用插件工具，{tool} 是宿主工具"));
+    }
+    let Some(session_id) = turn_registry.active_session_for(&request.conversation_id) else {
+        return Ok(ViewPromptOutcome { delivered: false });
+    };
+    crate::runtime::view_calls::queue().push(
+        &session_id,
+        tool,
+        &request.args,
+        request.view_title.trim(),
+    );
+    Ok(ViewPromptOutcome { delivered: true })
+}
+
 /// 视图发起的 `prompt`：活动轮次里作为插话进对话；空闲时不替用户发言。
 ///
 /// 空闲与「不替用户花钱」同一条理由——只把文字放进输入框，发不发由用户按。

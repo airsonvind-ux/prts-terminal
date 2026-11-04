@@ -165,6 +165,8 @@ pub async fn set_plugin_enabled(
             crate::plugins::enable_plugin(&id, &reg, &config, &services, &ledger)?;
         } else {
             ensure_no_active_turn(&turns, "停用")?;
+            // 停用后来源就不在了：队列里还没领取的视图调用一并丢弃。
+            crate::runtime::view_calls::queue().clear_all();
             crate::plugins::disable_plugin(&id, &reg, &config, &services, &ledger)?;
         }
         let context = format!(
@@ -253,6 +255,8 @@ pub async fn uninstall_plugin(
     tauri::async_runtime::spawn_blocking(move || {
         let name = plugin_name(&ledger, &id);
         ensure_no_active_turn(&turns, "卸载")?;
+        // 卸载后来源就不在了：队列里还没领取的视图调用一并丢弃。
+        crate::runtime::view_calls::queue().clear_all();
         crate::plugins::uninstall_plugin(&id, delete_data, &roots, &config, &reg, &ledger)?;
         let context = format!("插件 {name} 已卸载");
         crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));

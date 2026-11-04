@@ -255,6 +255,9 @@ pub enum SessionEvent {    /// turn 开始：一次 agent_process 处理周期
         /// 是否插件工具：没有 action 时前端据此走「调用插件工具：{名字}」保底。
         #[serde(default, skip_serializing_if = "is_false_flag")]
         plugin_tool: bool,
+        /// 由哪张视图发起（`view` 的 `call` 原语）；模型/宿主发起的调用为 None。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by_view: Option<String>,
     },
 
     /// 图片投递事实：记录某条 user/tool 消息的 image block 是否真的进入请求体。
@@ -477,6 +480,7 @@ impl SessionEvent {
             display: crate::tools::ToolDisplay::default(),
             action: None,
             plugin_tool: false,
+            by_view: None,
         }
     }
     /// 带展示切片与调用文案的 tool/call（orchestrator 发出 IPC / 写 log 时使用）。
@@ -500,7 +504,27 @@ impl SessionEvent {
             display,
             action: facts.and_then(|facts| facts.action.clone()),
             plugin_tool: facts.is_some_and(crate::tools::ToolFacts::is_plugin),
+            by_view: None,
         }
+    }
+
+    /// 视图发起的调用：带展示切片，并在事件里标出「由视图发起」。
+    pub fn tool_call_by_view(
+        session_id: &str,
+        call_id: &str,
+        tool_name: &str,
+        params: &str,
+        display: crate::tools::ToolDisplay,
+        facts: Option<&crate::tools::ToolFacts>,
+        view_title: &str,
+    ) -> Self {
+        let mut event = Self::tool_call_with_display(
+            session_id, call_id, tool_name, params, display, facts,
+        );
+        if let Self::ToolCall { by_view, .. } = &mut event {
+            *by_view = Some(view_title.to_string());
+        }
+        event
     }
     pub fn tool_result(
         session_id: &str,
@@ -1389,10 +1413,40 @@ mod tests {
         assert!(!json.contains("\"pluginTool\""), "got {json}");
     }
 
+    /// 视图发起的调用：事件里带 byView，模型发起的不带。
+    #[test]
+    fn view_initiated_calls_carry_the_source_title() {
+        let facts = crate::tools::ToolFacts {
+            origin: crate::tools::Origin::Plugin("demo".into()),
+            action: Some("清点图片".to_string()),
+        };
+        let ev = SessionEvent::tool_call_by_view(
+            "s1",
+            "view-1",
+            "demo_list",
+            "{}",
+            crate::tools::ToolDisplay::default(),
+            Some(&facts),
+            "地图",
+        );
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains("\"byView\":\"地图\""), "got {json}");
+
+        let plain = SessionEvent::tool_call_with_display(
+            "s1",
+            "c1",
+            "demo_list",
+            "{}",
+            crate::tools::ToolDisplay::default(),
+            Some(&facts),
+        );
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("\"byView\""), "got {json}");
+    }
+
     /// 旧归档没有这两个字段：读回 None/false，前端回落既有工具名表。
     #[test]
-    fn older_archives_without_action_still_deserialize() {
-        let old = r#"{"type":"tool/call","sessionId":"s1","callId":"c1","toolName":"read_file","params":"{}"}"#;
+    fn older_archives_without_action_still_deserialize() {        let old = r#"{"type":"tool/call","sessionId":"s1","callId":"c1","toolName":"read_file","params":"{}"}"#;
         let event: SessionEvent = serde_json::from_str(old).expect("旧归档应能反序列化");
         match event {
             SessionEvent::ToolCall {

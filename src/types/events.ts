@@ -201,6 +201,8 @@ export interface ToolCallEvent {
   action?: string;
   /** 是否插件贡献的工具（来自注册表来源；旧归档缺省 false）。 */
   pluginTool?: boolean;
+  /** 由哪张视图发起（视图 `call` 原语）；模型发起的调用没有这个字段。 */
+  byView?: string;
 }
 
 /** 展示切片链接类型：file（open_path 打开）/ url（系统浏览器打开） */

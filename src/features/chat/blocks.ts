@@ -40,6 +40,8 @@ export type ProcessRow =
       summary?: string;
       /** 审批态：等待确认 / 已确认 / 已拒绝 */
       approval?: "pending" | "approved" | "rejected";
+      /** 由哪张视图发起（视图交互的 call 原语）；模型发起的调用没有这个字段 */
+      byView?: string;
       /** 事件到达时刻（实时轮才有；工具行右侧耗时用） */
       startedAt?: number;
       endedAt?: number;
@@ -130,6 +132,7 @@ function toolRowOf(call: ToolCallEvent): ProcessRow {
     display: call.display,
     status: "running",
     startedAt: eventTime(call),
+    ...(call.byView ? { byView: call.byView } : {}),
   };
 }
 
