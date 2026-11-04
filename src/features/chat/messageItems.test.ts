@@ -126,7 +126,7 @@ describe("buildArchivedItems · 归档展示清洗", () => {
     expect(assistant).toMatchObject({
       type: "message",
       role: "assistant",
-      segments: [{ content: "\n\n正文", transition: false }],
+      segments: [{ content: "\n正文", transition: false }],
     });
     expect((turn[1] as { content: string }).content).toBe("【mood:困惑】\n\n正文");
 
@@ -137,6 +137,7 @@ describe("buildArchivedItems · 归档展示清洗", () => {
         {
           type: "mood/event",
           mood: "困惑",
+          tint: "困惑",
           intensity: 0,
         },
       ],

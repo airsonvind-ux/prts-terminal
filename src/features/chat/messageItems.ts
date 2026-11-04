@@ -68,7 +68,7 @@ function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
     }
     const parsed = stripTagFromText(block.content);
     if (parsed.text.length > 0) out.push({ ...block, content: parsed.text });
-    if (parsed.mood && !hasMood) {
+    if (parsed.tint !== null && !hasMood) {
       out.push({
         kind: "mood",
         id: `${block.id}-mood`,
@@ -76,7 +76,9 @@ function cleanTextBlocks(blocks: Block[], events: SessionEvent[]): Block[] {
           {
             type: "mood/event",
             sessionId,
-            mood: parsed.mood,
+            ...(parsed.mood ? { mood: parsed.mood } : {}),
+            tint: parsed.tint,
+            ...(parsed.voice ? { text: parsed.voice } : {}),
             intensity: parsed.intensity,
           },
         ],

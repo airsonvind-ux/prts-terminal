@@ -1,22 +1,18 @@
 // src/stores/__tests__/processing.mood.test.ts
-// 情绪标签 · 处理链路测试（批 2-D 动画映射 · 情绪通道）
+// 情绪标签 · 处理链路测试（MOOD v2）
 //
-// 复用既有 fake-timer / 直接调 store actions 的测试约定（processing.throttle.test.ts）。
+// v2 语义变了：整行（`【mood:偏向】心声` 到行尾）是一个块，心声不进正文，
+// 所以「剥离后正文」在多数场景里是空串——情绪卡自己承载那句心声。
 // 覆盖：
-//   1. 跨 33ms flush 边界标签：pending 扣留不落位，闭合后 mood 正确 + currentEvents 干净
-//   2. 无标签轮次逐字节一致（剥离器零副作用，mood 保持平静）
-//   3. reasoning chunk 不进扫描器（标签形态文本原样缓冲，不启动 pending）
-//   4. 工具型轮次：tool/call 段边界 re-arm 后段首标签被消费
-//   5. 段内二次标签忽略；跨段可再消费（轨迹语义，一轮多情绪）
-//   6. turn/end 归档：chunk 与 assistant/message 均已剥离 + mood 置位
-//   7. finishProcessing 未闭合 pending 放行（半标签最终可见）
-//   8. failProcessing 清理：pending 随缓冲丢弃，错误轮只归档 [user, error]
-//   9. 非法枚举不破坏归档（标签剥离，mood 保持平静）
-//  10. 扫描器状态按 session 隔离（每轮一个 sessionId，互不串扰）
-// 新增覆盖（批 2-D 强度档位 + mood/event 事件）：
-//  11. 强度解析：intensity 档位置位；非法强度（:0、:4、:x）回退 0；省略 → 0
-//  12. mood/event 事件：流式匹配先于剥离文本落位、携带 mood/intensity、
-//      归档 turns 含 mood/event、assistant/message 防重（流式已消费不重复插）
+//   1. 跨 flush 边界：半标签扣留、闭合后 mood/event 落位、正文为空
+//   2. 无标签轮次逐字节一致；reasoning chunk 不进扫描器
+//   3. 段边界（tool/call、轮内注入）后可再消费；每段最多一个
+//   4. 归档：chunk 与 assistant/message 均已剥离，mood/event 防重
+//   5. finish/fail 的 pending 生命周期
+//   6. 未知偏向：产事件、定色相，但不驱动动作
+//   7. 扫描器按 session 隔离
+//   8. 强度档位与非法强度回退
+//   9. mood/event 携带 tint/text，旧字段兼容
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useProcessingStore, flushPending } from "../useProcessingStore";
@@ -34,7 +30,7 @@ function resetAllStores(): void {
     errorMsg: null,
     overlay: null,
   });
-  resetScanners(); // 清空情绪扫描器模块级瞬态（与 chunkBuffers 并列的生命周期）
+  resetScanners();
   __invokeMock.mockClear();
 }
 
@@ -98,46 +94,38 @@ afterEach(() => vi.useRealTimers());
 // ═══════════════════════════════════════════════
 
 describe("场景 1：跨 flush 边界标签", () => {
-  it("pending 扣留不落位；闭合后 mood 正确 + currentEvents 干净", async () => {
+  it("半标签扣留不落位；闭合且换行后 mood/event 落位，正文为空", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
     store.appendCurrentEvent(textChunk(sid, "【mood:高"));
-
-    // 手动 flush（模拟 33ms 窗口到期）——扣留的半标签不应落位
     flushPending(sid);
-    expect(currentEventsOf(sid)).toHaveLength(1); // 只有 user/message
+    expect(currentEventsOf(sid).map((e) => e.type)).toEqual(["user/message"]);
 
-    store.appendCurrentEvent(textChunk(sid, "兴】好的。"));
+    // 闭合 + 换行 → 整行成块，心声「好的。」不进正文
+    store.appendCurrentEvent(textChunk(sid, "兴】好的。\n"));
     flushPending(sid);
 
     const events = currentEventsOf(sid);
-    expect(events.map((e) => e.type)).toEqual([
-      "user/message",
-      "mood/event",
-      "assistant/chunk",
-    ]);
-    // 时序：前段文本 → 情绪事件 → 本段剥离文本
-    expect(events[1]).toEqual({
+    expect(events.map((e) => e.type)).toEqual(["user/message", "mood/event"]);
+    expect(events[1]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "高兴",
+      tint: "高兴",
+      text: "好的。",
       intensity: 0,
     });
-    expect(events[2]).toEqual(
-      textChunk(sid, "好的。", "【mood:高兴】好的。")
-    ); // 展示已剥离，rawContent 保留原文
     expect(moodOf(sid)).toBe("高兴");
-    expect(intensityOf(sid)).toBe(0);
 
     useProcessingStore.getState().finishProcessing(sid);
   });
 
-  it("逐 token 切开的中文括号标签仍产 mood/event", async () => {
+  it("逐 token 切开的中文括号标签：块在换行处落位，之后是正文", async () => {
     const sid = await startTurn("测试");
     const store = useProcessingStore.getState();
 
-    for (const part of ["【", "m", "ood", ":", "困惑", "】\n\n", "正文"]) {
+    for (const part of ["【", "m", "ood", ":", "困惑", "】", "\n", "正文"]) {
       store.appendCurrentEvent(textChunk(sid, part));
     }
     flushPending(sid);
@@ -147,14 +135,16 @@ describe("场景 1：跨 flush 边界标签", () => {
       "user/message",
       "mood/event",
       "assistant/chunk",
-      "assistant/chunk",
     ]);
-    expect(events[1]).toEqual({
+    expect(events[1]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "困惑",
-      intensity: 0,
+      tint: "困惑",
     });
+    expect(events[1]).not.toHaveProperty("text");
+    // 正文从下一行开始，原样落位
+    expect(events[2]).toEqual(textChunk(sid, "正文"));
     expect(moodOf(sid)).toBe("困惑");
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -184,18 +174,18 @@ describe("场景 2：无标签轮次逐字节一致", () => {
     useProcessingStore.getState().finishProcessing(sid);
   });
 
-  it("reasoning chunk 不进扫描器：标签形态文本原样缓冲，不启动 pending", async () => {
+  it("reasoning chunk 不进扫描器：标签形态文本原样缓冲", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
     store.appendCurrentEvent(reasoningChunk(sid, "【mood:高"));
-    // 若 reasoning 进了扫描器，此文本 chunk 会闭合 pending 并剥离；实际不会
     store.appendCurrentEvent(textChunk(sid, "兴】答案。"));
     flushPending(sid);
 
     const events = currentEventsOf(sid);
     expect(events[1]).toEqual(reasoningChunk(sid, "【mood:高"));
-    expect(events[2]).toEqual(textChunk(sid, "兴】答案。")); // 原样（非段首标签不剥离）
+    // 行中标签（前面没有换行、也不是段首）不识别
+    expect(events[2]).toEqual(textChunk(sid, "兴】答案。"));
     expect(moodOf(sid)).toBe("平静");
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -212,8 +202,8 @@ describe("场景 3：轮内段边界（工具调用与注入）", () => {
 
     const store = useProcessingStore.getState();
     store.appendCurrentEvent(textChunk(sid, "我先查一下数据库。"));
-    store.appendCurrentEvent(toolCall(sid, "c1")); // 段边界 re-arm
-    store.appendCurrentEvent(textChunk(sid, "【mood:困惑】查到了，让我想想。"));
+    store.appendCurrentEvent(toolCall(sid, "c1"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:困惑】查到了，让我想想。\n"));
     flushPending(sid);
 
     const events = currentEventsOf(sid);
@@ -222,110 +212,83 @@ describe("场景 3：轮内段边界（工具调用与注入）", () => {
       "assistant/chunk",
       "tool/call",
       "mood/event",
-      "assistant/chunk",
     ]);
     expect(events[1]).toEqual(textChunk(sid, "我先查一下数据库。"));
-    expect(events[3]).toEqual({
+    expect(events[3]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "困惑",
-      intensity: 0,
+      text: "查到了，让我想想。",
     });
-    expect(events[4]).toEqual(
-      textChunk(sid, "查到了，让我想想。", "【mood:困惑】查到了，让我想想。")
-    );
     expect(moodOf(sid)).toBe("困惑");
 
     useProcessingStore.getState().finishProcessing(sid);
   });
 
-  it("跨段二次标签可再消费（轨迹）：两段两情绪各产一条事件", async () => {
+  it("跨段二次标签可再消费：两段两情绪各产一条事件", async () => {
     const sid = await startTurn("查询");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】第一个。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】第一个。\n"));
     store.appendCurrentEvent(toolCall(sid, "c1"));
-    store.appendCurrentEvent(textChunk(sid, "【mood:沮丧】第二个。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:沮丧】第二个。\n"));
     flushPending(sid);
 
     const events = currentEventsOf(sid);
     expect(events.map((e) => e.type)).toEqual([
       "user/message",
       "mood/event",
-      "assistant/chunk",
       "tool/call",
       "mood/event",
-      "assistant/chunk",
     ]);
-    // 段边界可再消费：两条事件成轨迹（顺序＝时间）
-    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
-      mood: string;
-    }>;
-    expect(moodEvents.map((e) => e.mood)).toEqual(["高兴", "沮丧"]);
-    expect(events[5]).toEqual(
-      textChunk(sid, "第二个。", "【mood:沮丧】第二个。")
-    );
-    expect(moodOf(sid)).toBe("沮丧"); // 落点＝最后一段
+    const moodEvents = events.filter((e) => e.type === "mood/event");
+    expect(moodEvents.map((e) => (e as { mood?: string }).mood)).toEqual([
+      "高兴",
+      "沮丧",
+    ]);
+    expect(moodOf(sid)).toBe("沮丧");
 
     useProcessingStore.getState().finishProcessing(sid);
   });
 
-  it("轨迹全链路：两段两情绪 + 聚合防重（本段已消费不重复插）", async () => {
+  it("同段第二个标签不处理（每段最多一个）", async () => {
     const sid = await startTurn("查询");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:高兴:1】我先查一下。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】第一段。\n"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:沮丧】同段第二行。\n"));
     flushPending(sid);
-    store.appendCurrentEvent(toolCall(sid, "c1"));
-    store.appendCurrentEvent(textChunk(sid, "【mood:困惑:2】查到了，结论如下。"));
-    flushPending(sid);
-    // 段完成聚合（后端原始聚合，携带标签）→ 本段已消费，应只剥离不补插
-    store.appendCurrentEvent({
-      type: "assistant/message",
-      sessionId: sid,
-      content: "【mood:困惑:2】查到了，结论如下。",
-      reasoningContent: null,
-      usage: null,
-    });
 
-    const events = currentEventsOf(sid);
-    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
-      mood: string;
-      intensity: number;
-    }>;
-    expect(moodEvents).toHaveLength(2); // 防重：不重复插
-    expect(moodEvents.map((e) => [e.mood, e.intensity])).toEqual([
-      ["高兴", 1],
-      ["困惑", 2],
-    ]);
-    expect(moodOf(sid)).toBe("困惑"); // 落点＝最后一段
-    expect(intensityOf(sid)).toBe(2);
+    const moodEvents = currentEventsOf(sid).filter(
+      (e) => e.type === "mood/event"
+    );
+    expect(moodEvents).toHaveLength(1);
+    expect(moodOf(sid)).toBe("高兴");
 
-    store.finishProcessing(sid);
-    const turn = useConversationStore.getState().conversations[0].turns[0];
-    expect(turn.filter((e) => e.type === "mood/event")).toHaveLength(2);
+    useProcessingStore.getState().finishProcessing(sid);
   });
 
   it("轮内注入也是段边界：注入后新回答的标签可再消费", async () => {
     const sid = await startTurn("查询");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】先答一段。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】先答一段。\n"));
     flushPending(sid);
-    // 轮内注入（插话）：user/message 到达 → 段边界（重置段首与消费位）
     store.appendCurrentEvent({
       type: "user/message",
       sessionId: sid,
       content: "追问一句",
     });
-    store.appendCurrentEvent(textChunk(sid, "【mood:困惑】补答一段。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:困惑】补答一段。\n"));
     flushPending(sid);
 
-    const events = currentEventsOf(sid);
-    const moodEvents = events.filter((e) => e.type === "mood/event") as Array<{
-      mood: string;
-    }>;
-    expect(moodEvents.map((e) => e.mood)).toEqual(["高兴", "困惑"]);
+    const moodEvents = currentEventsOf(sid).filter(
+      (e) => e.type === "mood/event"
+    );
+    expect(moodEvents.map((e) => (e as { mood?: string }).mood)).toEqual([
+      "高兴",
+      "困惑",
+    ]);
     expect(moodOf(sid)).toBe("困惑");
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -337,26 +300,26 @@ describe("场景 3：轮内段边界（工具调用与注入）", () => {
 // ═══════════════════════════════════════════════
 
 describe("场景 4：turn/end 归档", () => {
-  it("归档 content 已剥离 + mood 置位；快照删除后 mood 随快照清除", async () => {
+  it("归档 content 已剥离；chunk 与 assistant/message 都不重复插事件", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:高兴】答案在此。"));
+    store.appendCurrentEvent(
+      textChunk(sid, "【mood:高兴】答案在此。\n正文在此。")
+    );
     store.appendCurrentEvent({
       type: "assistant/message",
       sessionId: sid,
-      content: "【mood:高兴】答案在此。",
+      content: "【mood:高兴】答案在此。\n正文在此。",
       reasoningContent: null,
       usage: null,
     });
-    expect(moodOf(sid)).toBe("高兴"); // chunk 匹配时已置位
+    expect(moodOf(sid)).toBe("高兴");
 
     store.finishProcessing(sid);
 
     const conv = useConversationStore.getState().conversations[0];
-    expect(conv.turns).toHaveLength(1);
     const turn = conv.turns[0];
-    // 时序：user → mood/event → chunk → assistant/message → turn/end
     expect(turn.map((e) => e.type)).toEqual([
       "user/message",
       "mood/event",
@@ -364,15 +327,10 @@ describe("场景 4：turn/end 归档", () => {
       "assistant/message",
       "turn/end",
     ]);
-    // chunk 剥离
-    expect(turn[2].type).toBe("assistant/chunk");
-    expect((turn[2] as { content: string }).content).toBe("答案在此。");
-    // assistant/message 剥离（防止归档瞬间标签复活）
-    const msg = turn[turn.length - 2];
-    expect(msg.type).toBe("assistant/message");
-    expect((msg as { content: string }).content).toBe("答案在此。");
+    expect(turn.filter((e) => e.type === "mood/event")).toHaveLength(1);
+    expect((turn[2] as { content: string }).content).toBe("正文在此。");
+    expect((turn[3] as { content: string }).content).toBe("正文在此。");
 
-    // 快照已删除；mood 随快照自动清除
     expect(useProcessingStore.getState().processing).toEqual({});
   });
 
@@ -381,10 +339,9 @@ describe("场景 4：turn/end 归档", () => {
 
     const store = useProcessingStore.getState();
     store.appendCurrentEvent(textChunk(sid, "【mood:高"));
-    store.finishProcessing(sid); // 未手动 flush（真实路径：turn/end → finishProcessing）
+    store.finishProcessing(sid);
     const conv = useConversationStore.getState().conversations[0];
-    const turn = conv.turns[0];
-    const chunks = turn.filter((e) => e.type === "assistant/chunk");
+    const chunks = conv.turns[0].filter((e) => e.type === "assistant/chunk");
     expect(chunks).toHaveLength(1);
     expect((chunks[0] as { content: string }).content).toBe("【mood:高");
     expect(useProcessingStore.getState().processing).toEqual({});
@@ -396,7 +353,7 @@ describe("场景 4：turn/end 归档", () => {
 // ═══════════════════════════════════════════════
 
 describe("场景 5：failProcessing 清理", () => {
-  it("未闭合 pending 随缓冲丢弃：错误轮只归档 [user, error]，mood 随快照清除", async () => {
+  it("未闭合 pending 随缓冲丢弃：错误轮只归档 [user, error]", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
@@ -404,13 +361,11 @@ describe("场景 5：failProcessing 清理", () => {
     store.failProcessing(sid, "查询失败：连接超时");
 
     const conv = useConversationStore.getState().conversations[0];
-    expect(conv.turns).toHaveLength(1);
     expect(conv.turns[0].map((e) => e.type)).toEqual(["user/message", "error"]);
-
     expect(useProcessingStore.getState().processing).toEqual({});
-    // 扫描器状态已清空：新一轮可重新匹配
+
     const sid2 = await startTurn("下一轮");
-    store.appendCurrentEvent(textChunk(sid2, "【mood:沮丧】好的。"));
+    store.appendCurrentEvent(textChunk(sid2, "【mood:沮丧】好的。\n"));
     flushPending(sid2);
     expect(useProcessingStore.getState().processing[sid2].mood).toBe("沮丧");
     useProcessingStore.getState().finishProcessing(sid2);
@@ -418,26 +373,31 @@ describe("场景 5：failProcessing 清理", () => {
 });
 
 // ═══════════════════════════════════════════════
-// 场景 6：非法枚举不破坏归档
+// 场景 6：未知偏向
 // ═══════════════════════════════════════════════
 
-describe("场景 6：非法枚举不破坏归档", () => {
-  it("非法标签剥离后归档，mood 保持平静", async () => {
+describe("场景 6：未知偏向", () => {
+  it("自由偏向产事件、保留原词做色相，但不驱动动作", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:愤怒】提示"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:愤怒】提示\n"));
     flushPending(sid);
-    expect(moodOf(sid)).toBe("平静"); // 非法值不更新 mood
-    expect(intensityOf(sid)).toBe(0);
+
+    const events = currentEventsOf(sid);
+    expect(moodOf(sid)).toBe("平静"); // 未知词不触发动作
+    expect(events.find((e) => e.type === "mood/event")).toMatchObject({
+      type: "mood/event",
+      sessionId: sid,
+      tint: "愤怒",
+      text: "提示",
+      intensity: 0,
+    });
+    expect(
+      (events.find((e) => e.type === "mood/event") as { mood?: string }).mood
+    ).toBeUndefined();
 
     store.finishProcessing(sid);
-    const conv = useConversationStore.getState().conversations[0];
-    const turn = conv.turns[0];
-    const chunk = turn[1];
-    expect(chunk.type).toBe("assistant/chunk");
-    expect((chunk as { content: string }).content).toBe("提示"); // 只剥离，不更新
-    expect(useProcessingStore.getState().processing).toEqual({});
   });
 });
 
@@ -449,7 +409,6 @@ describe("场景 7：扫描器按 session 隔离", () => {
   it("两个并发轮次互不串扰：各自的标签各自消费", () => {
     const store = useProcessingStore.getState();
 
-    // 直接构造两个快照（绕过 sendMessage async，配合并发场景更稳）
     const sidA = "mood-session-a";
     const sidB = "mood-session-b";
     useProcessingStore.setState({
@@ -471,31 +430,25 @@ describe("场景 7：扫描器按 session 隔离", () => {
       },
     });
 
-    store.appendCurrentEvent(textChunk(sidA, "【mood:高兴】A 的答案。"));
-    store.appendCurrentEvent(textChunk(sidB, "【mood:困惑】B 的答案。"));
+    store.appendCurrentEvent(textChunk(sidA, "【mood:高兴】A 的答案。\n"));
+    store.appendCurrentEvent(textChunk(sidB, "【mood:困惑】B 的答案。\n"));
     flushPending(sidA);
     flushPending(sidB);
 
     expect(moodOf(sidA)).toBe("高兴");
     expect(moodOf(sidB)).toBe("困惑");
-    expect(currentEventsOf(sidA)[1]).toEqual({
+    expect(currentEventsOf(sidA)[1]).toMatchObject({
       type: "mood/event",
       sessionId: sidA,
       mood: "高兴",
-      intensity: 0,
+      text: "A 的答案。",
     });
-    expect(currentEventsOf(sidA)[2]).toEqual(
-      textChunk(sidA, "A 的答案。", "【mood:高兴】A 的答案。")
-    );
-    expect(currentEventsOf(sidB)[1]).toEqual({
+    expect(currentEventsOf(sidB)[1]).toMatchObject({
       type: "mood/event",
       sessionId: sidB,
       mood: "困惑",
-      intensity: 0,
+      text: "B 的答案。",
     });
-    expect(currentEventsOf(sidB)[2]).toEqual(
-      textChunk(sidB, "B 的答案。", "【mood:困惑】B 的答案。")
-    );
 
     useProcessingStore.getState().finishProcessing(sidA);
     useProcessingStore.getState().finishProcessing(sidB);
@@ -510,19 +463,20 @@ describe("场景 8：情绪强度解析", () => {
   it("标签带强度：mood + moodIntensity 同时置位，事件携带强度", async () => {
     const sid = await startTurn("测试");
 
-    useProcessingStore.getState().appendCurrentEvent(
-      textChunk(sid, "【mood:高兴:2】内容。")
-    );
+    useProcessingStore
+      .getState()
+      .appendCurrentEvent(textChunk(sid, "【mood:高兴:2】内容。\n"));
     flushPending(sid);
 
     const snap = useProcessingStore.getState().processing[sid];
     expect(snap.mood).toBe("高兴");
     expect(snap.moodIntensity).toBe(2);
-    expect(currentEventsOf(sid)[1]).toEqual({
+    expect(currentEventsOf(sid)[1]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "高兴",
       intensity: 2,
+      text: "内容。",
     });
 
     useProcessingStore.getState().finishProcessing(sid);
@@ -531,9 +485,9 @@ describe("场景 8：情绪强度解析", () => {
   it("省略强度 → 0（基础档）", async () => {
     const sid = await startTurn("测试");
 
-    useProcessingStore.getState().appendCurrentEvent(
-      textChunk(sid, "【mood:困惑】内容。")
-    );
+    useProcessingStore
+      .getState()
+      .appendCurrentEvent(textChunk(sid, "【mood:困惑】内容。\n"));
     flushPending(sid);
 
     const snap = useProcessingStore.getState().processing[sid];
@@ -548,9 +502,9 @@ describe("场景 8：情绪强度解析", () => {
     async (tag) => {
       const sid = await startTurn("测试");
 
-      useProcessingStore.getState().appendCurrentEvent(
-        textChunk(sid, tag + "内容。")
-      );
+      useProcessingStore
+        .getState()
+        .appendCurrentEvent(textChunk(sid, tag + "内容。\n"));
       flushPending(sid);
 
       const snap = useProcessingStore.getState().processing[sid];
@@ -567,70 +521,29 @@ describe("场景 8：情绪强度解析", () => {
 // ═══════════════════════════════════════════════
 
 describe("场景 9：mood/event 情绪事件", () => {
-  it("流式匹配：mood/event 先于剥离文本落位（appendImmediate 路径）", async () => {
+  it("流式匹配：mood/event 立即落位，不产生正文 chunk", async () => {
     const sid = await startTurn("测试");
 
     const store = useProcessingStore.getState();
-    store.appendCurrentEvent(textChunk(sid, "【mood:沮丧:3】好的，我明白了。"));
+    store.appendCurrentEvent(textChunk(sid, "【mood:沮丧:3】好的，我明白了。\n"));
 
-    // mood/event 立即落位；剥离文本仍在 33ms 缓冲中
     const events = currentEventsOf(sid);
     expect(events.map((e) => e.type)).toEqual(["user/message", "mood/event"]);
-    expect(events[1]).toEqual({
+    expect(events[1]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "沮丧",
       intensity: 3,
+      text: "好的，我明白了。",
     });
 
     flushPending(sid);
-    const flushed = currentEventsOf(sid);
-    expect(flushed.map((e) => e.type)).toEqual([
+    expect(currentEventsOf(sid).map((e) => e.type)).toEqual([
       "user/message",
       "mood/event",
-      "assistant/chunk",
     ]);
-    expect(flushed[2]).toEqual(
-      textChunk(sid, "好的，我明白了。", "【mood:沮丧:3】好的，我明白了。")
-    );
 
     useProcessingStore.getState().finishProcessing(sid);
-  });
-
-  it("归档 turns 含 mood/event；assistant/message 防重（流式已消费不重复插）", async () => {
-    const sid = await startTurn("测试");
-
-    const store = useProcessingStore.getState();
-    // 流式 chunk 已消费标签（产出 mood/event）
-    store.appendCurrentEvent(textChunk(sid, "【mood:高兴:2】答案在此。"));
-    // 聚合再次带同一标签（后端原始聚合）→ 应只剥离不重复插事件
-    store.appendCurrentEvent({
-      type: "assistant/message",
-      sessionId: sid,
-      content: "【mood:高兴:2】答案在此。",
-      reasoningContent: null,
-      usage: null,
-    });
-    store.finishProcessing(sid);
-
-    const turn = useConversationStore.getState().conversations[0].turns[0];
-    expect(turn.map((e) => e.type)).toEqual([
-      "user/message",
-      "mood/event",
-      "assistant/chunk",
-      "assistant/message",
-      "turn/end",
-    ]);
-    expect(turn.filter((e) => e.type === "mood/event")).toHaveLength(1); // 防重
-    expect(turn[1]).toEqual({
-      type: "mood/event",
-      sessionId: sid,
-      mood: "高兴",
-      intensity: 2,
-    });
-    // 归档内容均已剥离
-    expect((turn[2] as { content: string }).content).toBe("答案在此。");
-    expect((turn[3] as { content: string }).content).toBe("答案在此。");
   });
 
   it("assistant/message 补插：流式未消费（聚合意外带标签）→ 补插 mood/event", async () => {
@@ -639,11 +552,11 @@ describe("场景 9：mood/event 情绪事件", () => {
     const store = useProcessingStore.getState();
     // 流式阶段：无标签文本（扫描器未消费）
     store.appendCurrentEvent(textChunk(sid, "我查一下。"));
-    // 聚合意外带标签（异常路径：流式未匹配，如标签此前出现在段中）
+    // 聚合意外带标签（异常路径）
     store.appendCurrentEvent({
       type: "assistant/message",
       sessionId: sid,
-      content: "【mood:沮丧】我查一下。",
+      content: "【mood:沮丧】我查一下。\n正文",
       reasoningContent: null,
       usage: null,
     });
@@ -656,14 +569,15 @@ describe("场景 9：mood/event 情绪事件", () => {
       "mood/event",
       "assistant/message",
     ]);
-    expect(events[2]).toEqual({
+    expect(events[2]).toMatchObject({
       type: "mood/event",
       sessionId: sid,
       mood: "沮丧",
+      tint: "沮丧",
+      text: "我查一下。",
       intensity: 0,
     });
     expect(useProcessingStore.getState().processing[sid].mood).toBe("沮丧");
-    expect(useProcessingStore.getState().processing[sid].moodIntensity).toBe(0);
 
     useProcessingStore.getState().finishProcessing(sid);
   });

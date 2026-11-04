@@ -2,7 +2,7 @@ import type { MoodEvent, MoodIntensity, ToolDisplay } from "../../types";
 import { FileLink } from "../../shared/ui/FileLink";
 import styles from "./EventBadge.module.css";
 
-// ── 情绪描述表（批 2-D 情绪卡片）：情绪 × 强度档位 → 独立文案 ──
+// ── 情绪描述表（MOOD v2）：没有心声时的旁白兜底 ──
 
 const MOOD_DESCRIPTIONS: Record<
   "高兴" | "困惑" | "沮丧",
@@ -28,8 +28,26 @@ const MOOD_DESCRIPTIONS: Record<
   ],
 };
 
-/** 情绪事件 → 描述文本（intensity 由解析钳位在 0~3，索引安全） */
+/** 未知偏向（没有动作的那一类）的旁白兜底 */
+const NEUTRAL_DESCRIPTION = "PRTS 没说什么，安静地待着";
+
+/** 四色相：三个已知偏向各一色，自由偏向一律中性 */
+const MOOD_HUES: Record<"高兴" | "困惑" | "沮丧", string> = {
+  高兴: "#d7a94e",
+  困惑: "#6f7c8c",
+  沮丧: "#5f6f95",
+};
+
+const NEUTRAL_HUE = "#7f8794";
+
+/** 情绪事件 → 色相（卡片竖线与文字同色） */
+export function moodHue(ev: MoodEvent): string {
+  return ev.mood ? MOOD_HUES[ev.mood] : NEUTRAL_HUE;
+}
+
+/** 情绪事件 → 旁白文本（缺心声时兜底；intensity 已钳位在 0~3） */
 export function describeMood(ev: MoodEvent): string {
+  if (!ev.mood) return NEUTRAL_DESCRIPTION;
   const idx: MoodIntensity = ev.intensity as MoodIntensity;
   return MOOD_DESCRIPTIONS[ev.mood][idx];
 }
