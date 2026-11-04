@@ -73,6 +73,11 @@ struct TurnGuard {
 impl Drop for TurnGuard {
     fn drop(&mut self) {
         self.registry.unregister_if(&self.session_id, &self.signal);
+        // 轮次收尾丢弃还没领取的视图调用：来源视图随这一轮结束，不能在
+        // 下一轮里突然执行一条「由视图发起」的调用。
+        crate::runtime::view_calls::queue().clear(&self.session_id);
+        // 会话归属映射只在轮内有效：收尾即清，避免 sessionId 复用或泄漏。
+        crate::runtime::conversation_scope::clear(&self.session_id);
     }
 }
 
@@ -320,6 +325,9 @@ pub async fn agent_process(
     }
     let conversation_id = request.conversation_id.clone();
     let abort_signal = turn_registry.register(&session_id, &conversation_id);
+    // 会话归属映射：调度循环只拿得到 sessionId，视图落盘与回读都必须用
+    // 跨轮稳定的 conversationId（否则写进一个目录、按另一个目录读）。
+    crate::runtime::conversation_scope::register(&session_id, &conversation_id);
     // RAII 收尾：注册后任何错误出口（含 `?`）都会注销 busy 位
     let _turn_guard = TurnGuard {
         registry: Arc::clone(&turn_registry),

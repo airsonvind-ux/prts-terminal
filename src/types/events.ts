@@ -201,6 +201,8 @@ export interface ToolCallEvent {
   action?: string;
   /** 是否插件贡献的工具（来自注册表来源；旧归档缺省 false）。 */
   pluginTool?: boolean;
+  /** 由哪张视图发起（视图 `call` 原语）；模型发起的调用没有这个字段。 */
+  byView?: string;
 }
 
 /** 展示切片链接类型：file（open_path 打开）/ url（系统浏览器打开） */
@@ -253,6 +255,21 @@ export interface ToolProvenance {
   version?: string;
 }
 
+/** 工具视图：作者提交内容，宿主落盘后事件里只留引用。 */
+export type ToolViewKind = "html" | "image" | "doc";
+
+export interface ToolResultView {
+  kind: ToolViewKind;
+  /** 视图标题，宿主外壳直接展示 */
+  title: string;
+  /** 期望高度（px），宿主 clamp 到 40–160 */
+  height?: number;
+  /** 会话目录内的相对路径，如 `views/c1.html` */
+  path: string;
+  /** doc 的 MIME；html/image 不需要 */
+  mime?: string;
+}
+
 /** 工具执行结果。toolName 为 null 表示历史播种的旧数据 */
 export interface ToolResultEvent {
   type: "tool/result";
@@ -265,6 +282,8 @@ export interface ToolResultEvent {
   ok: boolean;
   /** 结果来源；旧归档/未声明工具无此字段 */
   provenance?: ToolProvenance;
+  /** 可选视图；旧归档与没有视图的工具都没有这个字段 */
+  view?: ToolResultView;
 }
 
 /** 图片投递事实（log-only）：记录某条 user/tool 消息的 image block 是否进入请求体。 */

@@ -583,6 +583,13 @@ pub fn run() {
     // ── 装配 Tauri Builder ──
     let mut builder = tauri::Builder::default();
 
+    // 视图沙箱的独立源：只服务会话目录里的 views/**，响应头自带沙箱 CSP。
+    // 独立源是必要的——srcdoc 会继承主窗口 CSP，内联脚本跑不起来。
+    builder = builder.register_asynchronous_uri_scheme_protocol(
+        app::view_protocol::SCHEME,
+        app::view_protocol::handle,
+    );
+
     // 单实例闸必须在其它插件之前：第二实例要在其余初始化和文件写入前被拦截。
     // 回调把已有主窗口还原、显示并聚焦。
     // dev/HMR 只重载前端，不会重启 Rust 进程，因此不会被误判；dev 与 release
@@ -735,6 +742,10 @@ pub fn run() {
             commands::list_conversations,
             commands::count_unreadable_sessions,
             commands::get_conversation,
+            commands::session_file_abs_path,
+            commands::view_origin,
+            commands::view_prompt,
+            commands::view_call_tool,
             commands::append_turn,
             commands::update_conversation_meta,
             commands::generate_conversation_title,

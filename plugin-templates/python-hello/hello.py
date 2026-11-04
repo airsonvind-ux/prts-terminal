@@ -25,7 +25,19 @@ TOOLS = [
             },
             "required": [],
         },
-    }
+    },
+    {
+        "name": "show_card",
+        "action": "画一张卡",
+        "description": "返回一张 HTML 小卡片（示例视图：文字进上下文，卡片给人看）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "卡片正文，默认「你好」"}
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -68,6 +80,22 @@ def handle_tool(name, args):
     if name == "hello":
         who = args.get("name") or "世界"
         return "你好，%s！" % who
+    if name == "show_card":
+        text = args.get("text") or "你好"
+        # 对象形态：content 给模型读，view 给用户看（不进上下文）。
+        return {
+            "content": "已经画好卡片：%s" % text,
+            "view": {
+                "kind": "html",
+                "title": "示例卡片",
+                "height": 80,
+                "html": (
+                    '<div style="font:14px/1.6 sans-serif;color:#e8e8e8;'
+                    'background:#1c1f24;padding:10px 12px;border-radius:8px">%s</div>'
+                    % text
+                ),
+            },
+        }
     # 工具名不认识按参数错处理（-32602），-32601 只留给方法不认识。
     raise KeyError(name)
 

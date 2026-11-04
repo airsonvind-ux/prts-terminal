@@ -55,6 +55,15 @@ pub fn get_conversation(
     s.get_coalesced(&conversation_id)
 }
 
+/// 把会话内相对路径（视图的 `views/<file>` 等）解析成绝对路径。
+///
+/// 事件里只存相对路径（数据目录可整体搬家），前端展示前经此换成绝对路径，
+/// 再交给 asset 协议读取。词法越界与软链接逃逸都由存储层拒绝。
+#[tauri::command]
+pub fn session_file_abs_path(conversation_id: String, path: String) -> Result<String, String> {
+    crate::storage::views::resolve_session_path(&conversation_id, &path)
+}
+
 /// 更新一轮的元数据（前端轮末触发）。primary 下事件由后端写官方 log；
 /// 前端只提交标题、用量、游标等投影元数据，不写轮事件。
 /// 可缺省字段：JS 侧 null/不传 = 缺省（Option）。

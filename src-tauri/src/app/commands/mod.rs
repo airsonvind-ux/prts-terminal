@@ -12,6 +12,7 @@ mod prelude;
 mod settings;
 mod skills;
 mod system;
+mod view;
 mod workspace;
 
 pub use agent::*;
@@ -24,6 +25,7 @@ pub use plugins::*;
 pub use settings::*;
 pub use skills::*;
 pub use system::*;
+pub use view::*;
 pub use workspace::*;
 
 #[cfg(test)]

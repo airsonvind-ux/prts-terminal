@@ -4,4 +4,5 @@ pub mod commands;
 pub mod config;
 pub mod db_seed;
 pub mod events;
+pub mod view_protocol;
 pub mod workspace;

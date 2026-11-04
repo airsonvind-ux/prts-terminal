@@ -105,6 +105,7 @@ export function MessageList({
           <MessageRow
             key={item.id}
             item={item}
+            conversationId={conversationId ?? undefined}
             onCancelPending={item.type === "pending" ? onCancelPending : undefined}
             onCardToggle={
               item.type === "process" || item.type === "mood"

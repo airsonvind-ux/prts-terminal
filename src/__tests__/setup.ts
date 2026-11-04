@@ -117,6 +117,16 @@ const __defaultInvokeImpl = (cmd: string) => {
     });
   }
   if (cmd === "memory_experience_list") return Promise.resolve([]);
+  // 视图：平台源与交互落点（真实实现在 Rust，这里给宿主形态的默认值）
+  if (cmd === "view_origin") {
+    return Promise.resolve({
+      scheme: "prts-view",
+      host: "prts-view.localhost",
+      origin: "http://prts-view.localhost",
+    });
+  }
+  if (cmd === "view_prompt") return Promise.resolve({ delivered: true });
+  if (cmd === "view_call_tool") return Promise.resolve({ delivered: true });
   // open_path（资源文件打开）与目录选择器默认静默/取消
   if (cmd === "open_path") return Promise.resolve(undefined);
   if (cmd === "choose_workspace_directory") return Promise.resolve(null);

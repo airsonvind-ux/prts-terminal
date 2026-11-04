@@ -19,6 +19,7 @@ import type {
   ToolCallEvent,
   ToolDisplay,
   ToolResultEvent,
+  ToolResultView,
 } from "../../types";
 import { eventTime } from "./eventTiming";
 
@@ -39,6 +40,8 @@ export type ProcessRow =
       summary?: string;
       /** 审批态：等待确认 / 已确认 / 已拒绝 */
       approval?: "pending" | "approved" | "rejected";
+      /** 由哪张视图发起（视图交互的 call 原语）；模型发起的调用没有这个字段 */
+      byView?: string;
       /** 事件到达时刻（实时轮才有；工具行右侧耗时用） */
       startedAt?: number;
       endedAt?: number;
@@ -83,8 +86,8 @@ export type Block =
       endedAt?: number;
     }
   | { kind: "text"; id: string; content: string; transition: boolean }
-  // ② 步（工具视图接口）填形状；本步渲染层跳过
-  | { kind: "view"; id: string; view: unknown }
+  // 视图块：随 tool/result 到达，独立于过程卡，按到达顺序与文本交错
+  | { kind: "view"; id: string; view: ToolResultView }
   // 情绪卡独立成块：它是独立样式、独立展开的东西，塞进过程卡会改变可见性
   | { kind: "mood"; id: string; events: SessionEvent[] };
 
@@ -102,9 +105,9 @@ function lastResetIndex(events: SessionEvent[]): number {
   return 0;
 }
 
-/** 结果事件上的视图载荷。② 步给 `ToolResultEvent` 加字段后，这里换成直接读取。 */
-function viewOf(result: ToolResultEvent): unknown {
-  return (result as ToolResultEvent & { view?: unknown }).view;
+/** 结果事件上的视图载荷；缺省表示这个工具没有视图。 */
+function viewOf(result: ToolResultEvent): ToolResultView | undefined {
+  return result.view;
 }
 
 /**
@@ -129,6 +132,7 @@ function toolRowOf(call: ToolCallEvent): ProcessRow {
     display: call.display,
     status: "running",
     startedAt: eventTime(call),
+    ...(call.byView ? { byView: call.byView } : {}),
   };
 }
 
@@ -329,9 +333,10 @@ export function splitTurn(events: SessionEvent[], turnIndex = 0, streaming = fal
           row.endedAt = eventTime(event);
         }
         // 视图随结果到达：结果行留在本卡，卡就此闭合，视图紧随其后
-        if (viewOf(event) !== undefined) {
+        const view = viewOf(event);
+        if (view !== undefined) {
           closeCard();
-          blocks.push({ kind: "view", id: nextId(), view: viewOf(event) });
+          blocks.push({ kind: "view", id: nextId(), view });
         }
         break;
       }

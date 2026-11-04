@@ -30,10 +30,24 @@ pub(super) async fn dispatch_turn_with_memory(
     // Skill 索引注入（Arc::clone 共享 process 的 turn 级快照，索引小、
     // 工具只读，零拷贝）；
     // abort 注入（M3-B：run_command execute 读 ctx.abort → RunOptions.cancel）。
+    // 视图落盘要用**会话 id**（跨轮稳定），而调度循环只有每轮新生成的
+    // sessionId；映射由命令层在轮次开始时登记。
+    //
+    // 查不到映射时**不带** conversation_id：视图不落盘、工具结果退回纯文本。
+    // 绝不回退到 sessionId——那会把视图写进每轮一换的目录，前端按会话 id
+    // 读不到，症状与 2026-11-05 那次「会话目录不可用」一模一样，而且只在
+    // 日志里留一行。宁可这一次没有图，也不让错误目录再悄悄产生。
+    let conversation_id = crate::runtime::conversation_scope::of(session_id);
+    if conversation_id.is_none() {
+        debug!("session_id" => session_id, "action" => "conversation_scope_missing");
+    }
     let mut ctx = match db {
         Some(ref db) => ToolContext::with_db(Arc::clone(db)),
         None => ToolContext::new(),
     };
+    if let Some(conversation_id) = conversation_id {
+        ctx = ctx.with_conversation_id(conversation_id);
+    }
     ctx.skill_index = Some(Arc::clone(skill_index));
     ctx.abort = Some(abort.clone());
     // Arc 共享：流式回调（'static）需持有 Registry/ToolContext 以在 tool/call
@@ -61,6 +75,62 @@ pub(super) async fn dispatch_turn_with_memory(
                     "step" => step,
                     "action" => "steer_injected",
                     "chars" => entry.text.chars().count()
+                );
+            }
+        }
+
+        // ── 视图调用领取（步边界，插话之后）──
+        // 视图的 `call` 只能调自己插件的工具（命令层已校验），不进审批链；
+        // 每步领一条，事件与上下文都带「由视图发起」——用户手打的字先于
+        // 后台视图的点击，这条顺序不能反。
+        // 失败也补一条 tool/result：悬空的 tool/call 会被画成「未完成」，
+        // 用户分不清是工具失败还是清理不彻底。
+        if !abort.is_aborted() {
+            if let Some(call) = crate::runtime::view_calls::queue().take_next(session_id) {
+                let facts = tools.facts_of(&call.tool);
+                let display = tools.display_for(&call.tool, &call.args, &tool_ctx);
+                sink.emit(SessionEvent::tool_call_by_view(
+                    session_id,
+                    &call.id,
+                    &call.tool,
+                    &call.args,
+                    display,
+                    facts.as_ref(),
+                    &call.view_title,
+                ));
+                let (ok, summary) = match tools.execute(&call.tool, &tool_ctx, &call.args) {
+                    Ok(output) => (true, output.summary.clone()),
+                    Err(err) => (false, err.to_string()),
+                };
+                sink.emit(SessionEvent::tool_result(
+                    session_id,
+                    &call.id,
+                    Some(&call.tool),
+                    &summary,
+                    ok,
+                ));
+                messages.push(ChatMessage::assistant_with_tools(
+                    String::new(),
+                    vec![crate::llm::ToolCall {
+                        id: call.id.clone(),
+                        call_type: "function".into(),
+                        function: crate::llm::ToolCallFunction {
+                            name: call.tool.clone(),
+                            arguments: call.args.clone(),
+                        },
+                    }],
+                    None,
+                ));
+                messages.push(ChatMessage::tool_result_with_status(
+                    &call.id,
+                    format!("（由视图《{}》发起）{summary}", call.view_title),
+                    ok,
+                ));
+                debug!(
+                    "step" => step,
+                    "action" => "view_call_executed",
+                    "tool" => call.tool.as_str(),
+                    "ok" => ok
                 );
             }
         }

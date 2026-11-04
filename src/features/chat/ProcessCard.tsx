@@ -253,6 +253,12 @@ function ToolLine({
       外部
     </span>
   ) : null;
+  // 视图发起的调用没有经过模型这一步，行首就要能认出来。
+  const byViewTag = row.byView ? (
+    <span className={styles.byViewTag} title={`由视图《${row.byView}》发起`}>
+      由视图
+    </span>
+  ) : null;
 
   if (row.status === "failed" || row.approval === "rejected") {
     const text =
@@ -265,6 +271,7 @@ function ToolLine({
         data-failed-line
       >
         <span className={`${styles.dot} ${styles.dotFailed}`} aria-hidden />
+        {byViewTag}
         <span
           className={styles.lineText}
           title={row.approval === "rejected" ? undefined : summary}
@@ -283,6 +290,7 @@ function ToolLine({
     return (
       <div className={styles.line}>
         <span className={`${styles.dot} ${styles.dotDone}`} aria-hidden />
+        {byViewTag}
         <span className={styles.lineText}>
           {`PRTS${phrase}完成`}
           {renderDisplaySuffix(display, false)}
@@ -299,6 +307,7 @@ function ToolLine({
       <>
         <div className={styles.line}>
           <span className={`${styles.dot} ${styles.dotRunning}`} aria-hidden />
+          {byViewTag}
           <span className={styles.lineText}>
             PRTS 正在等待你确认{phrase}
           </span>
@@ -315,6 +324,7 @@ function ToolLine({
         className={`${styles.dot} ${styles.dotRunning}${interactive ? "" : ` ${styles.dotStill}`}`}
         aria-hidden
       />
+      {byViewTag}
       <span className={styles.lineText}>
         {row.approval === "pending" && !interactive
           ? `PRTS正在${phrase}...（等待确认）`

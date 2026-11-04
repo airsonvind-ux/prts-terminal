@@ -457,3 +457,27 @@ describe("过程卡 · 展示切片", () => {
     expect(invokeMock.mock.calls.some((c) => c[0] === "open_path")).toBe(true);
   });
 });
+
+describe("过程卡 · 视图发起的调用", () => {
+  it("行首标「由视图」，模型发起的行没有", () => {
+    const fromView: SessionEvent[] = [
+      {
+        type: "tool/call",
+        sessionId: S,
+        callId: "view-1",
+        toolName: "pic_catalog_list_images",
+        params: "{}",
+        byView: "地图",
+        pluginTool: true,
+      },
+      result("view-1", "pic_catalog_list_images"),
+    ];
+    const live = render(fromView, true);
+    live.clickHeader();
+    expect(live.text()).toContain("由视图");
+
+    const plain = render([call("c1", "read_file"), result("c1", "read_file")], true);
+    plain.clickHeader();
+    expect(plain.text()).not.toContain("由视图");
+  });
+});

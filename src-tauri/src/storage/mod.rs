@@ -6,3 +6,4 @@ pub mod db;
 pub mod session;
 pub mod session_store;
 pub mod settings;
+pub mod views;

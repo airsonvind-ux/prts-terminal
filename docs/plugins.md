@@ -91,7 +91,7 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
 | 方法 | 参数 | 期望应答 |
 |---|---|---|
 | `initialize` | `{protocol, hostVersion, pluginId}` | `{protocol, tools, capabilities}` |
-| `tool.call` | `{name, args, deadlineMs}` | 任意 JSON |
+| `tool.call` | `{name, args, deadlineMs}` | 字符串，或 `{content, view?}` |
 | `shutdown` | `{}` | 任意 JSON（之后进程应退出） |
 | `cancel` | `{id}`（通知，无应答） | — |
 
@@ -101,6 +101,17 @@ M3 起可以在「设置 → 扩展」里管理它们：安装、启停、重试
   「…完成」「…失败」），缺省时回落到「调用插件工具：<完整工具名>」；
 - `timeoutMs` 缺省 60000。
 `initialize` 是工具面的**唯一来源**；它回报的 `capabilities` 只作诊断，不参与授权。
+
+`tool.call` 的结果：
+
+- 字符串：原样作为 `content` 进模型上下文；
+- 对象：`{content, view?}`，`content` 必填且非空（缺了按 `-32602` 判错，不回落成
+  「把 JSON 塞给模型」）；
+- `view` 给用户看、不进上下文，三种 `kind`：`html`（内联源码，≤ 64 KiB）、
+  `image`（插件目录内相对 `path`）、`doc`（`path` + `mime`）；`title` 必填（≤ 60 字），
+  `height` 可选并被限制在 40–160px。
+
+细节见手册《10-视图》。
 
 ### 插件 → 宿主
 
