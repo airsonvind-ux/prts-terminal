@@ -92,6 +92,9 @@ fn serve(path: &str) -> Result<(&'static str, Vec<u8>), String> {
 /// 跨源 iframe 的滚动条没法从父页面改，而 WebView2 的默认滚动条是浅色实心条，
 /// 压在深色视图上非常刺眼。作者自己的样式写在后面，会正常覆盖这些默认值。
 const VIEW_CHROME_CSS: &str = concat!(
+    // 作者没写底色时，文档画布默认是白的——放在深色面板里就是一块刺眼的
+    // 白板。这里把画布也让出来，露出宿主的底板；作者自己写背景仍然生效。
+    "html,body{background:transparent;color-scheme:dark}",
     "html{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}",
     "::-webkit-scrollbar{width:8px;height:8px}",
     "::-webkit-scrollbar-track{background:transparent}",

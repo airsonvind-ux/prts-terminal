@@ -48,7 +48,10 @@
   width: 100%;
   border: none;
   border-radius: 6px;
-  background: var(--depth-2);
+  /* iframe 自己再铺一层底色，就会在卡片里套出第二个灰矩形；
+     让它透明，露出卡片/面板的底色，界面才是一整块。 */
+  background: transparent;
+  color-scheme: dark;
 }
 
 .frameLarge {
@@ -56,7 +59,8 @@
   height: 68vh;
   border: none;
   border-radius: 6px;
-  background: var(--depth-2);
+  background: transparent;
+  color-scheme: dark;
 }
 
 .image {
@@ -142,8 +146,8 @@
   border: 1px solid var(--depth-0);
   border-radius: 10px;
   background: var(--depth-1);
-  /* 没有黑底之后，靠阴影把面板从背景里抬起来。 */
-  box-shadow: 0 24px 64px rgb(0 0 0 / 0.5);
+  /* 收得住的阴影：只是让面板离背景一层，不是铺一块更大的灰。 */
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.38);
 }
 
 .panelHeader {
