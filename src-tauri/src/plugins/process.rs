@@ -727,16 +727,17 @@ impl std::fmt::Display for ViewIssue {
                 "对象结果缺少 content（字符串以外必须给 {content, view?}，content 不能省）",
             ),
             Self::EmptyContent => f.write_str("content 是空的：模型只看 content，视图不能代替文字"),
-            Self::NotAnObject => {
-                f.write_str("结果既不是字符串也不是对象（只支持这两种形态）")
-            }
+            Self::NotAnObject => f.write_str("结果既不是字符串也不是对象（只支持这两种形态）"),
             Self::UnknownKind(kind) => {
                 write!(f, "view.kind 只能是 html / image / doc，收到「{kind}」")
             }
             Self::ViewNotObject => f.write_str("view 必须是对象"),
             Self::MissingTitle => f.write_str("view.title 必填，且不能为空"),
             Self::TitleTooLong { chars } => {
-                write!(f, "view.title 超过 {MAX_VIEW_TITLE_CHARS} 字（现在 {chars} 字）")
+                write!(
+                    f,
+                    "view.title 超过 {MAX_VIEW_TITLE_CHARS} 字（现在 {chars} 字）"
+                )
             }
             Self::MissingHtml => f.write_str("html 视图缺少 html 字段"),
             Self::MissingPath => f.write_str("image / doc 视图缺少 path"),
@@ -767,8 +768,9 @@ pub struct ParsedResult {
 /// `content`，`view` 可选。对象缺 `content` **判错而不是回落到 JSON**——
 /// 否则整个对象会被 pretty 打印进上下文，`view` 就从后门进了模型视野。
 pub fn render_output(value: Value, plugin_dir: &Path) -> Result<ToolOutput, ToolError> {
-    let parsed = parse_result(&value, plugin_dir)
-        .map_err(|issue| ToolError::Execution(format!("插件返回的结果不合法（-32602）：{issue}")))?;
+    let parsed = parse_result(&value, plugin_dir).map_err(|issue| {
+        ToolError::Execution(format!("插件返回的结果不合法（-32602）：{issue}"))
+    })?;
     let mut output = ToolOutput::json(value, parsed.content);
     output.view = parsed.view;
     Ok(output)
@@ -834,10 +836,10 @@ fn parse_view(view: &Value, content: &str, plugin_dir: &Path) -> Result<ParsedVi
     if chars > MAX_VIEW_TITLE_CHARS {
         return Err(ViewIssue::TitleTooLong { chars });
     }
-    let height = object
-        .get("height")
-        .and_then(Value::as_f64)
-        .map(|raw| raw.round().clamp(VIEW_HEIGHT_MIN as f64, VIEW_HEIGHT_MAX as f64) as u16);
+    let height = object.get("height").and_then(Value::as_f64).map(|raw| {
+        raw.round()
+            .clamp(VIEW_HEIGHT_MIN as f64, VIEW_HEIGHT_MAX as f64) as u16
+    });
 
     match kind {
         "html" => {
@@ -909,9 +911,12 @@ fn resolve_inside(plugin_dir: &Path, relative: &str) -> Result<PathBuf, ViewIssu
     // 也该报「越界」而不是「不存在」，否则插件收到的报错会指错方向。
     let rel = Path::new(relative);
     if rel.is_absolute()
-        || rel
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
+        || rel.components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        })
     {
         return Err(ViewIssue::PathEscapes {
             path: relative.to_string(),
@@ -923,9 +928,11 @@ fn resolve_inside(plugin_dir: &Path, relative: &str) -> Result<PathBuf, ViewIssu
         .map_err(|_| ViewIssue::PathMissing {
             path: relative.to_string(),
         })?;
-    let resolved = candidate.canonicalize().map_err(|_| ViewIssue::PathMissing {
-        path: relative.to_string(),
-    })?;
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|_| ViewIssue::PathMissing {
+            path: relative.to_string(),
+        })?;
     if !resolved.starts_with(&root) {
         return Err(ViewIssue::PathEscapes {
             path: relative.to_string(),
@@ -952,7 +959,11 @@ pub fn install(
     })?;
 
     let prefix = id.replace('-', "_");
-    let declared: Vec<String> = handshake.tools.iter().map(|spec| spec.name.clone()).collect();
+    let declared: Vec<String> = handshake
+        .tools
+        .iter()
+        .map(|spec| spec.name.clone())
+        .collect();
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     for spec in handshake.tools {
         let full = format!("{prefix}_{}", spec.name);
@@ -1024,10 +1035,7 @@ fn parse_tools(plugin_id: &str, value: &Value) -> Result<Vec<PluginToolSpec>, Pl
                 detail: format!("工具声明缺少 name：{item}"),
             });
         }
-        let description = item["description"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
+        let description = item["description"].as_str().unwrap_or_default().to_string();
         let parameters = item.get("parameters").cloned().unwrap_or_else(|| json!({}));
         if !parameters.is_object() {
             return Err(PluginError::Process {
@@ -1071,12 +1079,8 @@ fn host_error_to_rpc(error: &HostError) -> RpcError {
         HostError::CapabilityDenied { .. } => {
             RpcError::new(rpc::CAPABILITY_DENIED, error.to_string())
         }
-        HostError::InvalidArgs { .. } => {
-            RpcError::new(rpc::INVALID_PARAMS, error.to_string())
-        }
-        HostError::UnknownService(_) => {
-            RpcError::new(rpc::METHOD_NOT_FOUND, error.to_string())
-        }
+        HostError::InvalidArgs { .. } => RpcError::new(rpc::INVALID_PARAMS, error.to_string()),
+        HostError::UnknownService(_) => RpcError::new(rpc::METHOD_NOT_FOUND, error.to_string()),
         HostError::Failed { .. } => RpcError::new(rpc::PLUGIN_FAULT, error.to_string()),
     }
 }
@@ -1269,7 +1273,9 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            error.to_string().contains("action 超过 16 字（现在 17 字）"),
+            error
+                .to_string()
+                .contains("action 超过 16 字（现在 17 字）"),
             "{error}"
         );
     }
@@ -1291,7 +1297,10 @@ mod tests {
             &dir,
         )
         .unwrap();
-        assert_eq!(output.summary, "正文", "summary 只能是 content，不能是对象本身");
+        assert_eq!(
+            output.summary, "正文",
+            "summary 只能是 content，不能是对象本身"
+        );
         let view = output.view.expect("应当带视图");
         assert_eq!(view.kind, ToolViewKind::Html);
         assert_eq!(view.title, "标题");
@@ -1309,16 +1318,25 @@ mod tests {
         assert!(error.to_string().contains("content 是空的"), "got: {error}");
 
         let error = render_output(json!([1, 2]), &dir).unwrap_err();
-        assert!(error.to_string().contains("既不是字符串也不是对象"), "got: {error}");
+        assert!(
+            error.to_string().contains("既不是字符串也不是对象"),
+            "got: {error}"
+        );
     }
 
     #[test]
     fn render_output_validates_title_and_height() {
         let dir = scratch_dir("render-title");
 
-        let error = render_output(json!({ "content": "x", "view": { "kind": "html", "html": "<p/>" } }), &dir)
-            .unwrap_err();
-        assert!(error.to_string().contains("view.title 必填"), "got: {error}");
+        let error = render_output(
+            json!({ "content": "x", "view": { "kind": "html", "html": "<p/>" } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("view.title 必填"),
+            "got: {error}"
+        );
 
         let long = "标".repeat(61);
         let error = render_output(
@@ -1328,9 +1346,15 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("超过 60 字"), "got: {error}");
 
-        let error = render_output(json!({ "content": "x", "view": { "kind": "png", "title": "t" } }), &dir)
-            .unwrap_err();
-        assert!(error.to_string().contains("html / image / doc"), "got: {error}");
+        let error = render_output(
+            json!({ "content": "x", "view": { "kind": "png", "title": "t" } }),
+            &dir,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("html / image / doc"),
+            "got: {error}"
+        );
 
         // 高度越界夹取到 40–160，缺省 120。
         let low = render_output(
@@ -1381,7 +1405,10 @@ mod tests {
         .unwrap();
         let view = output.view.unwrap();
         assert_eq!(view.kind, ToolViewKind::Image);
-        assert_eq!(view.source.as_deref(), Some(image.canonicalize().unwrap().as_path()));
+        assert_eq!(
+            view.source.as_deref(),
+            Some(image.canonicalize().unwrap().as_path())
+        );
 
         let error = render_output(
             json!({ "content": "越界", "view": { "kind": "image", "path": "../secret.txt", "title": "t" } }),
@@ -1451,7 +1478,8 @@ mod tests {
                  "kind":"process","entry":{{"exe":"probe_plugin.exe"}},
                  "activation":[],"capabilities":[],"contributes":{{}}}}"#
         );
-        let manifest = crate::plugins::manifest::parse_manifest(&text).expect("样本 manifest 应当能解析");
+        let manifest =
+            crate::plugins::manifest::parse_manifest(&text).expect("样本 manifest 应当能解析");
         let mut registry = PluginRegistry::new();
         registry.insert(crate::plugins::registry::PluginRecord {
             manifest,
@@ -1469,7 +1497,10 @@ mod tests {
             {
                 let guard = ledger.lock().unwrap_or_else(|poison| poison.into_inner());
                 if let Some(record) = guard.get(id) {
-                    if matches!(record.state, crate::plugins::registry::PluginState::Faulted(_)) {
+                    if matches!(
+                        record.state,
+                        crate::plugins::registry::PluginState::Faulted(_)
+                    ) {
                         return true;
                     }
                 }
@@ -1675,9 +1706,6 @@ mod tests {
             wait_faulted(&ledger, "probe-hang"),
             "超时且不理 cancel 的插件必须记 Faulted"
         );
-        assert!(
-            !plugin.is_alive(),
-            "宽限期过后宿主应当把进程杀掉"
-        );
+        assert!(!plugin.is_alive(), "宽限期过后宿主应当把进程杀掉");
     }
 }

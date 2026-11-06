@@ -54,8 +54,20 @@ const TABLE: &[(&str, EmulatorConn)] = &[
             extras: false,
         },
     ),
-    ("夜神 Nox", EmulatorConn { config: "Nox", extras: false }),
-    ("逍遥 XYAZ", EmulatorConn { config: "XYAZ", extras: false }),
+    (
+        "夜神 Nox",
+        EmulatorConn {
+            config: "Nox",
+            extras: false,
+        },
+    ),
+    (
+        "逍遥 XYAZ",
+        EmulatorConn {
+            config: "XYAZ",
+            extras: false,
+        },
+    ),
     (
         "腾讯 Androws",
         EmulatorConn {
@@ -216,7 +228,10 @@ mod tests {
         std::fs::create_dir_all(root.join("shell")).unwrap();
         std::fs::write(root.join("shell").join("adb.exe"), b"x").unwrap();
 
-        let resolved = resolve_all(&machine_with("MuMu 12", root.clone()), &Overrides::default());
+        let resolved = resolve_all(
+            &machine_with("MuMu 12", root.clone()),
+            &Overrides::default(),
+        );
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].config, "MuMuEmulator12");
         assert!(resolved[0].extras, "MuMu 支持截图增强");

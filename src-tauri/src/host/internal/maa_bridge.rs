@@ -238,10 +238,7 @@ pub fn ensure(maa_dir: &Path, user_dir: &Path) -> MaaBridgeStatus {
     let child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            return MaaBridgeStatus::unavailable(format!(
-                "启动桥失败（{}）：{e}",
-                exe.display()
-            ))
+            return MaaBridgeStatus::unavailable(format!("启动桥失败（{}）：{e}", exe.display()))
         }
     };
     #[cfg(windows)]
@@ -334,14 +331,10 @@ pub fn shutdown() -> MaaBridgeStatus {
 /// 退出码翻译成人话：这几种是用户真会遇到的，每条都给下一步动作。
 fn exit_message(status: &ExitStatus) -> String {
     match status.code() {
-        Some(3) => {
-            "桥进程已退出（退出码 3）：端口监听失败，可能被别的程序占用——重试一次，\
+        Some(3) => "桥进程已退出（退出码 3）：端口监听失败，可能被别的程序占用——重试一次，\
              仍不行就重启 PRTS"
-                .to_string()
-        }
-        Some(4) => {
-            "桥进程已退出（退出码 4）：等不到连接，自己收场了——重试一次".to_string()
-        }
+            .to_string(),
+        Some(4) => "桥进程已退出（退出码 4）：等不到连接，自己收场了——重试一次".to_string(),
         Some(code) => format!("桥进程已退出（退出码 {code}）"),
         None => "桥进程已退出（被信号终止）".to_string(),
     }

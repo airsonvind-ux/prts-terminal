@@ -81,14 +81,11 @@ pub fn save_view_in(
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "bin".into());
             let name = format!("{stem}.{ext}");
-            std::fs::copy(source, dir.join(&name))
-                .map_err(|e| format!("复制视图失败: {e}"))?;
+            std::fs::copy(source, dir.join(&name)).map_err(|e| format!("复制视图失败: {e}"))?;
             let mime = match view.kind {
-                ToolViewKind::Doc => Some(
-                    view.mime
-                        .clone()
-                        .unwrap_or_else(|| mime_for_path(source)),
-                ),
+                ToolViewKind::Doc => {
+                    Some(view.mime.clone().unwrap_or_else(|| mime_for_path(source)))
+                }
                 _ => None,
             };
             (name, mime)
@@ -115,9 +112,12 @@ pub fn resolve_session_path(conversation_id: &str, relative: &str) -> Result<Str
 pub fn resolve_in(session_dir: &Path, relative: &str) -> Result<PathBuf, String> {
     let rel = Path::new(relative);
     if rel.is_absolute()
-        || rel
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_) | Component::RootDir))
+        || rel.components().any(|part| {
+            matches!(
+                part,
+                Component::ParentDir | Component::Prefix(_) | Component::RootDir
+            )
+        })
     {
         return Err(format!("路径越出会话目录：{relative}"));
     }

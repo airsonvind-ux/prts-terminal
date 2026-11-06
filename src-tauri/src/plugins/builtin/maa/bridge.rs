@@ -244,8 +244,8 @@ impl Bridge {
             .saturating_duration_since(Instant::now())
             .max(Duration::from_millis(1));
         let _ = stream.set_read_timeout(Some(remaining));
-        let ready = read_frame(&stream)
-            .map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
+        let ready =
+            read_frame(&stream).map_err(|e| BridgeError::Start(format!("等待桥握手失败：{e}")))?;
         if ready.get("event").and_then(Value::as_str) != Some("ready") {
             return Err(BridgeError::Start(format!("桥没有先发 ready：{ready}")));
         }

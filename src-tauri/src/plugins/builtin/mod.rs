@@ -18,11 +18,7 @@ pub mod maa;
 /// 需要改；未知 id 一律 `UnknownBuiltin`（fail-closed，不静默跳过）。
 ///
 /// `ctx` 按值传入：插件把它存进自己的单例，之后所有能力调用都经它走。
-pub fn install(
-    id: &str,
-    ctx: PluginCtx,
-    reg: &ToolRegistry,
-) -> Result<Vec<String>, PluginError> {
+pub fn install(id: &str, ctx: PluginCtx, reg: &ToolRegistry) -> Result<Vec<String>, PluginError> {
     match id {
         "maa" => maa::install(ctx, reg),
         other => Err(PluginError::UnknownBuiltin(other.to_string())),

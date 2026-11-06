@@ -23,10 +23,10 @@ pub use agent::{
     skills_snapshot,
 };
 pub use app::{commands, config, db_seed, events, workspace};
+pub use platform::{machine, notices, observability, updater};
 pub use plugins::builtin::maa;
 /// 协议门面：独立二进制（校验器、能力 dump）与宿主共用同一套判据。
 pub use plugins::sdk;
-pub use platform::{machine, notices, observability, updater};
 pub use runtime::{approval, exec, exec_settings, path_guard, policy, steer_queue, turn_registry};
 pub use storage::{attachments, credentials, db, session, session_store, settings};
 
@@ -357,7 +357,14 @@ pub fn run() {
     // ── 工具注册表（注册来源收口：tools::register_builtin，模块 9 P1）──
     // 以共享工作根构造沙箱策略注入注册（read_file/sim_path 经策略持有守卫
     // 与工作区基准）；句柄与设置同源，设置页改路径即跟随（见 crate::workspace）
-    let (tool_registry, plugin_registry, plugins_config, plugin_installer, host_services, plugin_roots) = {
+    let (
+        tool_registry,
+        plugin_registry,
+        plugins_config,
+        plugin_installer,
+        host_services,
+        plugin_roots,
+    ) = {
         let mut reg = ToolRegistry::new();
         let policy = Arc::new(Policy::new(workspace_root_handle.clone()));
         // 插件装配与宿主用同一份策略（M2 的 process 通道要它），先留句柄再交出
@@ -377,9 +384,15 @@ pub fn run() {
         let roots = plugins::PluginRoots::from_config();
         // 启停配置只读一次、内存里留一份：启停/安装/卸载都经它串行落盘（M3 §八）。
         let plugins_config = Arc::new(plugins::PluginsConfig::load(&roots.data));
-        let (host_services, query_service) = plugins::default_services(&roots, Some(Arc::clone(&db)));
-        let plugin_registry =
-            plugins::load_all(&reg, &roots, &plugins_config, &host_services, &plugin_policy);
+        let (host_services, query_service) =
+            plugins::default_services(&roots, Some(Arc::clone(&db)));
+        let plugin_registry = plugins::load_all(
+            &reg,
+            &roots,
+            &plugins_config,
+            &host_services,
+            &plugin_policy,
+        );
         // 技能索引要按台账找插件技能根：登记一次，此后启停即时反映到目录。
         plugins::attach_skill_ledger(Arc::clone(&plugin_registry));
         let registry = Arc::new(reg);

@@ -186,17 +186,30 @@ mod tests {
         let text = String::from_utf8_lossy(&with_head);
         let style_at = text.find("data-prts-view-chrome").expect("注入了样式");
         assert!(style_at > text.find("<head>").unwrap(), "在 head 之内");
-        assert!(style_at < text.find("<title>").unwrap(), "尽量靠前，作者样式可覆盖");
+        assert!(
+            style_at < text.find("<title>").unwrap(),
+            "尽量靠前，作者样式可覆盖"
+        );
         assert!(text.contains("::-webkit-scrollbar"), "带滚动条样式");
 
-        let no_head = String::from_utf8_lossy(&with_view_chrome(b"<!doctype html><p>hi</p>")).into_owned();
-        assert!(no_head.starts_with("<!doctype html><style"), "没有 head 时插在 doctype 之后");
+        let no_head =
+            String::from_utf8_lossy(&with_view_chrome(b"<!doctype html><p>hi</p>")).into_owned();
+        assert!(
+            no_head.starts_with("<!doctype html><style"),
+            "没有 head 时插在 doctype 之后"
+        );
     }
 
     #[test]
     fn mime_follows_extension() {
-        assert_eq!(mime_of(std::path::Path::new("a.html")), "text/html; charset=utf-8");
+        assert_eq!(
+            mime_of(std::path::Path::new("a.html")),
+            "text/html; charset=utf-8"
+        );
         assert_eq!(mime_of(std::path::Path::new("a.PNG")), "image/png");
-        assert_eq!(mime_of(std::path::Path::new("a.bin")), "application/octet-stream");
+        assert_eq!(
+            mime_of(std::path::Path::new("a.bin")),
+            "application/octet-stream"
+        );
     }
 }

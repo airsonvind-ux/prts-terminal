@@ -136,7 +136,8 @@ pub async fn pick_plugin_folder(app: AppHandle) -> Result<Option<String>, String
         .file()
         .set_title("选择插件文件夹")
         .pick_folder(move |picked| {
-            let value = picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
+            let value =
+                picked.and_then(|fp| fp.as_path().map(|p| p.to_string_lossy().into_owned()));
             let _ = tx.send(value);
         });
     rx.await.map_err(|e| format!("目录选择失败: {e}"))
@@ -169,10 +170,7 @@ pub async fn set_plugin_enabled(
             crate::runtime::view_calls::queue().clear_all();
             crate::plugins::disable_plugin(&id, &reg, &config, &services, &ledger)?;
         }
-        let context = format!(
-            "插件 {name} {}",
-            if enabled { "已启用" } else { "已停用" }
-        );
+        let context = format!("插件 {name} {}", if enabled { "已启用" } else { "已停用" });
         crate::plugins::refresh_catalogs(&reg, &notices, &ledger, Some(&context));
         Ok(list_from_ledger(&ledger))
     })
@@ -365,7 +363,10 @@ mod tests {
     #[test]
     fn taking_away_is_refused_while_a_turn_runs() {
         let turns = TurnRegistry::new();
-        assert!(ensure_no_active_turn(&turns, "停用").is_ok(), "空闲时可收权");
+        assert!(
+            ensure_no_active_turn(&turns, "停用").is_ok(),
+            "空闲时可收权"
+        );
 
         let _signal = turns.register("session", "conversation");
         assert_eq!(turns.active_count(), 1);

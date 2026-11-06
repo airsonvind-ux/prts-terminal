@@ -119,11 +119,7 @@ impl PluginRegistry {
 
     /// 记下一个读不出 manifest 的目录（重复目录名只留第一次）。
     pub fn insert_unregistered(&mut self, dir_name: &str, reason: &str) {
-        if self
-            .unregistered
-            .iter()
-            .any(|dir| dir.dir_name == dir_name)
-        {
+        if self.unregistered.iter().any(|dir| dir.dir_name == dir_name) {
             return;
         }
         self.unregistered.push(UnregisteredDir {

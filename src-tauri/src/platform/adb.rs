@@ -301,7 +301,10 @@ mod tests {
         std::fs::create_dir_all(root.join("shell")).unwrap();
         std::fs::write(root.join("shell").join("adb.exe"), b"x").unwrap();
 
-        let resolved = resolve_targets(&machine_with("MuMu 12", root.clone()), &Overrides::default());
+        let resolved = resolve_targets(
+            &machine_with("MuMu 12", root.clone()),
+            &Overrides::default(),
+        );
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].label, "MuMu 12");
         assert_eq!(resolved[0].adb_path, root.join("shell").join("adb.exe"));
@@ -315,7 +318,10 @@ mod tests {
     #[test]
     fn skips_emulator_without_adb() {
         let root = temp_root("empty");
-        let resolved = resolve_targets(&machine_with("MuMu 12", root.clone()), &Overrides::default());
+        let resolved = resolve_targets(
+            &machine_with("MuMu 12", root.clone()),
+            &Overrides::default(),
+        );
         assert!(resolved.is_empty(), "装目录里没有 adb 就不该给出目标");
         let _ = std::fs::remove_dir_all(&root);
     }

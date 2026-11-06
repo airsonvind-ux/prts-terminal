@@ -1609,11 +1609,7 @@ mod tests {
             )))
             .expect("登记 maa.bridge");
         let api: std::sync::Arc<dyn crate::host::HostApi> = std::sync::Arc::new(services);
-        PluginCtx::for_test(
-            "maa",
-            api,
-            ["maa.bridge".to_string()].into_iter().collect(),
-        )
+        PluginCtx::for_test("maa", api, ["maa.bridge".to_string()].into_iter().collect())
     }
 
     /// 从宿主能力层起桥并拿到端口（真机测试的前置步骤）。

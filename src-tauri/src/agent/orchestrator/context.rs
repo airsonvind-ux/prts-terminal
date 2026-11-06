@@ -33,8 +33,7 @@ use super::prompt_registry::builtin_registry;
 use crate::llm::ChatMessage;
 
 pub use super::prompt_registry::{
-    PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_PLUGIN,
-    ORDER_UI,
+    PromptRegistry, PromptSection, ORDER_BASE, ORDER_CATALOG, ORDER_MEMORY, ORDER_PLUGIN, ORDER_UI,
 };
 pub use super::token_estimate::{estimate_messages, estimate_tokens};
 

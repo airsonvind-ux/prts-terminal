@@ -675,10 +675,7 @@ pub(super) fn execute_tools_and_append_with_blocks(
                             match crate::storage::views::save_view(conversation_id, &tc.id, view) {
                                 Ok(saved) => Some(saved),
                                 Err(err) => {
-                                    eprintln!(
-                                        "[views] 视图落盘失败（call_id={}）：{err}",
-                                        tc.id
-                                    );
+                                    eprintln!("[views] 视图落盘失败（call_id={}）：{err}", tc.id);
                                     None
                                 }
                             }

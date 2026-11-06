@@ -96,11 +96,10 @@ fn rust_template_passes_the_validator() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let exe = scratch.join("target/release").join(if cfg!(windows) {
-        "hello.exe"
-    } else {
-        "hello"
-    });
+    let exe =
+        scratch
+            .join("target/release")
+            .join(if cfg!(windows) { "hello.exe" } else { "hello" });
     std::fs::copy(&exe, scratch.join(exe.file_name().expect("有文件名"))).expect("拷贝产物失败");
 
     let result = run_check(&scratch);

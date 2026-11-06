@@ -107,13 +107,7 @@ impl Installer {
         self.pending
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .insert(
-                token,
-                Pending {
-                    staging,
-                    manifest,
-                },
-            );
+            .insert(token, Pending { staging, manifest });
         Ok(preview)
     }
 
@@ -146,7 +140,10 @@ impl Installer {
         }
         if let Err(error) = fs::create_dir_all(&roots.user) {
             let _ = fs::remove_dir_all(&pending.staging);
-            return Err(format!("建插件目录失败（{}）：{error}", roots.user.display()));
+            return Err(format!(
+                "建插件目录失败（{}）：{error}",
+                roots.user.display()
+            ));
         }
         // 同一个数据盘下 rename 是原子的：要么完整落位，要么什么都看不到。
         if let Err(error) = fs::rename(&pending.staging, &target) {
@@ -154,13 +151,14 @@ impl Installer {
             return Err(format!("安装落位失败（{}）：{error}", target.display()));
         }
 
-        let (tools, reported) = match install_record(&pending.manifest, &target, reg, services, ledger) {
-            Ok(installed) => installed,
-            Err(error) => {
-                let _ = fs::remove_dir_all(&target);
-                return Err(format!("插件装上了但没起来：{error}"));
-            }
-        };
+        let (tools, reported) =
+            match install_record(&pending.manifest, &target, reg, services, ledger) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    let _ = fs::remove_dir_all(&target);
+                    return Err(format!("插件装上了但没起来：{error}"));
+                }
+            };
         if let Err(error) = config.set_enabled(&pending.manifest.id, true) {
             let _ = fs::remove_dir_all(&target);
             return Err(format!("写启用状态失败：{error}"));
@@ -208,7 +206,8 @@ fn read_and_validate(
     }
     let text = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("读不出 {}：{error}", manifest_path.display()))?;
-    let manifest = manifest::parse_manifest(&text).map_err(|error| format!("manifest 不是合法 JSON：{error}"))?;
+    let manifest = manifest::parse_manifest(&text)
+        .map_err(|error| format!("manifest 不是合法 JSON：{error}"))?;
 
     let dir_name = source
         .file_name()
@@ -258,7 +257,8 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) -> Result<(), String> 
     if depth > 32 {
         return Err("目录嵌套太深（超过 32 层）".to_string());
     }
-    let entries = fs::read_dir(dir).map_err(|error| format!("读不了目录 {}：{error}", dir.display()))?;
+    let entries =
+        fs::read_dir(dir).map_err(|error| format!("读不了目录 {}：{error}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|error| format!("读目录项失败（{}）：{error}", dir.display()))?;
         let path = entry.path();
@@ -416,7 +416,10 @@ mod tests {
             .preview(&source, &roots, &services(&roots), &HashSet::new())
             .unwrap_err();
         assert!(err.contains("game.capture"), "got: {err}");
-        assert!(err.contains("capability"), "错误要指出是能力问题，got: {err}");
+        assert!(
+            err.contains("capability"),
+            "错误要指出是能力问题，got: {err}"
+        );
         let _ = fs::remove_dir_all(&data);
         let _ = fs::remove_dir_all(&source);
     }
@@ -425,7 +428,8 @@ mod tests {
     fn duplicate_ids_are_rejected_before_touching_disk() {
         let data = scratch("duplicate");
         let source = scratch("duplicate-src");
-        fs::write(source.join("plugin.json"), process_manifest("maa", "a.exe")).expect("写 manifest");
+        fs::write(source.join("plugin.json"), process_manifest("maa", "a.exe"))
+            .expect("写 manifest");
         let roots = roots(&data);
         let installer = Installer::new(&data);
         let known: HashSet<String> = ["maa".to_string()].into_iter().collect();
@@ -441,7 +445,11 @@ mod tests {
     fn symlinks_inside_the_package_are_refused() {
         let data = scratch("symlink");
         let source = scratch("symlink-src");
-        fs::write(source.join("plugin.json"), process_manifest("linked", "a.exe")).expect("写 manifest");
+        fs::write(
+            source.join("plugin.json"),
+            process_manifest("linked", "a.exe"),
+        )
+        .expect("写 manifest");
         #[cfg(windows)]
         let made = std::os::windows::fs::symlink_file(
             source.join("plugin.json"),
@@ -449,7 +457,9 @@ mod tests {
         )
         .is_ok();
         #[cfg(not(windows))]
-        let made = std::os::unix::fs::symlink(source.join("plugin.json"), source.join("alias.json")).is_ok();
+        let made =
+            std::os::unix::fs::symlink(source.join("plugin.json"), source.join("alias.json"))
+                .is_ok();
         if !made {
             eprintln!("跳过：这个环境建不了符号链接");
             let _ = fs::remove_dir_all(&data);
@@ -470,7 +480,11 @@ mod tests {
     fn confirming_moves_the_folder_and_rolls_back_when_it_cannot_start() {
         let data = scratch("confirm");
         let source = scratch("confirm-src");
-        fs::write(source.join("plugin.json"), process_manifest("demo", "missing.exe")).expect("写 manifest");
+        fs::write(
+            source.join("plugin.json"),
+            process_manifest("demo", "missing.exe"),
+        )
+        .expect("写 manifest");
         let roots = roots(&data);
         let services = services(&roots);
         let installer = Installer::new(&data);
@@ -500,7 +514,11 @@ mod tests {
     fn a_second_confirm_with_the_same_token_is_refused() {
         let data = scratch("token");
         let source = scratch("token-src");
-        fs::write(source.join("plugin.json"), process_manifest("demo", "missing.exe")).expect("写 manifest");
+        fs::write(
+            source.join("plugin.json"),
+            process_manifest("demo", "missing.exe"),
+        )
+        .expect("写 manifest");
         let roots = roots(&data);
         let services = services(&roots);
         let installer = Installer::new(&data);
@@ -535,7 +553,11 @@ mod tests {
         // 可执行文件，这里只验证「落位 + 台账」这一步，加载失败的回滚在上面覆盖）。
         let data = scratch("loaded");
         let source = scratch("loaded-src");
-        fs::write(source.join("plugin.json"), process_manifest("demo", "missing.exe")).expect("写 manifest");
+        fs::write(
+            source.join("plugin.json"),
+            process_manifest("demo", "missing.exe"),
+        )
+        .expect("写 manifest");
         let roots = roots(&data);
         let services = services(&roots);
         let installer = Installer::new(&data);

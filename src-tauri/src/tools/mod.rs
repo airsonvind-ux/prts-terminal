@@ -633,11 +633,7 @@ impl ToolRegistry {
     /// 局部替换（历史行为，迁移不得改变）。插件路径的同名策略相反：
     /// `plugins::register_plugin_tools` 在调用本方法前先查重，重名即失败并
     /// 回滚，因为跨插件覆盖别人的工具是最难排查的一类故障。
-    pub fn register_with_origin(
-        &self,
-        tool: Box<dyn Tool>,
-        origin: Origin,
-    ) -> Result<(), String> {
+    pub fn register_with_origin(&self, tool: Box<dyn Tool>, origin: Origin) -> Result<(), String> {
         schema::validate_tool_schema(&tool.parameters())?;
         let name = tool.name().to_string();
         self.tools_write().insert(
@@ -795,12 +791,7 @@ impl ToolRegistry {
     /// 已落地守卫（模块 3 P1）：执行前 JSON Schema 参数校验
     /// （必填字段 + 顶层类型），违反转为 `ToolError::Parse`。
     /// 破坏性工具的批准策略（approval）随模块 10 沙箱落地时在此追加。
-    fn guard(
-        &self,
-        tool: &dyn Tool,
-        _ctx: &ToolContext,
-        params: &str,
-    ) -> Result<(), ToolError> {
+    fn guard(&self, tool: &dyn Tool, _ctx: &ToolContext, params: &str) -> Result<(), ToolError> {
         // 参数 schema 校验（LLM 传参错误在此拦截，统一错误信息）
         let args: serde_json::Value =
             serde_json::from_str(params).map_err(|e| ToolError::Parse(e.to_string()))?;

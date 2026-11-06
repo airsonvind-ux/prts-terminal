@@ -150,7 +150,8 @@ fn is_false_flag(value: &bool) -> bool {
 /// `SessionLog` 中的位置隐式给出（索引即 seq，单调连续）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum SessionEvent {    /// turn 开始：一次 agent_process 处理周期
+pub enum SessionEvent {
+    /// turn 开始：一次 agent_process 处理周期
     #[serde(rename = "turn/start", rename_all = "camelCase")]
     TurnStart { session_id: String },
 
@@ -518,9 +519,8 @@ impl SessionEvent {
         facts: Option<&crate::tools::ToolFacts>,
         view_title: &str,
     ) -> Self {
-        let mut event = Self::tool_call_with_display(
-            session_id, call_id, tool_name, params, display, facts,
-        );
+        let mut event =
+            Self::tool_call_with_display(session_id, call_id, tool_name, params, display, facts);
         if let Self::ToolCall { by_view, .. } = &mut event {
             *by_view = Some(view_title.to_string());
         }
@@ -1446,7 +1446,8 @@ mod tests {
 
     /// 旧归档没有这两个字段：读回 None/false，前端回落既有工具名表。
     #[test]
-    fn older_archives_without_action_still_deserialize() {        let old = r#"{"type":"tool/call","sessionId":"s1","callId":"c1","toolName":"read_file","params":"{}"}"#;
+    fn older_archives_without_action_still_deserialize() {
+        let old = r#"{"type":"tool/call","sessionId":"s1","callId":"c1","toolName":"read_file","params":"{}"}"#;
         let event: SessionEvent = serde_json::from_str(old).expect("旧归档应能反序列化");
         match event {
             SessionEvent::ToolCall {
@@ -1488,7 +1489,8 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_reason_vocabulary() {        for (reason, expected) in [
+    fn turn_end_reason_vocabulary() {
+        for (reason, expected) in [
             (TurnEndReason::Completed, "completed"),
             (TurnEndReason::Error, "error"),
             (TurnEndReason::Aborted, "aborted"),

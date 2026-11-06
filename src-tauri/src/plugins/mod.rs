@@ -29,9 +29,9 @@ use crate::tools::{Origin, Tool, ToolRegistry};
 
 use self::manifest::{is_bare_exe_name, PluginEntry, PluginManifest};
 
-pub use manifest::PluginKind;
 #[cfg(test)]
 pub(crate) use manifest::parse_manifest;
+pub use manifest::PluginKind;
 pub use registry::{PluginRecord, PluginRegistry, PluginState};
 
 /// 插件开发者会用到的协议门面（M4）。
@@ -44,21 +44,21 @@ pub mod sdk {
         is_bare_exe_name, parse_manifest, read_manifest, validate_with, PluginEntry, PluginKind,
         PluginManifest, MANIFEST_FILE_NAME, MAX_ENTRY_ARGS, SUPPORTED_PROTOCOL,
     };
+    pub use super::process::is_valid_tool_name;
     pub use super::rpc::{
         RpcError, CAPABILITY_DENIED, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND,
         PLUGIN_FAULT, TIMEOUT,
     };
     pub use super::transport::{write_frame, FrameError, FrameReader, MAX_FRAME_BYTES};
-    pub use super::process::is_valid_tool_name;
     // 校验器要按宿主同一套规则读工具结果（content 不能省、视图大小与路径），
     // 因此把 `parse_result` 摆到门面上——它只描述协议，不含宿主实现。
     pub use super::process::{parse_result, ParsedResult, ViewIssue};
     // 视图的三种 kind 属于协议（作者要按它写 view），校验器也要按它分支。
-    pub use crate::tools::ToolViewKind;
     pub use super::{
-        parse_action, resolve_program, ActionProblem, ProgramResolution, PluginError,
+        parse_action, resolve_program, ActionProblem, PluginError, ProgramResolution,
         MAX_ACTION_CHARS,
     };
+    pub use crate::tools::ToolViewKind;
 
     /// 宿主当前登记的能力键（D40：白名单由注册表生成，不另抄一份）。
     ///
@@ -109,13 +109,18 @@ impl ProgramResolution {
 /// 顺序不能反：模板里的 `hello.exe` 是裸名，先查目录才不需要给每个模板加 `./`。
 /// 宿主与 `plugin_check` 共用这一份判据——校验器不许另写一套，否则手册与实现
 /// 会对同一个名字给出两种结论。
-pub fn resolve_program(plugin_dir: &Path, entry: &PluginEntry) -> Result<ProgramResolution, String> {
+pub fn resolve_program(
+    plugin_dir: &Path,
+    entry: &PluginEntry,
+) -> Result<ProgramResolution, String> {
     let joined = plugin_dir.join(&entry.exe);
     if joined.is_file() {
         // 一级只允许落在插件目录内：`..`/绝对路径/盘符已被校验拦住，
         // 这里再挡一次符号链接指向目录外的情况（安装管道虽然拒符号链接，
         // 但 bundled/用户目录里可能有绕过安装管道放进来的东西）。
-        let base = plugin_dir.canonicalize().unwrap_or_else(|_| plugin_dir.to_path_buf());
+        let base = plugin_dir
+            .canonicalize()
+            .unwrap_or_else(|_| plugin_dir.to_path_buf());
         let real = joined.canonicalize().unwrap_or_else(|_| joined.clone());
         if !real.starts_with(&base) {
             return Err(format!(
@@ -155,7 +160,9 @@ pub enum ActionProblem {
 impl std::fmt::Display for ActionProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooLong { chars } => write!(f, "action 超过 {MAX_ACTION_CHARS} 字（现在 {chars} 字）"),
+            Self::TooLong { chars } => {
+                write!(f, "action 超过 {MAX_ACTION_CHARS} 字（现在 {chars} 字）")
+            }
             Self::Whitespace => write!(f, "action 含空白或不可见字符"),
         }
     }
@@ -607,12 +614,9 @@ fn load_one(
     };
 
     let id = manifest.id.clone();
-    if let Err(error) = manifest::validate_with(
-        &manifest,
-        dir_name,
-        &mut scan.seen_ids,
-        &services.keys(),
-    ) {
+    if let Err(error) =
+        manifest::validate_with(&manifest, dir_name, &mut scan.seen_ids, &services.keys())
+    {
         match &error {
             // 同 id 的外部插件不写台账、不覆盖内置记录（N3），只报清两个路径。
             PluginError::DuplicateId(duplicated) => {
@@ -628,13 +632,16 @@ fn load_one(
             }
             _ => {
                 eprintln!("[plugins] {dir_name}（id={id}）校验失败：{error}");
-                insert(ledger, PluginRecord {
-                    manifest,
-                    state: PluginState::Failed(error.to_string()),
-                    tools: Vec::new(),
-                    reported_capabilities: Vec::new(),
-                    dir: plugin_dir.to_path_buf(),
-                });
+                insert(
+                    ledger,
+                    PluginRecord {
+                        manifest,
+                        state: PluginState::Failed(error.to_string()),
+                        tools: Vec::new(),
+                        reported_capabilities: Vec::new(),
+                        dir: plugin_dir.to_path_buf(),
+                    },
+                );
             }
         }
         return;
@@ -644,26 +651,32 @@ fn load_one(
     // 启用状态在加载期的最后一刻生效：校验失败与停用是两回事，前者报错、后者安静跳过。
     if !config.is_enabled(&id) {
         eprintln!("[plugins] {id} 已在 {ENABLED_FILE_NAME} 里停用，跳过加载");
-        insert(ledger, PluginRecord {
-            manifest,
-            state: PluginState::Disabled,
-            tools: Vec::new(),
-            reported_capabilities: Vec::new(),
-            dir: plugin_dir.to_path_buf(),
-        });
+        insert(
+            ledger,
+            PluginRecord {
+                manifest,
+                state: PluginState::Disabled,
+                tools: Vec::new(),
+                reported_capabilities: Vec::new(),
+                dir: plugin_dir.to_path_buf(),
+            },
+        );
         return;
     }
 
     // process 插件的握手是同步的，但台账先落一条 Starting：装配期间若有别的
     // 读侧（M3 的扩展页），看到的是「正在启动」而不是「不存在」。
     if manifest.kind == PluginKind::Process {
-        insert(ledger, PluginRecord {
-            manifest: manifest.clone(),
-            state: PluginState::Starting,
-            tools: Vec::new(),
-            reported_capabilities: Vec::new(),
-            dir: plugin_dir.to_path_buf(),
-        });
+        insert(
+            ledger,
+            PluginRecord {
+                manifest: manifest.clone(),
+                state: PluginState::Starting,
+                tools: Vec::new(),
+                reported_capabilities: Vec::new(),
+                dir: plugin_dir.to_path_buf(),
+            },
+        );
     }
 
     // 能力裁剪（声明 ∩ 已登记）与按 kind 分发都在 install_record 里：
@@ -673,25 +686,31 @@ fn load_one(
     match outcome {
         Ok((tools, reported_capabilities)) => {
             warn_about_declared_skills(&manifest, plugin_dir);
-            insert(ledger, PluginRecord {
-                manifest,
-                state: PluginState::Loaded,
-                tools,
-                reported_capabilities,
-                dir: plugin_dir.to_path_buf(),
-            });
+            insert(
+                ledger,
+                PluginRecord {
+                    manifest,
+                    state: PluginState::Loaded,
+                    tools,
+                    reported_capabilities,
+                    dir: plugin_dir.to_path_buf(),
+                },
+            );
         }
         Err(error) => {
             eprintln!("[plugins] {id} 安装失败：{error}");
             // 安装失败时 register_plugin_tools 与 process::install 都已把本次
             // 注册摘干净、把进程收掉。
-            insert(ledger, PluginRecord {
-                manifest,
-                state: PluginState::Failed(error.to_string()),
-                tools: Vec::new(),
-                reported_capabilities: Vec::new(),
-                dir: plugin_dir.to_path_buf(),
-            });
+            insert(
+                ledger,
+                PluginRecord {
+                    manifest,
+                    state: PluginState::Failed(error.to_string()),
+                    tools: Vec::new(),
+                    reported_capabilities: Vec::new(),
+                    dir: plugin_dir.to_path_buf(),
+                },
+            );
         }
     }
 }
@@ -762,13 +781,11 @@ pub(super) fn install_record(
         .as_ref()
         .and_then(|requires| requires.protocol)
         .unwrap_or(manifest::SUPPORTED_PROTOCOL);
-    let granted =
-        crate::host::resolve_granted(services.as_ref(), &manifest.capabilities, protocol).map_err(
-            |error| PluginError::Invalid {
-                field: "capabilities",
-                value: error.to_string(),
-            },
-        )?;
+    let granted = crate::host::resolve_granted(services.as_ref(), &manifest.capabilities, protocol)
+        .map_err(|error| PluginError::Invalid {
+            field: "capabilities",
+            value: error.to_string(),
+        })?;
     let owned: Arc<HostServices> = Arc::clone(services);
     let api: Arc<dyn crate::host::HostApi> = owned;
     let ctx = crate::host::PluginCtx::new(manifest.id.clone(), api, granted);
@@ -782,7 +799,14 @@ pub(super) fn install_record(
                 .entry
                 .clone()
                 .expect("process 插件必须有 entry（校验规则 5）");
-            process::install(&manifest.id, plugin_dir, &entry, ctx, Arc::clone(ledger), reg)
+            process::install(
+                &manifest.id,
+                plugin_dir,
+                &entry,
+                ctx,
+                Arc::clone(ledger),
+                reg,
+            )
         }
     }
 }
@@ -958,7 +982,10 @@ pub fn refresh_catalogs(
             let name = def.function.name.clone();
             let origin = match reg.origin_of(&name) {
                 Some(Origin::Plugin(id)) => crate::notices::CatalogOrigin::Plugin {
-                    display_name: display_names.get(&id).cloned().unwrap_or_else(|| id.clone()),
+                    display_name: display_names
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| id.clone()),
                     id,
                 },
                 _ => crate::notices::CatalogOrigin::Host,
@@ -997,9 +1024,7 @@ fn display_names_from_ledger() -> HashMap<String, String> {
     let Some(ledger) = SKILL_LEDGER.get() else {
         return HashMap::new();
     };
-    let guard = ledger
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let guard = ledger.lock().unwrap_or_else(|poison| poison.into_inner());
     guard
         .list()
         .into_iter()
@@ -1033,7 +1058,11 @@ pub fn plugin_capabilities_text(
         }
     }
     lines.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    lines.into_iter().map(|(_, line)| line).collect::<Vec<_>>().join("\n")
+    lines
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 #[cfg(test)]
 mod tests {
@@ -1118,8 +1147,8 @@ mod tests {
             name: "bad_schema",
             schema: json!({ "type": "string" }),
         });
-        let err = register_plugin_tools(&reg, "probe", vec![StubTool::ok("fresh_a"), bad])
-            .unwrap_err();
+        let err =
+            register_plugin_tools(&reg, "probe", vec![StubTool::ok("fresh_a"), bad]).unwrap_err();
         match err {
             PluginError::Invalid {
                 field: "parameters",
@@ -1168,11 +1197,8 @@ mod tests {
     fn enabled_file_round_trips_and_keeps_unknown_ids() {
         let dir = scratch("enabled-round-trip");
         // 先手写一条未知 id：M2 没有对应插件，但它必须被保留（规格 §6）。
-        std::fs::write(
-            dir.join(ENABLED_FILE_NAME),
-            r#"{"enabled":{"ghost":true}}"#,
-        )
-        .expect("写初始文件");
+        std::fs::write(dir.join(ENABLED_FILE_NAME), r#"{"enabled":{"ghost":true}}"#)
+            .expect("写初始文件");
 
         let config = PluginsConfig::load(&dir);
         config.set_enabled("maa", false).expect("写启用状态");
@@ -1216,7 +1242,10 @@ mod tests {
             config.set_enabled("maa", enabled).expect("写启用状态");
             assert_eq!(config.is_enabled("maa"), enabled);
         }
-        assert_eq!(PluginsConfig::load(&dir).snapshot().get("maa"), Some(&false));
+        assert_eq!(
+            PluginsConfig::load(&dir).snapshot().get("maa"),
+            Some(&false)
+        );
         assert!(!config.is_enabled("maa"), "最后一次是 false");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1302,7 +1331,10 @@ mod tests {
         let ledger = load_all(&reg, &roots, &config, &services, &policy);
 
         let ledger = ledger.lock().expect("台账锁不该中毒");
-        assert!(ledger.get("broken").is_none(), "读不出 manifest 的目录不记账");
+        assert!(
+            ledger.get("broken").is_none(),
+            "读不出 manifest 的目录不记账"
+        );
         assert_eq!(
             ledger.get("maa").map(|record| record.state.clone()),
             Some(PluginState::Loaded),
@@ -1317,7 +1349,15 @@ mod tests {
     // ── 第 3 步：启停 / 重试 / 卸载 ──────────────────────────
 
     /// 一个装载了随包 maa 的测试装配。
-    fn loaded(tag: &str) -> (PluginRoots, Arc<HostServices>, ToolRegistry, PluginsConfig, Arc<Mutex<PluginRegistry>>) {
+    fn loaded(
+        tag: &str,
+    ) -> (
+        PluginRoots,
+        Arc<HostServices>,
+        ToolRegistry,
+        PluginsConfig,
+        Arc<Mutex<PluginRegistry>>,
+    ) {
         let data = scratch(tag);
         let roots = PluginRoots {
             bundled: crate::config::bundled_plugins_dir(),
@@ -1342,7 +1382,11 @@ mod tests {
         assert!(reg.get("run_maa_task").is_none(), "停用后工具必须摘掉");
         assert!(!config.is_enabled("maa"), "plugins.json 要写 false");
         assert_eq!(
-            ledger.lock().expect("台账锁不该中毒").get("maa").map(|r| r.state.clone()),
+            ledger
+                .lock()
+                .expect("台账锁不该中毒")
+                .get("maa")
+                .map(|r| r.state.clone()),
             Some(PluginState::Disabled)
         );
 
@@ -1361,7 +1405,11 @@ mod tests {
         assert!(reg.get("run_maa_task").is_some(), "启用后工具应重新注册");
         assert!(config.is_enabled("maa"));
         assert_eq!(
-            ledger.lock().expect("台账锁不该中毒").get("maa").map(|r| r.state.clone()),
+            ledger
+                .lock()
+                .expect("台账锁不该中毒")
+                .get("maa")
+                .map(|r| r.state.clone()),
             Some(PluginState::Loaded)
         );
         assert!(
@@ -1481,8 +1529,7 @@ mod tests {
         ];
         let text = plugin_capabilities_text(&reg, &skills);
         assert_eq!(
-            text,
-            "工具 plugin_tool — demo\n工具 run_maa_task — maa\n技能 插件技能 — 演示插件",
+            text, "工具 plugin_tool — demo\n工具 run_maa_task — maa\n技能 插件技能 — 演示插件",
             "只列插件条目，按名字排序；展示名取不到时退回 id"
         );
         assert!(!text.contains("host_tool"), "宿主工具不归插件段");
@@ -1498,7 +1545,10 @@ mod tests {
 
     #[test]
     fn action_accepts_a_short_phrase_and_rejects_the_template_parts() {
-        assert_eq!(parse_action("清点图片").unwrap(), Some("清点图片".to_string()));
+        assert_eq!(
+            parse_action("清点图片").unwrap(),
+            Some("清点图片".to_string())
+        );
         // 边界：正好 16 字可以，17 字不行。
         assert!(parse_action(&"图".repeat(MAX_ACTION_CHARS)).is_ok());
         assert_eq!(
@@ -1520,12 +1570,12 @@ mod tests {
     #[test]
     fn action_rejects_whitespace_and_invisible_characters() {
         for raw in [
-            " 清点图片",       // 首部空格
-            "清点图片 ",       // 尾部空格
-            "清点 图片",       // 内部空格
+            " 清点图片",        // 首部空格
+            "清点图片 ",        // 尾部空格
+            "清点 图片",        // 内部空格
             "清点\u{3000}图片", // 全角空格
             "清点\u{200b}图片", // 零宽空格
-            "清点\n图片",      // 换行
+            "清点\n图片",       // 换行
         ] {
             assert_eq!(
                 parse_action(raw),

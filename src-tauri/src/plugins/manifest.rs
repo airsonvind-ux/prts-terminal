@@ -224,8 +224,8 @@ pub fn validate_with(
             field: "requires.app",
             value: app.to_string(),
         })?;
-        let current = Version::parse(env!("CARGO_PKG_VERSION"))
-            .expect("CARGO_PKG_VERSION 必须是合法 semver");
+        let current =
+            Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION 必须是合法 semver");
         if !required.matches(&current) {
             return Err(PluginError::RequiresApp {
                 required: app.to_string(),
@@ -329,9 +329,12 @@ pub fn is_bare_exe_name(exe: &str) -> bool {
     !exe.contains('/')
         && !exe.contains('\\')
         && !path.is_absolute()
-        && !path
-            .components()
-            .any(|c| matches!(c, Component::Prefix(_) | Component::RootDir | Component::ParentDir))
+        && !path.components().any(|c| {
+            matches!(
+                c,
+                Component::Prefix(_) | Component::RootDir | Component::ParentDir
+            )
+        })
 }
 
 fn check_exe(exe: &str) -> Result<(), PluginError> {
@@ -352,10 +355,7 @@ fn check_exe(exe: &str) -> Result<(), PluginError> {
             value: format!("{exe}（必须是相对路径或裸命令名）"),
         });
     }
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir))
-    {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(PluginError::Invalid {
             field: "entry.exe",
             value: format!("{exe}（不得包含 ..）"),
@@ -421,7 +421,13 @@ mod tests {
     /// 规则 9 的用例要一个含 `network` 的白名单（D40 之后生产环境不会给）。
     fn check_with_network(v: &Value) -> Result<(), PluginError> {
         let mut seen = HashSet::new();
-        let known = ["fs.plugin", "fs.temp", "query.call", "maa.bridge", "network"];
+        let known = [
+            "fs.plugin",
+            "fs.temp",
+            "query.call",
+            "maa.bridge",
+            "network",
+        ];
         validate_with(&from_value(v), "maa", &mut seen, &known)
     }
 
@@ -449,10 +455,7 @@ mod tests {
         assert_eq!(m.requires.as_ref().unwrap().app.as_deref(), Some(">=0.1.1"));
         assert_eq!(m.capabilities, vec!["maa.bridge"]);
         assert_eq!(m.activation, vec!["onStartup"]);
-        assert_eq!(
-            m.contributes.settings_form.as_deref(),
-            Some("builtin-page")
-        );
+        assert_eq!(m.contributes.settings_form.as_deref(), Some("builtin-page"));
         assert!(check(&sample_value()).is_ok());
     }
 
@@ -467,7 +470,14 @@ mod tests {
 
     #[test]
     fn rejects_invalid_ids() {
-        for bad in ["Maa", "_maa", "a", "maa_plugin", "maa.plugin", &"a".repeat(65)] {
+        for bad in [
+            "Maa",
+            "_maa",
+            "a",
+            "maa_plugin",
+            "maa.plugin",
+            &"a".repeat(65),
+        ] {
             let mut v = sample_value();
             v["id"] = serde_json::json!(bad);
             match check(&v) {
@@ -485,7 +495,9 @@ mod tests {
         let mut v = sample_value();
         v["version"] = serde_json::json!("0.1");
         match check(&v) {
-            Err(PluginError::Invalid { field: "version", .. }) => {}
+            Err(PluginError::Invalid {
+                field: "version", ..
+            }) => {}
             other => panic!("非法版本应被拒绝，got: {other:?}"),
         }
     }
@@ -524,7 +536,9 @@ mod tests {
             let mut v = process_value();
             v["entry"]["exe"] = serde_json::json!(bad);
             match check(&v) {
-                Err(PluginError::Invalid { field: "entry.exe", .. }) => {}
+                Err(PluginError::Invalid {
+                    field: "entry.exe", ..
+                }) => {}
                 other => panic!("exe={bad:?} 应被拒绝，got: {other:?}"),
             }
         }
@@ -562,7 +576,10 @@ mod tests {
         let mut v = process_value();
         v["entry"] = serde_json::json!({ "exe": "python", "args": ["hello.py", ""] });
         match check(&v) {
-            Err(PluginError::Invalid { field: "entry.args", value }) => {
+            Err(PluginError::Invalid {
+                field: "entry.args",
+                value,
+            }) => {
                 assert!(value.contains("[1]"), "错误应指出第几项，got: {value}");
             }
             other => panic!("空串参数应被拒绝，got: {other:?}"),
@@ -575,7 +592,10 @@ mod tests {
         let args: Vec<String> = (0..=MAX_ENTRY_ARGS).map(|i| format!("--a{i}")).collect();
         v["entry"] = serde_json::json!({ "exe": "python", "args": args });
         match check(&v) {
-            Err(PluginError::Invalid { field: "entry.args", .. }) => {}
+            Err(PluginError::Invalid {
+                field: "entry.args",
+                ..
+            }) => {}
             other => panic!("超过上限的参数应被拒绝，got: {other:?}"),
         }
     }
@@ -691,7 +711,8 @@ mod tests {
             other => panic!("schema 表单缺 object schema 应被拒绝，got: {other:?}"),
         }
 
-        v["contributes"]["settingsSchema"] = serde_json::json!({ "type": "object", "properties": {} });
+        v["contributes"]["settingsSchema"] =
+            serde_json::json!({ "type": "object", "properties": {} });
         assert!(check(&v).is_ok());
     }
 

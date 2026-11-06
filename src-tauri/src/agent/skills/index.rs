@@ -315,7 +315,10 @@ impl SkillIndex {
                 _ => host.push(format!("- {name}［{source}］：{desc}")),
             }
         }
-        host.into_iter().chain(plugin).collect::<Vec<_>>().join("\n")
+        host.into_iter()
+            .chain(plugin)
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// 全部条目 `(name, description)` 对，按 name 排序（提醒 diff / 基线用，批 3）。
@@ -395,11 +398,7 @@ fn regular_skill_md(dir: &Path) -> Result<Option<PathBuf>, String> {
 }
 
 /// 读取并注册一个技能文件（解析失败 → 告警跳过；重名 → 告警保留先注册的）。
-fn register_skill(
-    tables: &mut Tables,
-    path: &Path,
-    origin: &CatalogOrigin,
-) -> Result<(), String> {
+fn register_skill(tables: &mut Tables, path: &Path, origin: &CatalogOrigin) -> Result<(), String> {
     // 调用方已做上限检查；这里再守一次，避免未来新增调用点绕过。
     let meta = std::fs::symlink_metadata(path)
         .map_err(|e| format!("读取元数据失败（{}）：{e}", path.display()))?;
@@ -734,8 +733,7 @@ mod tests {
         // 目录文本按来源分组：宿主行格式不变，插件行补展示名
         let text = idx.catalog_text();
         assert_eq!(
-            text,
-            "- 同名技能［用户］：宿主版本\n- 插件技能（演示插件）［用户］：插件独有",
+            text, "- 同名技能［用户］：宿主版本\n- 插件技能（演示插件）［用户］：插件独有",
             "宿主在前、插件在后且带归属"
         );
 

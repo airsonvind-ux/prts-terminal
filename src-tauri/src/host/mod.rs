@@ -150,7 +150,11 @@ impl HostServices {
     /// 登记一条服务；同键重复登记返回错误（不覆盖，避免静默换实现）。
     pub fn register(&mut self, service: Arc<dyn HostService>) -> Result<(), String> {
         let key = service.info().key;
-        if self.services.iter().any(|existing| existing.info().key == key) {
+        if self
+            .services
+            .iter()
+            .any(|existing| existing.info().key == key)
+        {
             return Err(format!("宿主能力重复登记：{key}"));
         }
         self.services.push(service);
@@ -159,7 +163,10 @@ impl HostServices {
 
     /// 已登记的服务键（按登记顺序；仅供装配期自检与测试）。
     pub fn keys(&self) -> Vec<&'static str> {
-        self.services.iter().map(|service| service.info().key).collect()
+        self.services
+            .iter()
+            .map(|service| service.info().key)
+            .collect()
     }
 
     /// 全部服务描述（按 key 排序）。
@@ -427,8 +434,12 @@ mod tests {
     fn registry() -> HostServices {
         let mut services = HostServices::new();
         services.register(EchoService::shared(&ECHO_INFO)).unwrap();
-        services.register(EchoService::shared(&FUTURE_INFO)).unwrap();
-        services.register(EchoService::shared(&APPROVAL_INFO)).unwrap();
+        services
+            .register(EchoService::shared(&FUTURE_INFO))
+            .unwrap();
+        services
+            .register(EchoService::shared(&APPROVAL_INFO))
+            .unwrap();
         services
     }
 
@@ -453,7 +464,10 @@ mod tests {
     #[test]
     fn info_finds_registered_only() {
         let services = registry();
-        assert_eq!(services.info("test.echo").map(|info| info.key), Some("test.echo"));
+        assert_eq!(
+            services.info("test.echo").map(|info| info.key),
+            Some("test.echo")
+        );
         assert!(services.info("test.absent").is_none());
     }
 
@@ -469,7 +483,9 @@ mod tests {
     #[test]
     fn call_on_unknown_service_is_error() {
         let services = registry();
-        let err = services.call("probe", "test.absent", json!({})).unwrap_err();
+        let err = services
+            .call("probe", "test.absent", json!({}))
+            .unwrap_err();
         assert_eq!(err, HostError::UnknownService("test.absent".to_string()));
     }
 
@@ -477,7 +493,9 @@ mod tests {
     fn duplicate_registration_is_rejected() {
         let mut services = HostServices::new();
         services.register(EchoService::shared(&ECHO_INFO)).unwrap();
-        let err = services.register(EchoService::shared(&ECHO_INFO)).unwrap_err();
+        let err = services
+            .register(EchoService::shared(&ECHO_INFO))
+            .unwrap_err();
         assert!(err.contains("test.echo"), "错误必须指出是哪个键：{err}");
         assert_eq!(services.keys(), vec!["test.echo"]);
     }
@@ -533,7 +551,10 @@ mod tests {
     fn resolve_granted_rejects_approval_services_without_approver() {
         let services = registry();
         let err = resolve_granted(&services, &["test.approval".to_string()], 1).unwrap_err();
-        assert_eq!(err, GrantError::NeedsApproval(vec!["test.approval".to_string()]));
+        assert_eq!(
+            err,
+            GrantError::NeedsApproval(vec!["test.approval".to_string()])
+        );
     }
 
     #[test]

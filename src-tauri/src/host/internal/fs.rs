@@ -129,8 +129,9 @@ impl FsService {
         } else if for_write {
             // 写入要给父目录建出来；建完再查一次，防止父目录是符号链接。
             if let Some(parent) = joined.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|err| HostError::failed(self.info.key, format!("建目录失败：{err}")))?;
+                std::fs::create_dir_all(parent).map_err(|err| {
+                    HostError::failed(self.info.key, format!("建目录失败：{err}"))
+                })?;
                 self.ensure_within(&base, parent, rel)?;
             }
         }
@@ -290,7 +291,9 @@ impl FsService {
         }
         std::fs::remove_dir_all(&target)
             .or_else(|_| std::fs::remove_file(&target))
-            .map_err(|err| HostError::failed(self.info.key, format!("purge {path:?} 失败：{err}")))?;
+            .map_err(|err| {
+                HostError::failed(self.info.key, format!("purge {path:?} 失败：{err}"))
+            })?;
         Ok(json!({ "removed": true }))
     }
 
@@ -372,7 +375,10 @@ mod tests {
     fn write_then_read_round_trips() {
         let (root, fs) = service("roundtrip");
         let written = fs
-            .call("maa", json!({"op": "write", "path": "a/b.json", "data": "{\"x\":1}"}))
+            .call(
+                "maa",
+                json!({"op": "write", "path": "a/b.json", "data": "{\"x\":1}"}),
+            )
             .unwrap();
         assert_eq!(written["bytes"], 7);
         let read = fs
@@ -385,8 +391,11 @@ mod tests {
     #[test]
     fn plugins_are_isolated_by_caller() {
         let (root, fs) = service("isolation");
-        fs.call("maa", json!({"op": "write", "path": "secret.txt", "data": "maa"}))
-            .unwrap();
+        fs.call(
+            "maa",
+            json!({"op": "write", "path": "secret.txt", "data": "maa"}),
+        )
+        .unwrap();
         let other = fs.call("other", json!({"op": "read", "path": "secret.txt"}));
         assert!(other.is_err(), "别的插件不该看见 maa 的文件");
         let _ = std::fs::remove_dir_all(&root);
@@ -395,7 +404,12 @@ mod tests {
     #[test]
     fn rejects_absolute_parent_and_outside_paths() {
         let (root, fs) = service("escape");
-        for path in ["C:\\Windows\\win.ini", "/etc/passwd", "../secret.txt", "a/../../x"] {
+        for path in [
+            "C:\\Windows\\win.ini",
+            "/etc/passwd",
+            "../secret.txt",
+            "a/../../x",
+        ] {
             let err = fs
                 .call("maa", json!({"op": "read", "path": path}))
                 .unwrap_err();
@@ -434,8 +448,11 @@ mod tests {
     #[test]
     fn delete_only_removes_empty_dirs_and_purge_needs_confirm() {
         let (root, fs) = service("delete");
-        fs.call("maa", json!({"op": "write", "path": "d/x.txt", "data": "x"}))
-            .unwrap();
+        fs.call(
+            "maa",
+            json!({"op": "write", "path": "d/x.txt", "data": "x"}),
+        )
+        .unwrap();
         let refused = fs.call("maa", json!({"op": "delete", "path": "d"}));
         assert!(refused.is_err(), "非空目录不能被 delete 带走");
 
@@ -452,7 +469,8 @@ mod tests {
     fn stat_and_list_report_missing_entries_calmly() {
         let (root, fs) = service("stat");
         assert_eq!(
-            fs.call("maa", json!({"op": "stat", "path": "nope"})).unwrap()["exists"],
+            fs.call("maa", json!({"op": "stat", "path": "nope"}))
+                .unwrap()["exists"],
             false
         );
         assert_eq!(
@@ -466,8 +484,11 @@ mod tests {
     fn temp_clears_and_rejects_plugin_only_ops() {
         let (root, _) = service("temp-root");
         let fs = FsService::temp(root.clone());
-        fs.call("maa", json!({"op": "write", "path": "scratch.txt", "data": "x"}))
-            .unwrap();
+        fs.call(
+            "maa",
+            json!({"op": "write", "path": "scratch.txt", "data": "x"}),
+        )
+        .unwrap();
         assert!(fs.call("maa", json!({"op": "purge", "path": ""})).is_err());
         fs.call("maa", json!({"op": "clear"})).unwrap();
         assert!(!root.join("plugin-temp").join("maa").exists());

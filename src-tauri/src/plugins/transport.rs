@@ -116,8 +116,8 @@ impl<R: BufRead> FrameReader<R> {
 
         let mut body = vec![0u8; length];
         self.inner.read_exact(&mut body)?;
-        let value = serde_json::from_slice(&body)
-            .map_err(|error| FrameError::Json(error.to_string()))?;
+        let value =
+            serde_json::from_slice(&body).map_err(|error| FrameError::Json(error.to_string()))?;
         Ok(Some(value))
     }
 }
@@ -171,10 +171,7 @@ mod tests {
     #[test]
     fn header_names_are_case_insensitive_and_unknown_ones_ignored() {
         let body = br#"{"ok":true}"#;
-        let raw = format!(
-            "X-Whatever: 1\r\ncontent-length: {}\r\n\r\n",
-            body.len()
-        );
+        let raw = format!("X-Whatever: 1\r\ncontent-length: {}\r\n\r\n", body.len());
         let mut buffer = raw.into_bytes();
         buffer.extend_from_slice(body);
 
@@ -205,7 +202,9 @@ mod tests {
 
     #[test]
     fn non_header_line_is_rejected() {
-        let mut reader = FrameReader::new(Cursor::new(b"Content-Length: 2\r\nnot-a-header\r\n\r\n{}".to_vec()));
+        let mut reader = FrameReader::new(Cursor::new(
+            b"Content-Length: 2\r\nnot-a-header\r\n\r\n{}".to_vec(),
+        ));
         match reader.read_frame() {
             Err(FrameError::Header(detail)) => assert!(detail.contains("名字: 值")),
             other => panic!("应报 Header，got: {other:?}"),

@@ -167,12 +167,17 @@ mod tests {
     fn calls_an_allowlisted_host_tool() {
         let registry = ToolRegistry::new();
         registry
-            .register(Box::new(StubTool { name: "query_stage" }))
+            .register(Box::new(StubTool {
+                name: "query_stage",
+            }))
             .unwrap();
         let service = service_with(Arc::new(registry));
 
         let value = service
-            .call("maa", json!({"tool": "query_stage", "args": {"stage": "1-7"}}))
+            .call(
+                "maa",
+                json!({"tool": "query_stage", "args": {"stage": "1-7"}}),
+            )
             .unwrap();
         assert_eq!(value, json!({"ok": true}));
     }
@@ -182,10 +187,13 @@ mod tests {
         let registry = Arc::new(ToolRegistry::new());
         let service = service_with(registry);
 
-        for tool in ["read_file", "run_command", "capture_game_screen", "no_such_tool"] {
-            let err = service
-                .call("maa", json!({"tool": tool}))
-                .unwrap_err();
+        for tool in [
+            "read_file",
+            "run_command",
+            "capture_game_screen",
+            "no_such_tool",
+        ] {
+            let err = service.call("maa", json!({"tool": tool})).unwrap_err();
             assert!(
                 matches!(err, HostError::InvalidArgs { .. }),
                 "{tool} 应该被拒：{err:?}"
@@ -198,13 +206,17 @@ mod tests {
         let registry = ToolRegistry::new();
         registry
             .register_with_origin(
-                Box::new(StubTool { name: "query_stage" }),
+                Box::new(StubTool {
+                    name: "query_stage",
+                }),
                 Origin::Plugin("other".to_string()),
             )
             .unwrap();
         let service = service_with(Arc::new(registry));
 
-        let err = service.call("maa", json!({"tool": "query_stage"})).unwrap_err();
+        let err = service
+            .call("maa", json!({"tool": "query_stage"}))
+            .unwrap_err();
         assert!(
             matches!(&err, HostError::InvalidArgs { detail, .. } if detail.contains("插件工具")),
             "{err:?}"
@@ -214,7 +226,9 @@ mod tests {
     #[test]
     fn reports_a_missing_binding_instead_of_panicking() {
         let service = QueryService::new(None);
-        let err = service.call("maa", json!({"tool": "query_stage"})).unwrap_err();
+        let err = service
+            .call("maa", json!({"tool": "query_stage"}))
+            .unwrap_err();
         assert!(matches!(err, HostError::Failed { .. }), "{err:?}");
     }
 

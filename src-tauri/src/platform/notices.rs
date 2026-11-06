@@ -411,12 +411,7 @@ impl Notices {
     /// 技能目录差异：首启只记基线（不告知、不耗序号）；有差异 →
     /// stamp=++seq、note=差异（新增 / 更新条目按 `- 名称（插件）：描述` 目录行
     /// 格式，移除列名；插件条目带展示名）。
-    fn diff_catalog_pairs(
-        &mut self,
-        k: DimKey,
-        entries: &[CatalogEntry],
-        context: Option<&str>,
-    ) {
+    fn diff_catalog_pairs(&mut self, k: DimKey, entries: &[CatalogEntry], context: Option<&str>) {
         let last = catalog_entries_from_value(&self.dim_ref(k).value);
         let seeded = self.dim_ref(k).value.is_empty() && self.dim_ref(k).stamp == 0;
         let mut current: Vec<CatalogEntry> = entries.to_vec();
@@ -564,8 +559,9 @@ fn catalog_entries_diff(
     let updated: Vec<&CatalogEntry> = current
         .iter()
         .filter(|e| {
-            last.iter()
-                .any(|l| l.name == e.name && !l.description.is_empty() && l.description != e.description)
+            last.iter().any(|l| {
+                l.name == e.name && !l.description.is_empty() && l.description != e.description
+            })
         })
         .collect();
 
@@ -859,10 +855,7 @@ mod tests {
         assert!(n.dims.skill_catalog.note.is_empty());
         assert_eq!(
             catalog_entries_from_value(&n.dims.skill_catalog.value),
-            vec![
-                host("推演分析", "推演规则"),
-                host("数值计算", "计算规则")
-            ]
+            vec![host("推演分析", "推演规则"), host("数值计算", "计算规则")]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -962,7 +955,10 @@ mod tests {
         {
             let mut n = Notices::load(&dir);
             n.diff_tool_catalog(
-                &[host("read_file", "读取文件"), plugin("run_maa_task", "跑 MAA", "maa", "MAA 自动化")],
+                &[
+                    host("read_file", "读取文件"),
+                    plugin("run_maa_task", "跑 MAA", "maa", "MAA 自动化"),
+                ],
                 None,
             );
         }
@@ -991,10 +987,7 @@ mod tests {
         assert_eq!(n.seq(), 0, "仅格式迁移不算差异");
         let value = &n.dims.tool_catalog.value;
         assert!(value.contains("\"origin\""), "写回三元组：{value}");
-        assert_eq!(
-            catalog_entries_from_value(value),
-            vec![host("A", "da")]
-        );
+        assert_eq!(catalog_entries_from_value(value), vec![host("A", "da")]);
     }
 
     #[test]

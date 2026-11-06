@@ -432,8 +432,9 @@ fn run_call(
                 ToolViewKind::Html => {
                     let html = view.html.as_deref().unwrap_or("");
                     if let Some(path) = render_view.as_deref() {
-                        let written = build_shell(html, &view.title)
-                            .and_then(|document| std::fs::write(path, document).map_err(|e| e.to_string()));
+                        let written = build_shell(html, &view.title).and_then(|document| {
+                            std::fs::write(path, document).map_err(|e| e.to_string())
+                        });
                         match written {
                             Ok(()) => println!("已写出预览：{}", path.display()),
                             Err(error) => {
@@ -581,7 +582,10 @@ fn run(dir: &Path, target: &str, json: bool) -> Vec<Check> {
             Some(found) => {
                 checks.push(Check::pass(
                     3,
-                    format!("插件目录里没有同名文件，按 PATH 找到 {name}（{}）", found.display()),
+                    format!(
+                        "插件目录里没有同名文件，按 PATH 找到 {name}（{}）",
+                        found.display()
+                    ),
                 ));
                 PathBuf::from(name)
             }
@@ -810,7 +814,10 @@ fn check_handshake(id: usize, manifest: &PluginManifest, frame: &Value) -> Check
     let Some(result) = frame.get("result") else {
         return Check::fail(
             id,
-            format!("initialize 回了 error：{}", frame.get("error").cloned().unwrap_or(Value::Null)),
+            format!(
+                "initialize 回了 error：{}",
+                frame.get("error").cloned().unwrap_or(Value::Null)
+            ),
             "initialize 成功时回 result；失败也要回一帧说明原因",
         );
     };
@@ -854,7 +861,11 @@ fn check_handshake(id: usize, manifest: &PluginManifest, frame: &Value) -> Check
                 "工具名用小写字母开头，只含 a-z 0-9 _，加上前缀后不超过 64 字符",
             );
         }
-        if !tool.get("parameters").map(Value::is_object).unwrap_or(false) {
+        if !tool
+            .get("parameters")
+            .map(Value::is_object)
+            .unwrap_or(false)
+        {
             return Check::fail(
                 id,
                 format!("工具 {name} 的 parameters 不是对象"),
@@ -898,7 +909,10 @@ fn check_handshake(id: usize, manifest: &PluginManifest, frame: &Value) -> Check
 
     Check::pass(
         id,
-        format!("protocol = {SUPPORTED_PROTOCOL}，声明了 {} 个工具", tools.len()),
+        format!(
+            "protocol = {SUPPORTED_PROTOCOL}，声明了 {} 个工具",
+            tools.len()
+        ),
     )
 }
 
@@ -1010,8 +1024,7 @@ impl Session {
     }
 
     fn send(&mut self, value: &Value) -> Result<(), String> {
-        write_frame(&mut self.stdin, value)
-            .map_err(|error| error.to_string())?;
+        write_frame(&mut self.stdin, value).map_err(|error| error.to_string())?;
         self.stdin.flush().map_err(|error| error.to_string())
     }
 
@@ -1091,7 +1104,6 @@ impl Drop for Session {
         self.reap();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1206,8 +1218,14 @@ mod tests {
     #[test]
     fn render_view_shell_escapes_content_and_keeps_the_sandbox() {
         let shell = build_shell(r#"<p class="x">a & b</p>"#, "标题 <x>").unwrap();
-        assert!(shell.contains(r#"<iframe sandbox="allow-scripts""#), "{shell}");
-        assert!(shell.contains("&lt;p class=&quot;x&quot;&gt;a &amp; b&lt;/p&gt;"), "{shell}");
+        assert!(
+            shell.contains(r#"<iframe sandbox="allow-scripts""#),
+            "{shell}"
+        );
+        assert!(
+            shell.contains("&lt;p class=&quot;x&quot;&gt;a &amp; b&lt;/p&gt;"),
+            "{shell}"
+        );
         assert!(shell.contains("<title>标题 &lt;x&gt;</title>"), "{shell}");
         // 内容只能出现在 srcdoc 里，不能变成外壳自己的节点。
         assert!(!shell.contains("<p class="), "{shell}");
