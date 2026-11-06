@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn writing_an_oversized_frame_is_rejected() {
-        let huge = json!(format!("{}", "x".repeat(MAX_FRAME_BYTES)));
+        let huge = json!("x".repeat(MAX_FRAME_BYTES));
         let mut buffer = Vec::new();
         match write_frame(&mut buffer, &huge) {
             Err(FrameError::TooLarge { .. }) => {}
