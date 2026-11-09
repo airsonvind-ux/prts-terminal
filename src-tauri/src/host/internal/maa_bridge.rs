@@ -425,7 +425,14 @@ impl HostService for MaaBridgeService {
 
         let status = match op {
             "ensure" => {
-                let Some(info) = MachineInfo::load(&self.data_dir) else {
+                let maa_override = crate::storage::settings::SettingsStore::load(&self.data_dir)
+                    .settings
+                    .maa
+                    .maa_dir_override()
+                    .map(str::to_string);
+                let Some(info) =
+                    MachineInfo::load_resolved(&self.data_dir, maa_override.as_deref())
+                else {
                     return Err(HostError::failed(
                         "maa.bridge",
                         "还没有本机信息（machine.json）：请重启 PRTS，或在设置里确认 MAA 安装位置",

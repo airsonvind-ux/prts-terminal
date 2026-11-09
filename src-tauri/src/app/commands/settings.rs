@@ -39,6 +39,18 @@ pub async fn maa_status() -> crate::maa::manager::StatusView {
         .unwrap_or_default()
 }
 
+/// 「重新检测」：强制重跑本机信息探测（设置页 MAA 路径那一节用）。
+///
+/// 与 `maa_status` 的区别：那个读缓存，这个真去扫注册表与常见目录，
+/// 用户刚解压一份 MAA 时只有这条能看见。所以同样丢进 `spawn_blocking`。
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn maa_redetect() -> crate::maa::manager::StatusView {
+    tauri::async_runtime::spawn_blocking(crate::maa::manager::redetect)
+        .await
+        .unwrap_or_default()
+}
+
 /// 「测试连接」：桥在但没连上时**真的重连一次**，完了回最新状态。
 ///
 /// `async` 不是为了并发，是为了**别冻界面**：Tauri 的同步命令在主线程执行，

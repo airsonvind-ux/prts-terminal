@@ -175,6 +175,39 @@ impl MachineInfo {
 
     /// 由注册表条目 + 兜底扫描推导（Windows 下调用；拆出便于阅读）。
     #[cfg(windows)]
+    /// 用设置里的 MAA 目录覆盖探测结果。
+    ///
+    /// 只认目录里有 `MaaCore.dll`；无效路径保持原值（不把好的探测结果砸掉）。
+    /// 与连接方式的 `auto_detect` 无关。
+    pub fn apply_maa_override(&mut self, raw: Option<&str>) {
+        let Some(raw) = raw else { return };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let dir = PathBuf::from(trimmed);
+        if dir.join(MAA_MARKER).is_file() {
+            self.maa = Some(dir);
+        }
+    }
+
+    /// 读缓存（失活则重新探测）并应用覆盖——工具层与桥的统一入口。
+    ///
+    /// 单独抽出来是因为：`machine.json` 是缓存，用户刚填的路径必须能绕过它，
+    /// 否则又要重启才能生效。
+    pub fn load_resolved(dir: &Path, maa_override: Option<&str>) -> Option<Self> {
+        let mut info = match Self::load(dir) {
+            Some(info) if info.all_alive() => info,
+            _ => {
+                let info = Self::detect(None);
+                info.save(dir);
+                info
+            }
+        };
+        info.apply_maa_override(maa_override);
+        Some(info)
+    }
+
     fn detect_from(entries: &[registry::Entry], maa_override: Option<&str>) -> Self {
         // ── 模拟器（层 2：注册表）──
         let mut emulators: Vec<Emulator> = Vec::new();
@@ -256,11 +289,78 @@ fn resolve_maa(entries: &[registry::Entry], maa_override: Option<&str>) -> Optio
             }
         }
     }
-    // 兜底：各盘根浅扫（便携版 MAA 不在注册表里，这一层真的会用到）
-    scan_drive_roots(&[MAA_MARKER])
-        .into_iter()
-        .next()
-        .map(|(dir, _marker)| dir)
+    // 兜底：已知位置快扫 + 各盘根一层。压缩包解压型没有注册表项，这一层真的会用到。
+    // 候选可能不止一个（旧版本目录没删、下载目录里还留着安装包旁的一份），
+    // 所以不取第一个，而是按 `MaaCore.dll` 的修改时间取最新——目录名里的版本号
+    // 不可信：很多人直接把新版本覆盖进老目录，名字不变。
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut budget = SCAN_BUDGET;
+    for root in maa_common_roots() {
+        collect_marker_dirs(&root, 3, MAA_MARKER, &mut candidates, &mut budget);
+    }
+    for (dir, _marker) in scan_drive_roots(&[MAA_MARKER]) {
+        candidates.push(dir);
+    }
+    candidates.sort_by_key(|dir| std::cmp::Reverse(marker_mtime(dir, MAA_MARKER)));
+    candidates.into_iter().next()
+}
+
+/// 扫描预算：目录条目上限，防止把整个盘拖进来。
+const SCAN_BUDGET: usize = 20_000;
+
+/// MAA 的常见落脚点（相对用户目录的那几个是解压默认位置）。
+fn maa_common_roots() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Some(v) = std::env::var_os("LOCALAPPDATA") {
+        out.push(PathBuf::from(&v));
+    }
+    if let Some(v) = std::env::var_os("APPDATA") {
+        out.push(PathBuf::from(v));
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let home = PathBuf::from(home);
+        out.push(home.join("Desktop"));
+        out.push(home.join("Downloads"));
+        out.push(home.join("Documents"));
+    }
+    out
+}
+
+/// 递归找含标记文件的目录；命中后不再深入。`budget` 是剩余条目预算。
+fn collect_marker_dirs(
+    root: &Path,
+    depth: u8,
+    marker: &str,
+    out: &mut Vec<PathBuf>,
+    budget: &mut usize,
+) {
+    if depth == 0 || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let p = e.path();
+        if !p.is_dir() {
+            continue;
+        }
+        if p.join(marker).is_file() {
+            out.push(p);
+            continue;
+        }
+        collect_marker_dirs(&p, depth - 1, marker, out, budget);
+    }
+}
+
+fn marker_mtime(dir: &Path, marker: &str) -> std::time::SystemTime {
+    std::fs::metadata(dir.join(marker))
+        .and_then(|m| m.modified())
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
 /// `<launcher>/games/*` 下含 `Arknights.exe` 的目录（不看目录名——两服不同）。
@@ -567,6 +667,41 @@ mod registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maa_override_requires_marker_file() {
+        let dir = std::env::temp_dir().join(format!("prts-maa-override-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(MAA_MARKER), b"x").unwrap();
+
+        let mut info = MachineInfo::default();
+        info.apply_maa_override(Some(dir.to_string_lossy().as_ref()));
+        assert_eq!(
+            info.maa.as_deref(),
+            Some(dir.as_path()),
+            "有标记文件就用它覆盖"
+        );
+
+        let mut untouched = MachineInfo::default();
+        untouched.apply_maa_override(Some("Z:\\definitely-not-here"));
+        assert!(
+            untouched.maa.is_none(),
+            "无效路径不得覆盖（包括不得砸掉已有结果）"
+        );
+
+        let mut blank = MachineInfo {
+            maa: Some(PathBuf::from("X:\\maa")),
+            ..Default::default()
+        };
+        blank.apply_maa_override(Some("   "));
+        assert_eq!(
+            blank.maa,
+            Some(PathBuf::from("X:\\maa")),
+            "空串 = 回自动，不动原值"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn dim_values_empty_are_not_detected() {

@@ -80,6 +80,7 @@ export function mergeSettings(cur: Settings, patch: SettingsPatch): Settings {
     if (p.screenshot_extras !== undefined) maa.screenshot_extras = p.screenshot_extras;
     if (p.touch_extras !== undefined) maa.touch_extras = p.touch_extras;
     if (p.emulator !== undefined) maa.emulator = p.emulator;
+    if (p.maa_path !== undefined) maa.maa_path = p.maa_path;
     if (p.emulator_path !== undefined) maa.emulator_path = p.emulator_path;
     if (p.adb_path !== undefined) maa.adb_path = p.adb_path;
     if (p.address !== undefined) maa.address = p.address;

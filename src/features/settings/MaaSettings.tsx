@@ -6,7 +6,7 @@
 // 三节：账号 → 连接 → 增强。
 //
 // - 状态与动作同一行：左边状态、右边「测试连接」。用户打开这页只需要看这一行。
-// - 连接节的四项（模拟器 / 安装路径 / 连接地址 / ADB 路径）**常驻显示**：
+// - 连接节的四项（模拟器 / 模拟器目录 / 连接地址 / ADB 路径）**常驻显示**：
 //   自动检测开着时整体置灰（值由我们识别），关掉后原地解锁——任何一行都不出现/消失。
 // - 状态行数据来自**只读**命令 maa_status（面板打开取一次、每次操作后刷新）；
 //   「测试连接」调 maa_test_connection（那才会真去连一次）。
@@ -48,6 +48,8 @@ export interface MaaSettingsProps {
   onTest: () => Promise<MaaStatus | null>;
   /** 变更上抛（Panel 单漏斗：busy 守卫 + 即时保存 + 失败回滚） */
   onPatch: (patch: MaaPatch, label?: string) => void;
+  /** 「选择」MAA 安装目录（Panel：busy 守卫 → 系统目录选择器 → 选中即存） */
+  onChooseMaaDir: () => Promise<void>;
   /** 「选择」模拟器安装目录（Panel：busy 守卫 → 系统目录选择器 → 选中即存） */
   onChooseEmulatorDir: () => void;
   /** 「选择」adb 可执行文件（同上，文件选择器） */
@@ -94,12 +96,16 @@ export function MaaSettings({
   testing,
   onTest,
   onPatch,
+  onChooseMaaDir,
   onChooseEmulatorDir,
   onChooseAdbFile,
 }: MaaSettingsProps) {
   const [status, setStatus] = useState<MaaStatus | null>(null);
+  /** 「重新检测」进行中：探测会扫目录，按钮得有个反馈 */
+  const [detecting, setDetecting] = useState(false);
   // 文本框草稿：失焦时提交（与现有页的文本字段约定一致）
   const [draft, setDraft] = useState({
+    maa_path: maa.maa_path,
     adb_path: maa.adb_path,
     address: maa.address,
     emulator_path: maa.emulator_path,
@@ -111,20 +117,36 @@ export function MaaSettings({
       .catch((e) => console.error("[maa] maa_status 失败", e));
   }, []);
 
+  /** 真去扫一次（读缓存看不到刚解压的 MAA，只有这条能看见） */
+  const redetect = useCallback(() => {
+    setDetecting(true);
+    invoke<MaaStatus>("maa_redetect")
+      .then(setStatus)
+      .catch((e) => console.error("[maa] maa_redetect 失败", e))
+      .finally(() => setDetecting(false));
+  }, []);
+
   useEffect(refresh, [refresh]);
   // 外部值变了（保存成功 / 失败回滚）→ 草稿跟着回到真实值
   useEffect(() => {
     setDraft({
+      maa_path: maa.maa_path,
       adb_path: maa.adb_path,
       address: maa.address,
       emulator_path: maa.emulator_path,
     });
-  }, [maa.adb_path, maa.address, maa.emulator_path]);
+  }, [maa.maa_path, maa.adb_path, maa.address, maa.emulator_path]);
 
   const runTest = async () => {
     const view = await onTest();
     if (view) setStatus(view);
     else refresh();
+  };
+
+  /** 选完目录必须重测：状态行显示的是探测结果，不重测就无从反馈 */
+  const chooseMaaDir = async () => {
+    await onChooseMaaDir();
+    redetect();
   };
 
   const running = status?.running ?? false;
@@ -159,6 +181,54 @@ export function MaaSettings({
             />
           ))}
         </div>
+      </SettingsSection>
+
+      {/* MAA 本体：压缩包解压即用，没有注册表项，探测会漏——这里给结论和手动出口 */}
+      <SettingsSection title="MAA 路径">
+        <div className={styles.statusRow}>
+          <div className={styles.statusText}>
+            {!status
+              ? "正在读取状态…"
+              : status.maa_override_invalid
+                ? `已填路径无效：这里没有 MaaCore.dll（${status.maa_override}）`
+                : status.maa_dir
+                  ? `已找到：${status.maa_dir}（${status.maa_source === "manual" ? "手动指定" : "自动检测"}）`
+                  : "未找到 MAA（目录里要有 MaaCore.dll）"}
+          </div>
+          <Button disabled={locked || detecting} onClick={redetect}>
+            {detecting ? "检测中…" : "重新检测"}
+          </Button>
+        </div>
+        <SettingsRow
+          label="MAA 目录"
+          hint={
+            draft.maa_path !== maa.maa_path
+              ? "未保存：按回车或点空白处生效"
+              : "自动检测不到时从这里指定"
+          }
+          control={
+            <div className={styles.pathRow}>
+              <input
+                className={styles.input}
+                disabled={locked}
+                value={draft.maa_path}
+                placeholder="D:\\MAA"
+                onChange={(e) => setDraft({ ...draft, maa_path: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                }}
+                onBlur={() => {
+                  if (draft.maa_path !== maa.maa_path) {
+                    onPatch({ maa_path: draft.maa_path }, "MAA 路径");
+                  }
+                }}
+              />
+              <Button disabled={locked} onClick={chooseMaaDir}>
+                选择
+              </Button>
+            </div>
+          }
+        />
       </SettingsSection>
 
       {/* ② 连接：状态与动作同一行；下面四项常驻，自动检测开着时置灰 */}
@@ -212,7 +282,8 @@ export function MaaSettings({
         />
 
         <SettingsRow
-          label="安装路径"
+          label="模拟器目录"
+          hint="MuMu / 雷电本体所在目录（截图增强要用）"
           control={
             <div className={styles.pathRow}>
               <input
@@ -223,7 +294,7 @@ export function MaaSettings({
                 onChange={(e) => setDraft({ ...draft, emulator_path: e.target.value })}
                 onBlur={() => {
                   if (draft.emulator_path !== maa.emulator_path) {
-                    onPatch({ emulator_path: draft.emulator_path }, "安装路径");
+                    onPatch({ emulator_path: draft.emulator_path }, "模拟器目录");
                   }
                 }}
               />

@@ -41,6 +41,7 @@ export function SettingsPanel() {
     handleResetWorkspace,
     maaInFlight,
     handleTestConnection,
+    handleChooseMaaDir,
     handleChooseEmulatorDir,
     handleChooseAdbFile,
     handleInstallSkill,
@@ -224,6 +225,7 @@ export function SettingsPanel() {
                 onTest: handleTestConnection,
                 onPatch: (patch, label) =>
                   updateSettings({ maa: patch }, label),
+                onChooseMaaDir: handleChooseMaaDir,
                 onChooseEmulatorDir: handleChooseEmulatorDir,
                 onChooseAdbFile: handleChooseAdbFile,
               }}

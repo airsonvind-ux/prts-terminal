@@ -54,6 +54,13 @@ pub struct MaaSettings {
     /// 指定模拟器（取值 = `machine.json` 里的标签；空 = 自动）。
     #[serde(default)]
     pub emulator: String,
+    /// MAA 安装目录覆盖（空 = 自动检测）。
+    ///
+    /// 与 `auto_detect` **无关**：那个开关管“怎么连”，这个管“装在哪”。
+    /// MAA 官方发布是压缩包，没有安装过程也就没有注册表项，探测天然够不到，
+    /// 所以这一项是必需的手动出口，不是锦上添花。
+    #[serde(default)]
+    pub maa_path: String,
     /// 模拟器路径覆盖（空 = 用本机探测到的安装目录）。截图增强要用它。
     #[serde(default)]
     pub emulator_path: String,
@@ -77,6 +84,7 @@ impl Default for MaaSettings {
             screenshot_extras: true,
             touch_extras: false,
             emulator: String::new(),
+            maa_path: String::new(),
             emulator_path: String::new(),
             adb_path: String::new(),
             address: String::new(),
@@ -85,6 +93,16 @@ impl Default for MaaSettings {
 }
 
 impl MaaSettings {
+    /// MAA 目录覆盖（空 = 不覆盖）。不受 `auto_detect` 影响。
+    pub fn maa_dir_override(&self) -> Option<&str> {
+        let trimmed = self.maa_path.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
     /// 连接覆盖项：自动检测开着 → 一律不覆盖；否则空串（或全空白）= 不覆盖。
     pub fn overrides(&self) -> Overrides {
         if self.auto_detect {
@@ -109,6 +127,26 @@ impl MaaSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maa_dir_override_is_independent_of_auto_detect() {
+        let s = MaaSettings {
+            maa_path: "  F:\\MAA-v6.22.0-win-x64  ".to_string(),
+            auto_detect: true,
+            ..MaaSettings::default()
+        };
+        assert_eq!(
+            s.maa_dir_override(),
+            Some("F:\\MAA-v6.22.0-win-x64"),
+            "手动路径不受自动检测开关影响，且去首尾空白"
+        );
+
+        let blank = MaaSettings {
+            maa_path: "   ".to_string(),
+            ..MaaSettings::default()
+        };
+        assert_eq!(blank.maa_dir_override(), None, "全空白 = 不覆盖");
+    }
 
     #[test]
     fn defaults_match_the_agreed_design() {

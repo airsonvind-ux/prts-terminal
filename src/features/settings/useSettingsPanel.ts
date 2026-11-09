@@ -412,6 +412,28 @@ export function useSettingsPanel() {
   }, []);
 
   /** 扩展页「选择」模拟器安装目录：busy 守卫 → 系统目录选择器 → 选定即存 */
+  /** 扩展页「选择」MAA 安装目录：跟模拟器目录同一个选择器，存进 maa_path */
+  const handleChooseMaaDir = useCallback(async () => {
+    if (isProcessingBusy(useProcessingStore.getState())) {
+      showToast("对话处理中不能修改路径", {
+        kind: "warning",
+        dedupeKey: "settings-busy-路径",
+      });
+      return;
+    }
+    const current = settingsRef.current?.maa.maa_path ?? "";
+    try {
+      const picked = await invoke<string | null>("pick_emulator_directory", {
+        current: current || null,
+      });
+      if (picked) {
+        updateSettings({ maa: { maa_path: picked } }, "MAA 路径");
+      }
+    } catch (e) {
+      showToast(`选择目录失败：${String(e)}`, { kind: "warning" });
+    }
+  }, [updateSettings]);
+
   const handleChooseEmulatorDir = useCallback(async () => {
     if (isProcessingBusy(useProcessingStore.getState())) {
       showToast("对话处理中不能修改路径", {
@@ -426,7 +448,7 @@ export function useSettingsPanel() {
         current: current || null,
       });
       if (picked) {
-        updateSettings({ maa: { emulator_path: picked } }, "安装路径");
+        updateSettings({ maa: { emulator_path: picked } }, "模拟器目录");
       }
     } catch (e) {
       showToast(`选择目录失败：${String(e)}`, { kind: "warning" });
@@ -547,6 +569,7 @@ export function useSettingsPanel() {
     handleResetWorkspace,
     maaInFlight,
     handleTestConnection,
+    handleChooseMaaDir,
     handleChooseEmulatorDir,
     handleChooseAdbFile,
     handleInstallSkill,

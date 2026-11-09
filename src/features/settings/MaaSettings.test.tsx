@@ -28,6 +28,7 @@ const MAA: MaaSettingsConfig = {
   screenshot_extras: true,
   touch_extras: false,
   emulator: "",
+  maa_path: "",
   emulator_path: "",
   adb_path: "",
   address: "",
@@ -36,6 +37,10 @@ const MAA: MaaSettingsConfig = {
 function status(over: Partial<MaaStatus> = {}): MaaStatus {
   return {
     maa_installed: true,
+    maa_dir: "F:\\MAA-v6.22.0-win-x64",
+    maa_override: null,
+    maa_override_invalid: false,
+    maa_source: "auto",
     bridge_available: true,
     connected: true,
     running: false,
@@ -88,6 +93,7 @@ async function render(
         testing,
         onTest,
         onPatch,
+        onChooseMaaDir: async () => {},
         onChooseEmulatorDir,
         onChooseAdbFile,
       })
@@ -113,7 +119,7 @@ describe("MaaSettings（插件设置页）", () => {
     expect(text).toContain("官服");
     expect(text).toContain("B 服");
     expect(text).toContain("自动检测");
-    expect(text).toContain("安装路径");
+    expect(text).toContain("模拟器目录");
     expect(text).toContain("测试连接");
     // 不泄露技术细节
     expect(text).not.toContain("截图增强也依赖它");

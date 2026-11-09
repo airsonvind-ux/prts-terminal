@@ -28,6 +28,7 @@ const MAA: MaaSettingsProps["maa"] = {
   screenshot_extras: true,
   touch_extras: false,
   emulator: "",
+  maa_path: "",
   emulator_path: "",
   adb_path: "",
   address: "",
@@ -39,6 +40,7 @@ const MAA_PROPS: MaaSettingsProps = {
   testing: false,
   onTest: async () => null,
   onPatch: () => {},
+  onChooseMaaDir: async () => {},
   onChooseEmulatorDir: () => {},
   onChooseAdbFile: () => {},
 };
@@ -46,6 +48,9 @@ const MAA_PROPS: MaaSettingsProps = {
 /** 详情页里会挂上 MAA 设置页，它一进来就问 maa_status；给个空台账形状即可。 */
 const MAA_STATUS = {
   maa_installed: true,
+  maa_dir: null,
+  maa_override: null,
+  maa_override_invalid: false,
   bridge_available: true,
   connected: false,
   running: false,

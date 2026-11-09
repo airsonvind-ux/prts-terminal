@@ -403,8 +403,19 @@ pub fn stop() -> Result<(), String> {
 /// 走 `status`（那才会真去连一次）。
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StatusView {
-    /// 本机装了 MAA（`machine.json` 的结论）。
+    /// 本机装了 MAA（`machine.json` + 设置覆盖的结论）。
     pub maa_installed: bool,
+    /// 实际生效的 MAA 目录（探测所得或用户手填）；`None` = 未找到。
+    /// 设置页直接显示它：用户能自查是没装、装得深，还是路径填错了。
+    pub maa_dir: Option<String>,
+    /// 设置里填的覆盖路径（空 = 没填）。用于区分“没填”与“填错了”。
+    pub maa_override: Option<String>,
+    /// 填了路径但目录里没有 `MaaCore.dll`。
+    /// 不单独说这一句，用户就只看到“未找到”，以为设置没保存。
+    pub maa_override_invalid: bool,
+    /// 生效目录的来源：`manual`（手动指定）或 `auto`（自动检测）。
+    /// 不标出来就会出现“状态行一个路径、输入框另一个路径”的疑问。
+    pub maa_source: String,
     /// 桥已启动且 MaaCore 可用。
     pub bridge_available: bool,
     pub connected: bool,
@@ -435,16 +446,51 @@ pub struct ResolvedView {
     pub root: String,
 }
 
+/// 强制重新探测本机信息并落缓存，然后回最新状态。
+///
+/// 与 `status_view` 的区别：那个只读缓存，这个真去扫。用户刚解压一份 MAA 时，
+/// 缓存里写着“没有”，只有这条能看见它。
+pub fn redetect() -> StatusView {
+    let dir = config::data_dir();
+    let maa_override = maa_override_from_settings();
+    let mut info = MachineInfo::detect(maa_override.as_deref());
+    info.apply_maa_override(maa_override.as_deref());
+    info.save(&dir);
+    status_view()
+}
+
+/// 设置里的 MAA 目录覆盖（空 = 不覆盖）。
+fn maa_override_from_settings() -> Option<String> {
+    let store = crate::storage::settings::SettingsStore::load(&config::data_dir());
+    store.settings.maa.maa_dir_override().map(str::to_string)
+}
+
 pub fn status_view() -> StatusView {
     let Ok(m) = lock() else {
         return StatusView::default();
     };
 
-    let machine = MachineInfo::load(&config::data_dir());
+    let maa_override = maa_override_from_settings();
+    let maa_override_invalid = maa_override
+        .as_deref()
+        .map(|raw| !std::path::Path::new(raw).join("MaaCore.dll").is_file())
+        .unwrap_or(false);
+    let machine = MachineInfo::load_resolved(&config::data_dir(), maa_override.as_deref());
     let maa_installed = machine
         .as_ref()
         .map(|info| info.maa.is_some())
         .unwrap_or(false);
+    let maa_dir = machine
+        .as_ref()
+        .and_then(|info| info.maa.clone())
+        .map(|p| p.to_string_lossy().into_owned());
+    // 覆盖有效才算“手动”，否则是探测来的——两者的可信度与排查方向不一样。
+    let maa_source = if maa_override.is_some() && !maa_override_invalid {
+        "manual"
+    } else {
+        "auto"
+    }
+    .to_string();
     let emulators: Vec<String> = machine
         .as_ref()
         .map(|info| info.emulators.iter().map(|e| e.label.clone()).collect())
@@ -469,6 +515,10 @@ pub fn status_view() -> StatusView {
     let Some(bridge) = m.bridge.as_ref() else {
         return StatusView {
             maa_installed,
+            maa_dir,
+            maa_override,
+            maa_override_invalid,
+            maa_source,
             last_error: m.last_error.clone(),
             stale: m.stale,
             emulators,
@@ -488,6 +538,10 @@ pub fn status_view() -> StatusView {
     let info = m.connected.as_ref();
     StatusView {
         maa_installed,
+        maa_dir,
+        maa_override,
+        maa_override_invalid,
+        maa_source,
         bridge_available,
         connected,
         running,
@@ -597,7 +651,8 @@ impl Manager {
         // 前置检查保留在插件侧：报错文案要给出用户能做的事（装 MAA / 改设置），
         // 而宿主的能力服务只能说「machine.json 或 MAA 目录不可用」。
         let data_dir = config::data_dir();
-        let info = MachineInfo::load(&data_dir).ok_or_else(|| {
+        let info = MachineInfo::load_resolved(&data_dir, maa_override_from_settings().as_deref())
+            .ok_or_else(|| {
             "还没有本机信息（machine.json）。请重启 PRTS，或在设置里确认 MAA 安装位置。".to_string()
         })?;
         if info.maa.is_none() {

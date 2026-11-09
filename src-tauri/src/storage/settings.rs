@@ -331,6 +331,8 @@ pub struct MaaPatch {
     pub screenshot_extras: Option<bool>,
     pub touch_extras: Option<bool>,
     pub emulator: Option<String>,
+    /// MAA 安装目录（空串 = 回自动检测）。
+    pub maa_path: Option<String>,
     pub emulator_path: Option<String>,
     pub adb_path: Option<String>,
     pub address: Option<String>,
@@ -724,6 +726,9 @@ impl SettingsStore {
             }
             if let Some(v) = &p.emulator {
                 self.settings.maa.emulator = v.trim().to_string();
+            }
+            if let Some(v) = &p.maa_path {
+                self.settings.maa.maa_path = v.trim().to_string();
             }
             if let Some(v) = &p.emulator_path {
                 self.settings.maa.emulator_path = v.trim().to_string();

@@ -513,14 +513,22 @@ pub fn run() {
         // 路径持久化到 data_dir/machine.json（工具层据此解析，不入值维度）。
         let machine_info = {
             let dir = config::data_dir();
-            match crate::machine::MachineInfo::load(&dir) {
+            let maa_override = crate::storage::settings::SettingsStore::load(&dir)
+                .settings
+                .maa
+                .maa_dir_override()
+                .map(str::to_string);
+            let mut info = match crate::machine::MachineInfo::load(&dir) {
                 Some(info) if info.all_alive() => info,
                 _ => {
                     let info = crate::machine::MachineInfo::detect(None);
                     info.save(&dir);
                     info
                 }
-            }
+            };
+            // 用户手填的路径优先于缓存与探测（D 系列：设置页必须能生效，不等重启）。
+            info.apply_maa_override(maa_override.as_deref());
+            info
         };
 
         {
@@ -732,6 +740,7 @@ pub fn run() {
             updater::updater_install_blockers,
             updater::updater_take_post_install_notice,
             commands::maa_status,
+            commands::maa_redetect,
             commands::maa_test_connection,
             commands::pick_emulator_directory,
             commands::pick_adb_file,

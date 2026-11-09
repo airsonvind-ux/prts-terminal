@@ -46,6 +46,7 @@ function defaultSettings(): Settings {
       screenshot_extras: true,
       touch_extras: false,
       emulator: "",
+      maa_path: "",
       emulator_path: "",
       adb_path: "",
       address: "",

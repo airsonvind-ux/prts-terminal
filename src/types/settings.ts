@@ -48,6 +48,8 @@ export interface MaaSettings {
   touch_extras: boolean;
   /** 指定模拟器（machine.json 的标签；空串 = 自动） */
   emulator: string;
+  /** MAA 安装目录（空 = 自动检测；与 auto_detect 无关） */
+  maa_path: string;
   /** 模拟器路径（空 = 用探测到的安装目录） */
   emulator_path: string;
   adb_path: string;
@@ -57,6 +59,14 @@ export interface MaaSettings {
 /** MAA 只读状态（maa_status / maa_test_connection 返回值） */
 export interface MaaStatus {
   maa_installed: boolean;
+  /** 实际生效的 MAA 目录（探测或手填）；null = 未找到 */
+  maa_dir: string | null;
+  /** 设置里填的覆盖路径（null = 没填） */
+  maa_override: string | null;
+  /** 填了路径但目录里没有 MaaCore.dll */
+  maa_override_invalid: boolean;
+  /** 生效目录的来源：手动指定 / 自动检测 */
+  maa_source: "manual" | "auto";
   bridge_available: boolean;
   connected: boolean;
   running: boolean;
@@ -250,6 +260,7 @@ export interface MaaPatch {
   screenshot_extras?: boolean;
   touch_extras?: boolean;
   emulator?: string;
+  maa_path?: string;
   emulator_path?: string;
   adb_path?: string;
   address?: string;
