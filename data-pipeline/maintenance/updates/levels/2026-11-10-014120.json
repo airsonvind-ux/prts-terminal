@@ -1,0 +1,260 @@
+{
+  "表": "levels",
+  "模式": "全量重建",
+  "运行时间": "2026-11-10 01:41:20",
+  "数据源": {
+    "提交": "6f63c14",
+    "提交标题": "[CN UPDATE] Client:2.7.91 Data:26-11-06-12-56-09-07186384",
+    "游戏版本": "2.7.91",
+    "数据时间": "26-11-06-12-56-09-07186384"
+  },
+  "脚本": {
+    "文件": "rebuild.py",
+    "版本": 1
+  },
+  "计数": {
+    "原": 4022,
+    "新": 4125
+  },
+  "新增": [
+    "level_act3autochess_01",
+    "level_act3autochess_02",
+    "level_act3autochess_03",
+    "level_act3autochess_04",
+    "level_act3autochess_05",
+    "level_act3autochess_06",
+    "level_act3autochess_07",
+    "level_act3autochess_escaped_multi",
+    "level_act3autochess_escaped_single",
+    "level_act3autochess_h01",
+    "level_act3autochess_h02",
+    "level_act3autochess_h03",
+    "level_act3autochess_h04",
+    "level_act3autochess_h05",
+    "level_act3autochess_h06",
+    "level_act3autochess_h07_01",
+    "level_act3autochess_h07_01_s",
+    "level_act3autochess_h07_02",
+    "level_act3autochess_h07_02_s",
+    "level_act3autochess_h07_03",
+    "level_act3autochess_h07_03_s",
+    "level_act3autochess_h07_04",
+    "level_act3autochess_h07_04_s",
+    "level_act3autochess_h07_06",
+    "level_act3autochess_h07_06_s",
+    "level_act3autochess_h07_07",
+    "level_act3autochess_h07_07_s",
+    "level_act3autochess_h07_08",
+    "level_act3autochess_h07_08_s",
+    "level_act3autochess_h07_09",
+    "level_act3autochess_h07_09_s",
+    "level_act3autochess_h07_10",
+    "level_act3autochess_h07_10_s",
+    "level_act3autochess_h07_11",
+    "level_act3autochess_h07_11_s",
+    "level_act3autochess_h08_01",
+    "level_act3autochess_h08_01_s",
+    "level_act3autochess_h08_02",
+    "level_act3autochess_h08_02_s",
+    "level_act3autochess_h08_03",
+    "level_act3autochess_h08_03_s",
+    "level_act3autochess_h08_04",
+    "level_act3autochess_h08_04_s",
+    "level_act3autochess_h08_05",
+    "level_act3autochess_h08_05_s",
+    "level_act3autochess_h08_06",
+    "level_act3autochess_h08_06_s",
+    "level_act3autochess_m01",
+    "level_act3autochess_m01_sub_01",
+    "level_act3autochess_m01_sub_02",
+    "level_act3autochess_m01_sub_03",
+    "level_act3autochess_m02",
+    "level_act3autochess_m02_sub_01",
+    "level_act3autochess_m02_sub_02",
+    "level_act3autochess_m02_sub_03",
+    "level_act3autochess_m03",
+    "level_act3autochess_m03_sub_01",
+    "level_act3autochess_m03_sub_02",
+    "level_act3autochess_m03_sub_03",
+    "level_act3autochess_m04",
+    "level_act3autochess_m04_sub_01",
+    "level_act3autochess_m04_sub_02",
+    "level_act3autochess_m04_sub_03",
+    "level_act3autochess_m05",
+    "level_act3autochess_m05_sub_01",
+    "level_act3autochess_m05_sub_02",
+    "level_act3autochess_m05_sub_03",
+    "level_act3autochess_m06",
+    "level_act3autochess_m06_sub_01",
+    "level_act3autochess_m06_sub_02",
+    "level_act3autochess_m06_sub_03",
+    "level_act3autochess_m09",
+    "level_act3autochess_m09_sub_01",
+    "level_act3autochess_m09_sub_02",
+    "level_act3autochess_m09_sub_03",
+    "level_act3autochess_m10",
+    "level_act3autochess_m10_sub_01",
+    "level_act3autochess_m10_sub_02",
+    "level_act3autochess_m10_sub_03",
+    "level_act3autochess_m11",
+    "level_act3autochess_m11_sub_01",
+    "level_act3autochess_m11_sub_02",
+    "level_act3autochess_m11_sub_03",
+    "level_act3autochess_m12",
+    "level_act3autochess_m12_sub_01",
+    "level_act3autochess_m12_sub_02",
+    "level_act3autochess_m12_sub_03",
+    "level_act3autochess_tr01",
+    "level_act3autochess_tr02",
+    "level_act3autochess_tr03",
+    "level_act3autochess_tr04",
+    "level_act55side_ex01",
+    "level_act55side_ex02",
+    "level_act55side_ex03",
+    "level_act55side_ex04",
+    "level_act55side_ex05",
+    "level_act55side_ex06",
+    "level_act55side_ex07",
+    "level_act55side_ex08",
+    "level_act55side_sub-1-1",
+    "level_act55side_sub-1-2",
+    "level_act55side_sub-1-3",
+    "level_act55side_sub-1-4"
+  ],
+  "消失": [],
+  "变化": [
+    "level_act1museum_m4_03"
+  ],
+  "复核": {
+    "行数": 4125,
+    "非空计数": {
+      "有额外路线": 1258,
+      "有分支": 1290,
+      "有预置单位": 3926,
+      "有关卡符文": 2235
+    },
+    "体积KB": {
+      "地图数据": 2537.3,
+      "路线": 11806.1,
+      "额外路线": 825.0,
+      "波次": 9971.1,
+      "分支": 958.2,
+      "预置单位": 1730.1,
+      "关卡符文": 1748.5
+    },
+    "visitEveryCheckPoint=true": 4475,
+    "源文件": {
+      "总数": 4125,
+      "obt": 2098,
+      "activities": 2027
+    },
+    "撞车": 4,
+    "撞车明细": [
+      {
+        "来源": "文件名相同",
+        "键": "level_autochess_enemy_data",
+        "保留": "levels\\activities\\act1autochess\\level_autochess_enemy_data.json",
+        "忽略": "levels\\activities\\act3autochess\\level_autochess_enemy_data.json"
+      },
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-01",
+        "保留": "levels\\obt\\rune\\level_rune_01-01.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-01.json"
+      },
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-02",
+        "保留": "levels\\obt\\rune\\level_rune_01-02.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-02.json"
+      },
+      {
+        "来源": "文件名相同",
+        "键": "level_rune_01-03",
+        "保留": "levels\\obt\\rune\\level_rune_01-03.json",
+        "忽略": "levels\\activities\\act5d1\\level_rune_01-03.json"
+      }
+    ],
+    "内部levelId 与文件名不一致": {
+      "数量": 15,
+      "明细": [
+        {
+          "键": "level_sandbox1_19",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_19.json"
+        },
+        {
+          "键": "level_sandbox1_24",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_24.json"
+        },
+        {
+          "键": "level_sandbox1_25",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_25.json"
+        },
+        {
+          "键": "level_sandbox1_26",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_26.json"
+        },
+        {
+          "键": "level_sandbox1_33",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_33.json"
+        },
+        {
+          "键": "level_sandbox1_58",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_58.json"
+        },
+        {
+          "键": "level_sandbox1_66",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_66.json"
+        },
+        {
+          "键": "level_sandbox1_67",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_67.json"
+        },
+        {
+          "键": "level_sandbox1_68",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\obt\\sandbox\\sandbox_1\\level_sandbox1_68.json"
+        },
+        {
+          "键": "level_sandbox_26",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_26.json"
+        },
+        {
+          "键": "level_sandbox_34",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_34.json"
+        },
+        {
+          "键": "level_sandbox_35",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_35.json"
+        },
+        {
+          "键": "level_sandbox_36",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_36.json"
+        },
+        {
+          "键": "level_sandbox_46",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_46.json"
+        },
+        {
+          "键": "level_sandbox_47",
+          "内部levelId": "[dev]test/level_training",
+          "源文件": "levels\\activities\\act1sandbox\\level_sandbox_47.json"
+        }
+      ]
+    }
+  },
+  "结果": "成功"
+}
