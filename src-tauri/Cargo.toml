@@ -57,7 +57,7 @@ semver = "1"
 url = "2"
 # 命令输出的 GBK 兜底解码（Windows 中文控制台，见 exec/runner.rs）
 encoding_rs = "0.8"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 # 图片附件的物化压缩（解码 → 缩边 → 重编码 JPEG）。
 # 特性裁剪：只开需要解码/编码的格式，其余（tiff/avif/exr 等）不编译。
