@@ -136,6 +136,7 @@ class TableSpec:
     on_diff: object = None                # (key, col, want, have) -> 写入值
     extra_args: object = None             # (parser) -> None
     recheck_enabled: bool = True          # 本表要不要 --recheck
+    name_col: str = "名称"                # 待办与记录里展示名称用的列（stages 为「关卡名」）
 
 
 # ─── 工具 ─────────────────────────────────────────────────────
@@ -400,18 +401,18 @@ def run(spec, argv=None):
         print("\n------ 2. 新增 ------")
         new_keys = [k for k in rows if k not in existing]
         record["新增"] = {"行": len(new_keys),
-                          "明细": [{"键": Pending.kstr(k), "名称": rows[k].get("名称")}
+                          "明细": [{"键": Pending.kstr(k), "名称": rows[k].get(spec.name_col)}
                                    for k in new_keys[:MAX_DETAIL]]}
         print("  新增行: %d" % len(new_keys))
         for k in new_keys[:20]:
-            print("    %s  %s" % (Pending.kstr(k), rows[k].get("名称") or ""))
+            print("    %s  %s" % (Pending.kstr(k), rows[k].get(spec.name_col) or ""))
         if not args.dry_run:
             added = 0
             exempt_new = 0
             for k in new_keys:
                 if exempt(k):
                     exempt_new += 1
-                elif pending.add(k, rows[k].get("名称") or ""):
+                elif pending.add(k, rows[k].get(spec.name_col) or ""):
                     added += 1
             record["pending"]["入口"] = added
             record["新增"]["豁免"] = exempt_new

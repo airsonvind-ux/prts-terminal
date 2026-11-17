@@ -644,6 +644,7 @@ SPEC = tb.TableSpec(
     crawl=crawl,
     skip_column=skip_column,
     recheck_enabled=False,
+    name_col="关卡名",
 )
 
 if __name__ == "__main__":
