@@ -1,0 +1,58 @@
+{
+  "脚本": {
+    "文件": "maintenance/tools/push.py",
+    "版本": 2
+  },
+  "运行时间": "2026-11-17 11:22:39",
+  "模式": "推送",
+  "应用版本": "0.1.3",
+  "数据版本": "2026.11.17",
+  "数据生成时间": "2026-11-17T03:22:38Z",
+  "数据源提交": "7e560050b03c34661db1d322d008733072352b2a",
+  "数据源说明": "数据源 7e56005；[CN UPDATE] Client:2.7.91 Data:26-11-13-06-37-23-89286612",
+  "结构版本": 1,
+  "源": "F:\\dev\\prts-terminal\\data-pipeline\\maintenance\\db\\arknights.db",
+  "目标": "F:\\dev\\prts-terminal\\src-tauri\\resources\\arknights.db",
+  "大小MB": 50.85,
+  "SHA-256": "8238B4A03856D8755C7B3C211944C2215418B3885BC7A1EE3F996A00A4BEE0EC",
+  "行数": {
+    "enemies": 2501,
+    "enemy_name_map": 16,
+    "levels": 4125,
+    "meta": 1,
+    "operators": 470,
+    "rogue_1_entries": 352,
+    "rogue_2_entries": 369,
+    "rogue_3_entries": 433,
+    "rogue_4_entries": 504,
+    "rogue_5_entries": 574,
+    "rogue_6_entries": 433,
+    "stages": 4986,
+    "tokens": 75,
+    "traps": 897
+  },
+  "源行数": {
+    "enemies": 2501,
+    "enemy_name_map": 16,
+    "levels": 4125,
+    "operators": 470,
+    "rogue_1_entries": 352,
+    "rogue_2_entries": 369,
+    "rogue_3_entries": 433,
+    "rogue_4_entries": 504,
+    "rogue_5_entries": 574,
+    "rogue_6_entries": 433,
+    "stages": 4986,
+    "tokens": 75,
+    "traps": 897
+  },
+  "行数不一致": [],
+  "data-contract": {
+    "status": "pending",
+    "passed": 0,
+    "ignored": 0,
+    "checkedAt": null,
+    "note": null
+  },
+  "结果": "成功"
+}
